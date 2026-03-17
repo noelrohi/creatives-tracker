@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/select";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { toast } from "sonner";
+import { Copy } from "lucide-react";
 
 export default function SettingsPage() {
   const { data: session } = useSession();
@@ -199,24 +200,38 @@ export default function SettingsPage() {
           </CardHeader>
           <CardContent>
             <div className="divide-y">
-              {org.invitations.map((inv) => (
-                <div
-                  key={inv.id}
-                  className="flex items-center justify-between py-3 first:pt-0 last:pb-0"
-                >
-                  <div className="grid gap-0.5">
-                    <span className="text-sm font-medium">{inv.email}</span>
-                    {inv.role && (
-                      <span className="text-xs text-muted-foreground">
-                        Role: {inv.role}
+              {org.invitations.map((inv) => {
+                const inviteLink = `${window.location.origin}/invite/${inv.id}`;
+                return (
+                  <div
+                    key={inv.id}
+                    className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
+                  >
+                    <div className="grid gap-0.5 min-w-0 flex-1">
+                      <span className="text-sm font-medium">{inv.email}</span>
+                      <span className="text-xs text-muted-foreground/50 truncate font-mono">
+                        {inviteLink}
                       </span>
-                    )}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-7 text-muted-foreground"
+                        onClick={() => {
+                          navigator.clipboard.writeText(inviteLink);
+                          toast.success("Invite link copied");
+                        }}
+                      >
+                        <Copy className="size-3.5" />
+                      </Button>
+                      <Badge variant="outline" className="text-[11px]">
+                        {inv.status}
+                      </Badge>
+                    </div>
                   </div>
-                  <Badge variant="outline" className="text-[11px]">
-                    {inv.status}
-                  </Badge>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </CardContent>
         </Card>
