@@ -1,4 +1,5 @@
 import { initTRPC, TRPCError } from "@trpc/server";
+import superjson from "superjson";
 import { auth } from "@/lib/auth";
 import type { Session } from "@/lib/auth";
 
@@ -9,7 +10,9 @@ export async function createContext(opts: { req: Request }) {
 
 type Context = Awaited<ReturnType<typeof createContext>>;
 
-const t = initTRPC.context<Context>().create();
+const t = initTRPC.context<Context>().create({
+  transformer: superjson,
+});
 
 export const router = t.router;
 export const publicProcedure = t.procedure;
