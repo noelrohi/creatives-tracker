@@ -1,0 +1,96 @@
+import { z } from "zod";
+import { eq, desc } from "drizzle-orm";
+import { router, protectedProcedure } from "../init";
+import { db } from "@/db";
+import { campaignConfigs } from "@/schema/campaign-config";
+
+export const campaignConfigRouter = router({
+  list: protectedProcedure.query(async () => {
+    return db
+      .select()
+      .from(campaignConfigs)
+      .orderBy(desc(campaignConfigs.createdAt));
+  }),
+
+  getById: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .query(async ({ input }) => {
+      const [config] = await db
+        .select()
+        .from(campaignConfigs)
+        .where(eq(campaignConfigs.id, input.id));
+      if (!config) throw new Error("Campaign config not found");
+      return config;
+    }),
+
+  create: protectedProcedure
+    .input(
+      z.object({
+        name: z.string().min(1),
+        objective: z.enum([
+          "conversions",
+          "traffic",
+          "engagement",
+          "awareness",
+          "leads",
+          "app_installs",
+        ]),
+        costCap: z.string().optional(),
+        targetingMethod: z.array(z.string()).min(1),
+        demographics: z.string().optional(),
+        geos: z.array(z.string()).min(1),
+        dailyBudget: z.string().min(1),
+        placements: z.array(z.string()).optional(),
+        notes: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const [config] = await db
+        .insert(campaignConfigs)
+        .values({ ...input, createdBy: ctx.session.user.id })
+        .returning();
+      return config;
+    }),
+
+  update: protectedProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        name: z.string().min(1).optional(),
+        objective: z
+          .enum([
+            "conversions",
+            "traffic",
+            "engagement",
+            "awareness",
+            "leads",
+            "app_installs",
+          ])
+          .optional(),
+        costCap: z.string().nullable().optional(),
+        targetingMethod: z.array(z.string()).optional(),
+        demographics: z.string().nullable().optional(),
+        geos: z.array(z.string()).optional(),
+        dailyBudget: z.string().optional(),
+        placements: z.array(z.string()).nullable().optional(),
+        notes: z.string().nullable().optional(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const { id, ...data } = input;
+      const [config] = await db
+        .update(campaignConfigs)
+        .set(data)
+        .where(eq(campaignConfigs.id, id))
+        .returning();
+      return config;
+    }),
+
+  delete: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ input }) => {
+      await db
+        .delete(campaignConfigs)
+        .where(eq(campaignConfigs.id, input.id));
+    }),
+});

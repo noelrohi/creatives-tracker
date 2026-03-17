@@ -5,6 +5,7 @@ import { ThemeProvider } from "next-themes";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import { useState } from "react";
 import { TRPCProvider } from "@/lib/trpc/client";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { AppRouter } from "@/lib/trpc/routers/_app";
 
 function makeQueryClient() {
@@ -37,7 +38,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <QueryClientProvider client={queryClient}>
       <TRPCProvider trpcClient={trpcClient} queryClient={queryClient}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-          {children}
+          <TooltipProvider>{children}</TooltipProvider>
         </ThemeProvider>
       </TRPCProvider>
     </QueryClientProvider>
