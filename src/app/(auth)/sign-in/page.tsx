@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryState } from "nuqs";
 import Link from "next/link";
 import { signIn } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
@@ -9,7 +10,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export default function SignInPage() {
+  return <Suspense><SignInForm /></Suspense>;
+}
+
+function SignInForm() {
   const router = useRouter();
+  const [redirect] = useQueryState("redirect");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -31,7 +37,7 @@ export default function SignInPage() {
       return;
     }
 
-    router.push("/");
+    router.push(redirect || "/");
   }
 
   return (
@@ -71,7 +77,7 @@ export default function SignInPage() {
       </div>
       <div className="text-center text-sm">
         Don&apos;t have an account?{" "}
-        <Link href="/sign-up" className="underline underline-offset-4">
+        <Link href={redirect ? `/sign-up?redirect=${encodeURIComponent(redirect)}` : "/sign-up"} className="underline underline-offset-4">
           Sign up
         </Link>
       </div>
