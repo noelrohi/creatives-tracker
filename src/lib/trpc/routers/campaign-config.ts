@@ -24,30 +24,14 @@ export const campaignConfigRouter = router({
     }),
 
   create: protectedProcedure
-    .input(
-      z.object({
-        name: z.string().min(1),
-        objective: z.enum([
-          "conversions",
-          "traffic",
-          "engagement",
-          "awareness",
-          "leads",
-          "app_installs",
-        ]),
-        costCap: z.string().optional(),
-        targetingMethod: z.array(z.string()).min(1),
-        demographics: z.string().optional(),
-        geos: z.array(z.string()).min(1),
-        dailyBudget: z.string().min(1),
-        placements: z.array(z.string()).optional(),
-        notes: z.string().optional(),
-      }),
-    )
+    .input(z.object({ name: z.string().optional() }).optional())
     .mutation(async ({ input, ctx }) => {
       const [config] = await db
         .insert(campaignConfigs)
-        .values({ ...input, createdBy: ctx.session.user.id })
+        .values({
+          name: input?.name ?? "Untitled Campaign",
+          createdBy: ctx.session.user.id,
+        })
         .returning();
       return config;
     }),
@@ -58,20 +42,14 @@ export const campaignConfigRouter = router({
         id: z.string(),
         name: z.string().min(1).optional(),
         objective: z
-          .enum([
-            "conversions",
-            "traffic",
-            "engagement",
-            "awareness",
-            "leads",
-            "app_installs",
-          ])
+          .enum(["conversions", "traffic", "engagement", "awareness", "leads", "app_installs"])
+          .nullable()
           .optional(),
         costCap: z.string().nullable().optional(),
-        targetingMethod: z.array(z.string()).optional(),
+        targetingMethod: z.array(z.string()).nullable().optional(),
         demographics: z.string().nullable().optional(),
-        geos: z.array(z.string()).optional(),
-        dailyBudget: z.string().optional(),
+        geos: z.array(z.string()).nullable().optional(),
+        dailyBudget: z.string().nullable().optional(),
         placements: z.array(z.string()).nullable().optional(),
         notes: z.string().nullable().optional(),
       }),

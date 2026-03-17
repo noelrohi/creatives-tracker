@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import { useState } from "react";
+import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { TRPCProvider } from "@/lib/trpc/client";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { AppRouter } from "@/lib/trpc/routers/_app";
@@ -38,7 +39,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <QueryClientProvider client={queryClient}>
       <TRPCProvider trpcClient={trpcClient} queryClient={queryClient}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-          <TooltipProvider>{children}</TooltipProvider>
+          <NuqsAdapter>
+            <TooltipProvider>{children}</TooltipProvider>
+          </NuqsAdapter>
         </ThemeProvider>
       </TRPCProvider>
     </QueryClientProvider>

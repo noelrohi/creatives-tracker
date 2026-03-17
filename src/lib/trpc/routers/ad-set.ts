@@ -81,19 +81,14 @@ export const adSetRouter = router({
     }),
 
   create: protectedProcedure
-    .input(
-      z.object({
-        name: z.string().min(1),
-        adCreativeId: z.string(),
-        landingPageVersionId: z.string(),
-        campaignConfigId: z.string(),
-        notes: z.string().optional(),
-      }),
-    )
+    .input(z.object({ name: z.string().optional() }).optional())
     .mutation(async ({ input, ctx }) => {
       const [adSet] = await db
         .insert(adSets)
-        .values({ ...input, createdBy: ctx.session.user.id })
+        .values({
+          name: input?.name ?? "Untitled Ad Set",
+          createdBy: ctx.session.user.id,
+        })
         .returning();
       return adSet;
     }),
@@ -103,9 +98,9 @@ export const adSetRouter = router({
       z.object({
         id: z.string(),
         name: z.string().min(1).optional(),
-        adCreativeId: z.string().optional(),
-        landingPageVersionId: z.string().optional(),
-        campaignConfigId: z.string().optional(),
+        adCreativeId: z.string().nullable().optional(),
+        landingPageVersionId: z.string().nullable().optional(),
+        campaignConfigId: z.string().nullable().optional(),
         notes: z.string().nullable().optional(),
       }),
     )

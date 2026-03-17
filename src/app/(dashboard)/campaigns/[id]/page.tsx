@@ -1,27 +1,21 @@
 "use client";
 
+import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useForm, Controller } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
 import { useTRPC } from "@/lib/trpc/client";
-import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { MultiSelect } from "@/components/multi-select";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  EditableText,
+  EditableSelect,
+  EditableMultiSelect,
+  EditableTags,
+} from "@/components/editable-field";
 import { toast } from "sonner";
-import { Trash2 } from "lucide-react";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { Trash2, ArrowLeft } from "lucide-react";
+import Link from "next/link";
 
 const objectiveOptions = [
   { label: "Conversions", value: "conversions" },
@@ -47,107 +41,31 @@ const placementOptions = [
   { label: "Auto", value: "auto" },
 ];
 
-const editCampaignSchema = z.object({
-  name: z.string().min(1),
-  objective: z.enum(["conversions", "traffic", "engagement", "awareness", "leads", "app_installs"]),
-  costCap: z.string().optional(),
-  targetingMethod: z.array(z.string()),
-  demographics: z.string().optional(),
-  geosInput: z.string(),
-  dailyBudget: z.string(),
-  placements: z.array(z.string()),
-  notes: z.string().optional(),
-});
-
-type EditCampaignFormValues = z.infer<typeof editCampaignSchema>;
-
-type CampaignData = {
-  id: string;
-  name: string;
-  objective: "conversions" | "traffic" | "engagement" | "awareness" | "leads" | "app_installs";
-  costCap: string | null;
-  targetingMethod: string[];
-  demographics: string | null;
-  geos: string[];
-  dailyBudget: string;
-  placements: string[] | null;
-  notes: string | null;
-  createdBy: string;
-  createdAt: Date | string;
-  updatedAt: Date | string;
-};
-
 export default function CampaignDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const trpc = useTRPC();
+  const queryClient = useQueryClient();
   const id = params.id as string;
 
   const campaign = useQuery(trpc.campaignConfig.getById.queryOptions({ id }));
 
-  if (campaign.isLoading) {
-    return (
-      <div className="flex flex-col gap-6">
-        <div className="flex items-center justify-between">
-          <Skeleton className="h-8 w-48" />
-          <Skeleton className="h-9 w-24" />
-        </div>
-        <div className="flex max-w-2xl flex-col gap-4">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="flex flex-col gap-2">
-              <Skeleton className="h-4 w-24" />
-              <Skeleton className="h-10 w-full" />
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
+  const [savingField, setSavingField] = useState<string | null>(null);
 
-  if (campaign.isError || !campaign.data) {
-    return <div className="p-6 text-destructive">Failed to load campaign.</div>;
-  }
-
-  return <EditCampaignForm key={id} data={campaign.data} />;
-}
-
-function EditCampaignForm({ data }: { data: CampaignData }) {
-  const router = useRouter();
-  const trpc = useTRPC();
-  const queryClient = useQueryClient();
-
-  const {
-    register,
-    handleSubmit,
-    control,
-    formState: { isSubmitting },
-  } = useForm<EditCampaignFormValues>({
-    resolver: zodResolver(editCampaignSchema),
-    defaultValues: {
-      name: data.name,
-      objective: data.objective,
-      costCap: data.costCap ?? "",
-      targetingMethod: data.targetingMethod,
-      demographics: data.demographics ?? "",
-      geosInput: data.geos.join(", "),
-      dailyBudget: data.dailyBudget ?? "",
-      placements: data.placements ?? [],
-      notes: data.notes ?? "",
-    },
-  });
-
-  const updateCampaign = useMutation({
+  const updateMutation = useMutation({
     ...trpc.campaignConfig.update.mutationOptions(),
     onSuccess: () => {
-      toast.success("Campaign updated successfully");
-      queryClient.invalidateQueries({ queryKey: trpc.campaignConfig.getById.queryKey({ id: data.id }) });
+      queryClient.invalidateQueries({ queryKey: trpc.campaignConfig.getById.queryKey({ id }) });
       queryClient.invalidateQueries({ queryKey: trpc.campaignConfig.list.queryKey() });
+      setSavingField(null);
     },
     onError: (error) => {
       toast.error(error.message);
+      setSavingField(null);
     },
   });
 
-  const deleteCampaign = useMutation({
+  const deleteMutation = useMutation({
     ...trpc.campaignConfig.delete.mutationOptions(),
     onSuccess: () => {
       toast.success("Campaign deleted");
@@ -158,143 +76,136 @@ function EditCampaignForm({ data }: { data: CampaignData }) {
     },
   });
 
-  const onSubmit = (formData: EditCampaignFormValues) => {
-    const geos = formData.geosInput
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    updateCampaign.mutate({
-      id: data.id,
-      name: formData.name,
-      objective: formData.objective,
-      costCap: formData.costCap || null,
-      targetingMethod: formData.targetingMethod,
-      demographics: formData.demographics || null,
-      geos,
-      dailyBudget: formData.dailyBudget,
-      placements: formData.placements.length > 0 ? formData.placements : null,
-      notes: formData.notes || null,
-    });
+  const saveField = (field: string, value: unknown) => {
+    setSavingField(field);
+    updateMutation.mutate({ id, [field]: value });
   };
+
+  if (campaign.isLoading) {
+    return (
+      <div className="flex flex-col gap-6">
+        <Skeleton className="h-10 w-64" />
+        <div className="flex max-w-2xl flex-col gap-2">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <Skeleton key={i} className="h-10 w-full" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (campaign.isError || !campaign.data) {
+    return <div className="p-6 text-destructive">Failed to load campaign.</div>;
+  }
+
+  const data = campaign.data;
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader title="Edit Campaign" description="Update your campaign configuration.">
-        <Button
-          variant="destructive"
-          onClick={() => {
-            if (confirm("Are you sure you want to delete this campaign?")) {
-              deleteCampaign.mutate({ id: data.id });
-            }
-          }}
-        >
-          <Trash2 className="mr-2 size-4" /> Delete
-        </Button>
-      </PageHeader>
-
-      <form onSubmit={handleSubmit(onSubmit)} className="flex max-w-2xl flex-col gap-4">
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="name">Campaign Name</Label>
-          <Input id="name" {...register("name")} />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="objective">Objective</Label>
-          <Controller
-            name="objective"
-            control={control}
-            render={({ field }) => (
-              <Select value={field.value} onValueChange={field.onChange}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select objective" />
-                </SelectTrigger>
-                <SelectContent>
-                  {objectiveOptions.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="costCap">Cost Cap (optional)</Label>
-          <Input
-            id="costCap"
-            {...register("costCap")}
-            placeholder="e.g. 50.00"
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label>Targeting Method</Label>
-          <Controller
-            name="targetingMethod"
-            control={control}
-            render={({ field }) => (
-              <MultiSelect
-                options={targetingMethodOptions}
-                value={field.value}
-                onChange={field.onChange}
-                placeholder="Select targeting methods"
-              />
-            )}
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="demographics">Demographics (optional)</Label>
-          <Input id="demographics" {...register("demographics")} />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="geos">Geos (comma-separated)</Label>
-          <Input id="geos" {...register("geosInput")} />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="dailyBudget">Daily Budget</Label>
-          <Input
-            id="dailyBudget"
-            type="number"
-            {...register("dailyBudget")}
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label>Placements</Label>
-          <Controller
-            name="placements"
-            control={control}
-            render={({ field }) => (
-              <MultiSelect
-                options={placementOptions}
-                value={field.value}
-                onChange={field.onChange}
-                placeholder="Select placements"
-              />
-            )}
-          />
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="notes">Notes (optional)</Label>
-          <Textarea id="notes" {...register("notes")} />
-        </div>
-
-        <div className="flex gap-2">
-          <Button type="submit" disabled={updateCampaign.isPending || isSubmitting}>
-            {updateCampaign.isPending ? "Saving..." : "Save Changes"}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="icon" asChild>
+            <Link href="/campaigns">
+              <ArrowLeft className="size-4" />
+            </Link>
           </Button>
-          <Button type="button" variant="outline" onClick={() => router.push("/campaigns")}>
-            Cancel
-          </Button>
+          <div className="flex-1">
+            <input
+              type="text"
+              defaultValue={data.name}
+              className="w-full border-none bg-transparent text-2xl font-semibold tracking-tight outline-none placeholder:text-muted-foreground/60 focus:ring-0"
+              placeholder="Untitled Campaign"
+              onBlur={(e) => {
+                const val = e.target.value.trim();
+                if (val && val !== data.name) {
+                  saveField("name", val);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+            />
+          </div>
         </div>
-      </form>
+        <ConfirmDialog
+          title="Delete campaign"
+          description="This will permanently delete this campaign configuration."
+          confirmLabel="Delete"
+          onConfirm={() => deleteMutation.mutate({ id })}
+          loading={deleteMutation.isPending}
+          trigger={
+            <Button variant="ghost" size="sm" className="text-muted-foreground/50 hover:text-destructive">
+              <Trash2 className="mr-1.5 size-3.5" /> Delete
+            </Button>
+          }
+        />
+      </div>
+
+      <div className="max-w-2xl divide-y rounded-lg border">
+        <EditableSelect
+          value={data.objective}
+          onSave={(v) => saveField("objective", v)}
+          options={objectiveOptions}
+          placeholder="Select objective..."
+          label="Objective"
+          saving={savingField === "objective"}
+        />
+        <EditableText
+          value={data.costCap}
+          onSave={(v) => saveField("costCap", v || null)}
+          placeholder="e.g., 50.00"
+          label="Cost Cap"
+          saving={savingField === "costCap"}
+        />
+        <EditableMultiSelect
+          value={data.targetingMethod}
+          onSave={(v) => saveField("targetingMethod", v)}
+          options={targetingMethodOptions}
+          placeholder="Select targeting methods..."
+          label="Targeting"
+          saving={savingField === "targetingMethod"}
+        />
+        <EditableText
+          value={data.demographics}
+          onSave={(v) => saveField("demographics", v || null)}
+          placeholder="e.g., 25-44, Male"
+          label="Demographics"
+          saving={savingField === "demographics"}
+        />
+        <EditableTags
+          value={data.geos}
+          onSave={(v) => saveField("geos", v)}
+          label="Geos"
+          placeholder="Type country code and press Enter..."
+          saving={savingField === "geos"}
+        />
+        <EditableText
+          value={data.dailyBudget}
+          onSave={(v) => saveField("dailyBudget", v || null)}
+          placeholder="e.g., 100"
+          label="Daily Budget"
+          type="number"
+          saving={savingField === "dailyBudget"}
+        />
+        <EditableMultiSelect
+          value={data.placements}
+          onSave={(v) => saveField("placements", v)}
+          options={placementOptions}
+          placeholder="Select placements..."
+          label="Placements"
+          saving={savingField === "placements"}
+        />
+        <EditableText
+          value={data.notes}
+          onSave={(v) => saveField("notes", v || null)}
+          placeholder="Add notes..."
+          label="Notes"
+          multiline
+          saving={savingField === "notes"}
+        />
+      </div>
     </div>
   );
 }

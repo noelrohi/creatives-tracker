@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, type DragEvent } from "react";
-import { Upload, X, FileImage, FileVideo } from "lucide-react";
+import { Upload, X, FileVideo } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { uploadFile } from "@/lib/upload";
 
@@ -28,7 +28,7 @@ export function FileUpload({
       const url = await uploadFile(file);
       onChange(url);
     } catch {
-      // TODO: toast error
+      // upload failed
     } finally {
       setUploading(false);
     }
@@ -49,25 +49,25 @@ export function FileUpload({
   if (value) {
     const isVideo = value.match(/\.(mp4|webm|mov)(\?|$)/i);
     return (
-      <div className={cn("relative rounded-md border p-2", className)}>
+      <div className={cn("group/file relative", className)}>
         {isVideo ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <FileVideo className="size-4" />
-            <span className="truncate">{value}</span>
+          <div className="flex items-center gap-2 rounded bg-muted/40 px-2.5 py-1.5 text-[13px] text-muted-foreground">
+            <FileVideo className="size-3.5" />
+            <span className="truncate">{value.split("/").pop()}</span>
           </div>
         ) : (
           <img
             src={value}
             alt="Upload preview"
-            className="max-h-40 rounded object-contain"
+            className="max-h-28 rounded object-contain"
           />
         )}
         <button
           type="button"
-          className="absolute -right-2 -top-2 rounded-full bg-destructive p-1 text-destructive-foreground"
+          className="absolute -right-1.5 -top-1.5 flex size-4 items-center justify-center rounded-full bg-muted text-muted-foreground opacity-0 transition-opacity group-hover/file:opacity-100 hover:bg-destructive hover:text-destructive-foreground"
           onClick={() => onChange(undefined)}
         >
-          <X className="size-3" />
+          <X className="size-2.5" />
         </button>
       </div>
     );
@@ -76,8 +76,8 @@ export function FileUpload({
   return (
     <div
       className={cn(
-        "flex cursor-pointer flex-col items-center justify-center rounded-md border-2 border-dashed p-6 transition-colors hover:border-primary/50",
-        dragOver && "border-primary bg-primary/5",
+        "flex cursor-pointer items-center gap-2 rounded border border-dashed border-border/60 px-3 py-2.5 text-[13px] text-muted-foreground/50 transition-colors hover:border-border hover:text-muted-foreground",
+        dragOver && "border-foreground/20 bg-muted/30 text-muted-foreground",
         uploading && "pointer-events-none opacity-50",
         className,
       )}
@@ -89,10 +89,8 @@ export function FileUpload({
       onDrop={handleDrop}
       onClick={() => inputRef.current?.click()}
     >
-      <Upload className="mb-2 size-6 text-muted-foreground" />
-      <p className="text-sm text-muted-foreground">
-        {uploading ? "Uploading..." : "Drop file here or click to upload"}
-      </p>
+      <Upload className="size-3.5" />
+      <span>{uploading ? "Uploading..." : "Drop file or click to upload"}</span>
       <input
         ref={inputRef}
         type="file"

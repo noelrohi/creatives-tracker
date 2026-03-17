@@ -10,15 +10,15 @@ export const adCreatives = pgTable(
     id: text("id")
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
-    name: text("name").notNull(),
+    name: text("name").notNull().default("Untitled Creative"),
     assetUrl: text("asset_url"),
-    format: formatEnum("format").notNull(),
-    angle: text("angle").notNull(),
-    persona: text("persona").notNull(),
-    awarenessLevel: awarenessLevelEnum("awareness_level").notNull(),
-    hook: text("hook").notNull(),
-    tone: text("tone").array().notNull(),
-    cta: text("cta").notNull(),
+    format: formatEnum("format"),
+    angle: text("angle"),
+    persona: text("persona"),
+    awarenessLevel: awarenessLevelEnum("awareness_level"),
+    hook: text("hook"),
+    tone: text("tone").array(),
+    cta: text("cta"),
     landingPageId: text("landing_page_id").references(
       () => landingPages.id,
       { onDelete: "set null" },

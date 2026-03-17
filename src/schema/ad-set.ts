@@ -11,16 +11,19 @@ export const adSets = pgTable(
     id: text("id")
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
-    name: text("name").notNull(),
-    adCreativeId: text("ad_creative_id")
-      .notNull()
-      .references(() => adCreatives.id, { onDelete: "cascade" }),
-    landingPageVersionId: text("landing_page_version_id")
-      .notNull()
-      .references(() => landingPageVersions.id, { onDelete: "cascade" }),
-    campaignConfigId: text("campaign_config_id")
-      .notNull()
-      .references(() => campaignConfigs.id, { onDelete: "cascade" }),
+    name: text("name").notNull().default("Untitled Ad Set"),
+    adCreativeId: text("ad_creative_id").references(
+      () => adCreatives.id,
+      { onDelete: "set null" },
+    ),
+    landingPageVersionId: text("landing_page_version_id").references(
+      () => landingPageVersions.id,
+      { onDelete: "set null" },
+    ),
+    campaignConfigId: text("campaign_config_id").references(
+      () => campaignConfigs.id,
+      { onDelete: "set null" },
+    ),
     notes: text("notes"),
     createdBy: text("created_by")
       .notNull()

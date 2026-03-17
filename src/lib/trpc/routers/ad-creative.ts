@@ -95,31 +95,14 @@ export const adCreativeRouter = router({
     }),
 
   create: protectedProcedure
-    .input(
-      z.object({
-        name: z.string().min(1),
-        assetUrl: z.string().optional(),
-        format: z.enum(["static", "video", "ugc", "carousel"]),
-        angle: z.string().min(1),
-        persona: z.string().min(1),
-        awarenessLevel: z.enum([
-          "unaware",
-          "problem_aware",
-          "solution_aware",
-          "product_aware",
-          "most_aware",
-        ]),
-        hook: z.string().min(1),
-        tone: z.array(z.string()).min(1),
-        cta: z.string().min(1),
-        landingPageId: z.string().optional(),
-        notes: z.string().optional(),
-      }),
-    )
+    .input(z.object({ name: z.string().optional() }).optional())
     .mutation(async ({ input, ctx }) => {
       const [creative] = await db
         .insert(adCreatives)
-        .values({ ...input, createdBy: ctx.session.user.id })
+        .values({
+          name: input?.name ?? "Untitled Creative",
+          createdBy: ctx.session.user.id,
+        })
         .returning();
       return creative;
     }),
@@ -129,22 +112,17 @@ export const adCreativeRouter = router({
       z.object({
         id: z.string(),
         name: z.string().min(1).optional(),
-        assetUrl: z.string().optional(),
-        format: z.enum(["static", "video", "ugc", "carousel"]).optional(),
-        angle: z.string().min(1).optional(),
-        persona: z.string().min(1).optional(),
+        assetUrl: z.string().nullable().optional(),
+        format: z.enum(["static", "video", "ugc", "carousel"]).nullable().optional(),
+        angle: z.string().nullable().optional(),
+        persona: z.string().nullable().optional(),
         awarenessLevel: z
-          .enum([
-            "unaware",
-            "problem_aware",
-            "solution_aware",
-            "product_aware",
-            "most_aware",
-          ])
+          .enum(["unaware", "problem_aware", "solution_aware", "product_aware", "most_aware"])
+          .nullable()
           .optional(),
-        hook: z.string().min(1).optional(),
-        tone: z.array(z.string()).optional(),
-        cta: z.string().min(1).optional(),
+        hook: z.string().nullable().optional(),
+        tone: z.array(z.string()).nullable().optional(),
+        cta: z.string().nullable().optional(),
         landingPageId: z.string().nullable().optional(),
         notes: z.string().nullable().optional(),
       }),

@@ -9,13 +9,13 @@ export const campaignConfigs = pgTable(
     id: text("id")
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
-    name: text("name").notNull(),
-    objective: objectiveEnum("objective").notNull(),
+    name: text("name").notNull().default("Untitled Campaign"),
+    objective: objectiveEnum("objective"),
     costCap: text("cost_cap"),
-    targetingMethod: text("targeting_method").array().notNull(),
+    targetingMethod: text("targeting_method").array(),
     demographics: text("demographics"),
-    geos: text("geos").array().notNull(),
-    dailyBudget: numeric("daily_budget").notNull(),
+    geos: text("geos").array(),
+    dailyBudget: numeric("daily_budget"),
     placements: text("placements").array(),
     notes: text("notes"),
     createdBy: text("created_by")

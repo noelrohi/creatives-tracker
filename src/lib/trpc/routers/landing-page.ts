@@ -30,14 +30,18 @@ export const landingPageRouter = router({
   create: protectedProcedure
     .input(
       z.object({
-        name: z.string().min(1),
-        url: z.string().url(),
-      }),
+        name: z.string().optional(),
+        url: z.string().optional(),
+      }).optional(),
     )
     .mutation(async ({ input, ctx }) => {
       const [page] = await db
         .insert(landingPages)
-        .values({ ...input, createdBy: ctx.session.user.id })
+        .values({
+          name: input?.name || "Untitled Landing Page",
+          url: input?.url || "",
+          createdBy: ctx.session.user.id,
+        })
         .returning();
       return page;
     }),
@@ -47,7 +51,7 @@ export const landingPageRouter = router({
       z.object({
         id: z.string(),
         name: z.string().min(1).optional(),
-        url: z.string().url().optional(),
+        url: z.string().optional(),
       }),
     )
     .mutation(async ({ input }) => {
