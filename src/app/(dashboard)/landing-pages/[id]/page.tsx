@@ -3,16 +3,18 @@
 import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import {
-  useQuery,
-  useMutation,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTRPC } from "@/lib/trpc/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { EditableText } from "@/components/editable-field";
+import { ButtonGroup } from "@/components/ui/button-group";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Table,
   TableBody,
@@ -21,9 +23,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { ArrowLeft, Plus, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+import { ArrowLeft, MoreHorizontalIcon, Pencil, Plus, Trash2 } from "lucide-react";
+import { LandingPageFormDialog } from "../landing-page-form-dialog";
+import { AddVersionDialog } from "../add-version-dialog";
 
 export default function LandingPageDetailPage() {
   const trpc = useTRPC();
@@ -32,22 +36,11 @@ export default function LandingPageDetailPage() {
   const queryClient = useQueryClient();
   const id = params.id as string;
 
-  const [savingField, setSavingField] = useState<string | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [addVersionOpen, setAddVersionOpen] = useState(false);
 
   const landingPage = useQuery(trpc.landingPage.getById.queryOptions({ id }));
-
-  const updateMutation = useMutation({
-    ...trpc.landingPage.update.mutationOptions(),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: trpc.landingPage.getById.queryKey({ id }) });
-      queryClient.invalidateQueries({ queryKey: trpc.landingPage.list.queryKey() });
-      setSavingField(null);
-    },
-    onError: (error) => {
-      toast.error(error.message);
-      setSavingField(null);
-    },
-  });
 
   const deleteMutation = useMutation({
     ...trpc.landingPage.delete.mutationOptions(),
@@ -61,15 +54,6 @@ export default function LandingPageDetailPage() {
     },
   });
 
-  const saveField = (field: string, value: unknown) => {
-    setSavingField(field);
-    updateMutation.mutate({ id, [field]: value });
-  };
-
-  const handleDelete = () => {
-    deleteMutation.mutate({ id });
-  };
-
   if (landingPage.isLoading) {
     return (
       <div className="flex flex-col gap-6">
@@ -82,7 +66,10 @@ export default function LandingPageDetailPage() {
         </div>
         <div className="rounded-lg border p-2">
           {Array.from({ length: 2 }).map((_, i) => (
-            <div key={i} className="grid grid-cols-[140px_1fr] items-center gap-3 px-3 py-3">
+            <div
+              key={i}
+              className="grid grid-cols-[140px_1fr] items-center gap-3 px-3 py-3"
+            >
               <Skeleton className="h-4 w-24" />
               <Skeleton className="h-7 w-full" />
             </div>
@@ -117,51 +104,59 @@ export default function LandingPageDetailPage() {
               <ArrowLeft className="size-4" />
             </Link>
           </Button>
-          <EditableTitle
-            value={data.name}
-            onSave={(v) => saveField("name", v)}
-            saving={savingField === "name"}
-          />
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {data.name || "Untitled Landing Page"}
+          </h1>
         </div>
-        <ConfirmDialog
-          title="Delete landing page"
-          description="This will permanently delete this landing page and all its versions."
-          confirmLabel="Delete"
-          onConfirm={handleDelete}
-          loading={deleteMutation.isPending}
-          trigger={
-            <Button variant="ghost" size="sm" className="text-muted-foreground/50 hover:text-destructive">
-              <Trash2 className="mr-1.5 size-3.5" /> Delete
-            </Button>
-          }
-        />
+        <ButtonGroup>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setEditOpen(true)}
+          >
+            <Pencil className="mr-1.5 size-3.5" /> Edit
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon-sm"
+                aria-label="More options"
+              >
+                <MoreHorizontalIcon />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                variant="destructive"
+                onClick={() => setDeleteOpen(true)}
+              >
+                <Trash2 /> Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </ButtonGroup>
       </div>
 
-      {/* Fields */}
-      <div className="rounded-lg border divide-y">
-        <EditableText
-          label="URL"
-          value={data.url}
-          onSave={(v) => saveField("url", v)}
-          type="url"
-          placeholder="https://..."
-          saving={savingField === "url"}
-        />
-      </div>
+      {/* Read-only fields */}
+      <dl className="rounded-lg border divide-y">
+        <div className="grid grid-cols-[140px_1fr] items-center gap-3 px-3 py-3">
+          <dt className="text-sm text-muted-foreground">URL</dt>
+          <dd className="text-sm">{data.url || "\u2014"}</dd>
+        </div>
+      </dl>
 
       {/* Metadata */}
       <p className="text-xs text-muted-foreground px-3">
-        Created {new Date(data.createdAt).toLocaleDateString()} · Last updated{" "}
+        Created {new Date(data.createdAt).toLocaleDateString()} · Updated{" "}
         {new Date(data.updatedAt).toLocaleDateString()}
       </p>
 
       {/* Versions */}
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Versions</h2>
-        <Button size="sm" asChild>
-          <Link href={`/landing-pages/${id}/versions/new`}>
-            <Plus className="mr-2 size-4" /> Add Version
-          </Link>
+        <Button size="sm" onClick={() => setAddVersionOpen(true)}>
+          <Plus className="mr-2 size-4" /> Add Version
         </Button>
       </div>
 
@@ -183,19 +178,23 @@ export default function LandingPageDetailPage() {
                   colSpan={5}
                   className="text-center text-muted-foreground"
                 >
-                  No versions yet. Add the first version.
+                  No versions yet
                 </TableCell>
               </TableRow>
             ) : (
               data.versions.map((version) => (
                 <TableRow key={version.id}>
-                  <TableCell className="font-medium">v{version.version}</TableCell>
+                  <TableCell className="font-medium">
+                    v{version.version}
+                  </TableCell>
                   <TableCell>
                     <Badge variant="secondary">
                       {version.pageType.replace(/_/g, " ")}
                     </Badge>
                   </TableCell>
-                  <TableCell className="max-w-xs truncate">{version.heroCopy}</TableCell>
+                  <TableCell className="max-w-xs truncate">
+                    {version.heroCopy}
+                  </TableCell>
                   <TableCell>
                     <Badge variant="outline">
                       {version.funnelPosition.replace(/_/g, " ")}
@@ -210,57 +209,31 @@ export default function LandingPageDetailPage() {
           </TableBody>
         </Table>
       </div>
+
+      {/* Dialogs */}
+      <LandingPageFormDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        landingPage={{
+          id: data.id,
+          name: data.name,
+          url: data.url,
+        }}
+      />
+      <AddVersionDialog
+        open={addVersionOpen}
+        onOpenChange={setAddVersionOpen}
+        landingPageId={id}
+      />
+      <ConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title="Delete landing page"
+        description="This will permanently delete this landing page and all its versions."
+        confirmLabel="Delete"
+        onConfirm={() => deleteMutation.mutate({ id })}
+        loading={deleteMutation.isPending}
+      />
     </div>
-  );
-}
-
-function EditableTitle({
-  value,
-  onSave,
-  saving,
-}: {
-  value: string | null | undefined;
-  onSave: (value: string) => void;
-  saving?: boolean;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value ?? "");
-
-  const handleSave = () => {
-    setEditing(false);
-    if (draft !== (value ?? "")) {
-      onSave(draft);
-    }
-  };
-
-  return editing ? (
-    <input
-      autoFocus
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={handleSave}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") handleSave();
-        if (e.key === "Escape") {
-          setDraft(value ?? "");
-          setEditing(false);
-        }
-      }}
-      className="bg-transparent text-2xl font-semibold tracking-tight outline-none border-b-2 border-primary"
-    />
-  ) : (
-    <button
-      type="button"
-      onClick={() => {
-        setDraft(value ?? "");
-        setEditing(true);
-      }}
-      className="flex items-center gap-2 text-2xl font-semibold tracking-tight hover:text-muted-foreground transition-colors"
-    >
-      {value || "Untitled Landing Page"}
-      {saving && (
-        <span className="text-xs font-normal text-muted-foreground">Saving...</span>
-      )}
-    </button>
   );
 }

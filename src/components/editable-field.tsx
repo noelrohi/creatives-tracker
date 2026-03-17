@@ -13,8 +13,6 @@ import { MultiSelect } from "@/components/multi-select";
 import { FileUpload } from "@/components/file-upload";
 import { cn } from "@/lib/utils";
 
-// Shared row wrapper — no borders, no card. Just aligned label + value
-// with a ghost hover that barely whispers.
 function FieldRow({
   label,
   saving,
@@ -44,6 +42,27 @@ function FieldRow({
   );
 }
 
+function ReadOnlyValue({
+  children,
+  empty,
+  placeholder,
+}: {
+  children?: React.ReactNode;
+  empty?: boolean;
+  placeholder?: string;
+}) {
+  return (
+    <span
+      className={cn(
+        "min-h-6 px-2 text-[13px] whitespace-pre-wrap",
+        empty ? "text-muted-foreground/40 italic" : "text-foreground",
+      )}
+    >
+      {empty ? (placeholder ?? "Empty") : children}
+    </span>
+  );
+}
+
 // -------------------------------------------------------------------
 // EditableText
 // -------------------------------------------------------------------
@@ -56,6 +75,7 @@ interface EditableTextProps {
   saving?: boolean;
   multiline?: boolean;
   type?: string;
+  readOnly?: boolean;
 }
 
 export function EditableText({
@@ -66,6 +86,7 @@ export function EditableText({
   saving,
   multiline,
   type,
+  readOnly,
 }: EditableTextProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? "");
@@ -91,6 +112,16 @@ export function EditableText({
       setEditing(false);
     }
   };
+
+  if (readOnly) {
+    return (
+      <FieldRow label={label}>
+        <ReadOnlyValue empty={!value} placeholder={placeholder}>
+          {value}
+        </ReadOnlyValue>
+      </FieldRow>
+    );
+  }
 
   return (
     <FieldRow label={label} saving={saving}>
@@ -145,6 +176,7 @@ interface EditableSelectProps {
   placeholder?: string;
   label: string;
   saving?: boolean;
+  readOnly?: boolean;
 }
 
 export function EditableSelect({
@@ -154,7 +186,19 @@ export function EditableSelect({
   placeholder = "Select...",
   label,
   saving,
+  readOnly,
 }: EditableSelectProps) {
+  if (readOnly) {
+    const selected = options.find((o) => o.value === value);
+    return (
+      <FieldRow label={label}>
+        <ReadOnlyValue empty={!selected} placeholder={placeholder}>
+          {selected?.label}
+        </ReadOnlyValue>
+      </FieldRow>
+    );
+  }
+
   return (
     <FieldRow label={label} saving={saving}>
       <Select
@@ -189,6 +233,7 @@ interface EditableMultiSelectProps {
   placeholder?: string;
   label: string;
   saving?: boolean;
+  readOnly?: boolean;
 }
 
 export function EditableMultiSelect({
@@ -198,7 +243,33 @@ export function EditableMultiSelect({
   placeholder = "Add...",
   label,
   saving,
+  readOnly,
 }: EditableMultiSelectProps) {
+  if (readOnly) {
+    const vals = value ?? [];
+    const labels = vals
+      .map((v) => options.find((o) => o.value === v)?.label ?? v)
+    return (
+      <FieldRow label={label}>
+        {labels.length === 0 ? (
+          <ReadOnlyValue empty placeholder={placeholder} />
+        ) : (
+          <div className="flex flex-wrap items-center gap-1 px-2">
+            {labels.map((l) => (
+              <Badge
+                key={l}
+                variant="secondary"
+                className="h-5 rounded px-1.5 text-[11px] font-normal"
+              >
+                {l}
+              </Badge>
+            ))}
+          </div>
+        )}
+      </FieldRow>
+    );
+  }
+
   return (
     <FieldRow label={label} saving={saving}>
       <MultiSelect
@@ -221,6 +292,7 @@ interface EditableFileProps {
   label: string;
   accept?: string;
   saving?: boolean;
+  readOnly?: boolean;
 }
 
 export function EditableFile({
@@ -229,7 +301,20 @@ export function EditableFile({
   label,
   accept,
   saving,
+  readOnly,
 }: EditableFileProps) {
+  if (readOnly) {
+    return (
+      <FieldRow label={label}>
+        {value ? (
+          <img src={value} alt="" className="h-16 rounded object-cover" />
+        ) : (
+          <ReadOnlyValue empty placeholder="No file" />
+        )}
+      </FieldRow>
+    );
+  }
+
   return (
     <FieldRow label={label} saving={saving}>
       <FileUpload value={value ?? undefined} onChange={onSave} accept={accept} />
@@ -247,6 +332,7 @@ interface EditableTagsProps {
   label: string;
   placeholder?: string;
   saving?: boolean;
+  readOnly?: boolean;
 }
 
 export function EditableTags({
@@ -255,6 +341,7 @@ export function EditableTags({
   label,
   placeholder = "Type and press Enter",
   saving,
+  readOnly,
 }: EditableTagsProps) {
   const [input, setInput] = useState("");
   const tags = value ?? [];
@@ -270,6 +357,28 @@ export function EditableTags({
   const removeTag = (tag: string) => {
     onSave(tags.filter((t) => t !== tag));
   };
+
+  if (readOnly) {
+    return (
+      <FieldRow label={label}>
+        {tags.length === 0 ? (
+          <ReadOnlyValue empty placeholder={placeholder} />
+        ) : (
+          <div className="flex flex-wrap items-center gap-1 px-2">
+            {tags.map((tag) => (
+              <Badge
+                key={tag}
+                variant="secondary"
+                className="h-5 rounded px-1.5 text-[11px] font-normal"
+              >
+                {tag}
+              </Badge>
+            ))}
+          </div>
+        )}
+      </FieldRow>
+    );
+  }
 
   return (
     <FieldRow label={label} saving={saving}>

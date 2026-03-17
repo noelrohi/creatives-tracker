@@ -6,9 +6,6 @@ import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTRPC } from "@/lib/trpc/client";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -18,10 +15,18 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { EditableText, EditableSelect } from "@/components/editable-field";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { Trash2, ArrowLeft, Plus } from "lucide-react";
+import { ButtonGroup } from "@/components/ui/button-group";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Trash2, ArrowLeft, MoreHorizontalIcon, Pencil, Plus } from "lucide-react";
+import { AdSetFormDialog } from "../ad-set-form-dialog";
+import { AddPerformanceLogDialog } from "../add-performance-log-dialog";
 
 export default function AdSetDetailPage() {
   const params = useParams();
@@ -30,34 +35,12 @@ export default function AdSetDetailPage() {
   const queryClient = useQueryClient();
   const id = params.id as string;
 
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [addLogOpen, setAddLogOpen] = useState(false);
+
   const adSet = useQuery(trpc.adSet.getById.queryOptions({ id }));
   const logs = useQuery(trpc.performanceLog.listByAdSet.queryOptions({ adSetId: id }));
-  const creatives = useQuery(trpc.adCreative.list.queryOptions({}));
-  const campaigns = useQuery(trpc.campaignConfig.list.queryOptions());
-  const landingPages = useQuery(trpc.landingPage.list.queryOptions());
-
-  const [showLogForm, setShowLogForm] = useState(false);
-  const [savingField, setSavingField] = useState<string | null>(null);
-
-  // Build a flat list of landing page versions for the select
-  const [selectedLpId, setSelectedLpId] = useState<string | null>(null);
-  const landingPageVersions = useQuery({
-    ...trpc.landingPage.listVersions.queryOptions({ landingPageId: selectedLpId ?? "" }),
-    enabled: !!selectedLpId,
-  });
-
-  const updateMutation = useMutation({
-    ...trpc.adSet.update.mutationOptions(),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: trpc.adSet.getById.queryKey({ id }) });
-      queryClient.invalidateQueries({ queryKey: trpc.adSet.list.queryKey() });
-      setSavingField(null);
-    },
-    onError: (error) => {
-      toast.error(error.message);
-      setSavingField(null);
-    },
-  });
 
   const deleteMutation = useMutation({
     ...trpc.adSet.delete.mutationOptions(),
@@ -70,24 +53,18 @@ export default function AdSetDetailPage() {
     },
   });
 
-  const saveField = (field: string, value: unknown) => {
-    setSavingField(field);
-    updateMutation.mutate({ id, [field]: value });
-  };
-
   if (adSet.isLoading) {
     return (
       <div className="flex flex-col gap-6">
         <Skeleton className="h-10 w-64" />
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex flex-col gap-2">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <Skeleton key={i} className="h-10 w-full" />
-              ))}
+        <div className="max-w-2xl space-y-0 divide-y rounded-lg border px-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="grid grid-cols-[140px_1fr] items-baseline gap-4 py-3">
+              <Skeleton className="h-4 w-20" />
+              <Skeleton className="h-4 w-40" />
             </div>
-          </CardContent>
-        </Card>
+          ))}
+        </div>
         <Skeleton className="h-6 w-36" />
         <Skeleton className="h-32 w-full" />
       </div>
@@ -100,28 +77,6 @@ export default function AdSetDetailPage() {
 
   const data = adSet.data;
 
-  const creativeOptions = (creatives.data ?? []).map((c) => ({
-    label: c.name,
-    value: c.id,
-  }));
-
-  const campaignOptions = (campaigns.data ?? []).map((c) => ({
-    label: c.name,
-    value: c.id,
-  }));
-
-  // Build LP options as "PageName" for the first step
-  const lpOptions = (landingPages.data ?? []).map((lp) => ({
-    label: lp.name,
-    value: lp.id,
-  }));
-
-  // Build version options for the selected LP
-  const versionOptions = (landingPageVersions.data ?? []).map((v) => ({
-    label: `v${v.version} - ${v.pageType}`,
-    value: v.id,
-  }));
-
   return (
     <div className="flex flex-col gap-6">
       {/* Header */}
@@ -132,133 +87,63 @@ export default function AdSetDetailPage() {
               <ArrowLeft className="size-4" />
             </Link>
           </Button>
-          <div className="flex-1">
-            <input
-              type="text"
-              defaultValue={data.name}
-              className="w-full border-none bg-transparent text-2xl font-semibold tracking-tight outline-none placeholder:text-muted-foreground/60 focus:ring-0"
-              placeholder="Untitled Ad Set"
-              onBlur={(e) => {
-                const val = e.target.value.trim();
-                if (val && val !== data.name) {
-                  saveField("name", val);
-                }
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  (e.target as HTMLInputElement).blur();
-                }
-              }}
-            />
-          </div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {data.name || "Untitled Ad Set"}
+          </h1>
         </div>
-        <ConfirmDialog
-          title="Delete ad set"
-          description="This will permanently delete this ad set and its performance logs."
-          confirmLabel="Delete"
-          onConfirm={() => deleteMutation.mutate({ id })}
-          loading={deleteMutation.isPending}
-          trigger={
-            <Button variant="ghost" size="sm" className="text-muted-foreground/50 hover:text-destructive">
-              <Trash2 className="mr-1.5 size-3.5" /> Delete
-            </Button>
-          }
-        />
+        <ButtonGroup>
+          <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+            <Pencil className="mr-1.5 size-3.5" /> Edit
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="icon-sm" aria-label="More options">
+                <MoreHorizontalIcon />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem variant="destructive" onClick={() => setDeleteOpen(true)}>
+                <Trash2 /> Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </ButtonGroup>
       </div>
 
-      {/* Section 1: Ad Set Info */}
-      <div className="max-w-2xl divide-y rounded-lg border">
-        <EditableSelect
-          value={data.adCreativeId}
-          onSave={(v) => saveField("adCreativeId", v || null)}
-          options={creativeOptions}
-          placeholder="Select creative..."
-          label="Creative"
-          saving={savingField === "adCreativeId"}
-        />
-        <div className="group grid grid-cols-[140px_1fr] items-center gap-3 rounded-md px-3 py-2 hover:bg-muted/50">
+      {/* Read-only detail */}
+      <div className="max-w-2xl divide-y rounded-lg border px-4">
+        <div className="grid grid-cols-[140px_1fr] items-baseline gap-4 py-3">
+          <span className="text-sm text-muted-foreground">Creative</span>
+          <span className="text-sm">{data.adCreativeName || "\u2014"}</span>
+        </div>
+        <div className="grid grid-cols-[140px_1fr] items-baseline gap-4 py-3">
           <span className="text-sm text-muted-foreground">Landing Page</span>
-          <div className="flex flex-col gap-2">
-            {data.landingPageName ? (
-              <span className="text-sm">
-                {data.landingPageName} v{data.landingPageVersion}
-              </span>
-            ) : (
-              <span className="text-sm text-muted-foreground/60">No version linked</span>
-            )}
-            <div className="flex items-center gap-2">
-              <select
-                className="h-7 rounded border bg-transparent px-2 text-xs"
-                value={selectedLpId ?? ""}
-                onChange={(e) => setSelectedLpId(e.target.value || null)}
-              >
-                <option value="">Select page...</option>
-                {lpOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-              {selectedLpId && (
-                <select
-                  className="h-7 rounded border bg-transparent px-2 text-xs"
-                  value=""
-                  onChange={(e) => {
-                    if (e.target.value) {
-                      saveField("landingPageVersionId", e.target.value);
-                      setSelectedLpId(null);
-                    }
-                  }}
-                >
-                  <option value="">Select version...</option>
-                  {versionOptions.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
-          </div>
+          <span className="text-sm">
+            {data.landingPageName
+              ? `${data.landingPageName} v${data.landingPageVersion}`
+              : "\u2014"}
+          </span>
         </div>
-        <EditableSelect
-          value={data.campaignConfigId}
-          onSave={(v) => saveField("campaignConfigId", v || null)}
-          options={campaignOptions}
-          placeholder="Select campaign..."
-          label="Campaign"
-          saving={savingField === "campaignConfigId"}
-        />
-        <EditableText
-          value={data.notes}
-          onSave={(v) => saveField("notes", v || null)}
-          placeholder="Add notes..."
-          label="Notes"
-          multiline
-          saving={savingField === "notes"}
-        />
+        <div className="grid grid-cols-[140px_1fr] items-baseline gap-4 py-3">
+          <span className="text-sm text-muted-foreground">Campaign</span>
+          <span className="text-sm">{data.campaignConfigName || "\u2014"}</span>
+        </div>
+        <div className="grid grid-cols-[140px_1fr] items-baseline gap-4 py-3">
+          <span className="text-sm text-muted-foreground">Notes</span>
+          <span className="whitespace-pre-wrap text-sm">
+            {data.notes || "\u2014"}
+          </span>
+        </div>
       </div>
 
-      {/* Section 2: Performance Logs */}
+      {/* Performance Logs */}
       <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Performance Logs</h2>
-          <Button onClick={() => setShowLogForm(!showLogForm)} size="sm">
-            <Plus className="mr-2 size-4" /> Add Performance Log
+          <Button onClick={() => setAddLogOpen(true)} size="sm">
+            <Plus className="mr-1.5 size-3.5" /> Add Log
           </Button>
         </div>
-
-        {showLogForm && (
-          <AddPerformanceLogForm
-            adSetId={id}
-            onSuccess={() => {
-              queryClient.invalidateQueries({
-                queryKey: trpc.performanceLog.listByAdSet.queryKey({ adSetId: id }),
-              });
-              setShowLogForm(false);
-            }}
-          />
-        )}
 
         <div className="rounded-lg border">
           <Table>
@@ -279,17 +164,22 @@ export default function AdSetDetailPage() {
                   <TableCell>
                     {log.dateStart} &mdash; {log.dateEnd}
                   </TableCell>
-                  <TableCell>{log.roas ?? "-"}</TableCell>
-                  <TableCell>{log.cpa ? `$${log.cpa}` : "-"}</TableCell>
-                  <TableCell>{log.ctr ? `${log.ctr}%` : "-"}</TableCell>
-                  <TableCell>{log.conversionRate ? `${log.conversionRate}%` : "-"}</TableCell>
-                  <TableCell>{log.spend ? `$${log.spend}` : "-"}</TableCell>
-                  <TableCell>{log.conversions ?? "-"}</TableCell>
+                  <TableCell>{log.roas ?? "\u2014"}</TableCell>
+                  <TableCell>{log.cpa ? `$${log.cpa}` : "\u2014"}</TableCell>
+                  <TableCell>{log.ctr ? `${log.ctr}%` : "\u2014"}</TableCell>
+                  <TableCell>
+                    {log.conversionRate ? `${log.conversionRate}%` : "\u2014"}
+                  </TableCell>
+                  <TableCell>{log.spend ? `$${log.spend}` : "\u2014"}</TableCell>
+                  <TableCell>{log.conversions ?? "\u2014"}</TableCell>
                 </TableRow>
               ))}
               {logs.data?.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground">
+                  <TableCell
+                    colSpan={7}
+                    className="text-center text-muted-foreground"
+                  >
                     No performance logs yet.
                   </TableCell>
                 </TableRow>
@@ -298,115 +188,39 @@ export default function AdSetDetailPage() {
           </Table>
         </div>
       </div>
+
+      {/* Dialogs */}
+      <AdSetFormDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        adSet={{
+          id: data.id,
+          name: data.name,
+          adCreativeId: data.adCreativeId,
+          landingPageVersionId: data.landingPageVersionId,
+          campaignConfigId: data.campaignConfigId,
+          notes: data.notes,
+        }}
+        onSuccess={() => {
+          queryClient.invalidateQueries({
+            queryKey: trpc.adSet.getById.queryKey({ id }),
+          });
+        }}
+      />
+      <AddPerformanceLogDialog
+        open={addLogOpen}
+        onOpenChange={setAddLogOpen}
+        adSetId={id}
+      />
+      <ConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title="Delete ad set"
+        description="This will permanently delete this ad set and its performance logs."
+        confirmLabel="Delete"
+        onConfirm={() => deleteMutation.mutate({ id })}
+        loading={deleteMutation.isPending}
+      />
     </div>
-  );
-}
-
-function AddPerformanceLogForm({
-  adSetId,
-  onSuccess,
-}: {
-  adSetId: string;
-  onSuccess: () => void;
-}) {
-  const trpc = useTRPC();
-
-  const [form, setForm] = useState({
-    dateStart: "",
-    dateEnd: "",
-    roas: "",
-    cpa: "",
-    ctr: "",
-    conversionRate: "",
-    spend: "",
-    conversions: "",
-  });
-
-  const createLog = useMutation({
-    ...trpc.performanceLog.create.mutationOptions(),
-    onSuccess: () => {
-      toast.success("Performance log added");
-      onSuccess();
-    },
-    onError: (error) => {
-      toast.error(error.message);
-    },
-  });
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!form.dateStart || !form.dateEnd) {
-      toast.error("Date range is required");
-      return;
-    }
-    createLog.mutate({
-      adSetId,
-      dateStart: form.dateStart,
-      dateEnd: form.dateEnd,
-      roas: form.roas || undefined,
-      cpa: form.cpa || undefined,
-      ctr: form.ctr || undefined,
-      conversionRate: form.conversionRate || undefined,
-      spend: form.spend || undefined,
-      conversions: form.conversions ? parseInt(form.conversions, 10) : undefined,
-    });
-  };
-
-  const update = (field: string) => (e: React.ChangeEvent<HTMLInputElement>) => {
-    setForm((prev) => ({ ...prev, [field]: e.target.value }));
-  };
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>New Performance Log</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="dateStart">Date Start</Label>
-              <Input id="dateStart" type="date" value={form.dateStart} onChange={update("dateStart")} />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="dateEnd">Date End</Label>
-              <Input id="dateEnd" type="date" value={form.dateEnd} onChange={update("dateEnd")} />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="roas">ROAS</Label>
-              <Input id="roas" value={form.roas} onChange={update("roas")} placeholder="e.g. 3.5" />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="cpa">CPA</Label>
-              <Input id="cpa" value={form.cpa} onChange={update("cpa")} placeholder="e.g. 25.00" />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="ctr">CTR (%)</Label>
-              <Input id="ctr" value={form.ctr} onChange={update("ctr")} placeholder="e.g. 2.5" />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="conversionRate">Conv Rate (%)</Label>
-              <Input id="conversionRate" value={form.conversionRate} onChange={update("conversionRate")} placeholder="e.g. 4.2" />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="spend">Spend</Label>
-              <Input id="spend" value={form.spend} onChange={update("spend")} placeholder="e.g. 500.00" />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="conversions">Conversions</Label>
-              <Input id="conversions" value={form.conversions} onChange={update("conversions")} placeholder="e.g. 20" />
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <Button type="submit" disabled={createLog.isPending}>
-              {createLog.isPending ? "Adding..." : "Add Log"}
-            </Button>
-            <Button type="button" variant="outline" onClick={onSuccess}>
-              Cancel
-            </Button>
-          </div>
-        </form>
-      </CardContent>
-    </Card>
   );
 }

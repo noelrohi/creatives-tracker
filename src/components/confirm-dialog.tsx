@@ -13,13 +13,15 @@ import {
 import { Button } from "@/components/ui/button";
 
 interface ConfirmDialogProps {
-  trigger: React.ReactNode;
+  trigger?: React.ReactNode;
   title: string;
   description: string;
   confirmLabel?: string;
   onConfirm: () => void;
   variant?: "destructive" | "default";
   loading?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 export function ConfirmDialog({
@@ -30,10 +32,12 @@ export function ConfirmDialog({
   onConfirm,
   variant = "destructive",
   loading,
+  open,
+  onOpenChange,
 }: ConfirmDialogProps) {
   return (
-    <Dialog>
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      {trigger && <DialogTrigger asChild>{trigger}</DialogTrigger>}
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>

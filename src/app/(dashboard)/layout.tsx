@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import Script from "next/script";
 import { auth } from "@/lib/auth";
 import { AppSidebar } from "@/components/app-sidebar";
 import {
@@ -30,6 +31,13 @@ export default async function DashboardLayout({
         </header>
         <main className="flex-1 p-6">{children}</main>
       </SidebarInset>
+      {process.env.NODE_ENV === "development" && (
+        <Script
+          src="//unpkg.com/react-grab/dist/index.global.js"
+          crossOrigin="anonymous"
+          strategy="beforeInteractive"
+        />
+      )}
     </SidebarProvider>
   );
 }

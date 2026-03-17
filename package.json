@@ -8,9 +8,12 @@
     "start": "next start",
     "lint": "eslint",
     "db:push": "drizzle-kit push",
+    "db:push:prod": "drizzle-kit push --config=drizzle-prod.config.ts",
     "db:migrate": "drizzle-kit migrate",
+    "db:migrate:prod": "drizzle-kit migrate --config=drizzle-prod.config.ts",
     "db:generate": "drizzle-kit generate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "db:studio:prod": "drizzle-kit studio --config=drizzle-prod.config.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

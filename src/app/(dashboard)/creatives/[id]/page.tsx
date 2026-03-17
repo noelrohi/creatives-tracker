@@ -10,40 +10,23 @@ import {
 } from "@tanstack/react-query";
 import { useTRPC } from "@/lib/trpc/client";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  EditableText,
-  EditableSelect,
-  EditableMultiSelect,
-  EditableFile,
-} from "@/components/editable-field";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { ArrowLeft, Trash2 } from "lucide-react";
+import { ButtonGroup } from "@/components/ui/button-group";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ArrowLeft, MoreHorizontalIcon, Pencil, Trash2 } from "lucide-react";
+import { CreativeFormDialog } from "../creative-form-dialog";
 
-const FORMAT_OPTIONS = [
-  { label: "Static", value: "static" },
-  { label: "Video", value: "video" },
-  { label: "UGC", value: "ugc" },
-  { label: "Carousel", value: "carousel" },
-];
-
-const AWARENESS_OPTIONS = [
-  { label: "Unaware", value: "unaware" },
-  { label: "Problem Aware", value: "problem_aware" },
-  { label: "Solution Aware", value: "solution_aware" },
-  { label: "Product Aware", value: "product_aware" },
-  { label: "Most Aware", value: "most_aware" },
-];
-
-const TONE_OPTIONS = [
-  { label: "Clinical", value: "clinical" },
-  { label: "Casual", value: "casual" },
-  { label: "Fear-based", value: "fear_based" },
-  { label: "Aspirational", value: "aspirational" },
-  { label: "Urgent", value: "urgent" },
-  { label: "Humorous", value: "humorous" },
-];
+function prettify(s: string | null | undefined) {
+  return s ? s.replace(/_/g, " ") : null;
+}
 
 export default function CreativeDetailPage() {
   const trpc = useTRPC();
@@ -52,27 +35,11 @@ export default function CreativeDetailPage() {
   const queryClient = useQueryClient();
   const id = params.id as string;
 
-  const [savingField, setSavingField] = useState<string | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const creative = useQuery(trpc.adCreative.getById.queryOptions({ id }));
   const landingPages = useQuery(trpc.landingPage.list.queryOptions());
-
-  const updateMutation = useMutation({
-    ...trpc.adCreative.update.mutationOptions(),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.adCreative.getById.queryKey({ id }),
-      });
-      queryClient.invalidateQueries({
-        queryKey: trpc.adCreative.list.queryKey(),
-      });
-      setSavingField(null);
-    },
-    onError: (error) => {
-      toast.error(error.message);
-      setSavingField(null);
-    },
-  });
 
   const deleteMutation = useMutation({
     ...trpc.adCreative.delete.mutationOptions(),
@@ -87,11 +54,6 @@ export default function CreativeDetailPage() {
       toast.error(error.message || "Failed to delete");
     },
   });
-
-  const saveField = (field: string, value: unknown) => {
-    setSavingField(field);
-    updateMutation.mutate({ id, [field]: value });
-  };
 
   if (creative.isLoading) {
     return (
@@ -128,193 +90,193 @@ export default function CreativeDetailPage() {
 
   const data = creative.data;
 
-  const landingPageOptions = (landingPages.data ?? []).map((lp) => ({
-    label: lp.name,
-    value: lp.id,
-  }));
+  const landingPageName =
+    landingPages.data?.find((lp) => lp.id === data.landingPageId)?.name ?? null;
+
+  const renderAsset = () => {
+    if (!data.assetUrl) return <span className="text-muted-foreground">—</span>;
+    if (data.assetUrl.match(/\.(mp4|webm|mov)(\?|$)/i)) {
+      return <span className="text-sm text-muted-foreground">Video file</span>;
+    }
+    return (
+      <img
+        src={data.assetUrl}
+        alt={data.name}
+        className="h-32 rounded object-cover"
+      />
+    );
+  };
+
+  const rows: { label: string; content: React.ReactNode }[] = [
+    {
+      label: "Asset",
+      content: renderAsset(),
+    },
+    {
+      label: "Format",
+      content: data.format ? (
+        <span className="capitalize">{data.format}</span>
+      ) : (
+        <span className="text-muted-foreground">—</span>
+      ),
+    },
+    {
+      label: "Angle",
+      content: data.angle ?? <span className="text-muted-foreground">—</span>,
+    },
+    {
+      label: "Persona",
+      content: data.persona ?? <span className="text-muted-foreground">—</span>,
+    },
+    {
+      label: "Awareness",
+      content: data.awarenessLevel ? (
+        <span className="capitalize">{prettify(data.awarenessLevel)}</span>
+      ) : (
+        <span className="text-muted-foreground">—</span>
+      ),
+    },
+    {
+      label: "Hook",
+      content: data.hook ?? <span className="text-muted-foreground">—</span>,
+    },
+    {
+      label: "Tone",
+      content:
+        data.tone && data.tone.length > 0 ? (
+          <div className="flex flex-wrap gap-1">
+            {data.tone.map((t) => (
+              <Badge key={t} variant="secondary" className="capitalize">
+                {t.replace(/_/g, " ")}
+              </Badge>
+            ))}
+          </div>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
+    },
+    {
+      label: "CTA",
+      content: data.cta ?? <span className="text-muted-foreground">—</span>,
+    },
+    {
+      label: "Landing Page",
+      content: landingPageName ?? (
+        <span className="text-muted-foreground">—</span>
+      ),
+    },
+    {
+      label: "Notes",
+      content: data.notes ? (
+        <span className="whitespace-pre-wrap">{data.notes}</span>
+      ) : (
+        <span className="text-muted-foreground">—</span>
+      ),
+    },
+  ];
 
   return (
     <div className="mx-auto max-w-2xl pt-2">
-      {/* Header — minimal: back arrow, title, ghost delete */}
-      <div className="group/header flex items-center gap-2 mb-6">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-7 shrink-0 text-muted-foreground/60 hover:text-foreground"
-          asChild
-        >
-          <Link href="/creatives">
-            <ArrowLeft className="size-3.5" />
-          </Link>
-        </Button>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 shrink-0 text-muted-foreground/60 hover:text-foreground"
+            asChild
+          >
+            <Link href="/creatives">
+              <ArrowLeft className="size-3.5" />
+            </Link>
+          </Button>
+          <h1 className="text-lg font-medium tracking-tight">
+            {data.name || "Untitled"}
+          </h1>
+        </div>
 
-        <EditableTitle
-          value={data.name}
-          onSave={(v) => saveField("name", v)}
-          saving={savingField === "name"}
-        />
-
-        <ConfirmDialog
-          title="Delete creative"
-          description="This will permanently delete this creative and all its data."
-          confirmLabel="Delete"
-          onConfirm={() => deleteMutation.mutate({ id })}
-          loading={deleteMutation.isPending}
-          trigger={
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-7 shrink-0 text-muted-foreground/30 opacity-0 transition-opacity group-hover/header:opacity-100 hover:text-destructive"
-            >
-              <Trash2 className="size-3.5" />
-            </Button>
-          }
-        />
+        <ButtonGroup>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setEditOpen(true)}
+          >
+            <Pencil className="mr-1.5 size-3.5" /> Edit
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon-sm"
+                aria-label="More options"
+              >
+                <MoreHorizontalIcon />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                variant="destructive"
+                onClick={() => setDeleteOpen(true)}
+              >
+                <Trash2 /> Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </ButtonGroup>
       </div>
 
-      {/* Properties — no card, no dividers. Just quiet rows. */}
-      <div className="-mx-2 space-y-px">
-        <EditableFile
-          label="Asset"
-          value={data.assetUrl}
-          onSave={(v) => saveField("assetUrl", v)}
-          accept="image/*,video/*"
-          saving={savingField === "assetUrl"}
-        />
-        <EditableSelect
-          label="Format"
-          value={data.format}
-          onSave={(v) => saveField("format", v)}
-          options={FORMAT_OPTIONS}
-          placeholder="Select format"
-          saving={savingField === "format"}
-        />
-        <EditableText
-          label="Angle"
-          value={data.angle}
-          onSave={(v) => saveField("angle", v)}
-          placeholder="e.g., sleep quality"
-          saving={savingField === "angle"}
-        />
-        <EditableText
-          label="Persona"
-          value={data.persona}
-          onSave={(v) => saveField("persona", v)}
-          placeholder="e.g., busy professionals"
-          saving={savingField === "persona"}
-        />
-        <EditableSelect
-          label="Awareness"
-          value={data.awarenessLevel}
-          onSave={(v) => saveField("awarenessLevel", v)}
-          options={AWARENESS_OPTIONS}
-          placeholder="Select level"
-          saving={savingField === "awarenessLevel"}
-        />
-        <EditableText
-          label="Hook"
-          value={data.hook}
-          onSave={(v) => saveField("hook", v)}
-          placeholder="First 3 seconds or headline"
-          saving={savingField === "hook"}
-        />
-        <EditableMultiSelect
-          label="Tone"
-          value={data.tone}
-          onSave={(v) => saveField("tone", v)}
-          options={TONE_OPTIONS}
-          placeholder="Add tone"
-          saving={savingField === "tone"}
-        />
-        <EditableText
-          label="CTA"
-          value={data.cta}
-          onSave={(v) => saveField("cta", v)}
-          placeholder="e.g., Shop Now"
-          saving={savingField === "cta"}
-        />
-        <EditableSelect
-          label="Landing Page"
-          value={data.landingPageId}
-          onSave={(v) => saveField("landingPageId", v)}
-          options={landingPageOptions}
-          placeholder="Link a page"
-          saving={savingField === "landingPageId"}
-        />
+      {/* Properties */}
+      <dl className="-mx-2 divide-y divide-border/50">
+        {rows.map((row) => (
+          <div
+            key={row.label}
+            className="grid grid-cols-[120px_1fr] items-baseline gap-4 py-2.5 px-2"
+          >
+            <dt className="text-sm text-muted-foreground">{row.label}</dt>
+            <dd className="text-sm">{row.content}</dd>
+          </div>
+        ))}
+      </dl>
 
-        {/* Separator before notes */}
-        <div className="pt-2" />
-
-        <EditableText
-          label="Notes"
-          value={data.notes}
-          onSave={(v) => saveField("notes", v)}
-          placeholder="Add notes..."
-          multiline
-          saving={savingField === "notes"}
-        />
-      </div>
-
-      {/* Timestamp — barely visible */}
+      {/* Timestamp */}
       <p className="mt-8 text-[11px] text-muted-foreground/40 px-2">
         Created {new Date(data.createdAt).toLocaleDateString()} · Updated{" "}
         {new Date(data.updatedAt).toLocaleDateString()}
       </p>
-    </div>
-  );
-}
 
-// Title — large, clean, inline-editable. No borders until focused.
-function EditableTitle({
-  value,
-  onSave,
-  saving,
-}: {
-  value: string | null | undefined;
-  onSave: (value: string) => void;
-  saving?: boolean;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value ?? "");
-
-  const commit = () => {
-    setEditing(false);
-    if (draft.trim() && draft !== (value ?? "")) onSave(draft.trim());
-    else setDraft(value ?? "");
-  };
-
-  if (editing) {
-    return (
-      <input
-        autoFocus
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") commit();
-          if (e.key === "Escape") {
-            setDraft(value ?? "");
-            setEditing(false);
-          }
+      {/* Dialogs */}
+      <CreativeFormDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        creative={{
+          id: data.id,
+          name: data.name,
+          assetUrl: data.assetUrl,
+          format: data.format,
+          angle: data.angle,
+          persona: data.persona,
+          awarenessLevel: data.awarenessLevel,
+          hook: data.hook,
+          tone: data.tone,
+          cta: data.cta,
+          landingPageId: data.landingPageId,
+          notes: data.notes,
         }}
-        className="flex-1 bg-transparent text-lg font-medium tracking-tight text-foreground outline-none"
+        onSuccess={() => {
+          queryClient.invalidateQueries({
+            queryKey: trpc.adCreative.getById.queryKey({ id }),
+          });
+        }}
       />
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={() => {
-        setDraft(value ?? "");
-        setEditing(true);
-      }}
-      className="flex flex-1 items-center gap-2 text-left text-lg font-medium tracking-tight text-foreground transition-colors hover:text-muted-foreground"
-    >
-      {value || "Untitled"}
-      {saving ? (
-        <span className="inline-block size-1 animate-pulse rounded-full bg-muted-foreground/50" />
-      ) : null}
-    </button>
+      <ConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title="Delete creative"
+        description="This will permanently delete this creative and all its data."
+        confirmLabel="Delete"
+        onConfirm={() => deleteMutation.mutate({ id })}
+        loading={deleteMutation.isPending}
+      />
+    </div>
   );
 }
