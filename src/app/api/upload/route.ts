@@ -18,7 +18,10 @@ export async function POST(request: Request) {
     return Response.json({ error: "No file provided" }, { status: 400 });
   }
 
-  const blob = await put(file.name, file, {
+  const env = process.env.NODE_ENV === "production" ? "prod" : "dev";
+  const path = `${env}/${file.name}`;
+
+  const blob = await put(path, file, {
     access: "public",
   });
 
