@@ -5,22 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1773737361818,
-      "tag": "0000_solid_revanche",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1773738514933,
-      "tag": "0001_simple_white_queen",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1773739948255,
-      "tag": "0002_orange_master_mold",
+      "when": 1773766349232,
+      "tag": "0000_sad_bromley",
       "breakpoints": true
     }
   ]

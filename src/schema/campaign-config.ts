@@ -1,6 +1,6 @@
 import { relations } from "drizzle-orm";
 import { pgTable, text, timestamp, numeric, index } from "drizzle-orm/pg-core";
-import { user } from "./auth";
+import { user, organization } from "./auth";
 import { objectiveEnum } from "./enums";
 
 export const campaignConfigs = pgTable(
@@ -18,6 +18,9 @@ export const campaignConfigs = pgTable(
     dailyBudget: numeric("daily_budget"),
     placements: text("placements").array(),
     notes: text("notes"),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
     createdBy: text("created_by")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
@@ -27,7 +30,10 @@ export const campaignConfigs = pgTable(
       .$onUpdate(() => new Date())
       .notNull(),
   },
-  (table) => [index("campaign_config_created_by_idx").on(table.createdBy)],
+  (table) => [
+    index("campaign_config_organization_id_idx").on(table.organizationId),
+    index("campaign_config_created_by_idx").on(table.createdBy),
+  ],
 );
 
 export const campaignConfigRelations = relations(campaignConfigs, ({ one }) => ({

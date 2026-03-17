@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import { router, protectedProcedure } from "../init";
 import { db } from "@/db";
 import { performanceLogs } from "@/schema/performance-log";
@@ -7,11 +7,11 @@ import { performanceLogs } from "@/schema/performance-log";
 export const performanceLogRouter = router({
   listByAdSet: protectedProcedure
     .input(z.object({ adSetId: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       return db
         .select()
         .from(performanceLogs)
-        .where(eq(performanceLogs.adSetId, input.adSetId))
+        .where(and(eq(performanceLogs.adSetId, input.adSetId), eq(performanceLogs.organizationId, ctx.organizationId)))
         .orderBy(desc(performanceLogs.dateStart));
     }),
 
@@ -29,10 +29,10 @@ export const performanceLogRouter = router({
         dateEnd: z.string(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const [log] = await db
         .insert(performanceLogs)
-        .values(input)
+        .values({ ...input, organizationId: ctx.organizationId })
         .returning();
       return log;
     }),
@@ -51,21 +51,21 @@ export const performanceLogRouter = router({
         dateEnd: z.string().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const { id, ...data } = input;
       const [log] = await db
         .update(performanceLogs)
         .set(data)
-        .where(eq(performanceLogs.id, id))
+        .where(and(eq(performanceLogs.id, id), eq(performanceLogs.organizationId, ctx.organizationId)))
         .returning();
       return log;
     }),
 
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       await db
         .delete(performanceLogs)
-        .where(eq(performanceLogs.id, input.id));
+        .where(and(eq(performanceLogs.id, input.id), eq(performanceLogs.organizationId, ctx.organizationId)));
     }),
 });

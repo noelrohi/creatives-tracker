@@ -1,24 +1,25 @@
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import { router, protectedProcedure } from "../init";
 import { db } from "@/db";
 import { campaignConfigs } from "@/schema/campaign-config";
 
 export const campaignConfigRouter = router({
-  list: protectedProcedure.query(async () => {
+  list: protectedProcedure.query(async ({ ctx }) => {
     return db
       .select()
       .from(campaignConfigs)
+      .where(eq(campaignConfigs.organizationId, ctx.organizationId))
       .orderBy(desc(campaignConfigs.createdAt));
   }),
 
   getById: protectedProcedure
     .input(z.object({ id: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const [config] = await db
         .select()
         .from(campaignConfigs)
-        .where(eq(campaignConfigs.id, input.id));
+        .where(and(eq(campaignConfigs.id, input.id), eq(campaignConfigs.organizationId, ctx.organizationId)));
       if (!config) throw new Error("Campaign config not found");
       return config;
     }),
@@ -31,6 +32,7 @@ export const campaignConfigRouter = router({
         .values({
           name: input?.name ?? "Untitled Campaign",
           createdBy: ctx.session.user.id,
+          organizationId: ctx.organizationId,
         })
         .returning();
       return config;
@@ -54,21 +56,21 @@ export const campaignConfigRouter = router({
         notes: z.string().nullable().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const { id, ...data } = input;
       const [config] = await db
         .update(campaignConfigs)
         .set(data)
-        .where(eq(campaignConfigs.id, id))
+        .where(and(eq(campaignConfigs.id, id), eq(campaignConfigs.organizationId, ctx.organizationId)))
         .returning();
       return config;
     }),
 
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       await db
         .delete(campaignConfigs)
-        .where(eq(campaignConfigs.id, input.id));
+        .where(and(eq(campaignConfigs.id, input.id), eq(campaignConfigs.organizationId, ctx.organizationId)));
     }),
 });

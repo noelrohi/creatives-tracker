@@ -26,8 +26,8 @@ export const adCreativeRouter = router({
         })
         .optional(),
     )
-    .query(async ({ input }) => {
-      const conditions: SQL[] = [];
+    .query(async ({ input, ctx }) => {
+      const conditions: SQL[] = [eq(adCreatives.organizationId, ctx.organizationId)];
       if (input?.format) {
         conditions.push(eq(adCreatives.format, input.format));
       }
@@ -67,7 +67,7 @@ export const adCreativeRouter = router({
 
   getById: protectedProcedure
     .input(z.object({ id: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const [creative] = await db
         .select({
           id: adCreatives.id,
@@ -89,7 +89,7 @@ export const adCreativeRouter = router({
         })
         .from(adCreatives)
         .leftJoin(landingPages, eq(adCreatives.landingPageId, landingPages.id))
-        .where(eq(adCreatives.id, input.id));
+        .where(and(eq(adCreatives.id, input.id), eq(adCreatives.organizationId, ctx.organizationId)));
       if (!creative) throw new Error("Ad creative not found");
       return creative;
     }),
@@ -102,6 +102,7 @@ export const adCreativeRouter = router({
         .values({
           name: input?.name ?? "Untitled Creative",
           createdBy: ctx.session.user.id,
+          organizationId: ctx.organizationId,
         })
         .returning();
       return creative;
@@ -127,19 +128,19 @@ export const adCreativeRouter = router({
         notes: z.string().nullable().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const { id, ...data } = input;
       const [creative] = await db
         .update(adCreatives)
         .set(data)
-        .where(eq(adCreatives.id, id))
+        .where(and(eq(adCreatives.id, id), eq(adCreatives.organizationId, ctx.organizationId)))
         .returning();
       return creative;
     }),
 
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
-      await db.delete(adCreatives).where(eq(adCreatives.id, input.id));
+    .mutation(async ({ input, ctx }) => {
+      await db.delete(adCreatives).where(and(eq(adCreatives.id, input.id), eq(adCreatives.organizationId, ctx.organizationId)));
     }),
 });

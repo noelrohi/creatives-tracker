@@ -1,27 +1,27 @@
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import { router, protectedProcedure } from "../init";
 import { db } from "@/db";
 import { landingPages, landingPageVersions } from "@/schema/landing-page";
 
 export const landingPageRouter = router({
-  list: protectedProcedure.query(async () => {
-    return db.select().from(landingPages).orderBy(desc(landingPages.createdAt));
+  list: protectedProcedure.query(async ({ ctx }) => {
+    return db.select().from(landingPages).where(eq(landingPages.organizationId, ctx.organizationId)).orderBy(desc(landingPages.createdAt));
   }),
 
   getById: protectedProcedure
     .input(z.object({ id: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const [page] = await db
         .select()
         .from(landingPages)
-        .where(eq(landingPages.id, input.id));
+        .where(and(eq(landingPages.id, input.id), eq(landingPages.organizationId, ctx.organizationId)));
       if (!page) throw new Error("Landing page not found");
 
       const versions = await db
         .select()
         .from(landingPageVersions)
-        .where(eq(landingPageVersions.landingPageId, input.id))
+        .where(and(eq(landingPageVersions.landingPageId, input.id), eq(landingPageVersions.organizationId, ctx.organizationId)))
         .orderBy(desc(landingPageVersions.version));
 
       return { ...page, versions };
@@ -41,6 +41,7 @@ export const landingPageRouter = router({
           name: input?.name || "Untitled Landing Page",
           url: input?.url || "",
           createdBy: ctx.session.user.id,
+          organizationId: ctx.organizationId,
         })
         .returning();
       return page;
@@ -54,20 +55,20 @@ export const landingPageRouter = router({
         url: z.string().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const { id, ...data } = input;
       const [page] = await db
         .update(landingPages)
         .set(data)
-        .where(eq(landingPages.id, id))
+        .where(and(eq(landingPages.id, id), eq(landingPages.organizationId, ctx.organizationId)))
         .returning();
       return page;
     }),
 
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
-      await db.delete(landingPages).where(eq(landingPages.id, input.id));
+    .mutation(async ({ input, ctx }) => {
+      await db.delete(landingPages).where(and(eq(landingPages.id, input.id), eq(landingPages.organizationId, ctx.organizationId)));
     }),
 
   createVersion: protectedProcedure
@@ -108,6 +109,7 @@ export const landingPageRouter = router({
           ...input,
           version: nextVersion,
           createdBy: ctx.session.user.id,
+          organizationId: ctx.organizationId,
         })
         .returning();
       return version;
@@ -115,11 +117,11 @@ export const landingPageRouter = router({
 
   listVersions: protectedProcedure
     .input(z.object({ landingPageId: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       return db
         .select()
         .from(landingPageVersions)
-        .where(eq(landingPageVersions.landingPageId, input.landingPageId))
+        .where(and(eq(landingPageVersions.landingPageId, input.landingPageId), eq(landingPageVersions.organizationId, ctx.organizationId)))
         .orderBy(desc(landingPageVersions.version));
     }),
 });

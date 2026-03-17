@@ -1,6 +1,6 @@
 import { relations } from "drizzle-orm";
 import { pgTable, text, timestamp, index } from "drizzle-orm/pg-core";
-import { user } from "./auth";
+import { user, organization } from "./auth";
 import { adCreatives } from "./ad-creative";
 import { landingPageVersions } from "./landing-page";
 import { campaignConfigs } from "./campaign-config";
@@ -25,6 +25,9 @@ export const adSets = pgTable(
       { onDelete: "set null" },
     ),
     notes: text("notes"),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
     createdBy: text("created_by")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
@@ -35,6 +38,7 @@ export const adSets = pgTable(
       .notNull(),
   },
   (table) => [
+    index("ad_set_organization_id_idx").on(table.organizationId),
     index("ad_set_created_by_idx").on(table.createdBy),
     index("ad_set_ad_creative_id_idx").on(table.adCreativeId),
     index("ad_set_lp_version_id_idx").on(table.landingPageVersionId),

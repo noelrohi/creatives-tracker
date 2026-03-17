@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import { router, protectedProcedure } from "../init";
 import { db } from "@/db";
 import { adSets } from "@/schema/ad-set";
@@ -8,7 +8,7 @@ import { landingPageVersions, landingPages } from "@/schema/landing-page";
 import { campaignConfigs } from "@/schema/campaign-config";
 
 export const adSetRouter = router({
-  list: protectedProcedure.query(async () => {
+  list: protectedProcedure.query(async ({ ctx }) => {
     return db
       .select({
         id: adSets.id,
@@ -39,12 +39,13 @@ export const adSetRouter = router({
         campaignConfigs,
         eq(adSets.campaignConfigId, campaignConfigs.id),
       )
+      .where(eq(adSets.organizationId, ctx.organizationId))
       .orderBy(desc(adSets.createdAt));
   }),
 
   getById: protectedProcedure
     .input(z.object({ id: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const [adSet] = await db
         .select({
           id: adSets.id,
@@ -75,7 +76,7 @@ export const adSetRouter = router({
           campaignConfigs,
           eq(adSets.campaignConfigId, campaignConfigs.id),
         )
-        .where(eq(adSets.id, input.id));
+        .where(and(eq(adSets.id, input.id), eq(adSets.organizationId, ctx.organizationId)));
       if (!adSet) throw new Error("Ad set not found");
       return adSet;
     }),
@@ -88,6 +89,7 @@ export const adSetRouter = router({
         .values({
           name: input?.name ?? "Untitled Ad Set",
           createdBy: ctx.session.user.id,
+          organizationId: ctx.organizationId,
         })
         .returning();
       return adSet;
@@ -104,19 +106,19 @@ export const adSetRouter = router({
         notes: z.string().nullable().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const { id, ...data } = input;
       const [adSet] = await db
         .update(adSets)
         .set(data)
-        .where(eq(adSets.id, id))
+        .where(and(eq(adSets.id, id), eq(adSets.organizationId, ctx.organizationId)))
         .returning();
       return adSet;
     }),
 
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
-      await db.delete(adSets).where(eq(adSets.id, input.id));
+    .mutation(async ({ input, ctx }) => {
+      await db.delete(adSets).where(and(eq(adSets.id, input.id), eq(adSets.organizationId, ctx.organizationId)));
     }),
 });
