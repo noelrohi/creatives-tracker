@@ -124,4 +124,49 @@ export const landingPageRouter = router({
         .where(and(eq(landingPageVersions.landingPageId, input.landingPageId), eq(landingPageVersions.organizationId, ctx.organizationId)))
         .orderBy(desc(landingPageVersions.version));
     }),
+
+  updateVersion: protectedProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        screenshotUrl: z.string().nullable().optional(),
+        pageType: z
+          .enum(["product_page", "advertorial", "listicle", "quiz", "other"])
+          .optional(),
+        heroCopy: z.string().min(1).optional(),
+        benefits: z.array(z.string()).optional(),
+        socialProofType: z.array(z.string()).optional(),
+        funnelPosition: z
+          .enum(["cold_traffic_entry", "retarget", "upsell"])
+          .optional(),
+        notes: z.string().nullable().optional(),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const { id, ...data } = input;
+      const [version] = await db
+        .update(landingPageVersions)
+        .set(data)
+        .where(
+          and(
+            eq(landingPageVersions.id, id),
+            eq(landingPageVersions.organizationId, ctx.organizationId),
+          ),
+        )
+        .returning();
+      return version;
+    }),
+
+  deleteVersion: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      await db
+        .delete(landingPageVersions)
+        .where(
+          and(
+            eq(landingPageVersions.id, input.id),
+            eq(landingPageVersions.organizationId, ctx.organizationId),
+          ),
+        );
+    }),
 });

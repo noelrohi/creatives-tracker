@@ -27,7 +27,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { toast } from "sonner";
 import { ArrowLeft, MoreHorizontalIcon, Pencil, Plus, Trash2 } from "lucide-react";
 import { LandingPageFormDialog } from "../landing-page-form-dialog";
-import { AddVersionDialog } from "../add-version-dialog";
+import { VersionDialog } from "../add-version-dialog";
 
 export default function LandingPageDetailPage() {
   const trpc = useTRPC();
@@ -39,6 +39,17 @@ export default function LandingPageDetailPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [addVersionOpen, setAddVersionOpen] = useState(false);
+  const [editingVersion, setEditingVersion] = useState<{
+    id: string;
+    version: number;
+    screenshotUrl: string | null;
+    pageType: string;
+    heroCopy: string;
+    benefits: string[];
+    socialProofType: string[];
+    funnelPosition: string;
+    notes: string | null;
+  } | null>(null);
 
   const landingPage = useQuery(trpc.landingPage.getById.queryOptions({ id }));
 
@@ -183,7 +194,11 @@ export default function LandingPageDetailPage() {
               </TableRow>
             ) : (
               data.versions.map((version) => (
-                <TableRow key={version.id}>
+                <TableRow
+                  key={version.id}
+                  className="cursor-pointer hover:bg-muted/40"
+                  onClick={() => setEditingVersion(version)}
+                >
                   <TableCell className="font-medium">
                     v{version.version}
                   </TableCell>
@@ -220,10 +235,16 @@ export default function LandingPageDetailPage() {
           url: data.url,
         }}
       />
-      <AddVersionDialog
+      <VersionDialog
         open={addVersionOpen}
         onOpenChange={setAddVersionOpen}
         landingPageId={id}
+      />
+      <VersionDialog
+        open={!!editingVersion}
+        onOpenChange={(open) => { if (!open) setEditingVersion(null); }}
+        landingPageId={id}
+        version={editingVersion ?? undefined}
       />
       <ConfirmDialog
         open={deleteOpen}
