@@ -28,6 +28,7 @@ import { toast } from "sonner";
 interface VersionData {
   id: string;
   version: number;
+  url: string | null;
   screenshotUrl: string | null;
   pageType: string;
   heroCopy: string;
@@ -100,6 +101,7 @@ const FUNNEL_POSITION_OPTIONS = [
 // ── Form (child component, initializes from props) ─────────────────
 
 interface FormValues {
+  url: string;
   screenshotUrl?: string;
   pageType: "product_page" | "advertorial" | "listicle" | "quiz" | "other";
   heroCopy: string;
@@ -125,6 +127,7 @@ function VersionForm({
   const { register, handleSubmit, control } = useForm<FormValues>({
     defaultValues: version
       ? {
+          url: version.url ?? "",
           screenshotUrl: version.screenshotUrl ?? undefined,
           pageType: version.pageType as FormValues["pageType"],
           heroCopy: version.heroCopy,
@@ -134,6 +137,7 @@ function VersionForm({
           notes: version.notes ?? "",
         }
       : {
+          url: "",
           screenshotUrl: undefined,
           pageType: "product_page",
           heroCopy: "",
@@ -184,6 +188,7 @@ function VersionForm({
         id: version.id,
         ...rest,
         benefits,
+        url: rest.url || null,
         screenshotUrl: rest.screenshotUrl || null,
         notes: rest.notes || null,
       });
@@ -192,6 +197,7 @@ function VersionForm({
         landingPageId,
         ...rest,
         benefits,
+        url: rest.url || undefined,
         screenshotUrl: rest.screenshotUrl || undefined,
         notes: rest.notes || undefined,
       });
@@ -205,6 +211,15 @@ function VersionForm({
     >
       <div className="relative overflow-y-auto flex-1 px-1 -mx-1 [mask-image:linear-gradient(to_bottom,transparent,black_12px,black_calc(100%-12px),transparent)]">
         <div className="grid gap-4 sm:grid-cols-2">
+          <Field className="sm:col-span-2">
+            <FieldLabel>URL</FieldLabel>
+            <Input
+              {...register("url")}
+              placeholder="https://..."
+              type="url"
+            />
+          </Field>
+
           <Field>
             <FieldLabel>Page Type</FieldLabel>
             <Controller

@@ -44,6 +44,21 @@ export const landingPageRouter = router({
           organizationId: ctx.organizationId,
         })
         .returning();
+
+      // Auto-create v1
+      await db.insert(landingPageVersions).values({
+        landingPageId: page.id,
+        version: 1,
+        url: input?.url || "",
+        pageType: "product_page",
+        heroCopy: "",
+        benefits: [],
+        socialProofType: [],
+        funnelPosition: "cold_traffic_entry",
+        createdBy: ctx.session.user.id,
+        organizationId: ctx.organizationId,
+      });
+
       return page;
     }),
 
@@ -75,6 +90,7 @@ export const landingPageRouter = router({
     .input(
       z.object({
         landingPageId: z.string(),
+        url: z.string().optional(),
         screenshotUrl: z.string().optional(),
         pageType: z.enum([
           "product_page",
@@ -143,6 +159,7 @@ export const landingPageRouter = router({
         .values({
           landingPageId: source.landingPageId,
           version: nextVersion,
+          url: source.url,
           screenshotUrl: source.screenshotUrl,
           pageType: source.pageType,
           heroCopy: source.heroCopy,
@@ -171,6 +188,7 @@ export const landingPageRouter = router({
     .input(
       z.object({
         id: z.string(),
+        url: z.string().nullable().optional(),
         screenshotUrl: z.string().nullable().optional(),
         pageType: z
           .enum(["product_page", "advertorial", "listicle", "quiz", "other"])

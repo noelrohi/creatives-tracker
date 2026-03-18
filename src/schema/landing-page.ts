@@ -39,6 +39,7 @@ export const landingPageVersions = pgTable(
       .notNull()
       .references(() => landingPages.id, { onDelete: "cascade" }),
     version: integer("version").notNull(),
+    url: text("url"),
     screenshotUrl: text("screenshot_url"),
     pageType: pageTypeEnum("page_type").notNull(),
     heroCopy: text("hero_copy").notNull(),

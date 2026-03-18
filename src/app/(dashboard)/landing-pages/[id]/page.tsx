@@ -42,6 +42,7 @@ export default function LandingPageDetailPage() {
   const [editingVersion, setEditingVersion] = useState<{
     id: string;
     version: number;
+    url: string | null;
     screenshotUrl: string | null;
     pageType: string;
     heroCopy: string;
