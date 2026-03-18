@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/table";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { toast } from "sonner";
-import { ArrowLeft, MoreHorizontalIcon, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Copy, MoreHorizontalIcon, Pencil, Plus, Trash2 } from "lucide-react";
 import { LandingPageFormDialog } from "../landing-page-form-dialog";
 import { VersionDialog } from "../add-version-dialog";
 
@@ -52,6 +52,20 @@ export default function LandingPageDetailPage() {
   } | null>(null);
 
   const landingPage = useQuery(trpc.landingPage.getById.queryOptions({ id }));
+
+  const duplicateVersionMutation = useMutation({
+    ...trpc.landingPage.duplicateVersion.mutationOptions(),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({
+        queryKey: trpc.landingPage.getById.queryKey({ id }),
+      });
+      toast.success(`Duplicated as v${data.version}`);
+      setEditingVersion(data);
+    },
+    onError: (error) => {
+      toast.error(error.message);
+    },
+  });
 
   const deleteMutation = useMutation({
     ...trpc.landingPage.delete.mutationOptions(),
@@ -180,13 +194,14 @@ export default function LandingPageDetailPage() {
               <TableHead>Hero Copy</TableHead>
               <TableHead>Funnel Position</TableHead>
               <TableHead>Created</TableHead>
+              <TableHead className="w-10" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {data.versions.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={5}
+                  colSpan={6}
                   className="text-center text-muted-foreground"
                 >
                   No versions yet
@@ -194,11 +209,7 @@ export default function LandingPageDetailPage() {
               </TableRow>
             ) : (
               data.versions.map((version) => (
-                <TableRow
-                  key={version.id}
-                  className="cursor-pointer hover:bg-muted/40"
-                  onClick={() => setEditingVersion(version)}
-                >
+                <TableRow key={version.id}>
                   <TableCell className="font-medium">
                     v{version.version}
                   </TableCell>
@@ -217,6 +228,28 @@ export default function LandingPageDetailPage() {
                   </TableCell>
                   <TableCell className="text-muted-foreground">
                     {new Date(version.createdAt).toLocaleDateString()}
+                  </TableCell>
+                  <TableCell className="w-10">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon" className="size-7">
+                          <MoreHorizontalIcon className="size-3.5" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => setEditingVersion(version)}>
+                          <Pencil className="size-3.5" />
+                          Edit
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => duplicateVersionMutation.mutate({ id: version.id })}
+                          disabled={duplicateVersionMutation.isPending}
+                        >
+                          <Copy className="size-3.5" />
+                          Duplicate
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </TableCell>
                 </TableRow>
               ))

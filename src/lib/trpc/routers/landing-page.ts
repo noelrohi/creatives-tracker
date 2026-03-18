@@ -115,6 +115,48 @@ export const landingPageRouter = router({
       return version;
     }),
 
+  duplicateVersion: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      const [source] = await db
+        .select()
+        .from(landingPageVersions)
+        .where(
+          and(
+            eq(landingPageVersions.id, input.id),
+            eq(landingPageVersions.organizationId, ctx.organizationId),
+          ),
+        );
+      if (!source) throw new Error("Version not found");
+
+      const [latest] = await db
+        .select({ version: landingPageVersions.version })
+        .from(landingPageVersions)
+        .where(eq(landingPageVersions.landingPageId, source.landingPageId))
+        .orderBy(desc(landingPageVersions.version))
+        .limit(1);
+
+      const nextVersion = (latest?.version ?? 0) + 1;
+
+      const [duplicate] = await db
+        .insert(landingPageVersions)
+        .values({
+          landingPageId: source.landingPageId,
+          version: nextVersion,
+          screenshotUrl: source.screenshotUrl,
+          pageType: source.pageType,
+          heroCopy: source.heroCopy,
+          benefits: source.benefits,
+          socialProofType: source.socialProofType,
+          funnelPosition: source.funnelPosition,
+          notes: source.notes,
+          createdBy: ctx.session.user.id,
+          organizationId: ctx.organizationId,
+        })
+        .returning();
+      return duplicate;
+    }),
+
   listVersions: protectedProcedure
     .input(z.object({ landingPageId: z.string() }))
     .query(async ({ input, ctx }) => {
