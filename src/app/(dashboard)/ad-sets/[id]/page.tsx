@@ -24,8 +24,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Trash2, ArrowLeft, MoreHorizontalIcon, Pencil, Plus } from "lucide-react";
+import { Trash2, ArrowLeft, MoreHorizontalIcon, Pencil, Plus, Upload, Copy } from "lucide-react";
 import { AdSetFormDialog } from "../ad-set-form-dialog";
+import { TagInput } from "@/components/tag-input";
 import { AddPerformanceLogDialog } from "../add-performance-log-dialog";
 
 export default function AdSetDetailPage() {
@@ -41,6 +42,17 @@ export default function AdSetDetailPage() {
 
   const adSet = useQuery(trpc.adSet.getById.queryOptions({ id }));
   const logs = useQuery(trpc.performanceLog.listByAdSet.queryOptions({ adSetId: id }));
+
+  const duplicateMutation = useMutation({
+    ...trpc.adSet.duplicate.mutationOptions(),
+    onSuccess: (data) => {
+      toast.success("Ad set duplicated");
+      router.push(`/ad-sets/${data.id}`);
+    },
+    onError: (error) => {
+      toast.error(error.message);
+    },
+  });
 
   const deleteMutation = useMutation({
     ...trpc.adSet.delete.mutationOptions(),
@@ -102,6 +114,12 @@ export default function AdSetDetailPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onClick={() => duplicateMutation.mutate({ id })}
+                disabled={duplicateMutation.isPending}
+              >
+                <Copy /> Duplicate
+              </DropdownMenuItem>
               <DropdownMenuItem variant="destructive" onClick={() => setDeleteOpen(true)}>
                 <Trash2 /> Delete
               </DropdownMenuItem>
@@ -113,20 +131,40 @@ export default function AdSetDetailPage() {
       {/* Read-only detail */}
       <div className="max-w-2xl divide-y rounded-lg border px-4">
         <div className="grid grid-cols-[140px_1fr] items-baseline gap-4 py-3">
+          <span className="text-sm text-muted-foreground">Campaign</span>
+          {data.campaignConfigId ? (
+            <Link
+              href={`/campaigns/${data.campaignConfigId}`}
+              className="text-sm hover:underline"
+            >
+              {data.campaignConfigName}
+            </Link>
+          ) : (
+            <span className="text-sm text-muted-foreground/40">{"\u2014"}</span>
+          )}
+        </div>
+        <div className="grid grid-cols-[140px_1fr] items-baseline gap-4 py-3">
           <span className="text-sm text-muted-foreground">Creative</span>
-          <span className="text-sm">{data.adCreativeName || "\u2014"}</span>
+          {data.adCreativeId ? (
+            <Link
+              href={`/creatives/${data.adCreativeId}`}
+              className="text-sm hover:underline"
+            >
+              {data.adCreativeName}
+            </Link>
+          ) : (
+            <span className="text-sm text-muted-foreground/40">{"\u2014"}</span>
+          )}
         </div>
         <div className="grid grid-cols-[140px_1fr] items-baseline gap-4 py-3">
           <span className="text-sm text-muted-foreground">Landing Page</span>
-          <span className="text-sm">
-            {data.landingPageName
-              ? `${data.landingPageName} v${data.landingPageVersion}`
-              : "\u2014"}
-          </span>
-        </div>
-        <div className="grid grid-cols-[140px_1fr] items-baseline gap-4 py-3">
-          <span className="text-sm text-muted-foreground">Campaign</span>
-          <span className="text-sm">{data.campaignConfigName || "\u2014"}</span>
+          {data.landingPageVersionId ? (
+            <span className="text-sm">
+              {data.landingPageName} v{data.landingPageVersion}
+            </span>
+          ) : (
+            <span className="text-sm text-muted-foreground/40">{"\u2014"}</span>
+          )}
         </div>
         <div className="grid grid-cols-[140px_1fr] items-baseline gap-4 py-3">
           <span className="text-sm text-muted-foreground">Notes</span>
@@ -136,16 +174,29 @@ export default function AdSetDetailPage() {
         </div>
       </div>
 
+      {/* Tags */}
+      <div className="max-w-2xl">
+        <h3 className="text-sm font-medium text-muted-foreground mb-2">Tags</h3>
+        <TagInput entityType="ad_set" entityId={id} />
+      </div>
+
       {/* Performance Logs */}
       <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Performance Logs</h2>
-          <Button onClick={() => setAddLogOpen(true)} size="sm">
-            <Plus className="mr-1.5 size-3.5" /> Add Log
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" asChild>
+              <Link href={`/ad-sets/${id}/import`}>
+                <Upload className="mr-1.5 size-3.5" /> Import CSV
+              </Link>
+            </Button>
+            <Button onClick={() => setAddLogOpen(true)} size="sm">
+              <Plus className="mr-1.5 size-3.5" /> Add Log
+            </Button>
+          </div>
         </div>
 
-        <div className="rounded-lg border">
+        <div className="rounded-lg border overflow-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -155,13 +206,17 @@ export default function AdSetDetailPage() {
                 <TableHead>CTR</TableHead>
                 <TableHead>Conv Rate</TableHead>
                 <TableHead>Spend</TableHead>
-                <TableHead>Conversions</TableHead>
+                <TableHead>Conv</TableHead>
+                <TableHead>Impr</TableHead>
+                <TableHead>Reach</TableHead>
+                <TableHead>Freq</TableHead>
+                <TableHead>CPM</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {logs.data?.map((log) => (
                 <TableRow key={log.id}>
-                  <TableCell>
+                  <TableCell className="whitespace-nowrap">
                     {log.dateStart} &mdash; {log.dateEnd}
                   </TableCell>
                   <TableCell>{log.roas ?? "\u2014"}</TableCell>
@@ -172,12 +227,16 @@ export default function AdSetDetailPage() {
                   </TableCell>
                   <TableCell>{log.spend ? `$${log.spend}` : "\u2014"}</TableCell>
                   <TableCell>{log.conversions ?? "\u2014"}</TableCell>
+                  <TableCell>{log.impressions?.toLocaleString() ?? "\u2014"}</TableCell>
+                  <TableCell>{log.reach?.toLocaleString() ?? "\u2014"}</TableCell>
+                  <TableCell>{log.frequency ?? "\u2014"}</TableCell>
+                  <TableCell>{log.cpm ? `$${log.cpm}` : "\u2014"}</TableCell>
                 </TableRow>
               ))}
               {logs.data?.length === 0 && (
                 <TableRow>
                   <TableCell
-                    colSpan={7}
+                    colSpan={11}
                     className="text-center text-muted-foreground"
                   >
                     No performance logs yet.

@@ -30,10 +30,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   LayoutDashboard,
+  Columns3,
   Image,
   Globe,
   Megaphone,
   Layers,
+  FlaskConical,
   LogOut,
   Settings,
   ChevronsUpDown,
@@ -42,10 +44,12 @@ import {
 
 const navItems = [
   { label: "Dashboard", href: "/", icon: LayoutDashboard },
+  { label: "Overview", href: "/overview", icon: Columns3 },
   { label: "Creatives", href: "/creatives", icon: Image },
   { label: "Landing Pages", href: "/landing-pages", icon: Globe },
   { label: "Campaigns", href: "/campaigns", icon: Megaphone },
   { label: "Ad Sets", href: "/ad-sets", icon: Layers },
+  { label: "A/B Tests", href: "/ab-tests", icon: FlaskConical },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
 

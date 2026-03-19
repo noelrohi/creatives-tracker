@@ -40,9 +40,12 @@ import {
   ChevronRight,
   Trash2,
   CheckSquare,
+  Upload,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CreativeFormDialog } from "./creative-form-dialog";
+import { ImportCSVDialog } from "@/components/import-csv-dialog";
+import type { MappedRow } from "@/lib/csv-parser";
 import { toast } from "sonner";
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -118,6 +121,45 @@ export default function CreativesPage() {
   );
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+
+  const importMutation = useMutation({
+    ...trpc.adCreative.bulkImport.mutationOptions(),
+    onSuccess: (data) => {
+      toast.success(`Imported ${data.length} creative${data.length > 1 ? "s" : ""}`);
+      queryClient.invalidateQueries({ queryKey: trpc.adCreative.list.queryKey() });
+      setImportOpen(false);
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  // Fetch ad sets for parent selector
+  const adSetsList = useQuery(trpc.adSet.list.queryOptions());
+
+  const handleImport = (rows: MappedRow[], parentId: string | null) => {
+    importMutation.mutate({
+      rows: rows.map((r) => ({
+        name: r.name || "Imported Ad",
+        adSetName: r.parentName,
+        adSetId: parentId || undefined,
+        roas: r.roas,
+        cpa: r.cpa,
+        ctr: r.ctr,
+        conversionRate: r.conversionRate,
+        spend: r.spend,
+        conversions: r.conversions,
+        impressions: r.impressions,
+        reach: r.reach,
+        frequency: r.frequency,
+        cpm: r.cpm,
+        qualityRanking: r.qualityRanking,
+        engagementRateRanking: r.engagementRateRanking,
+        conversionRateRanking: r.conversionRateRanking,
+        dateStart: r.dateStart,
+        dateEnd: r.dateEnd,
+      })),
+    });
+  };
 
   // Multi-select state
   const [selecting, setSelecting] = useState(false);
@@ -209,6 +251,15 @@ export default function CreativesPage() {
             {selecting ? "Cancel" : "Select"}
           </Button>
         )}
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => setImportOpen(true)}
+          className="gap-1.5"
+        >
+          <Upload className="size-3.5" />
+          Import
+        </Button>
         <Button
           size="sm"
           onClick={() => setCreateOpen(true)}
@@ -386,6 +437,16 @@ export default function CreativesPage() {
         confirmLabel="Delete"
         onConfirm={handleBulkDelete}
         loading={deleteMutation.isPending}
+      />
+
+      <ImportCSVDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        expectedLevel="ad"
+        onImport={handleImport}
+        importing={importMutation.isPending}
+        parentOptions={adSetsList.data?.map((a) => ({ id: a.id, name: a.name })) ?? []}
+        parentLabel="Link to ad set"
       />
 
       <CreativeFormDialog

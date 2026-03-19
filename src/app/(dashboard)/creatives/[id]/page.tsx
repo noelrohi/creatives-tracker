@@ -21,8 +21,17 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ArrowLeft, MoreHorizontalIcon, Pencil, Trash2 } from "lucide-react";
+import { ArrowLeft, Copy, Layers, MoreHorizontalIcon, Pencil, Trash2 } from "lucide-react";
 import { CreativeFormDialog } from "../creative-form-dialog";
+import { TagInput } from "@/components/tag-input";
+import {
+  Item,
+  ItemContent,
+  ItemTitle,
+  ItemDescription,
+  ItemMedia,
+  ItemGroup,
+} from "@/components/ui/item";
 
 function prettify(s: string | null | undefined) {
   return s ? s.replace(/_/g, " ") : null;
@@ -40,6 +49,18 @@ export default function CreativeDetailPage() {
 
   const creative = useQuery(trpc.adCreative.getById.queryOptions({ id }));
   const landingPages = useQuery(trpc.landingPage.list.queryOptions());
+  const linkedAdSets = useQuery(trpc.adSet.listByCreative.queryOptions({ adCreativeId: id }));
+
+  const duplicateMutation = useMutation({
+    ...trpc.adCreative.duplicate.mutationOptions(),
+    onSuccess: (data) => {
+      toast.success("Creative duplicated");
+      router.push(`/creatives/${data.id}`);
+    },
+    onError: (error) => {
+      toast.error(error.message || "Failed to duplicate");
+    },
+  });
 
   const deleteMutation = useMutation({
     ...trpc.adCreative.delete.mutationOptions(),
@@ -215,6 +236,12 @@ export default function CreativeDetailPage() {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem
+                onClick={() => duplicateMutation.mutate({ id })}
+                disabled={duplicateMutation.isPending}
+              >
+                <Copy /> Duplicate
+              </DropdownMenuItem>
+              <DropdownMenuItem
                 variant="destructive"
                 onClick={() => setDeleteOpen(true)}
               >
@@ -237,6 +264,54 @@ export default function CreativeDetailPage() {
           </div>
         ))}
       </dl>
+
+      {/* Tags */}
+      <div className="mt-6 px-2">
+        <h3 className="text-sm font-medium text-muted-foreground mb-2">Tags</h3>
+        <TagInput entityType="ad_creative" entityId={id} />
+      </div>
+
+      {/* Used in Ad Sets */}
+      <div className="mt-6 px-2">
+        <div className="flex items-center gap-2 mb-3">
+          <h3 className="text-sm font-medium">Used in Ad Sets</h3>
+          {linkedAdSets.data && (
+            <span className="text-[13px] tabular-nums text-muted-foreground/50">
+              {linkedAdSets.data.length}
+            </span>
+          )}
+        </div>
+        {linkedAdSets.data?.length === 0 ? (
+          <p className="text-sm text-muted-foreground/60">
+            Not used in any ad sets yet.
+          </p>
+        ) : (
+          <ItemGroup>
+            {linkedAdSets.data?.map((adSet) => (
+              <Item key={adSet.id} asChild variant="outline" size="sm">
+                <Link
+                  href={`/ad-sets/${adSet.id}`}
+                  className="hover:bg-muted/40 transition-colors"
+                >
+                  <ItemMedia variant="icon">
+                    <div className="flex size-8 items-center justify-center rounded-md bg-violet-500/10">
+                      <Layers className="size-3.5 text-violet-500" />
+                    </div>
+                  </ItemMedia>
+                  <ItemContent>
+                    <ItemTitle>{adSet.name}</ItemTitle>
+                    <ItemDescription>
+                      {adSet.campaignConfigName
+                        ? `Campaign: ${adSet.campaignConfigName}`
+                        : "No campaign linked"}
+                    </ItemDescription>
+                  </ItemContent>
+                </Link>
+              </Item>
+            ))}
+          </ItemGroup>
+        )}
+      </div>
 
       {/* Timestamp */}
       <p className="mt-8 text-[11px] text-muted-foreground/40 px-2">

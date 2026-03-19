@@ -80,6 +80,39 @@ export const landingPageRouter = router({
       return page;
     }),
 
+  duplicate: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      const [source] = await db
+        .select()
+        .from(landingPages)
+        .where(and(eq(landingPages.id, input.id), eq(landingPages.organizationId, ctx.organizationId)));
+      if (!source) throw new Error("Landing page not found");
+      const [duplicate] = await db
+        .insert(landingPages)
+        .values({
+          name: `Copy of ${source.name}`,
+          url: source.url,
+          createdBy: ctx.session.user.id,
+          organizationId: ctx.organizationId,
+        })
+        .returning();
+      // Auto-create v1 for the duplicate (per spec: no version duplication)
+      await db.insert(landingPageVersions).values({
+        landingPageId: duplicate.id,
+        version: 1,
+        url: source.url,
+        pageType: "product_page",
+        heroCopy: "",
+        benefits: [],
+        socialProofType: [],
+        funnelPosition: "cold_traffic_entry",
+        createdBy: ctx.session.user.id,
+        organizationId: ctx.organizationId,
+      });
+      return duplicate;
+    }),
+
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {

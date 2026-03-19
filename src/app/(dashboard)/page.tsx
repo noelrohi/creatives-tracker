@@ -24,6 +24,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CreativeInsights } from "@/components/creative-insights";
 
 export default function DashboardPage() {
   const trpc = useTRPC();
@@ -33,6 +34,7 @@ export default function DashboardPage() {
   const landingPages = useQuery(trpc.landingPage.list.queryOptions());
   const campaigns = useQuery(trpc.campaignConfig.list.queryOptions());
   const adSets = useQuery(trpc.adSet.list.queryOptions());
+  const allLogs = useQuery(trpc.performanceLog.listAll.queryOptions());
 
   const isLoading =
     creatives.isLoading ||
@@ -99,8 +101,6 @@ export default function DashboardPage() {
       icon: Image,
       color: "text-blue-500",
       bg: "bg-blue-500/10",
-      onCreate: () =>
-        trpc.adCreative.create.mutationOptions(),
     },
     {
       label: "Landing Pages",
@@ -134,9 +134,11 @@ export default function DashboardPage() {
     (campaigns.data?.length ?? 0) +
     (adSets.data?.length ?? 0);
 
+  const hasPerformanceData = (allLogs.data?.length ?? 0) > 0;
+
   return (
     <div className="flex flex-col gap-8">
-      {/* ── Nav cards — compact row ─────────────────────────── */}
+      {/* Nav cards */}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         {sections.map((s) => (
           <Link
@@ -169,7 +171,23 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {/* ── Recent activity ─────────────────────────────────── */}
+      {/* Creative insights */}
+      {hasPerformanceData && (
+        <div className="flex flex-col gap-3">
+          <h2 className="text-[13px] font-medium uppercase tracking-wider text-muted-foreground/50">
+            Creative Insights
+          </h2>
+          <div className="rounded-lg border p-4 overflow-auto max-h-[500px]">
+            <CreativeInsights
+              creatives={creatives.data ?? []}
+              adSets={adSets.data ?? []}
+              performanceLogs={allLogs.data ?? []}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Recent activity */}
       <div>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-[13px] font-medium uppercase tracking-wider text-muted-foreground/50">
@@ -272,7 +290,6 @@ function CreateButton({
   label: string;
   href: string;
 }) {
-  // Each entity has its own mutation to avoid union type issues
   const adCreative = useMutation({
     ...trpc.adCreative.create.mutationOptions(),
     onSuccess: (data) => router.push(`${href}/${data.id}`),

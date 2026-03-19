@@ -29,6 +29,10 @@ interface FormValues {
   conversionRate: string;
   spend: string;
   conversions: string;
+  impressions: string;
+  reach: string;
+  frequency: string;
+  cpm: string;
 }
 
 export function AddPerformanceLogDialog({
@@ -49,6 +53,10 @@ export function AddPerformanceLogDialog({
       conversionRate: "",
       spend: "",
       conversions: "",
+      impressions: "",
+      reach: "",
+      frequency: "",
+      cpm: "",
     },
   });
 
@@ -84,12 +92,18 @@ export function AddPerformanceLogDialog({
       conversions: values.conversions
         ? parseInt(values.conversions, 10)
         : undefined,
+      impressions: values.impressions
+        ? parseInt(values.impressions, 10)
+        : undefined,
+      reach: values.reach ? parseInt(values.reach, 10) : undefined,
+      frequency: values.frequency || undefined,
+      cpm: values.cpm || undefined,
     });
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>Add Performance Log</DialogTitle>
         </DialogHeader>
@@ -117,24 +131,15 @@ export function AddPerformanceLogDialog({
             <div className="grid gap-4 sm:grid-cols-2">
               <Field>
                 <FieldLabel>ROAS</FieldLabel>
-                <Input
-                  {...register("roas")}
-                  placeholder="e.g. 3.5"
-                />
+                <Input {...register("roas")} placeholder="e.g. 3.5" />
               </Field>
               <Field>
                 <FieldLabel>CPA</FieldLabel>
-                <Input
-                  {...register("cpa")}
-                  placeholder="e.g. 25.00"
-                />
+                <Input {...register("cpa")} placeholder="e.g. 25.00" />
               </Field>
               <Field>
                 <FieldLabel>CTR %</FieldLabel>
-                <Input
-                  {...register("ctr")}
-                  placeholder="e.g. 2.5"
-                />
+                <Input {...register("ctr")} placeholder="e.g. 2.5" />
               </Field>
               <Field>
                 <FieldLabel>Conv Rate %</FieldLabel>
@@ -145,10 +150,7 @@ export function AddPerformanceLogDialog({
               </Field>
               <Field>
                 <FieldLabel>Spend</FieldLabel>
-                <Input
-                  {...register("spend")}
-                  placeholder="e.g. 500.00"
-                />
+                <Input {...register("spend")} placeholder="e.g. 500.00" />
               </Field>
               <Field>
                 <FieldLabel>Conversions</FieldLabel>
@@ -156,6 +158,30 @@ export function AddPerformanceLogDialog({
                   {...register("conversions")}
                   placeholder="e.g. 20"
                 />
+              </Field>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field>
+                <FieldLabel>Impressions</FieldLabel>
+                <Input
+                  {...register("impressions")}
+                  placeholder="e.g. 10000"
+                />
+              </Field>
+              <Field>
+                <FieldLabel>Reach</FieldLabel>
+                <Input {...register("reach")} placeholder="e.g. 8000" />
+              </Field>
+              <Field>
+                <FieldLabel>Frequency</FieldLabel>
+                <Input
+                  {...register("frequency")}
+                  placeholder="e.g. 1.25"
+                />
+              </Field>
+              <Field>
+                <FieldLabel>CPM</FieldLabel>
+                <Input {...register("cpm")} placeholder="e.g. 35.00" />
               </Field>
             </div>
           </FieldGroup>

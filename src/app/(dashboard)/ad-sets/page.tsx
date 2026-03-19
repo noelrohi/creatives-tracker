@@ -20,18 +20,57 @@ import {
   ItemGroup,
   ItemActions,
 } from "@/components/ui/item";
-import { Plus, Layers, Trash2, CheckSquare } from "lucide-react";
+import { Plus, Layers, Trash2, CheckSquare, ArrowLeftRight, Upload } from "lucide-react";
 import { toast } from "sonner";
+import { ImportCSVDialog } from "@/components/import-csv-dialog";
+import type { MappedRow } from "@/lib/csv-parser";
 
 export default function AdSetsPage() {
   const trpc = useTRPC();
   const router = useRouter();
   const queryClient = useQueryClient();
   const adSets = useQuery(trpc.adSet.list.queryOptions());
+  const campaigns = useQuery(trpc.campaignConfig.list.queryOptions());
   const [createOpen, setCreateOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleteOpen, setDeleteOpen] = useState(false);
+
+  const importMutation = useMutation({
+    ...trpc.adSet.bulkImport.mutationOptions(),
+    onSuccess: (data) => {
+      toast.success(`Imported ${data.length} ad set${data.length > 1 ? "s" : ""}`);
+      queryClient.invalidateQueries({ queryKey: trpc.adSet.list.queryOptions().queryKey });
+      setImportOpen(false);
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  const handleImport = (rows: MappedRow[], parentId: string | null) => {
+    importMutation.mutate({
+      rows: rows.map((r) => ({
+        name: r.name || "Imported Ad Set",
+        campaignName: r.parentName,
+        campaignConfigId: parentId || undefined,
+        roas: r.roas,
+        cpa: r.cpa,
+        ctr: r.ctr,
+        conversionRate: r.conversionRate,
+        spend: r.spend,
+        conversions: r.conversions,
+        impressions: r.impressions,
+        reach: r.reach,
+        frequency: r.frequency,
+        cpm: r.cpm,
+        qualityRanking: r.qualityRanking,
+        engagementRateRanking: r.engagementRateRanking,
+        conversionRateRanking: r.conversionRateRanking,
+        dateStart: r.dateStart,
+        dateEnd: r.dateEnd,
+      })),
+    });
+  };
 
   const deleteMutation = useMutation({
     ...trpc.adSet.delete.mutationOptions(),
@@ -104,6 +143,15 @@ export default function AdSetsPage() {
             {selecting ? "Cancel" : "Select"}
           </Button>
         )}
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => setImportOpen(true)}
+          className="gap-1.5"
+        >
+          <Upload className="size-3.5" />
+          Import
+        </Button>
         <Button
           size="sm"
           onClick={() => setCreateOpen(true)}
@@ -258,6 +306,21 @@ export default function AdSetsPage() {
           <span className="text-sm font-medium tabular-nums">
             {selected.size} selected
           </span>
+          {selected.size === 2 && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+              asChild
+            >
+              <Link
+                href={`/compare?type=ad_set&a=${[...selected][0]}&b=${[...selected][1]}`}
+              >
+                <ArrowLeftRight className="size-3.5" />
+                Compare
+              </Link>
+            </Button>
+          )}
           <Button
             size="sm"
             variant="destructive"
@@ -278,6 +341,16 @@ export default function AdSetsPage() {
         confirmLabel="Delete"
         onConfirm={handleBulkDelete}
         loading={deleteMutation.isPending}
+      />
+
+      <ImportCSVDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        expectedLevel="ad_set"
+        onImport={handleImport}
+        importing={importMutation.isPending}
+        parentOptions={campaigns.data?.map((c) => ({ id: c.id, name: c.name })) ?? []}
+        parentLabel="Link to campaign"
       />
 
       <AdSetFormDialog

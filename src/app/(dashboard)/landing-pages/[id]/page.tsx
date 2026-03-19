@@ -27,6 +27,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { toast } from "sonner";
 import { ArrowLeft, Copy, MoreHorizontalIcon, Pencil, Plus, Trash2 } from "lucide-react";
 import { LandingPageFormDialog } from "../landing-page-form-dialog";
+import { TagInput } from "@/components/tag-input";
 import { VersionDialog } from "../add-version-dialog";
 
 export default function LandingPageDetailPage() {
@@ -53,6 +54,17 @@ export default function LandingPageDetailPage() {
   } | null>(null);
 
   const landingPage = useQuery(trpc.landingPage.getById.queryOptions({ id }));
+
+  const duplicatePageMutation = useMutation({
+    ...trpc.landingPage.duplicate.mutationOptions(),
+    onSuccess: (data) => {
+      toast.success("Landing page duplicated");
+      router.push(`/landing-pages/${data.id}`);
+    },
+    onError: (error) => {
+      toast.error(error.message);
+    },
+  });
 
   const duplicateVersionMutation = useMutation({
     ...trpc.landingPage.duplicateVersion.mutationOptions(),
@@ -154,6 +166,12 @@ export default function LandingPageDetailPage() {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem
+                onClick={() => duplicatePageMutation.mutate({ id })}
+                disabled={duplicatePageMutation.isPending}
+              >
+                <Copy /> Duplicate
+              </DropdownMenuItem>
+              <DropdownMenuItem
                 variant="destructive"
                 onClick={() => setDeleteOpen(true)}
               >
@@ -177,6 +195,12 @@ export default function LandingPageDetailPage() {
         Created {new Date(data.createdAt).toLocaleDateString()} · Updated{" "}
         {new Date(data.updatedAt).toLocaleDateString()}
       </p>
+
+      {/* Tags */}
+      <div>
+        <h3 className="text-sm font-medium text-muted-foreground mb-2">Tags</h3>
+        <TagInput entityType="landing_page" entityId={id} />
+      </div>
 
       {/* Versions */}
       <div className="flex items-center justify-between">

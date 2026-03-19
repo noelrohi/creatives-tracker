@@ -19,9 +19,11 @@ import {
   ItemGroup,
   ItemActions,
 } from "@/components/ui/item";
-import { Plus, Megaphone, Trash2, CheckSquare } from "lucide-react";
+import { Plus, Megaphone, Trash2, CheckSquare, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { CampaignFormDialog } from "./campaign-form-dialog";
+import { ImportCSVDialog } from "@/components/import-csv-dialog";
+import type { MappedRow } from "@/lib/csv-parser";
 
 export default function CampaignsPage() {
   const trpc = useTRPC();
@@ -29,9 +31,30 @@ export default function CampaignsPage() {
   const queryClient = useQueryClient();
   const campaigns = useQuery(trpc.campaignConfig.list.queryOptions());
   const [createOpen, setCreateOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleteOpen, setDeleteOpen] = useState(false);
+
+  const importMutation = useMutation({
+    ...trpc.campaignConfig.bulkImport.mutationOptions(),
+    onSuccess: (data) => {
+      const created = data.length;
+      toast.success(`Imported ${created} campaign${created > 1 ? "s" : ""}`);
+      queryClient.invalidateQueries({ queryKey: trpc.campaignConfig.list.queryKey() });
+      setImportOpen(false);
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  const handleImport = (rows: MappedRow[], _parentId: string | null) => {
+    importMutation.mutate({
+      rows: rows.map((r) => ({
+        name: r.name || "Imported Campaign",
+        dailyBudget: r.spend,
+      })),
+    });
+  };
 
   const deleteMutation = useMutation({
     ...trpc.campaignConfig.delete.mutationOptions(),
@@ -93,6 +116,15 @@ export default function CampaignsPage() {
             {selecting ? "Cancel" : "Select"}
           </Button>
         )}
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => setImportOpen(true)}
+          className="gap-1.5"
+        >
+          <Upload className="size-3.5" />
+          Import
+        </Button>
         <Button
           size="sm"
           onClick={() => setCreateOpen(true)}
@@ -254,6 +286,14 @@ export default function CampaignsPage() {
           </Button>
         </div>
       )}
+
+      <ImportCSVDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        expectedLevel="campaign"
+        onImport={handleImport}
+        importing={importMutation.isPending}
+      />
 
       <CampaignFormDialog
         open={createOpen}
