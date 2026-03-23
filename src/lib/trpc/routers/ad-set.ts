@@ -1,277 +1,236 @@
 import { z } from "zod";
-import { eq, desc, and } from "drizzle-orm";
-import { router, protectedProcedure } from "../init";
+import { eq, desc, and, sql } from "drizzle-orm";
+import { router, baseProcedure } from "../init";
 import { db } from "@/db";
 import { adSets } from "@/schema/ad-set";
-import { adCreatives } from "@/schema/ad-creative";
-import { landingPageVersions, landingPages } from "@/schema/landing-page";
-import { campaignConfigs } from "@/schema/campaign-config";
-import { performanceLogs } from "@/schema/performance-log";
+import { campaigns } from "@/schema/campaign";
+import { ads } from "@/schema/ad";
 
 export const adSetRouter = router({
-  list: protectedProcedure.query(async ({ ctx }) => {
-    return db
+  list: baseProcedure.query(async () => {
+    const rows = await db
       .select({
         id: adSets.id,
         name: adSets.name,
-        adCreativeId: adSets.adCreativeId,
-        adCreativeName: adCreatives.name,
-        landingPageVersionId: adSets.landingPageVersionId,
-        landingPageName: landingPages.name,
-        landingPageVersion: landingPageVersions.version,
-        campaignConfigId: adSets.campaignConfigId,
-        campaignConfigName: campaignConfigs.name,
+        campaignId: adSets.campaignId,
+        campaignName: campaigns.name,
+        costCap: adSets.costCap,
+        dailyBudget: adSets.dailyBudget,
+        targetingMethod: adSets.targetingMethod,
+        geos: adSets.geos,
+        placements: adSets.placements,
+        demographics: adSets.demographics,
+        scheduleStart: adSets.scheduleStart,
+        scheduleEnd: adSets.scheduleEnd,
+        status: adSets.status,
         notes: adSets.notes,
-        createdBy: adSets.createdBy,
         createdAt: adSets.createdAt,
         updatedAt: adSets.updatedAt,
+        adCount: sql<number>`(SELECT count(*) FROM ad WHERE ad.ad_set_id = ${adSets.id})`.as("ad_count"),
       })
       .from(adSets)
-      .leftJoin(adCreatives, eq(adSets.adCreativeId, adCreatives.id))
-      .leftJoin(
-        landingPageVersions,
-        eq(adSets.landingPageVersionId, landingPageVersions.id),
-      )
-      .leftJoin(
-        landingPages,
-        eq(landingPageVersions.landingPageId, landingPages.id),
-      )
-      .leftJoin(
-        campaignConfigs,
-        eq(adSets.campaignConfigId, campaignConfigs.id),
-      )
-      .where(eq(adSets.organizationId, ctx.organizationId))
+      .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
       .orderBy(desc(adSets.createdAt));
+    return rows;
   }),
 
-  listByCampaign: protectedProcedure
-    .input(z.object({ campaignConfigId: z.string() }))
-    .query(async ({ input, ctx }) => {
-      return db
+  listByCampaign: baseProcedure
+    .input(z.object({ campaignId: z.string() }))
+    .query(async ({ input }) => {
+      const rows = await db
         .select({
           id: adSets.id,
           name: adSets.name,
-          adCreativeId: adSets.adCreativeId,
-          adCreativeName: adCreatives.name,
-          landingPageVersionId: adSets.landingPageVersionId,
-          landingPageName: landingPages.name,
-          landingPageVersion: landingPageVersions.version,
+          costCap: adSets.costCap,
+          dailyBudget: adSets.dailyBudget,
+          status: adSets.status,
           notes: adSets.notes,
           createdAt: adSets.createdAt,
+          adCount: sql<number>`(SELECT count(*) FROM ad WHERE ad.ad_set_id = ${adSets.id})`.as("ad_count"),
         })
         .from(adSets)
-        .leftJoin(adCreatives, eq(adSets.adCreativeId, adCreatives.id))
-        .leftJoin(landingPageVersions, eq(adSets.landingPageVersionId, landingPageVersions.id))
-        .leftJoin(landingPages, eq(landingPageVersions.landingPageId, landingPages.id))
-        .where(
-          and(
-            eq(adSets.campaignConfigId, input.campaignConfigId),
-            eq(adSets.organizationId, ctx.organizationId),
-          ),
-        )
+        .where(eq(adSets.campaignId, input.campaignId))
         .orderBy(desc(adSets.createdAt));
+      return rows;
     }),
 
-  listByCreative: protectedProcedure
-    .input(z.object({ adCreativeId: z.string() }))
-    .query(async ({ input, ctx }) => {
-      return db
-        .select({
-          id: adSets.id,
-          name: adSets.name,
-          campaignConfigId: adSets.campaignConfigId,
-          campaignConfigName: campaignConfigs.name,
-          notes: adSets.notes,
-          createdAt: adSets.createdAt,
-        })
-        .from(adSets)
-        .leftJoin(campaignConfigs, eq(adSets.campaignConfigId, campaignConfigs.id))
-        .where(
-          and(
-            eq(adSets.adCreativeId, input.adCreativeId),
-            eq(adSets.organizationId, ctx.organizationId),
-          ),
-        )
-        .orderBy(desc(adSets.createdAt));
-    }),
-
-  getById: protectedProcedure
+  getById: baseProcedure
     .input(z.object({ id: z.string() }))
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input }) => {
       const [adSet] = await db
         .select({
           id: adSets.id,
           name: adSets.name,
-          adCreativeId: adSets.adCreativeId,
-          adCreativeName: adCreatives.name,
-          landingPageVersionId: adSets.landingPageVersionId,
-          landingPageName: landingPages.name,
-          landingPageVersion: landingPageVersions.version,
-          campaignConfigId: adSets.campaignConfigId,
-          campaignConfigName: campaignConfigs.name,
+          campaignId: adSets.campaignId,
+          campaignName: campaigns.name,
+          costCap: adSets.costCap,
+          dailyBudget: adSets.dailyBudget,
+          targetingMethod: adSets.targetingMethod,
+          geos: adSets.geos,
+          placements: adSets.placements,
+          demographics: adSets.demographics,
+          scheduleStart: adSets.scheduleStart,
+          scheduleEnd: adSets.scheduleEnd,
+          status: adSets.status,
           notes: adSets.notes,
-          createdBy: adSets.createdBy,
-          createdAt: adSets.createdAt,
+            createdAt: adSets.createdAt,
           updatedAt: adSets.updatedAt,
         })
         .from(adSets)
-        .leftJoin(adCreatives, eq(adSets.adCreativeId, adCreatives.id))
-        .leftJoin(
-          landingPageVersions,
-          eq(adSets.landingPageVersionId, landingPageVersions.id),
-        )
-        .leftJoin(
-          landingPages,
-          eq(landingPageVersions.landingPageId, landingPages.id),
-        )
-        .leftJoin(
-          campaignConfigs,
-          eq(adSets.campaignConfigId, campaignConfigs.id),
-        )
-        .where(and(eq(adSets.id, input.id), eq(adSets.organizationId, ctx.organizationId)));
+        .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
+        .where(eq(adSets.id, input.id));
       if (!adSet) throw new Error("Ad set not found");
       return adSet;
     }),
 
-  create: protectedProcedure
-    .input(z.object({ name: z.string().optional() }).optional())
-    .mutation(async ({ input, ctx }) => {
+  create: baseProcedure
+    .input(
+      z.object({
+        name: z.string().optional(),
+        campaignId: z.string(),
+        costCap: z.string().optional(),
+        dailyBudget: z.string().optional(),
+        targetingMethod: z.array(z.string()).optional(),
+        geos: z.array(z.string()).optional(),
+        placements: z.array(z.string()).optional(),
+        demographics: z.string().optional(),
+        scheduleStart: z.string().datetime().optional(),
+        scheduleEnd: z.string().datetime().optional(),
+        metaId: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ input }) => {
       const [adSet] = await db
         .insert(adSets)
         .values({
-          name: input?.name ?? "Untitled Ad Set",
-          createdBy: ctx.session.user.id,
-          organizationId: ctx.organizationId,
+          name: input.name ?? "Untitled Ad Set",
+          metaId: input.metaId,
+          campaignId: input.campaignId,
+          costCap: input.costCap,
+          dailyBudget: input.dailyBudget,
+          targetingMethod: input.targetingMethod,
+          geos: input.geos,
+          placements: input.placements,
+          demographics: input.demographics,
+          scheduleStart: input.scheduleStart ? new Date(input.scheduleStart) : undefined,
+          scheduleEnd: input.scheduleEnd ? new Date(input.scheduleEnd) : undefined,
         })
         .returning();
       return adSet;
     }),
 
-  update: protectedProcedure
+  update: baseProcedure
     .input(
       z.object({
         id: z.string(),
         name: z.string().min(1).optional(),
-        adCreativeId: z.string().nullable().optional(),
-        landingPageVersionId: z.string().nullable().optional(),
-        campaignConfigId: z.string().nullable().optional(),
+        campaignId: z.string().optional(),
+        costCap: z.string().nullable().optional(),
+        dailyBudget: z.string().nullable().optional(),
+        targetingMethod: z.array(z.string()).nullable().optional(),
+        geos: z.array(z.string()).nullable().optional(),
+        placements: z.array(z.string()).nullable().optional(),
+        demographics: z.string().nullable().optional(),
+        scheduleStart: z.string().datetime().nullable().optional(),
+        scheduleEnd: z.string().datetime().nullable().optional(),
+        status: z.enum(["active", "paused", "archived"]).optional(),
+        metaId: z.string().nullable().optional(),
         notes: z.string().nullable().optional(),
       }),
     )
-    .mutation(async ({ input, ctx }) => {
-      const { id, ...data } = input;
+    .mutation(async ({ input }) => {
+      const { id, scheduleStart, scheduleEnd, ...rest } = input;
+      const data: Record<string, unknown> = { ...rest };
+      if (scheduleStart !== undefined) {
+        data.scheduleStart = scheduleStart ? new Date(scheduleStart) : null;
+      }
+      if (scheduleEnd !== undefined) {
+        data.scheduleEnd = scheduleEnd ? new Date(scheduleEnd) : null;
+      }
       const [adSet] = await db
         .update(adSets)
         .set(data)
-        .where(and(eq(adSets.id, id), eq(adSets.organizationId, ctx.organizationId)))
+        .where(eq(adSets.id, id))
         .returning();
       return adSet;
     }),
 
-  duplicate: protectedProcedure
+  duplicate: baseProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const [source] = await db
         .select()
         .from(adSets)
-        .where(and(eq(adSets.id, input.id), eq(adSets.organizationId, ctx.organizationId)));
+        .where(eq(adSets.id, input.id));
       if (!source) throw new Error("Ad set not found");
       const [duplicate] = await db
         .insert(adSets)
         .values({
           name: `Copy of ${source.name}`,
-          adCreativeId: source.adCreativeId,
-          landingPageVersionId: source.landingPageVersionId,
-          campaignConfigId: source.campaignConfigId,
+          campaignId: source.campaignId,
+          costCap: source.costCap,
+          dailyBudget: source.dailyBudget,
+          targetingMethod: source.targetingMethod,
+          geos: source.geos,
+          placements: source.placements,
+          demographics: source.demographics,
+          scheduleStart: source.scheduleStart,
+          scheduleEnd: source.scheduleEnd,
+          status: source.status,
           notes: source.notes,
-          createdBy: ctx.session.user.id,
-          organizationId: ctx.organizationId,
         })
         .returning();
       return duplicate;
     }),
 
-  bulkImport: protectedProcedure
+  bulkImport: baseProcedure
     .input(
       z.object({
+        campaignId: z.string(),
         rows: z.array(
           z.object({
             name: z.string(),
-            campaignName: z.string().optional(),
-            campaignConfigId: z.string().optional(),
-            roas: z.string().optional(),
-            cpa: z.string().optional(),
-            ctr: z.string().optional(),
-            conversionRate: z.string().optional(),
-            spend: z.string().optional(),
-            conversions: z.number().int().optional(),
-            impressions: z.number().int().optional(),
-            reach: z.number().int().optional(),
-            frequency: z.string().optional(),
-            cpm: z.string().optional(),
-            qualityRanking: z.string().optional(),
-            engagementRateRanking: z.string().optional(),
-            conversionRateRanking: z.string().optional(),
-            dateStart: z.string(),
-            dateEnd: z.string(),
+            dailyBudget: z.string().optional(),
+            costCap: z.string().optional(),
           }),
         ),
       }),
     )
-    .mutation(async ({ input, ctx }) => {
-      const results: { adSetId: string; name: string }[] = [];
-      // Cache campaign lookups
-      const campaignCache = new Map<string, string>();
-
+    .mutation(async ({ input }) => {
+      const results: { id: string; name: string }[] = [];
       for (const row of input.rows) {
-        // Link to campaign: prefer explicit ID, fall back to name matching
-        let campaignConfigId: string | undefined = row.campaignConfigId;
-        if (!campaignConfigId && row.campaignName) {
-          if (campaignCache.has(row.campaignName)) {
-            campaignConfigId = campaignCache.get(row.campaignName);
-          } else {
-            const [existing] = await db
-              .select({ id: campaignConfigs.id })
-              .from(campaignConfigs)
-              .where(
-                and(
-                  eq(campaignConfigs.name, row.campaignName),
-                  eq(campaignConfigs.organizationId, ctx.organizationId),
-                ),
-              );
-            if (existing) {
-              campaignConfigId = existing.id;
-              campaignCache.set(row.campaignName, existing.id);
-            }
-          }
+        const [existing] = await db
+          .select({ id: adSets.id })
+          .from(adSets)
+          .where(
+            and(
+              eq(adSets.name, row.name),
+              eq(adSets.campaignId, input.campaignId),
+            ),
+          );
+        if (existing) {
+          results.push({ id: existing.id, name: row.name });
+          continue;
         }
-
         const [adSet] = await db
           .insert(adSets)
           .values({
             name: row.name,
-            campaignConfigId: campaignConfigId,
-            createdBy: ctx.session.user.id,
-            organizationId: ctx.organizationId,
+            campaignId: input.campaignId,
+            dailyBudget: row.dailyBudget,
+            costCap: row.costCap,
           })
           .returning();
-
-        const { name: _, campaignName: __, campaignConfigId: ___, ...perfData } = row;
-        await db.insert(performanceLogs).values({
-          ...perfData,
-          adSetId: adSet.id,
-          organizationId: ctx.organizationId,
-        });
-
-        results.push({ adSetId: adSet.id, name: adSet.name });
+        results.push({ id: adSet.id, name: adSet.name });
       }
-
       return results;
     }),
 
-  delete: protectedProcedure
+  delete: baseProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input, ctx }) => {
-      await db.delete(adSets).where(and(eq(adSets.id, input.id), eq(adSets.organizationId, ctx.organizationId)));
+    .mutation(async ({ input }) => {
+      await db
+        .delete(adSets)
+        .where(eq(adSets.id, input.id));
     }),
 });

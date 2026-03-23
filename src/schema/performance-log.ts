@@ -8,8 +8,7 @@ import {
   date,
   index,
 } from "drizzle-orm/pg-core";
-import { organization } from "./auth";
-import { adSets } from "./ad-set";
+import { ads } from "./ad";
 
 export const performanceLogs = pgTable(
   "performance_log",
@@ -17,9 +16,9 @@ export const performanceLogs = pgTable(
     id: text("id")
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
-    adSetId: text("ad_set_id")
+    adId: text("ad_id")
       .notNull()
-      .references(() => adSets.id, { onDelete: "cascade" }),
+      .references(() => ads.id, { onDelete: "cascade" }),
     // Core metrics
     roas: numeric("roas"),
     cpa: numeric("cpa"),
@@ -32,6 +31,16 @@ export const performanceLogs = pgTable(
     reach: integer("reach"),
     frequency: numeric("frequency"),
     cpm: numeric("cpm"),
+    // Clicks & engagement
+    linkClicks: integer("link_clicks"),
+    clicksAll: integer("clicks_all"),
+    cpc: numeric("cpc"),
+    ctrLinkClick: numeric("ctr_link_click"),
+    // Landing page
+    landingPageViews: integer("landing_page_views"),
+    costPerLpv: numeric("cost_per_lpv"),
+    // Purchase value
+    purchaseValue: numeric("purchase_value"),
     // Ad quality (from Meta)
     qualityRanking: text("quality_ranking"),
     engagementRateRanking: text("engagement_rate_ranking"),
@@ -39,20 +48,14 @@ export const performanceLogs = pgTable(
     // Date range
     dateStart: date("date_start").notNull(),
     dateEnd: date("date_end").notNull(),
-    organizationId: text("organization_id")
-      .notNull()
-      .references(() => organization.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  (table) => [
-    index("performance_log_ad_set_id_idx").on(table.adSetId),
-    index("performance_log_organization_id_idx").on(table.organizationId),
-  ],
+  (table) => [index("performance_log_ad_id_idx").on(table.adId)],
 );
 
 export const performanceLogRelations = relations(performanceLogs, ({ one }) => ({
-  adSet: one(adSets, {
-    fields: [performanceLogs.adSetId],
-    references: [adSets.id],
+  ad: one(ads, {
+    fields: [performanceLogs.adId],
+    references: [ads.id],
   }),
 }));

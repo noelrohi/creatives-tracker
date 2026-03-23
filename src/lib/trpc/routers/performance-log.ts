@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { eq, desc, and } from "drizzle-orm";
-import { router, protectedProcedure } from "../init";
+import { eq, desc } from "drizzle-orm";
+import { router, baseProcedure } from "../init";
 import { db } from "@/db";
 import { performanceLogs } from "@/schema/performance-log";
 
@@ -37,45 +37,44 @@ const perfFieldsNullable = {
 };
 
 export const performanceLogRouter = router({
-  listAll: protectedProcedure.query(async ({ ctx }) => {
+  listAll: baseProcedure.query(async () => {
     return db
       .select()
       .from(performanceLogs)
-      .where(eq(performanceLogs.organizationId, ctx.organizationId))
       .orderBy(desc(performanceLogs.dateStart));
   }),
 
-  listByAdSet: protectedProcedure
-    .input(z.object({ adSetId: z.string() }))
-    .query(async ({ input, ctx }) => {
+  listByAd: baseProcedure
+    .input(z.object({ adId: z.string() }))
+    .query(async ({ input }) => {
       return db
         .select()
         .from(performanceLogs)
-        .where(and(eq(performanceLogs.adSetId, input.adSetId), eq(performanceLogs.organizationId, ctx.organizationId)))
+        .where(eq(performanceLogs.adId, input.adId))
         .orderBy(desc(performanceLogs.dateStart));
     }),
 
-  create: protectedProcedure
+  create: baseProcedure
     .input(
       z.object({
-        adSetId: z.string(),
+        adId: z.string(),
         dateStart: z.string(),
         dateEnd: z.string(),
         ...perfFields,
       }),
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const [log] = await db
         .insert(performanceLogs)
-        .values({ ...input, organizationId: ctx.organizationId })
+        .values(input)
         .returning();
       return log;
     }),
 
-  bulkCreate: protectedProcedure
+  bulkCreate: baseProcedure
     .input(
       z.object({
-        adSetId: z.string(),
+        adId: z.string(),
         rows: z.array(
           z.object({
             dateStart: z.string(),
@@ -85,17 +84,16 @@ export const performanceLogRouter = router({
         ),
       }),
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       if (input.rows.length === 0) return [];
       const values = input.rows.map((row) => ({
         ...row,
-        adSetId: input.adSetId,
-        organizationId: ctx.organizationId,
+        adId: input.adId,
       }));
       return db.insert(performanceLogs).values(values).returning();
     }),
 
-  update: protectedProcedure
+  update: baseProcedure
     .input(
       z.object({
         id: z.string(),
@@ -104,21 +102,21 @@ export const performanceLogRouter = router({
         ...perfFieldsNullable,
       }),
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const { id, ...data } = input;
       const [log] = await db
         .update(performanceLogs)
         .set(data)
-        .where(and(eq(performanceLogs.id, id), eq(performanceLogs.organizationId, ctx.organizationId)))
+        .where(eq(performanceLogs.id, id))
         .returning();
       return log;
     }),
 
-  delete: protectedProcedure
+  delete: baseProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       await db
         .delete(performanceLogs)
-        .where(and(eq(performanceLogs.id, input.id), eq(performanceLogs.organizationId, ctx.organizationId)));
+        .where(eq(performanceLogs.id, input.id));
     }),
 });

@@ -1,14 +1,14 @@
 import { z } from "zod";
-import { eq, desc, ilike, and, type SQL } from "drizzle-orm";
-import { router, protectedProcedure } from "../init";
+import { eq, desc, ilike, and, sql, type SQL } from "drizzle-orm";
+import { router, baseProcedure } from "../init";
 import { db } from "@/db";
 import { adCreatives } from "@/schema/ad-creative";
 import { landingPages } from "@/schema/landing-page";
-import { adSets } from "@/schema/ad-set";
+import { ads } from "@/schema/ad";
 import { performanceLogs } from "@/schema/performance-log";
 
 export const adCreativeRouter = router({
-  list: protectedProcedure
+  list: baseProcedure
     .input(
       z
         .object({
@@ -28,8 +28,8 @@ export const adCreativeRouter = router({
         })
         .optional(),
     )
-    .query(async ({ input, ctx }) => {
-      const conditions: SQL[] = [eq(adCreatives.organizationId, ctx.organizationId)];
+    .query(async ({ input }) => {
+      const conditions: SQL[] = [];
       if (input?.format) {
         conditions.push(eq(adCreatives.format, input.format));
       }
@@ -57,9 +57,23 @@ export const adCreativeRouter = router({
           landingPageId: adCreatives.landingPageId,
           landingPageName: landingPages.name,
           notes: adCreatives.notes,
-          createdBy: adCreatives.createdBy,
           createdAt: adCreatives.createdAt,
           updatedAt: adCreatives.updatedAt,
+          totalSpend: sql<string | null>`(
+            SELECT sum(pl.spend) FROM performance_log pl
+            JOIN ad ON ad.id = pl.ad_id
+            WHERE ad.ad_creative_id = ${adCreatives.id}
+          )`.as("total_spend"),
+          avgRoas: sql<string | null>`(
+            SELECT avg(pl.roas) FROM performance_log pl
+            JOIN ad ON ad.id = pl.ad_id
+            WHERE ad.ad_creative_id = ${adCreatives.id}
+          )`.as("avg_roas"),
+          totalConversions: sql<number | null>`(
+            SELECT sum(pl.conversions) FROM performance_log pl
+            JOIN ad ON ad.id = pl.ad_id
+            WHERE ad.ad_creative_id = ${adCreatives.id}
+          )`.as("total_conversions"),
         })
         .from(adCreatives)
         .leftJoin(landingPages, eq(adCreatives.landingPageId, landingPages.id))
@@ -67,9 +81,9 @@ export const adCreativeRouter = router({
         .orderBy(desc(adCreatives.createdAt));
     }),
 
-  getById: protectedProcedure
+  getById: baseProcedure
     .input(z.object({ id: z.string() }))
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input }) => {
       const [creative] = await db
         .select({
           id: adCreatives.id,
@@ -85,32 +99,29 @@ export const adCreativeRouter = router({
           landingPageId: adCreatives.landingPageId,
           landingPageName: landingPages.name,
           notes: adCreatives.notes,
-          createdBy: adCreatives.createdBy,
           createdAt: adCreatives.createdAt,
           updatedAt: adCreatives.updatedAt,
         })
         .from(adCreatives)
         .leftJoin(landingPages, eq(adCreatives.landingPageId, landingPages.id))
-        .where(and(eq(adCreatives.id, input.id), eq(adCreatives.organizationId, ctx.organizationId)));
+        .where(eq(adCreatives.id, input.id));
       if (!creative) throw new Error("Ad creative not found");
       return creative;
     }),
 
-  create: protectedProcedure
+  create: baseProcedure
     .input(z.object({ name: z.string().optional() }).optional())
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const [creative] = await db
         .insert(adCreatives)
         .values({
           name: input?.name ?? "Untitled Creative",
-          createdBy: ctx.session.user.id,
-          organizationId: ctx.organizationId,
         })
         .returning();
       return creative;
     }),
 
-  update: protectedProcedure
+  update: baseProcedure
     .input(
       z.object({
         id: z.string(),
@@ -130,23 +141,23 @@ export const adCreativeRouter = router({
         notes: z.string().nullable().optional(),
       }),
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const { id, ...data } = input;
       const [creative] = await db
         .update(adCreatives)
         .set(data)
-        .where(and(eq(adCreatives.id, id), eq(adCreatives.organizationId, ctx.organizationId)))
+        .where(eq(adCreatives.id, id))
         .returning();
       return creative;
     }),
 
-  duplicate: protectedProcedure
+  duplicate: baseProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const [source] = await db
         .select()
         .from(adCreatives)
-        .where(and(eq(adCreatives.id, input.id), eq(adCreatives.organizationId, ctx.organizationId)));
+        .where(eq(adCreatives.id, input.id));
       if (!source) throw new Error("Ad creative not found");
       const [duplicate] = await db
         .insert(adCreatives)
@@ -162,111 +173,122 @@ export const adCreativeRouter = router({
           cta: source.cta,
           landingPageId: source.landingPageId,
           notes: source.notes,
-          createdBy: ctx.session.user.id,
-          organizationId: ctx.organizationId,
         })
         .returning();
       return duplicate;
     }),
 
-  bulkImport: protectedProcedure
+  bulkImport: baseProcedure
     .input(
-      z.object({
-        rows: z.array(
-          z.object({
-            name: z.string(),
-            adSetName: z.string().optional(),
-            adSetId: z.string().optional(),
-            roas: z.string().optional(),
-            cpa: z.string().optional(),
-            ctr: z.string().optional(),
-            conversionRate: z.string().optional(),
-            spend: z.string().optional(),
-            conversions: z.number().int().optional(),
-            impressions: z.number().int().optional(),
-            reach: z.number().int().optional(),
-            frequency: z.string().optional(),
-            cpm: z.string().optional(),
-            qualityRanking: z.string().optional(),
-            engagementRateRanking: z.string().optional(),
-            conversionRateRanking: z.string().optional(),
-            dateStart: z.string(),
-            dateEnd: z.string(),
-          }),
-        ),
-      }),
+      z.array(
+        z.object({
+          name: z.string(),
+          roas: z.string().optional(),
+          cpa: z.string().optional(),
+          ctr: z.string().optional(),
+          conversionRate: z.string().optional(),
+          spend: z.string().optional(),
+          conversions: z.number().int().optional(),
+          impressions: z.number().int().optional(),
+          reach: z.number().int().optional(),
+          frequency: z.string().optional(),
+          cpm: z.string().optional(),
+          qualityRanking: z.string().optional(),
+          engagementRateRanking: z.string().optional(),
+          conversionRateRanking: z.string().optional(),
+          linkClicks: z.number().int().optional(),
+          clicksAll: z.number().int().optional(),
+          cpc: z.string().optional(),
+          ctrLinkClick: z.string().optional(),
+          landingPageViews: z.number().int().optional(),
+          costPerLpv: z.string().optional(),
+          purchaseValue: z.string().optional(),
+          delivery: z.string().optional(),
+          dateStart: z.string(),
+          dateEnd: z.string(),
+        }),
+      ),
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const results: { id: string; name: string }[] = [];
-      // Cache ad set lookups: name → { adSetId, existed }
-      const adSetCache = new Map<string, string>();
+      // Cache: ad name -> adId (dedup rows with same ad name)
+      const adCache = new Map<string, string>();
 
-      for (const row of input.rows) {
-        // Create the ad creative
-        const [creative] = await db
-          .insert(adCreatives)
-          .values({
-            name: row.name,
-            createdBy: ctx.session.user.id,
-            organizationId: ctx.organizationId,
-          })
-          .returning();
+      for (const row of input) {
+        const adName = row.name;
+        const status =
+          row.delivery === "active" ? "active" as const
+          : row.delivery === "inactive" || row.delivery === "not_delivering" ? "paused" as const
+          : "active" as const;
 
-        // Find or create matching ad set — prefer explicit ID
-        const targetAdSetName = row.adSetName;
-        const explicitAdSetId = row.adSetId;
-        if (explicitAdSetId || targetAdSetName) {
-          let adSetId = explicitAdSetId || (targetAdSetName ? adSetCache.get(targetAdSetName) : undefined);
-          if (!adSetId && targetAdSetName) {
-            const [existing] = await db
-              .select({ id: adSets.id })
-              .from(adSets)
-              .where(
-                and(
-                  eq(adSets.name, targetAdSetName),
-                  eq(adSets.organizationId, ctx.organizationId),
-                ),
-              );
-            if (existing) {
-              adSetId = existing.id;
-            } else {
-              // Create ad set for this group
-              const [newAdSet] = await db
-                .insert(adSets)
-                .values({
-                  name: targetAdSetName,
-                  adCreativeId: creative.id,
-                  createdBy: ctx.session.user.id,
-                  organizationId: ctx.organizationId,
-                })
-                .returning();
-              adSetId = newAdSet.id;
+        let adId = adCache.get(adName);
+
+        if (!adId) {
+          // Check if ad already exists by name
+          const [existing] = await db
+            .select({ id: ads.id, adCreativeId: ads.adCreativeId })
+            .from(ads)
+            .where(eq(ads.name, adName));
+
+          if (existing) {
+            adId = existing.id;
+            // Update status on reimport
+            await db.update(ads).set({ status }).where(eq(ads.id, adId));
+            if (existing.adCreativeId) {
+              results.push({ id: existing.adCreativeId, name: adName });
             }
-            if (targetAdSetName) adSetCache.set(targetAdSetName, adSetId);
-          }
+          } else {
+            // Create creative + ad
+            const [creative] = await db
+              .insert(adCreatives)
+              .values({ name: adName })
+              .returning();
 
-          // Create performance log on the ad set
-          if (adSetId) {
-            const { name: _, adSetName: __, adSetId: ___, ...perfData } = row;
-            const hasPerf = perfData.spend || perfData.roas || perfData.conversions;
-            if (hasPerf) {
-              await db.insert(performanceLogs).values({
-                ...perfData,
-                adSetId,
-                organizationId: ctx.organizationId,
-              });
-            }
+            const [ad] = await db
+              .insert(ads)
+              .values({ name: adName, adCreativeId: creative.id, status })
+              .returning();
+
+            adId = ad.id;
+            results.push({ id: creative.id, name: creative.name });
           }
+          adCache.set(adName, adId);
         }
 
-        results.push({ id: creative.id, name: creative.name });
+        // Upsert performance log — match on (adId, dateStart, dateEnd)
+        const { name: _, delivery: __, ...perfData } = row;
+        const hasPerf = perfData.spend || perfData.roas || perfData.conversions;
+        if (hasPerf) {
+          const [existingLog] = await db
+            .select({ id: performanceLogs.id })
+            .from(performanceLogs)
+            .where(
+              and(
+                eq(performanceLogs.adId, adId),
+                eq(performanceLogs.dateStart, perfData.dateStart),
+                eq(performanceLogs.dateEnd, perfData.dateEnd),
+              ),
+            );
+
+          if (existingLog) {
+            await db
+              .update(performanceLogs)
+              .set(perfData)
+              .where(eq(performanceLogs.id, existingLog.id));
+          } else {
+            await db.insert(performanceLogs).values({
+              ...perfData,
+              adId,
+            });
+          }
+        }
       }
       return results;
     }),
 
-  delete: protectedProcedure
+  delete: baseProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input, ctx }) => {
-      await db.delete(adCreatives).where(and(eq(adCreatives.id, input.id), eq(adCreatives.organizationId, ctx.organizationId)));
+    .mutation(async ({ input }) => {
+      await db.delete(adCreatives).where(eq(adCreatives.id, input.id));
     }),
 });

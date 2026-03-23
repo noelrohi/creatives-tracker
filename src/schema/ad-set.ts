@@ -1,9 +1,7 @@
 import { relations } from "drizzle-orm";
-import { pgTable, text, timestamp, index } from "drizzle-orm/pg-core";
-import { user, organization } from "./auth";
-import { adCreatives } from "./ad-creative";
-import { landingPageVersions } from "./landing-page";
-import { campaignConfigs } from "./campaign-config";
+import { pgTable, text, timestamp, numeric, index } from "drizzle-orm/pg-core";
+import { statusEnum } from "./enums";
+import { campaigns } from "./campaign";
 
 export const adSets = pgTable(
   "ad_set",
@@ -12,55 +10,32 @@ export const adSets = pgTable(
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
     name: text("name").notNull().default("Untitled Ad Set"),
-    adCreativeId: text("ad_creative_id").references(
-      () => adCreatives.id,
-      { onDelete: "set null" },
-    ),
-    landingPageVersionId: text("landing_page_version_id").references(
-      () => landingPageVersions.id,
-      { onDelete: "set null" },
-    ),
-    campaignConfigId: text("campaign_config_id").references(
-      () => campaignConfigs.id,
-      { onDelete: "set null" },
-    ),
+    campaignId: text("campaign_id")
+      .notNull()
+      .references(() => campaigns.id, { onDelete: "cascade" }),
+    costCap: text("cost_cap"),
+    dailyBudget: numeric("daily_budget"),
+    targetingMethod: text("targeting_method").array(),
+    geos: text("geos").array(),
+    placements: text("placements").array(),
+    demographics: text("demographics"),
+    scheduleStart: timestamp("schedule_start"),
+    scheduleEnd: timestamp("schedule_end"),
+    metaId: text("meta_id").unique(),
+    status: statusEnum("status").notNull().default("active"),
     notes: text("notes"),
-    organizationId: text("organization_id")
-      .notNull()
-      .references(() => organization.id, { onDelete: "cascade" }),
-    createdBy: text("created_by")
-      .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
       .$onUpdate(() => new Date())
       .notNull(),
   },
-  (table) => [
-    index("ad_set_organization_id_idx").on(table.organizationId),
-    index("ad_set_created_by_idx").on(table.createdBy),
-    index("ad_set_ad_creative_id_idx").on(table.adCreativeId),
-    index("ad_set_lp_version_id_idx").on(table.landingPageVersionId),
-    index("ad_set_campaign_config_id_idx").on(table.campaignConfigId),
-  ],
+  (table) => [index("ad_set_campaign_id_idx").on(table.campaignId)],
 );
 
 export const adSetRelations = relations(adSets, ({ one }) => ({
-  adCreative: one(adCreatives, {
-    fields: [adSets.adCreativeId],
-    references: [adCreatives.id],
-  }),
-  landingPageVersion: one(landingPageVersions, {
-    fields: [adSets.landingPageVersionId],
-    references: [landingPageVersions.id],
-  }),
-  campaignConfig: one(campaignConfigs, {
-    fields: [adSets.campaignConfigId],
-    references: [campaignConfigs.id],
-  }),
-  creator: one(user, {
-    fields: [adSets.createdBy],
-    references: [user.id],
+  campaign: one(campaigns, {
+    fields: [adSets.campaignId],
+    references: [campaigns.id],
   }),
 }));

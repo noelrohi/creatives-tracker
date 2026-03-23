@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -10,6 +10,7 @@ import {
   SheetHeader,
   SheetTitle,
   SheetDescription,
+  SheetFooter,
 } from "@/components/ui/sheet";
 import {
   Select,
@@ -40,6 +41,7 @@ import {
   getLevelLabel,
   suggestMapping,
   applyMapping,
+  isMetaReport,
   type ColumnMapping,
   type ParsedCSV,
   type MappedRow,
@@ -77,6 +79,14 @@ const ALL_FIELDS: {
   { key: "qualityRanking", label: "Quality Ranking" },
   { key: "engagementRateRanking", label: "Engagement Ranking" },
   { key: "conversionRateRanking", label: "Conversion Ranking" },
+  { key: "linkClicks", label: "Link Clicks" },
+  { key: "clicksAll", label: "Clicks (all)" },
+  { key: "cpc", label: "CPC" },
+  { key: "ctrLinkClick", label: "CTR (link click)" },
+  { key: "landingPageViews", label: "LP Views" },
+  { key: "costPerLpv", label: "Cost per LPV" },
+  { key: "purchaseValue", label: "Purchase Value" },
+  { key: "delivery", label: "Delivery Status" },
   { key: "dateStart", label: "Date Start", required: true },
   { key: "dateEnd", label: "Date End", required: true },
 ];
@@ -88,6 +98,9 @@ function emptyMapping(): ColumnMapping {
     reach: null, frequency: null, cpm: null, qualityRanking: null,
     engagementRateRanking: null, conversionRateRanking: null,
     dateStart: null, dateEnd: null,
+    linkClicks: null, clicksAll: null, cpc: null, ctrLinkClick: null,
+    landingPageViews: null, costPerLpv: null, purchaseValue: null,
+    delivery: null,
   };
 }
 
@@ -100,7 +113,7 @@ interface ImportCSVDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   expectedLevel: ImportLevel;
-  onImport: (rows: MappedRow[], parentId: string | null) => void;
+  onImport: (rows: MappedRow[], parentId?: string | null) => void;
   importing?: boolean;
   parentOptions?: ParentOption[];
   parentLabel?: string;
@@ -121,72 +134,67 @@ export function ImportCSVDialog({
   const [skipZeroSpend, setSkipZeroSpend] = useState(true);
   const [selectedParentId, setSelectedParentId] = useState<string | null>(null);
   const [showMapping, setShowMapping] = useState(false);
+  const [autoDetected, setAutoDetected] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const resetState = useCallback(() => {
+  function resetState() {
     setParsed(null);
     setMapping(emptyMapping());
     setDetectedLevel(expectedLevel);
     setSelectedParentId(null);
     setShowMapping(false);
+    setAutoDetected(false);
     setDragging(false);
     setFileName(null);
-  }, [expectedLevel]);
+  }
 
-  const handleClose = useCallback(
-    (open: boolean) => {
-      if (!open) resetState();
-      onOpenChange(open);
-    },
-    [onOpenChange, resetState],
-  );
+  function handleClose(open: boolean) {
+    if (!open) resetState();
+    onOpenChange(open);
+  }
 
-  const processFile = useCallback(
-    (file: File) => {
-      setFileName(file.name);
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const text = event.target?.result as string;
-        const result = parseCSV(text);
-        if (result.rows.length === 0) {
-          toast.error("No data rows found in CSV");
-          return;
-        }
-        setParsed(result);
-        const detected = detectLevel(result.headers);
-        setDetectedLevel(detected);
-        setMapping(suggestMapping(result.headers, detected));
-      };
-      reader.readAsText(file);
-    },
-    [],
-  );
-
-  const handleFileInput = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) processFile(file);
-    },
-    [processFile],
-  );
-
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      setDragging(false);
-      const file = e.dataTransfer.files?.[0];
-      if (file && file.name.endsWith(".csv")) {
-        processFile(file);
-      } else {
-        toast.error("Please drop a .csv file");
+  function processFile(file: File) {
+    setFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      const result = parseCSV(text);
+      if (result.rows.length === 0) {
+        toast.error("No data rows found in CSV");
+        return;
       }
-    },
-    [processFile],
-  );
+      setParsed(result);
+      const detected = detectLevel(result.headers);
+      setDetectedLevel(detected);
+      const suggestedMapping = suggestMapping(result.headers, detected);
+      setMapping(suggestedMapping);
+      if (isMetaReport(result.headers)) {
+        setAutoDetected(true);
+        setShowMapping(false);
+      }
+    };
+    reader.readAsText(file);
+  }
 
-  const getFilteredRows = useCallback((): MappedRow[] => {
+  function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file) processFile(file);
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file && file.name.endsWith(".csv")) {
+      processFile(file);
+    } else {
+      toast.error("Please drop a .csv file");
+    }
+  }
+
+  function getFilteredRows(): MappedRow[] {
     if (!parsed) return [];
     let rows = applyMapping(parsed.rows, mapping);
     if (skipZeroSpend) {
@@ -195,20 +203,16 @@ export function ImportCSVDialog({
       );
     }
     return rows;
-  }, [parsed, mapping, skipZeroSpend]);
+  }
 
-  const handleImport = useCallback(() => {
-    if (!mapping.dateStart || !mapping.dateEnd) {
-      toast.error("Date Start and Date End are required");
-      return;
-    }
+  function handleImport() {
     const rows = getFilteredRows();
     if (rows.length === 0) {
       toast.error("No valid rows to import");
       return;
     }
     onImport(rows, selectedParentId);
-  }, [mapping, getFilteredRows, onImport, selectedParentId]);
+  }
 
   const filteredRows = getFilteredRows();
   const totalRows = filteredRows.length;
@@ -235,7 +239,7 @@ export function ImportCSVDialog({
           </SheetDescription>
         </SheetHeader>
 
-        <div className="flex-1 overflow-y-auto flex flex-col gap-5 px-4 pb-4">
+        <div className="flex-1 overflow-y-auto flex flex-col gap-5 px-4">
           {/* Drop zone — always visible so user can re-upload */}
           <div
             onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
@@ -291,9 +295,15 @@ export function ImportCSVDialog({
             <>
               {/* Controls row */}
               <div className="flex items-center gap-3 flex-wrap">
-                <Badge variant="secondary" className="text-xs">
-                  {detectedCount} columns mapped
-                </Badge>
+                {autoDetected ? (
+                  <Badge variant="default" className="text-xs">
+                    Meta report auto-detected
+                  </Badge>
+                ) : (
+                  <Badge variant="secondary" className="text-xs">
+                    {detectedCount} columns mapped
+                  </Badge>
+                )}
                 <button
                   type="button"
                   onClick={() => setShowMapping(!showMapping)}
@@ -404,13 +414,15 @@ export function ImportCSVDialog({
                       <TableHead className="sticky top-0 bg-background">Impr</TableHead>
                       <TableHead className="sticky top-0 bg-background">Reach</TableHead>
                       <TableHead className="sticky top-0 bg-background">CPM</TableHead>
+                      <TableHead className="sticky top-0 bg-background">Clicks</TableHead>
+                      <TableHead className="sticky top-0 bg-background">LPV</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {previewRows.length === 0 ? (
                       <TableRow>
                         <TableCell
-                          colSpan={detectedLevel !== "campaign" ? 10 : 9}
+                          colSpan={detectedLevel !== "campaign" ? 12 : 11}
                           className="text-center text-muted-foreground py-8"
                         >
                           No rows match current filters.
@@ -447,6 +459,12 @@ export function ImportCSVDialog({
                           <TableCell className="tabular-nums">
                             {row.cpm ? `$${row.cpm}` : "—"}
                           </TableCell>
+                          <TableCell className="tabular-nums">
+                            {row.linkClicks?.toLocaleString() ?? "—"}
+                          </TableCell>
+                          <TableCell className="tabular-nums">
+                            {row.landingPageViews?.toLocaleString() ?? "—"}
+                          </TableCell>
                         </TableRow>
                       ))
                     )}
@@ -454,26 +472,30 @@ export function ImportCSVDialog({
                 </Table>
               </div>
 
-              {/* Footer */}
-              <div className="flex items-center justify-between pt-1">
-                <p className="text-sm text-muted-foreground tabular-nums">
-                  {totalRows} row{totalRows !== 1 ? "s" : ""}
-                  {previewRows.length < totalRows
-                    ? ` (showing ${previewRows.length})`
-                    : ""}
-                </p>
-                <Button
-                  onClick={handleImport}
-                  disabled={importing || totalRows === 0}
-                >
-                  {importing
-                    ? "Importing..."
-                    : `Import ${totalRows} row${totalRows !== 1 ? "s" : ""}`}
-                </Button>
-              </div>
             </>
           )}
         </div>
+
+        {/* Footer — outside scroll area so it's always clickable */}
+        {parsed && (
+          <SheetFooter className="flex-row items-center justify-between border-t">
+            <p className="text-sm text-muted-foreground tabular-nums">
+              {totalRows} row{totalRows !== 1 ? "s" : ""}
+              {previewRows.length < totalRows
+                ? ` (showing ${previewRows.length})`
+                : ""}
+            </p>
+            <Button
+              type="button"
+              onClick={() => handleImport()}
+              disabled={importing || totalRows === 0}
+            >
+              {importing
+                ? "Importing..."
+                : `Import ${totalRows} row${totalRows !== 1 ? "s" : ""}`}
+            </Button>
+          </SheetFooter>
+        )}
       </SheetContent>
     </Sheet>
   );

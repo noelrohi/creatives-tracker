@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { useForm, Controller } from "react-hook-form";
 import {
   useQuery,
   useMutation,
@@ -10,19 +11,29 @@ import {
 } from "@tanstack/react-query";
 import { useTRPC } from "@/lib/trpc/client";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Field, FieldLabel } from "@/components/ui/field";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { MultiSelect } from "@/components/multi-select";
+import { FileUpload } from "@/components/file-upload";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { ButtonGroup } from "@/components/ui/button-group";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ArrowLeft, Copy, Layers, MoreHorizontalIcon, Pencil, Trash2 } from "lucide-react";
-import { CreativeFormDialog } from "../creative-form-dialog";
+import { ArrowLeft, Copy, Layers, MoreHorizontalIcon, Sparkles, Trash2 } from "lucide-react";
 import { TagInput } from "@/components/tag-input";
 import {
   Item,
@@ -33,8 +44,42 @@ import {
   ItemGroup,
 } from "@/components/ui/item";
 
-function prettify(s: string | null | undefined) {
-  return s ? s.replace(/_/g, " ") : null;
+const FORMAT_OPTIONS = [
+  { label: "Static", value: "static" },
+  { label: "Video", value: "video" },
+  { label: "UGC", value: "ugc" },
+  { label: "Carousel", value: "carousel" },
+];
+
+const AWARENESS_OPTIONS = [
+  { label: "Unaware", value: "unaware" },
+  { label: "Problem Aware", value: "problem_aware" },
+  { label: "Solution Aware", value: "solution_aware" },
+  { label: "Product Aware", value: "product_aware" },
+  { label: "Most Aware", value: "most_aware" },
+];
+
+const TONE_OPTIONS = [
+  { label: "Clinical", value: "clinical" },
+  { label: "Casual", value: "casual" },
+  { label: "Fear-based", value: "fear_based" },
+  { label: "Aspirational", value: "aspirational" },
+  { label: "Urgent", value: "urgent" },
+  { label: "Humorous", value: "humorous" },
+];
+
+interface FormValues {
+  name: string;
+  assetUrl: string | null;
+  format: string | null;
+  angle: string | null;
+  persona: string | null;
+  awarenessLevel: string | null;
+  hook: string | null;
+  tone: string[] | null;
+  cta: string | null;
+  landingPageId: string | null;
+  notes: string | null;
 }
 
 export default function CreativeDetailPage() {
@@ -44,12 +89,75 @@ export default function CreativeDetailPage() {
   const queryClient = useQueryClient();
   const id = params.id as string;
 
-  const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const creative = useQuery(trpc.adCreative.getById.queryOptions({ id }));
   const landingPages = useQuery(trpc.landingPage.list.queryOptions());
-  const linkedAdSets = useQuery(trpc.adSet.listByCreative.queryOptions({ adCreativeId: id }));
+  const linkedAds = useQuery(trpc.ad.listByCreative.queryOptions({ adCreativeId: id }));
+
+  const form = useForm<FormValues>({
+    defaultValues: {
+      name: "",
+      assetUrl: null,
+      format: null,
+      angle: null,
+      persona: null,
+      awarenessLevel: null,
+      hook: null,
+      tone: null,
+      cta: null,
+      landingPageId: null,
+      notes: null,
+    },
+  });
+
+  // Sync form when data loads
+  useEffect(() => {
+    if (creative.data) {
+      const d = creative.data;
+      form.reset({
+        name: d.name,
+        assetUrl: d.assetUrl,
+        format: d.format,
+        angle: d.angle,
+        persona: d.persona,
+        awarenessLevel: d.awarenessLevel,
+        hook: d.hook,
+        tone: d.tone,
+        cta: d.cta,
+        landingPageId: d.landingPageId,
+        notes: d.notes,
+      });
+    }
+  }, [creative.data, form]);
+
+  const updateMutation = useMutation(
+    trpc.adCreative.update.mutationOptions({
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: trpc.adCreative.getById.queryKey({ id }) });
+        queryClient.invalidateQueries({ queryKey: trpc.adCreative.list.queryKey() });
+        toast.success("Creative saved");
+      },
+      onError: (error) => toast.error(error.message),
+    }),
+  );
+
+  const analyzeMutation = useMutation(
+    trpc.ai.analyze.mutationOptions({
+      onSuccess: (suggestions) => {
+        // Fill form fields — don't save yet
+        if (suggestions.format) form.setValue("format", suggestions.format, { shouldDirty: true });
+        if (suggestions.angle) form.setValue("angle", suggestions.angle, { shouldDirty: true });
+        if (suggestions.persona) form.setValue("persona", suggestions.persona, { shouldDirty: true });
+        if (suggestions.awarenessLevel) form.setValue("awarenessLevel", suggestions.awarenessLevel, { shouldDirty: true });
+        if (suggestions.hook) form.setValue("hook", suggestions.hook, { shouldDirty: true });
+        if (suggestions.tone) form.setValue("tone", suggestions.tone, { shouldDirty: true });
+        if (suggestions.cta) form.setValue("cta", suggestions.cta, { shouldDirty: true });
+        toast.success("Fields auto-filled — review and save");
+      },
+      onError: (error) => toast.error(error.message || "Analysis failed"),
+    }),
+  );
 
   const duplicateMutation = useMutation({
     ...trpc.adCreative.duplicate.mutationOptions(),
@@ -57,24 +165,37 @@ export default function CreativeDetailPage() {
       toast.success("Creative duplicated");
       router.push(`/creatives/${data.id}`);
     },
-    onError: (error) => {
-      toast.error(error.message || "Failed to duplicate");
-    },
+    onError: (error) => toast.error(error.message || "Failed to duplicate"),
   });
 
   const deleteMutation = useMutation({
     ...trpc.adCreative.delete.mutationOptions(),
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.adCreative.list.queryKey(),
-      });
+      queryClient.invalidateQueries({ queryKey: trpc.adCreative.list.queryKey() });
       toast.success("Creative deleted");
       router.push("/creatives");
     },
-    onError: (error) => {
-      toast.error(error.message || "Failed to delete");
-    },
+    onError: (error) => toast.error(error.message || "Failed to delete"),
   });
+
+  function onSubmit(values: FormValues) {
+    updateMutation.mutate({
+      id,
+      name: values.name || undefined,
+      assetUrl: values.assetUrl,
+      format: (values.format as "static" | "video" | "ugc" | "carousel") ?? null,
+      angle: values.angle,
+      persona: values.persona,
+      awarenessLevel: (values.awarenessLevel as "unaware" | "problem_aware" | "solution_aware" | "product_aware" | "most_aware") ?? null,
+      hook: values.hook,
+      tone: values.tone,
+      cta: values.cta,
+      landingPageId: values.landingPageId,
+      notes: values.notes,
+    });
+  }
+
+  const assetUrl = form.watch("assetUrl");
 
   if (creative.isLoading) {
     return (
@@ -83,15 +204,9 @@ export default function CreativeDetailPage() {
           <Skeleton className="size-7 rounded" />
           <Skeleton className="h-7 w-56" />
         </div>
-        <div className="space-y-1 pt-2">
-          {Array.from({ length: 10 }).map((_, i) => (
-            <div
-              key={i}
-              className="grid grid-cols-[120px_1fr] gap-4 px-2 py-[7px]"
-            >
-              <Skeleton className="h-4 w-16" />
-              <Skeleton className="h-4 w-full" />
-            </div>
+        <div className="space-y-4 pt-2">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <Skeleton key={i} className="h-9 w-full rounded" />
           ))}
         </div>
       </div>
@@ -109,92 +224,10 @@ export default function CreativeDetailPage() {
     );
   }
 
-  const data = creative.data;
-
-  const landingPageName =
-    landingPages.data?.find((lp) => lp.id === data.landingPageId)?.name ?? null;
-
-  const renderAsset = () => {
-    if (!data.assetUrl) return <span className="text-muted-foreground">—</span>;
-    if (data.assetUrl.match(/\.(mp4|webm|mov)(\?|$)/i)) {
-      return <span className="text-sm text-muted-foreground">Video file</span>;
-    }
-    return (
-      <img
-        src={data.assetUrl}
-        alt={data.name}
-        className="h-32 rounded object-cover"
-      />
-    );
-  };
-
-  const rows: { label: string; content: React.ReactNode }[] = [
-    {
-      label: "Asset",
-      content: renderAsset(),
-    },
-    {
-      label: "Format",
-      content: data.format ? (
-        <span className="capitalize">{data.format}</span>
-      ) : (
-        <span className="text-muted-foreground">—</span>
-      ),
-    },
-    {
-      label: "Angle",
-      content: data.angle ?? <span className="text-muted-foreground">—</span>,
-    },
-    {
-      label: "Persona",
-      content: data.persona ?? <span className="text-muted-foreground">—</span>,
-    },
-    {
-      label: "Awareness",
-      content: data.awarenessLevel ? (
-        <span className="capitalize">{prettify(data.awarenessLevel)}</span>
-      ) : (
-        <span className="text-muted-foreground">—</span>
-      ),
-    },
-    {
-      label: "Hook",
-      content: data.hook ?? <span className="text-muted-foreground">—</span>,
-    },
-    {
-      label: "Tone",
-      content:
-        data.tone && data.tone.length > 0 ? (
-          <div className="flex flex-wrap gap-1">
-            {data.tone.map((t) => (
-              <Badge key={t} variant="secondary" className="capitalize">
-                {t.replace(/_/g, " ")}
-              </Badge>
-            ))}
-          </div>
-        ) : (
-          <span className="text-muted-foreground">—</span>
-        ),
-    },
-    {
-      label: "CTA",
-      content: data.cta ?? <span className="text-muted-foreground">—</span>,
-    },
-    {
-      label: "Landing Page",
-      content: landingPageName ?? (
-        <span className="text-muted-foreground">—</span>
-      ),
-    },
-    {
-      label: "Notes",
-      content: data.notes ? (
-        <span className="whitespace-pre-wrap">{data.notes}</span>
-      ) : (
-        <span className="text-muted-foreground">—</span>
-      ),
-    },
-  ];
+  const landingPageOptions = (landingPages.data ?? []).map((lp) => ({
+    label: lp.name,
+    value: lp.id,
+  }));
 
   return (
     <div className="mx-auto max-w-2xl pt-2">
@@ -212,25 +245,14 @@ export default function CreativeDetailPage() {
             </Link>
           </Button>
           <h1 className="text-lg font-medium tracking-tight">
-            {data.name || "Untitled"}
+            {creative.data.name || "Untitled"}
           </h1>
         </div>
 
-        <ButtonGroup>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setEditOpen(true)}
-          >
-            <Pencil className="mr-1.5 size-3.5" /> Edit
-          </Button>
+        <div className="flex items-center gap-2">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="icon-sm"
-                aria-label="More options"
-              >
+              <Button variant="outline" size="icon-sm" aria-label="More options">
                 <MoreHorizontalIcon />
               </Button>
             </DropdownMenuTrigger>
@@ -249,100 +271,234 @@ export default function CreativeDetailPage() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        </ButtonGroup>
+        </div>
       </div>
 
-      {/* Properties */}
-      <dl className="-mx-2 divide-y divide-border/50">
-        {rows.map((row) => (
-          <div
-            key={row.label}
-            className="grid grid-cols-[120px_1fr] items-baseline gap-4 py-2.5 px-2"
+      {/* Form */}
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+        {/* Asset + Auto-suggest */}
+        <Field>
+          <FieldLabel>Asset</FieldLabel>
+          <Controller
+            control={form.control}
+            name="assetUrl"
+            render={({ field }) => (
+              <FileUpload
+                value={field.value ?? undefined}
+                onChange={(url) => field.onChange(url ?? null)}
+                accept="image/*,video/*"
+              />
+            )}
+          />
+        </Field>
+
+        {assetUrl && (
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full gap-1.5"
+            onClick={() =>
+              analyzeMutation.mutate({
+                assetUrl: assetUrl,
+                name: form.getValues("name"),
+              })
+            }
+            disabled={analyzeMutation.isPending}
           >
-            <dt className="text-sm text-muted-foreground">{row.label}</dt>
-            <dd className="text-sm">{row.content}</dd>
-          </div>
-        ))}
-      </dl>
+            <Sparkles className="size-3.5" />
+            {analyzeMutation.isPending ? "Analyzing..." : "Auto-suggest Resolution Tags"}
+          </Button>
+        )}
+
+        {/* Resolution fields */}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field className="sm:col-span-2">
+            <FieldLabel>Name</FieldLabel>
+            <Input {...form.register("name")} placeholder="Creative name" />
+          </Field>
+
+          <Field>
+            <FieldLabel>Format</FieldLabel>
+            <Controller
+              control={form.control}
+              name="format"
+              render={({ field }) => (
+                <Select
+                  value={field.value ?? ""}
+                  onValueChange={(v) => field.onChange(v || null)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select format" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {FORMAT_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            />
+          </Field>
+
+          <Field>
+            <FieldLabel>Awareness Level</FieldLabel>
+            <Controller
+              control={form.control}
+              name="awarenessLevel"
+              render={({ field }) => (
+                <Select
+                  value={field.value ?? ""}
+                  onValueChange={(v) => field.onChange(v || null)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select awareness level" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {AWARENESS_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            />
+          </Field>
+
+          <Field>
+            <FieldLabel>Angle</FieldLabel>
+            <Input {...form.register("angle")} placeholder="e.g., sleep quality" />
+          </Field>
+
+          <Field>
+            <FieldLabel>Persona</FieldLabel>
+            <Input {...form.register("persona")} placeholder="e.g., busy professionals" />
+          </Field>
+
+          <Field className="sm:col-span-2">
+            <FieldLabel>Hook</FieldLabel>
+            <Input {...form.register("hook")} placeholder="First 3 seconds or headline" />
+          </Field>
+
+          <Field>
+            <FieldLabel>Tone</FieldLabel>
+            <Controller
+              control={form.control}
+              name="tone"
+              render={({ field }) => (
+                <MultiSelect
+                  options={TONE_OPTIONS}
+                  value={field.value ?? []}
+                  onChange={(v) => field.onChange(v.length > 0 ? v : null)}
+                  placeholder="Select tone"
+                />
+              )}
+            />
+          </Field>
+
+          <Field>
+            <FieldLabel>CTA</FieldLabel>
+            <Input {...form.register("cta")} placeholder="e.g., Shop Now" />
+          </Field>
+
+          <Field className="sm:col-span-2">
+            <FieldLabel>Landing Page</FieldLabel>
+            <Controller
+              control={form.control}
+              name="landingPageId"
+              render={({ field }) => (
+                <Select
+                  value={field.value ?? ""}
+                  onValueChange={(v) => field.onChange(v || null)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select landing page" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {landingPageOptions.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            />
+          </Field>
+
+          <Field className="sm:col-span-2">
+            <FieldLabel>Notes</FieldLabel>
+            <Textarea {...form.register("notes")} placeholder="Add notes..." />
+          </Field>
+        </div>
+
+        {/* Save button */}
+        <div className="flex items-center justify-between">
+          <p className="text-[11px] text-muted-foreground/40">
+            Created {new Date(creative.data.createdAt).toLocaleDateString()} · Updated{" "}
+            {new Date(creative.data.updatedAt).toLocaleDateString()}
+          </p>
+          <Button
+            type="submit"
+            disabled={updateMutation.isPending || !form.formState.isDirty}
+          >
+            {updateMutation.isPending ? "Saving..." : "Save"}
+          </Button>
+        </div>
+      </form>
 
       {/* Tags */}
-      <div className="mt-6 px-2">
+      <div className="mt-8 px-2">
         <h3 className="text-sm font-medium text-muted-foreground mb-2">Tags</h3>
         <TagInput entityType="ad_creative" entityId={id} />
       </div>
 
-      {/* Used in Ad Sets */}
+      {/* Used in Ads */}
       <div className="mt-6 px-2">
         <div className="flex items-center gap-2 mb-3">
-          <h3 className="text-sm font-medium">Used in Ad Sets</h3>
-          {linkedAdSets.data && (
+          <h3 className="text-sm font-medium">Used in Ads</h3>
+          {linkedAds.data && (
             <span className="text-[13px] tabular-nums text-muted-foreground/50">
-              {linkedAdSets.data.length}
+              {linkedAds.data.length}
             </span>
           )}
         </div>
-        {linkedAdSets.data?.length === 0 ? (
+        {linkedAds.data?.length === 0 ? (
           <p className="text-sm text-muted-foreground/60">
-            Not used in any ad sets yet.
+            Not used in any ads yet.
           </p>
         ) : (
           <ItemGroup>
-            {linkedAdSets.data?.map((adSet) => (
-              <Item key={adSet.id} asChild variant="outline" size="sm">
-                <Link
-                  href={`/ad-sets/${adSet.id}`}
-                  className="hover:bg-muted/40 transition-colors"
-                >
+            {linkedAds.data?.map((ad) => (
+              <Item key={ad.id} variant="outline" size="sm">
+                <div className="flex items-center gap-3 px-3 py-2">
                   <ItemMedia variant="icon">
-                    <div className="flex size-8 items-center justify-center rounded-md bg-violet-500/10">
-                      <Layers className="size-3.5 text-violet-500" />
+                    <div className="flex size-8 items-center justify-center rounded-md bg-rose-500/10">
+                      <Layers className="size-3.5 text-rose-500" />
                     </div>
                   </ItemMedia>
                   <ItemContent>
-                    <ItemTitle>{adSet.name}</ItemTitle>
+                    <ItemTitle>{ad.name}</ItemTitle>
                     <ItemDescription>
-                      {adSet.campaignConfigName
-                        ? `Campaign: ${adSet.campaignConfigName}`
-                        : "No campaign linked"}
+                      {ad.status === "paused" ? (
+                        <Badge variant="secondary" className="text-[10px]">Paused</Badge>
+                      ) : ad.status === "archived" ? (
+                        <Badge variant="secondary" className="text-[10px]">Archived</Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-[10px] text-emerald-600">Active</Badge>
+                      )}
                     </ItemDescription>
                   </ItemContent>
-                </Link>
+                </div>
               </Item>
             ))}
           </ItemGroup>
         )}
       </div>
 
-      {/* Timestamp */}
-      <p className="mt-8 text-[11px] text-muted-foreground/40 px-2">
-        Created {new Date(data.createdAt).toLocaleDateString()} · Updated{" "}
-        {new Date(data.updatedAt).toLocaleDateString()}
-      </p>
-
-      {/* Dialogs */}
-      <CreativeFormDialog
-        open={editOpen}
-        onOpenChange={setEditOpen}
-        creative={{
-          id: data.id,
-          name: data.name,
-          assetUrl: data.assetUrl,
-          format: data.format,
-          angle: data.angle,
-          persona: data.persona,
-          awarenessLevel: data.awarenessLevel,
-          hook: data.hook,
-          tone: data.tone,
-          cta: data.cta,
-          landingPageId: data.landingPageId,
-          notes: data.notes,
-        }}
-        onSuccess={() => {
-          queryClient.invalidateQueries({
-            queryKey: trpc.adCreative.getById.queryKey({ id }),
-          });
-        }}
-      />
+      {/* Delete dialog */}
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}

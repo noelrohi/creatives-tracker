@@ -8,6 +8,7 @@ import { useState } from "react";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { TRPCProvider } from "@/lib/trpc/client";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Toaster } from "@/components/ui/sonner";
 import type { AppRouter } from "@/lib/trpc/routers/_app";
 
 function makeQueryClient() {
@@ -41,7 +42,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <TRPCProvider trpcClient={trpcClient} queryClient={queryClient}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
           <NuqsAdapter>
-            <TooltipProvider>{children}</TooltipProvider>
+            <TooltipProvider>
+              {children}
+              <Toaster />
+            </TooltipProvider>
           </NuqsAdapter>
         </ThemeProvider>
       </TRPCProvider>

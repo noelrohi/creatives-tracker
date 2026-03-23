@@ -1,49 +1,44 @@
 import { z } from "zod";
 import { eq, and, ilike, desc } from "drizzle-orm";
-import { router, protectedProcedure } from "../init";
+import { router, baseProcedure } from "../init";
 import { db } from "@/db";
 import { tags, entityTags } from "@/schema/tag";
 
 const entityTypeSchema = z.enum([
   "ad_creative",
   "landing_page",
-  "campaign_config",
+  "campaign",
   "ad_set",
+  "ad",
 ]);
 
 export const tagRouter = router({
-  search: protectedProcedure
+  search: baseProcedure
     .input(z.object({ query: z.string().optional() }).optional())
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input }) => {
       if (input?.query) {
         return db
           .select()
           .from(tags)
-          .where(
-            and(
-              eq(tags.organizationId, ctx.organizationId),
-              ilike(tags.name, `%${input.query}%`),
-            ),
-          )
+          .where(ilike(tags.name, `%${input.query}%`))
           .orderBy(desc(tags.createdAt))
           .limit(20);
       }
       return db
         .select()
         .from(tags)
-        .where(eq(tags.organizationId, ctx.organizationId))
         .orderBy(desc(tags.createdAt))
         .limit(50);
     }),
 
-  listForEntity: protectedProcedure
+  listForEntity: baseProcedure
     .input(
       z.object({
         entityType: entityTypeSchema,
         entityId: z.string(),
       }),
     )
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input }) => {
       const rows = await db
         .select({ tag: tags, entityTag: entityTags })
         .from(entityTags)
@@ -52,13 +47,12 @@ export const tagRouter = router({
           and(
             eq(entityTags.entityType, input.entityType),
             eq(entityTags.entityId, input.entityId),
-            eq(entityTags.organizationId, ctx.organizationId),
           ),
         );
       return rows.map((r) => r.tag);
     }),
 
-  attach: protectedProcedure
+  attach: baseProcedure
     .input(
       z.object({
         entityType: entityTypeSchema,
@@ -67,17 +61,12 @@ export const tagRouter = router({
         tagColor: z.string().optional(),
       }),
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       // Find or create tag
       let [tag] = await db
         .select()
         .from(tags)
-        .where(
-          and(
-            eq(tags.name, input.tagName),
-            eq(tags.organizationId, ctx.organizationId),
-          ),
-        );
+        .where(eq(tags.name, input.tagName));
 
       if (!tag) {
         [tag] = await db
@@ -85,7 +74,6 @@ export const tagRouter = router({
           .values({
             name: input.tagName,
             color: input.tagColor,
-            organizationId: ctx.organizationId,
           })
           .returning();
       }
@@ -107,14 +95,13 @@ export const tagRouter = router({
           entityType: input.entityType,
           entityId: input.entityId,
           tagId: tag.id,
-          organizationId: ctx.organizationId,
         });
       }
 
       return tag;
     }),
 
-  detach: protectedProcedure
+  detach: baseProcedure
     .input(
       z.object({
         entityType: entityTypeSchema,
@@ -122,7 +109,7 @@ export const tagRouter = router({
         tagId: z.string(),
       }),
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       await db
         .delete(entityTags)
         .where(
@@ -130,7 +117,6 @@ export const tagRouter = router({
             eq(entityTags.entityType, input.entityType),
             eq(entityTags.entityId, input.entityId),
             eq(entityTags.tagId, input.tagId),
-            eq(entityTags.organizationId, ctx.organizationId),
           ),
         );
     }),

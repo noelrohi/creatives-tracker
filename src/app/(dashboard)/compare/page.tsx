@@ -9,10 +9,15 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft } from "lucide-react";
 
-type CompareType = "ad_set" | "ad_creative" | "campaign_config";
+type CompareType = "ad" | "ad_set" | "ad_creative" | "campaign";
 
 function useEntityData(type: CompareType, id: string | null) {
   const trpc = useTRPC();
+
+  const ad = useQuery({
+    ...trpc.ad.getById.queryOptions({ id: id ?? "" }),
+    enabled: type === "ad" && !!id,
+  });
 
   const adSet = useQuery({
     ...trpc.adSet.getById.queryOptions({ id: id ?? "" }),
@@ -25,10 +30,11 @@ function useEntityData(type: CompareType, id: string | null) {
   });
 
   const campaign = useQuery({
-    ...trpc.campaignConfig.getById.queryOptions({ id: id ?? "" }),
-    enabled: type === "campaign_config" && !!id,
+    ...trpc.campaign.getById.queryOptions({ id: id ?? "" }),
+    enabled: type === "campaign" && !!id,
   });
 
+  if (type === "ad") return ad;
   if (type === "ad_set") return adSet;
   if (type === "ad_creative") return creative;
   return campaign;
@@ -37,8 +43,8 @@ function useEntityData(type: CompareType, id: string | null) {
 function usePerformanceLogs(type: CompareType, id: string | null) {
   const trpc = useTRPC();
   return useQuery({
-    ...trpc.performanceLog.listByAdSet.queryOptions({ adSetId: id ?? "" }),
-    enabled: type === "ad_set" && !!id,
+    ...trpc.performanceLog.listByAd.queryOptions({ adId: id ?? "" }),
+    enabled: type === "ad" && !!id,
   });
 }
 
@@ -48,11 +54,22 @@ interface FieldDef {
   format?: (v: unknown) => string;
 }
 
-const AD_SET_FIELDS: FieldDef[] = [
+const AD_FIELDS: FieldDef[] = [
   { label: "Name", key: "name" },
+  { label: "Ad Set", key: "adSetName" },
+  { label: "Campaign", key: "campaignName" },
   { label: "Creative", key: "adCreativeName" },
   { label: "Landing Page", key: "landingPageName" },
-  { label: "Campaign", key: "campaignConfigName" },
+  { label: "Status", key: "status" },
+  { label: "Notes", key: "notes" },
+];
+
+const AD_SET_FIELDS: FieldDef[] = [
+  { label: "Name", key: "name" },
+  { label: "Campaign", key: "campaignName" },
+  { label: "Daily Budget", key: "dailyBudget" },
+  { label: "Cost Cap", key: "costCap" },
+  { label: "Status", key: "status" },
   { label: "Notes", key: "notes" },
 ];
 
@@ -70,22 +87,20 @@ const CREATIVE_FIELDS: FieldDef[] = [
 const CAMPAIGN_FIELDS: FieldDef[] = [
   { label: "Name", key: "name" },
   { label: "Objective", key: "objective" },
-  { label: "Cost Cap", key: "costCap" },
-  { label: "Daily Budget", key: "dailyBudget" },
-  { label: "Demographics", key: "demographics" },
+  { label: "Status", key: "status" },
   { label: "Notes", key: "notes" },
 ];
 
 function getFields(type: CompareType) {
+  if (type === "ad") return AD_FIELDS;
   if (type === "ad_set") return AD_SET_FIELDS;
   if (type === "ad_creative") return CREATIVE_FIELDS;
   return CAMPAIGN_FIELDS;
 }
 
 function getBackLink(type: CompareType) {
-  if (type === "ad_set") return "/ad-sets";
   if (type === "ad_creative") return "/creatives";
-  return "/campaigns";
+  return "/";
 }
 
 function getVal(data: Record<string, unknown> | undefined, key: string): string {
@@ -98,7 +113,7 @@ function getVal(data: Record<string, unknown> | undefined, key: string): string 
 
 export default function ComparePage() {
   const searchParams = useSearchParams();
-  const type = (searchParams.get("type") ?? "ad_set") as CompareType;
+  const type = (searchParams.get("type") ?? "ad") as CompareType;
   const idA = searchParams.get("a");
   const idB = searchParams.get("b");
 
@@ -114,7 +129,7 @@ export default function ComparePage() {
     return (
       <div className="flex flex-col items-center justify-center gap-4 py-24">
         <p className="text-sm text-muted-foreground">
-          Select two items to compare. Use the URL params: ?type=ad_set&a=id1&b=id2
+          Select two items to compare. Use the URL params: ?type=ad&a=id1&b=id2
         </p>
       </div>
     );
@@ -123,7 +138,7 @@ export default function ComparePage() {
   const dataA = entityA.data as Record<string, unknown> | undefined;
   const dataB = entityB.data as Record<string, unknown> | undefined;
 
-  // Compute latest performance averages for ad sets
+  // Compute latest performance averages for ads
   const perfA = logsA.data?.slice(0, 5);
   const perfB = logsB.data?.slice(0, 5);
 
@@ -212,8 +227,8 @@ export default function ComparePage() {
             </div>
           </div>
 
-          {/* Performance comparison for ad sets */}
-          {type === "ad_set" && (perfA?.length || perfB?.length) ? (
+          {/* Performance comparison for ads */}
+          {type === "ad" && (perfA?.length || perfB?.length) ? (
             <div className="rounded-lg border overflow-hidden">
               <div className="bg-muted/30 px-4 py-2.5 text-sm font-medium">
                 Performance Metrics (last 5 logs avg)

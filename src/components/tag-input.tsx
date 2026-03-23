@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { X } from "lucide-react";
 
 interface TagInputProps {
-  entityType: "ad_creative" | "landing_page" | "campaign_config" | "ad_set";
+  entityType: "ad_creative" | "landing_page" | "campaign" | "ad_set" | "ad";
   entityId: string;
 }
 

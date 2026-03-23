@@ -133,32 +133,35 @@ export default function CreativesPage() {
     onError: (error) => toast.error(error.message),
   });
 
-  // Fetch ad sets for parent selector
-  const adSetsList = useQuery(trpc.adSet.list.queryOptions());
-
-  const handleImport = (rows: MappedRow[], parentId: string | null) => {
-    importMutation.mutate({
-      rows: rows.map((r) => ({
+  const handleImport = (rows: MappedRow[]) => {
+    importMutation.mutate(
+      rows.map((r) => ({
         name: r.name || "Imported Ad",
-        adSetName: r.parentName,
-        adSetId: parentId || undefined,
         roas: r.roas,
         cpa: r.cpa,
         ctr: r.ctr,
         conversionRate: r.conversionRate,
         spend: r.spend,
-        conversions: r.conversions,
-        impressions: r.impressions,
-        reach: r.reach,
+        conversions: r.conversions != null ? Number(r.conversions) : undefined,
+        impressions: r.impressions != null ? Number(r.impressions) : undefined,
+        reach: r.reach != null ? Number(r.reach) : undefined,
         frequency: r.frequency,
         cpm: r.cpm,
         qualityRanking: r.qualityRanking,
         engagementRateRanking: r.engagementRateRanking,
         conversionRateRanking: r.conversionRateRanking,
+        linkClicks: r.linkClicks != null ? Number(r.linkClicks) : undefined,
+        clicksAll: r.clicksAll != null ? Number(r.clicksAll) : undefined,
+        cpc: r.cpc,
+        ctrLinkClick: r.ctrLinkClick,
+        landingPageViews: r.landingPageViews != null ? Number(r.landingPageViews) : undefined,
+        costPerLpv: r.costPerLpv,
+        purchaseValue: r.purchaseValue,
+        delivery: r.delivery,
         dateStart: r.dateStart,
         dateEnd: r.dateEnd,
       })),
-    });
+    );
   };
 
   // Multi-select state
@@ -445,8 +448,6 @@ export default function CreativesPage() {
         expectedLevel="ad"
         onImport={handleImport}
         importing={importMutation.isPending}
-        parentOptions={adSetsList.data?.map((a) => ({ id: a.id, name: a.name })) ?? []}
-        parentLabel="Link to ad set"
       />
 
       <CreativeFormDialog
@@ -706,6 +707,16 @@ function ListView({ items, selecting, selected, toggleSelect }: { items: Creativ
             </ItemContent>
 
             <ItemActions>
+              {(creative as Record<string, unknown>).totalSpend != null && (
+                <span className="text-[11px] tabular-nums text-muted-foreground">
+                  ${Number((creative as Record<string, unknown>).totalSpend).toFixed(0)} spent
+                </span>
+              )}
+              {(creative as Record<string, unknown>).avgRoas != null && (
+                <Badge variant="outline" className="h-5 rounded px-1.5 text-[11px] font-normal tabular-nums">
+                  {Number((creative as Record<string, unknown>).avgRoas).toFixed(1)}x
+                </Badge>
+              )}
               {creative.format ? (
                 <Badge
                   variant="secondary"

@@ -62,6 +62,15 @@ export interface ColumnMapping {
   conversionRateRanking: string | null;
   dateStart: string | null;
   dateEnd: string | null;
+  // New fields from Meta reports
+  linkClicks: string | null;
+  clicksAll: string | null;
+  cpc: string | null;
+  ctrLinkClick: string | null;
+  landingPageViews: string | null;
+  costPerLpv: string | null;
+  purchaseValue: string | null;
+  delivery: string | null;
 }
 
 interface SuggestionSet {
@@ -88,10 +97,11 @@ const SUGGESTIONS: SuggestionSet = {
       "ROAS",
     ],
     cpa: [
-      "Cost per results",
+      "Cost per purchase (USD)",
       "Cost per purchase",
-      "CPA",
+      "Cost per results",
       "Cost per result",
+      "CPA",
     ],
     ctr: ["CTR (all)", "CTR"],
     conversionRate: ["Conversion rate", "Conv rate"],
@@ -115,6 +125,34 @@ const SUGGESTIONS: SuggestionSet = {
     conversionRateRanking: ["Conversion rate ranking"],
     dateStart: ["Reporting starts", "Start date", "Date start"],
     dateEnd: ["Reporting ends", "End date", "Date end"],
+    // New fields
+    linkClicks: ["Link clicks"],
+    clicksAll: ["Clicks (all)"],
+    cpc: [
+      "CPC (cost per link click) (USD)",
+      "CPC (cost per link click)",
+      "CPC",
+    ],
+    ctrLinkClick: [
+      "CTR (link click-through rate)",
+      "Link CTR",
+    ],
+    landingPageViews: ["Landing page views"],
+    costPerLpv: [
+      "Cost per landing page view (USD)",
+      "Cost per landing page view",
+    ],
+    purchaseValue: [
+      "Purchases conversion value",
+      "Purchase conversion value",
+      "Conversion value",
+    ],
+    delivery: [
+      "Ad delivery",
+      "Ad set delivery",
+      "Campaign delivery",
+      "Delivery",
+    ],
   },
 };
 
@@ -159,6 +197,14 @@ export function suggestMapping(
     conversionRateRanking: null,
     dateStart: null,
     dateEnd: null,
+    linkClicks: null,
+    clicksAll: null,
+    cpc: null,
+    ctrLinkClick: null,
+    landingPageViews: null,
+    costPerLpv: null,
+    purchaseValue: null,
+    delivery: null,
   };
 
   mapping.name = findHeader(headers, SUGGESTIONS.name[level]);
@@ -169,6 +215,18 @@ export function suggestMapping(
   }
 
   return mapping;
+}
+
+/**
+ * Detect if this is a Meta Ads Manager report that can be auto-imported
+ * without manual column mapping.
+ */
+export function isMetaReport(headers: string[]): boolean {
+  const lower = headers.map((h) => h.toLowerCase().trim());
+  const required = ["reporting starts", "reporting ends"];
+  const hasRequired = required.every((r) => lower.includes(r));
+  const hasLevel = lower.includes("ad name") || lower.includes("ad set name") || lower.includes("campaign name");
+  return hasRequired && hasLevel;
 }
 
 export interface MappedRow {
@@ -189,6 +247,15 @@ export interface MappedRow {
   conversionRateRanking?: string;
   dateStart: string;
   dateEnd: string;
+  // New fields
+  linkClicks?: number;
+  clicksAll?: number;
+  cpc?: string;
+  ctrLinkClick?: string;
+  landingPageViews?: number;
+  costPerLpv?: string;
+  purchaseValue?: string;
+  delivery?: string;
 }
 
 export function applyMapping(
@@ -219,7 +286,10 @@ export function applyMapping(
       }
 
       // Numeric fields
-      for (const key of ["roas", "cpa", "ctr", "conversionRate", "spend", "frequency", "cpm"] as const) {
+      for (const key of [
+        "roas", "cpa", "ctr", "conversionRate", "spend", "frequency", "cpm",
+        "cpc", "ctrLinkClick", "costPerLpv", "purchaseValue",
+      ] as const) {
         if (mapping[key]) {
           const val = parseNumeric(row[mapping[key]!]);
           if (val !== undefined) mapped[key] = val;
@@ -227,12 +297,21 @@ export function applyMapping(
       }
 
       // Integer fields
-      for (const key of ["conversions", "impressions", "reach"] as const) {
+      for (const key of [
+        "conversions", "impressions", "reach",
+        "linkClicks", "clicksAll", "landingPageViews",
+      ] as const) {
         if (mapping[key]) {
           const raw = row[mapping[key]!]?.trim().replace(/[^0-9.-]/g, "");
           const n = parseInt(raw, 10);
           if (!isNaN(n)) mapped[key] = n;
         }
+      }
+
+      // Delivery status
+      if (mapping.delivery) {
+        const v = row[mapping.delivery]?.trim().toLowerCase();
+        if (v && v !== "-" && v !== "") mapped.delivery = v;
       }
 
       // Text fields (rankings)

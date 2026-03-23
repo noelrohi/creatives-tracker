@@ -1,16 +1,15 @@
 import { z } from "zod";
-import { eq, desc, and } from "drizzle-orm";
-import { router, protectedProcedure } from "../init";
+import { eq, desc } from "drizzle-orm";
+import { router, baseProcedure } from "../init";
 import { db } from "@/db";
 import { abTests, abTestVariants } from "@/schema/ab-test";
-import { adSets } from "@/schema/ad-set";
+import { ads } from "@/schema/ad";
 
 export const abTestRouter = router({
-  list: protectedProcedure.query(async ({ ctx }) => {
+  list: baseProcedure.query(async () => {
     const tests = await db
       .select()
       .from(abTests)
-      .where(eq(abTests.organizationId, ctx.organizationId))
       .orderBy(desc(abTests.createdAt));
 
     // Fetch variant counts
@@ -27,36 +26,31 @@ export const abTestRouter = router({
     return testsWithCounts;
   }),
 
-  getById: protectedProcedure
+  getById: baseProcedure
     .input(z.object({ id: z.string() }))
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input }) => {
       const [test] = await db
         .select()
         .from(abTests)
-        .where(
-          and(
-            eq(abTests.id, input.id),
-            eq(abTests.organizationId, ctx.organizationId),
-          ),
-        );
+        .where(eq(abTests.id, input.id));
       if (!test) throw new Error("A/B test not found");
 
       const variants = await db
         .select({
           id: abTestVariants.id,
-          adSetId: abTestVariants.adSetId,
+          adId: abTestVariants.adId,
           label: abTestVariants.label,
-          adSetName: adSets.name,
+          adName: ads.name,
         })
         .from(abTestVariants)
-        .innerJoin(adSets, eq(abTestVariants.adSetId, adSets.id))
+        .innerJoin(ads, eq(abTestVariants.adId, ads.id))
         .where(eq(abTestVariants.abTestId, input.id))
         .orderBy(abTestVariants.createdAt);
 
       return { ...test, variants };
     }),
 
-  create: protectedProcedure
+  create: baseProcedure
     .input(
       z
         .object({
@@ -65,20 +59,18 @@ export const abTestRouter = router({
         })
         .optional(),
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const [test] = await db
         .insert(abTests)
         .values({
           name: input?.name || "Untitled Test",
           hypothesis: input?.hypothesis,
-          createdBy: ctx.session.user.id,
-          organizationId: ctx.organizationId,
         })
         .returning();
       return test;
     }),
 
-  update: protectedProcedure
+  update: baseProcedure
     .input(
       z.object({
         id: z.string(),
@@ -88,65 +80,49 @@ export const abTestRouter = router({
         winnerVariantId: z.string().nullable().optional(),
       }),
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const { id, ...data } = input;
       const [test] = await db
         .update(abTests)
         .set(data)
-        .where(
-          and(
-            eq(abTests.id, id),
-            eq(abTests.organizationId, ctx.organizationId),
-          ),
-        )
+        .where(eq(abTests.id, id))
         .returning();
       return test;
     }),
 
-  delete: protectedProcedure
+  delete: baseProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       await db
         .delete(abTests)
-        .where(
-          and(
-            eq(abTests.id, input.id),
-            eq(abTests.organizationId, ctx.organizationId),
-          ),
-        );
+        .where(eq(abTests.id, input.id));
     }),
 
-  addVariant: protectedProcedure
+  addVariant: baseProcedure
     .input(
       z.object({
         abTestId: z.string(),
-        adSetId: z.string(),
+        adId: z.string(),
         label: z.string().min(1),
       }),
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const [variant] = await db
         .insert(abTestVariants)
         .values({
           abTestId: input.abTestId,
-          adSetId: input.adSetId,
+          adId: input.adId,
           label: input.label,
-          organizationId: ctx.organizationId,
         })
         .returning();
       return variant;
     }),
 
-  removeVariant: protectedProcedure
+  removeVariant: baseProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       await db
         .delete(abTestVariants)
-        .where(
-          and(
-            eq(abTestVariants.id, input.id),
-            eq(abTestVariants.organizationId, ctx.organizationId),
-          ),
-        );
+        .where(eq(abTestVariants.id, input.id));
     }),
 });

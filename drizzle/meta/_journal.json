@@ -29,6 +29,27 @@
       "when": 1773886412238,
       "tag": "0003_greedy_nebula",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1773896703678,
+      "tag": "0004_chilly_fenris",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1774260502790,
+      "tag": "0005_classy_tempest",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1774261960454,
+      "tag": "0006_right_wolfpack",
+      "breakpoints": true
     }
   ]
 }

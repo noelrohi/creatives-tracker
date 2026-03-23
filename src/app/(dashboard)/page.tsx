@@ -1,8 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useTRPC } from "@/lib/trpc/client";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -14,35 +13,17 @@ import {
   ItemMedia,
   ItemGroup,
 } from "@/components/ui/item";
-import {
-  Image,
-  Globe,
-  Megaphone,
-  Layers,
-  Plus,
-  ArrowRight,
-  Sparkles,
-} from "lucide-react";
+import { Image, Globe, Upload, ArrowRight, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CreativeInsights } from "@/components/creative-insights";
 
 export default function DashboardPage() {
   const trpc = useTRPC();
-  const router = useRouter();
 
   const creatives = useQuery(trpc.adCreative.list.queryOptions({}));
   const landingPages = useQuery(trpc.landingPage.list.queryOptions());
-  const campaigns = useQuery(trpc.campaignConfig.list.queryOptions());
-  const adSets = useQuery(trpc.adSet.list.queryOptions());
-  const allLogs = useQuery(trpc.performanceLog.listAll.queryOptions());
 
-  const isLoading =
-    creatives.isLoading ||
-    landingPages.isLoading ||
-    campaigns.isLoading ||
-    adSets.isLoading;
+  const isLoading = creatives.isLoading || landingPages.isLoading;
 
-  // Collect recent items across all types
   const recentItems = !isLoading
     ? [
         ...(creatives.data ?? []).map((c) => ({
@@ -62,28 +43,6 @@ export default function DashboardPage() {
           href: `/landing-pages/${lp.id}`,
           detail: lp.url || null,
           date: lp.createdAt,
-        })),
-        ...(campaigns.data ?? []).map((c) => ({
-          id: c.id,
-          name: c.name,
-          type: "Campaign" as const,
-          icon: Megaphone,
-          href: `/campaigns/${c.id}`,
-          detail: [c.objective, c.dailyBudget ? `$${c.dailyBudget}/day` : null]
-            .filter(Boolean)
-            .join(" · ") || null,
-          date: c.createdAt,
-        })),
-        ...(adSets.data ?? []).map((a) => ({
-          id: a.id,
-          name: a.name,
-          type: "Ad Set" as const,
-          icon: Layers,
-          href: `/ad-sets/${a.id}`,
-          detail: [a.adCreativeName, a.campaignConfigName]
-            .filter(Boolean)
-            .join(" → ") || null,
-          date: a.createdAt,
         })),
       ]
         .sort(
@@ -110,36 +69,15 @@ export default function DashboardPage() {
       color: "text-emerald-500",
       bg: "bg-emerald-500/10",
     },
-    {
-      label: "Campaigns",
-      count: campaigns.data?.length ?? 0,
-      href: "/campaigns",
-      icon: Megaphone,
-      color: "text-amber-500",
-      bg: "bg-amber-500/10",
-    },
-    {
-      label: "Ad Sets",
-      count: adSets.data?.length ?? 0,
-      href: "/ad-sets",
-      icon: Layers,
-      color: "text-violet-500",
-      bg: "bg-violet-500/10",
-    },
   ];
 
   const totalItems =
-    (creatives.data?.length ?? 0) +
-    (landingPages.data?.length ?? 0) +
-    (campaigns.data?.length ?? 0) +
-    (adSets.data?.length ?? 0);
-
-  const hasPerformanceData = (allLogs.data?.length ?? 0) > 0;
+    (creatives.data?.length ?? 0) + (landingPages.data?.length ?? 0);
 
   return (
     <div className="flex flex-col gap-8">
       {/* Nav cards */}
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2">
         {sections.map((s) => (
           <Link
             key={s.href}
@@ -171,21 +109,16 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {/* Creative insights */}
-      {hasPerformanceData && (
-        <div className="flex flex-col gap-3">
-          <h2 className="text-[13px] font-medium uppercase tracking-wider text-muted-foreground/50">
-            Creative Insights
-          </h2>
-          <div className="rounded-lg border p-4 overflow-auto max-h-[500px]">
-            <CreativeInsights
-              creatives={creatives.data ?? []}
-              adSets={adSets.data ?? []}
-              performanceLogs={allLogs.data ?? []}
-            />
-          </div>
-        </div>
-      )}
+      {/* Import CTA */}
+      <div className="flex items-center gap-3 rounded-lg border border-dashed border-border px-4 py-3">
+        <Upload className="size-4 text-muted-foreground" />
+        <p className="flex-1 text-sm text-muted-foreground">
+          Import ads from Meta Ads Manager CSV exports
+        </p>
+        <Button asChild size="sm" variant="outline">
+          <Link href="/import">Import Ads</Link>
+        </Button>
+      </div>
 
       {/* Recent activity */}
       <div>
@@ -220,14 +153,15 @@ export default function DashboardPage() {
                 Nothing here yet
               </p>
               <p className="text-[13px] text-muted-foreground/40">
-                Start by creating a creative, landing page, or campaign.
+                Import your ads to get started.
               </p>
             </div>
-            <div className="flex gap-2">
-              <CreateButton trpc={trpc} router={router} entity="adCreative" label="Creative" href="/creatives" />
-              <CreateButton trpc={trpc} router={router} entity="landingPage" label="Landing Page" href="/landing-pages" />
-              <CreateButton trpc={trpc} router={router} entity="campaignConfig" label="Campaign" href="/campaigns" />
-            </div>
+            <Button asChild size="sm" variant="outline" className="gap-1.5">
+              <Link href="/import">
+                <Upload className="size-3" />
+                Import Ads
+              </Link>
+            </Button>
           </div>
         ) : (
           <ItemGroup>
@@ -243,8 +177,6 @@ export default function DashboardPage() {
                         "flex size-8 items-center justify-center rounded-md",
                         item.type === "Creative" && "bg-blue-500/10",
                         item.type === "Landing Page" && "bg-emerald-500/10",
-                        item.type === "Campaign" && "bg-amber-500/10",
-                        item.type === "Ad Set" && "bg-violet-500/10",
                       )}
                     >
                       <item.icon
@@ -252,8 +184,6 @@ export default function DashboardPage() {
                           "size-3.5",
                           item.type === "Creative" && "text-blue-500",
                           item.type === "Landing Page" && "text-emerald-500",
-                          item.type === "Campaign" && "text-amber-500",
-                          item.type === "Ad Set" && "text-violet-500",
                         )}
                       />
                     </div>
@@ -274,48 +204,5 @@ export default function DashboardPage() {
         )}
       </div>
     </div>
-  );
-}
-
-function CreateButton({
-  trpc,
-  router,
-  entity,
-  label,
-  href,
-}: {
-  trpc: ReturnType<typeof useTRPC>;
-  router: ReturnType<typeof useRouter>;
-  entity: "adCreative" | "landingPage" | "campaignConfig";
-  label: string;
-  href: string;
-}) {
-  const adCreative = useMutation({
-    ...trpc.adCreative.create.mutationOptions(),
-    onSuccess: (data) => router.push(`${href}/${data.id}`),
-  });
-  const landingPage = useMutation({
-    ...trpc.landingPage.create.mutationOptions(),
-    onSuccess: (data) => router.push(`${href}/${data.id}`),
-  });
-  const campaignConfig = useMutation({
-    ...trpc.campaignConfig.create.mutationOptions(),
-    onSuccess: (data) => router.push(`${href}/${data.id}`),
-  });
-
-  const mutations = { adCreative, landingPage, campaignConfig };
-  const m = mutations[entity];
-
-  return (
-    <Button
-      size="sm"
-      variant="outline"
-      onClick={() => m.mutate({})}
-      disabled={m.isPending}
-      className="gap-1.5 text-[13px]"
-    >
-      <Plus className="size-3" />
-      {label}
-    </Button>
   );
 }

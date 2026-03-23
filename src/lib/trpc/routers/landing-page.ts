@@ -1,47 +1,45 @@
 import { z } from "zod";
-import { eq, desc, and } from "drizzle-orm";
-import { router, protectedProcedure } from "../init";
+import { eq, desc } from "drizzle-orm";
+import { router, baseProcedure } from "../init";
 import { db } from "@/db";
 import { landingPages, landingPageVersions } from "@/schema/landing-page";
 
 export const landingPageRouter = router({
-  list: protectedProcedure.query(async ({ ctx }) => {
-    return db.select().from(landingPages).where(eq(landingPages.organizationId, ctx.organizationId)).orderBy(desc(landingPages.createdAt));
+  list: baseProcedure.query(async () => {
+    return db.select().from(landingPages).orderBy(desc(landingPages.createdAt));
   }),
 
-  getById: protectedProcedure
+  getById: baseProcedure
     .input(z.object({ id: z.string() }))
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input }) => {
       const [page] = await db
         .select()
         .from(landingPages)
-        .where(and(eq(landingPages.id, input.id), eq(landingPages.organizationId, ctx.organizationId)));
+        .where(eq(landingPages.id, input.id));
       if (!page) throw new Error("Landing page not found");
 
       const versions = await db
         .select()
         .from(landingPageVersions)
-        .where(and(eq(landingPageVersions.landingPageId, input.id), eq(landingPageVersions.organizationId, ctx.organizationId)))
+        .where(eq(landingPageVersions.landingPageId, input.id))
         .orderBy(desc(landingPageVersions.version));
 
       return { ...page, versions };
     }),
 
-  create: protectedProcedure
+  create: baseProcedure
     .input(
       z.object({
         name: z.string().optional(),
         url: z.string().optional(),
       }).optional(),
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const [page] = await db
         .insert(landingPages)
         .values({
           name: input?.name || "Untitled Landing Page",
           url: input?.url || "",
-          createdBy: ctx.session.user.id,
-          organizationId: ctx.organizationId,
         })
         .returning();
 
@@ -55,14 +53,12 @@ export const landingPageRouter = router({
         benefits: [],
         socialProofType: [],
         funnelPosition: "cold_traffic_entry",
-        createdBy: ctx.session.user.id,
-        organizationId: ctx.organizationId,
       });
 
       return page;
     }),
 
-  update: protectedProcedure
+  update: baseProcedure
     .input(
       z.object({
         id: z.string(),
@@ -70,31 +66,29 @@ export const landingPageRouter = router({
         url: z.string().optional(),
       }),
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const { id, ...data } = input;
       const [page] = await db
         .update(landingPages)
         .set(data)
-        .where(and(eq(landingPages.id, id), eq(landingPages.organizationId, ctx.organizationId)))
+        .where(eq(landingPages.id, id))
         .returning();
       return page;
     }),
 
-  duplicate: protectedProcedure
+  duplicate: baseProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const [source] = await db
         .select()
         .from(landingPages)
-        .where(and(eq(landingPages.id, input.id), eq(landingPages.organizationId, ctx.organizationId)));
+        .where(eq(landingPages.id, input.id));
       if (!source) throw new Error("Landing page not found");
       const [duplicate] = await db
         .insert(landingPages)
         .values({
           name: `Copy of ${source.name}`,
           url: source.url,
-          createdBy: ctx.session.user.id,
-          organizationId: ctx.organizationId,
         })
         .returning();
       // Auto-create v1 for the duplicate (per spec: no version duplication)
@@ -107,19 +101,17 @@ export const landingPageRouter = router({
         benefits: [],
         socialProofType: [],
         funnelPosition: "cold_traffic_entry",
-        createdBy: ctx.session.user.id,
-        organizationId: ctx.organizationId,
       });
       return duplicate;
     }),
 
-  delete: protectedProcedure
+  delete: baseProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input, ctx }) => {
-      await db.delete(landingPages).where(and(eq(landingPages.id, input.id), eq(landingPages.organizationId, ctx.organizationId)));
+    .mutation(async ({ input }) => {
+      await db.delete(landingPages).where(eq(landingPages.id, input.id));
     }),
 
-  createVersion: protectedProcedure
+  createVersion: baseProcedure
     .input(
       z.object({
         landingPageId: z.string(),
@@ -139,7 +131,7 @@ export const landingPageRouter = router({
         notes: z.string().optional(),
       }),
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       // Get the next version number
       const [latest] = await db
         .select({ version: landingPageVersions.version })
@@ -157,25 +149,18 @@ export const landingPageRouter = router({
         .values({
           ...input,
           version: nextVersion,
-          createdBy: ctx.session.user.id,
-          organizationId: ctx.organizationId,
         })
         .returning();
       return version;
     }),
 
-  duplicateVersion: protectedProcedure
+  duplicateVersion: baseProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const [source] = await db
         .select()
         .from(landingPageVersions)
-        .where(
-          and(
-            eq(landingPageVersions.id, input.id),
-            eq(landingPageVersions.organizationId, ctx.organizationId),
-          ),
-        );
+        .where(eq(landingPageVersions.id, input.id));
       if (!source) throw new Error("Version not found");
 
       const [latest] = await db
@@ -200,24 +185,22 @@ export const landingPageRouter = router({
           socialProofType: source.socialProofType,
           funnelPosition: source.funnelPosition,
           notes: source.notes,
-          createdBy: ctx.session.user.id,
-          organizationId: ctx.organizationId,
         })
         .returning();
       return duplicate;
     }),
 
-  listVersions: protectedProcedure
+  listVersions: baseProcedure
     .input(z.object({ landingPageId: z.string() }))
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input }) => {
       return db
         .select()
         .from(landingPageVersions)
-        .where(and(eq(landingPageVersions.landingPageId, input.landingPageId), eq(landingPageVersions.organizationId, ctx.organizationId)))
+        .where(eq(landingPageVersions.landingPageId, input.landingPageId))
         .orderBy(desc(landingPageVersions.version));
     }),
 
-  updateVersion: protectedProcedure
+  updateVersion: baseProcedure
     .input(
       z.object({
         id: z.string(),
@@ -235,31 +218,21 @@ export const landingPageRouter = router({
         notes: z.string().nullable().optional(),
       }),
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const { id, ...data } = input;
       const [version] = await db
         .update(landingPageVersions)
         .set(data)
-        .where(
-          and(
-            eq(landingPageVersions.id, id),
-            eq(landingPageVersions.organizationId, ctx.organizationId),
-          ),
-        )
+        .where(eq(landingPageVersions.id, id))
         .returning();
       return version;
     }),
 
-  deleteVersion: protectedProcedure
+  deleteVersion: baseProcedure
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       await db
         .delete(landingPageVersions)
-        .where(
-          and(
-            eq(landingPageVersions.id, input.id),
-            eq(landingPageVersions.organizationId, ctx.organizationId),
-          ),
-        );
+        .where(eq(landingPageVersions.id, input.id));
     }),
 });

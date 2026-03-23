@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/chart";
 import Link from "next/link";
 
-interface AdSet {
+interface Ad {
   id: string;
   adCreativeId: string | null;
   [key: string]: unknown;
@@ -28,7 +28,7 @@ interface Creative {
 }
 
 interface PerfLog {
-  adSetId: string;
+  adId: string;
   roas: string | null;
   cpa: string | null;
   spend: string | null;
@@ -40,7 +40,7 @@ interface PerfLog {
 
 interface CreativeInsightsProps {
   creatives: Creative[];
-  adSets: AdSet[];
+  ads: Ad[];
   performanceLogs: PerfLog[];
 }
 
@@ -137,16 +137,16 @@ function InsightChart({ title, data }: { title: string; data: DimensionResult[] 
   );
 }
 
-export function CreativeInsights({ creatives, adSets, performanceLogs }: CreativeInsightsProps) {
+export function CreativeInsights({ creatives, ads, performanceLogs }: CreativeInsightsProps) {
   const { creativePerf, dimensions } = useMemo(() => {
-    const adSetToCreative = new Map<string, string>();
-    for (const adSet of adSets) {
-      if (adSet.adCreativeId) adSetToCreative.set(adSet.id, adSet.adCreativeId);
+    const adToCreative = new Map<string, string>();
+    for (const ad of ads) {
+      if (ad.adCreativeId) adToCreative.set(ad.id, ad.adCreativeId);
     }
 
     const creativePerf = new Map<string, PerfLog[]>();
     for (const log of performanceLogs) {
-      const creativeId = adSetToCreative.get(log.adSetId);
+      const creativeId = adToCreative.get(log.adId);
       if (!creativeId) continue;
       if (!creativePerf.has(creativeId)) creativePerf.set(creativeId, []);
       creativePerf.get(creativeId)!.push(log);
@@ -165,7 +165,7 @@ export function CreativeInsights({ creatives, adSets, performanceLogs }: Creativ
     if (personaDim.length > 1) dims.push({ key: "persona", label: "ROAS by Persona", data: personaDim.slice(0, 8) });
 
     return { creativePerf, dimensions: dims };
-  }, [creatives, adSets, performanceLogs]);
+  }, [creatives, ads, performanceLogs]);
 
   const topCreatives = useMemo(() => {
     return creatives

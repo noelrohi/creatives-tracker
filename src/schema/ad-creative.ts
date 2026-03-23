@@ -1,6 +1,5 @@
 import { relations } from "drizzle-orm";
 import { pgTable, text, timestamp, index } from "drizzle-orm/pg-core";
-import { user, organization } from "./auth";
 import { landingPages } from "./landing-page";
 import { formatEnum, awarenessLevelEnum } from "./enums";
 
@@ -24,12 +23,6 @@ export const adCreatives = pgTable(
       { onDelete: "set null" },
     ),
     notes: text("notes"),
-    organizationId: text("organization_id")
-      .notNull()
-      .references(() => organization.id, { onDelete: "cascade" }),
-    createdBy: text("created_by")
-      .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -37,8 +30,6 @@ export const adCreatives = pgTable(
       .notNull(),
   },
   (table) => [
-    index("ad_creative_organization_id_idx").on(table.organizationId),
-    index("ad_creative_created_by_idx").on(table.createdBy),
     index("ad_creative_landing_page_id_idx").on(table.landingPageId),
     index("ad_creative_format_idx").on(table.format),
     index("ad_creative_awareness_level_idx").on(table.awarenessLevel),
@@ -49,9 +40,5 @@ export const adCreativeRelations = relations(adCreatives, ({ one }) => ({
   landingPage: one(landingPages, {
     fields: [adCreatives.landingPageId],
     references: [landingPages.id],
-  }),
-  creator: one(user, {
-    fields: [adCreatives.createdBy],
-    references: [user.id],
   }),
 }));

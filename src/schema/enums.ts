@@ -1,5 +1,11 @@
 import { pgEnum } from "drizzle-orm/pg-core";
 
+export const statusEnum = pgEnum("status", [
+  "active",
+  "paused",
+  "archived",
+]);
+
 export const formatEnum = pgEnum("format", [
   "static",
   "video",
