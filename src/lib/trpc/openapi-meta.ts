@@ -26,7 +26,6 @@ export function openApiQueryMeta(
       method: "GET",
       path: buildOpenApiPath(routerName, procedureName),
       summary,
-      tags: [routerName],
     },
   };
 }
@@ -41,7 +40,6 @@ export function openApiMutationMeta(
       method: "POST",
       path: buildOpenApiPath(routerName, procedureName),
       summary,
-      tags: [routerName],
     },
   };
 }

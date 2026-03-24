@@ -1,11 +1,152 @@
 import { TRPCError } from "@trpc/server";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
-import { toJSONSchema, type ZodTypeAny } from "zod";
+import { z, toJSONSchema, type ZodTypeAny } from "zod";
+import { createSelectSchema } from "drizzle-zod";
 import { createContext } from "./init";
 import type { OpenApiMeta, OpenApiMethod } from "./openapi-meta";
 import { appRouter } from "./routers/_app";
+import { landingPages, landingPageVersions } from "@/schema/landing-page";
+import { adCreatives } from "@/schema/ad-creative";
+import { campaigns } from "@/schema/campaign";
+import { adSets } from "@/schema/ad-set";
+import { ads } from "@/schema/ad";
+import { performanceLogs } from "@/schema/performance-log";
+import { tags, entityTags } from "@/schema/tag";
+import { accounts } from "@/schema/account";
 
 const EXCLUDED_OPENAPI_ROUTERS = new Set(["abTest"]);
+
+const TAG_METADATA: Record<string, { name: string; description: string }> = {
+  landingPage: {
+    name: "Landing Pages",
+    description: "Manage landing pages and their versions",
+  },
+  adCreative: {
+    name: "Ad Creatives",
+    description: "Manage ad creatives and performance analytics",
+  },
+  campaign: {
+    name: "Campaigns",
+    description: "Manage advertising campaigns",
+  },
+  adSet: {
+    name: "Ad Sets",
+    description: "Manage ad sets within campaigns",
+  },
+  ad: {
+    name: "Ads",
+    description: "Manage individual ads",
+  },
+  performanceLog: {
+    name: "Performance Logs",
+    description: "Track and manage ad performance metrics",
+  },
+  tag: {
+    name: "Tags",
+    description: "Manage tags and entity associations",
+  },
+  account: {
+    name: "Accounts",
+    description: "Manage ad platform accounts",
+  },
+};
+
+const dateAsString = z.string().describe("ISO 8601 date-time string");
+
+function selectSchema(table: Parameters<typeof createSelectSchema>[0]) {
+  // Override Date columns to string for JSON Schema compatibility
+  const schema = createSelectSchema(table);
+  const shape = (schema as z.ZodObject<z.ZodRawShape>).shape;
+  const overrides: Record<string, ZodTypeAny> = {};
+
+  for (const [key, field] of Object.entries(shape)) {
+    const unwrapped =
+      field instanceof z.ZodNullable ? field.unwrap() : field;
+    if (unwrapped instanceof z.ZodDate) {
+      overrides[key] =
+        field instanceof z.ZodNullable
+          ? dateAsString.nullable()
+          : dateAsString;
+    }
+  }
+
+  if (Object.keys(overrides).length > 0) {
+    return (schema as z.ZodObject<z.ZodRawShape>).extend(overrides);
+  }
+  return schema;
+}
+
+const selectSchemas: Record<string, ZodTypeAny> = {
+  landingPage: selectSchema(landingPages),
+  landingPageVersion: selectSchema(landingPageVersions),
+  adCreative: selectSchema(adCreatives),
+  campaign: selectSchema(campaigns),
+  adSet: selectSchema(adSets),
+  ad: selectSchema(ads),
+  performanceLog: selectSchema(performanceLogs),
+  tag: selectSchema(tags),
+  entityTag: selectSchema(entityTags),
+  account: selectSchema(accounts),
+};
+
+function getResponseSchema(
+  routerName: string,
+  procedureName: string,
+): JsonSchema | undefined {
+  const baseSchema = selectSchemas[routerName];
+  if (!baseSchema) return undefined;
+
+  const itemSchema = toJSONSchema(baseSchema, {
+    target: "openapi-3.0",
+    reused: "inline",
+  }) as JsonSchema;
+
+  if (
+    procedureName === "list" ||
+    procedureName.startsWith("listBy") ||
+    procedureName.startsWith("listAll")
+  ) {
+    return { type: "array", items: itemSchema };
+  }
+
+  if (procedureName === "listVersions") {
+    const versionSchema = selectSchemas["landingPageVersion"];
+    if (versionSchema) {
+      return {
+        type: "array",
+        items: toJSONSchema(versionSchema, {
+          target: "openapi-3.0",
+          reused: "inline",
+        }) as JsonSchema,
+      };
+    }
+  }
+
+  if (procedureName === "listForEntity") {
+    const tagWithEntitySchema = z.object({
+      tagId: z.string(),
+      tagName: z.string(),
+      tagColor: z.string().nullable(),
+      entityTagId: z.string(),
+    });
+    return {
+      type: "array",
+      items: toJSONSchema(tagWithEntitySchema, {
+        target: "openapi-3.0",
+        reused: "inline",
+      }) as JsonSchema,
+    };
+  }
+
+  return itemSchema;
+}
+
+function humanizeProcedureName(procedureName: string): string {
+  return procedureName
+    .replace(/([A-Z])/g, " $1")
+    .replace(/^./, (c) => c.toUpperCase())
+    .trim();
+}
 
 type JsonSchema = Record<string, unknown>;
 
@@ -25,6 +166,7 @@ type OpenApiProcedure = {
   summary?: string;
   tags: string[];
   inputSchema?: ZodTypeAny;
+  responseSchema?: JsonSchema;
 };
 
 function isProcedure(value: unknown): value is ProcedureLike {
@@ -219,14 +361,18 @@ function collectOpenApiProcedures(
       continue;
     }
 
+    const tagMeta = TAG_METADATA[routerName];
+    const displayTag = tagMeta?.name ?? routerName;
+
     procedures.push({
       routerName,
       procedureName: key,
       method: openapi.method,
       path: openapi.path,
-      summary: openapi.summary,
-      tags: openapi.tags ?? [routerName],
+      summary: openapi.summary ?? humanizeProcedureName(key),
+      tags: openapi.tags ?? [displayTag],
       inputSchema: getProcedureInputSchema(value),
+      responseSchema: getResponseSchema(routerName, key),
     });
   }
 
@@ -252,8 +398,11 @@ export function getOpenApiProcedure(
 
 export function generateOpenApiDocument(baseUrl: string) {
   const paths: Record<string, Record<string, unknown>> = {};
+  const usedTags = new Set<string>();
 
-  for (const procedure of getOpenApiProcedures()) {
+  const procedures = getOpenApiProcedures();
+
+  for (const procedure of procedures) {
     const operation: Record<string, unknown> = {
       operationId: `${procedure.routerName}.${procedure.procedureName}`,
       tags: procedure.tags,
@@ -263,7 +412,7 @@ export function generateOpenApiDocument(baseUrl: string) {
           description: "Successful response",
           content: {
             "application/json": {
-              schema: {
+              schema: procedure.responseSchema ?? {
                 type: "object",
                 additionalProperties: true,
               },
@@ -282,21 +431,33 @@ export function generateOpenApiDocument(baseUrl: string) {
       }
     }
 
+    for (const tag of procedure.tags) {
+      usedTags.add(tag);
+    }
+
     paths[procedure.path] = {
       ...(paths[procedure.path] ?? {}),
       [procedure.method.toLowerCase()]: operation,
     };
   }
 
+  const tags = [...usedTags].map((tag) => {
+    const meta = Object.values(TAG_METADATA).find((m) => m.name === tag);
+    return meta
+      ? { name: meta.name, description: meta.description }
+      : { name: tag };
+  });
+
   return {
     openapi: "3.0.3",
     info: {
-      title: "Adsolute tRPC API",
+      title: "Adsolute API",
       version: "1.0.0",
       description:
-        "Internal REST bridge generated from the app's tRPC router for interactive docs and CLI development.",
+        "REST API for managing ad campaigns, creatives, landing pages, and performance analytics.",
     },
     servers: [{ url: baseUrl }],
+    tags,
     paths,
   };
 }
