@@ -32,7 +32,7 @@ import {
   Upload,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { StaleDataBanner } from "@/components/data-freshness";
+import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
 
 function fmt(val: unknown, prefix = "", suffix = "") {
   if (val == null || val === "") return "—";

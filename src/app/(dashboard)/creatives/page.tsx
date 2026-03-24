@@ -22,7 +22,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Search, Sparkles, Trash2, Upload, ArrowUpDown, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { StaleDataBanner } from "@/components/data-freshness";
+import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
 import { toast } from "sonner";
 
 const FORMATS = ["static", "video", "ugc", "carousel"] as const;

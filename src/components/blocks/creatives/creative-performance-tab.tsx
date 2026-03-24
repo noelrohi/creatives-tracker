@@ -9,7 +9,7 @@ import {
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
-import { DataFreshnessLabel } from "@/components/data-freshness";
+import { DataFreshnessLabel } from "@/components/blocks/dashboard/data-freshness";
 
 function fmt(
   value: string | number | null | undefined,
