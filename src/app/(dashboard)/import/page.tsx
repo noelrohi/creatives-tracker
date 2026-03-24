@@ -4,7 +4,7 @@ import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useForm, Controller } from "react-hook-form";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useTRPC } from "@/lib/trpc/client";
+import { useTRPC, useTRPCClient } from "@/lib/trpc/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -38,6 +38,8 @@ import {
   type MappedRow,
   type ImportLevel,
 } from "@/lib/csv-parser";
+
+const MAX_BULK_IMPORT_PAYLOAD_BYTES = 1_000_000;
 
 const ALL_FIELDS: {
   key: keyof ColumnMapping;
@@ -108,9 +110,91 @@ function emptyMapping(): ColumnMapping {
   };
 }
 
+function mapRowsForImport(rows: MappedRow[]) {
+  return rows.map((r) => ({
+    name: r.name || "Imported Ad",
+    roas: r.roas,
+    cpa: r.cpa,
+    ctr: r.ctr,
+    conversionRate: r.conversionRate,
+    spend: r.spend,
+    conversions: r.conversions != null ? Number(r.conversions) : undefined,
+    impressions: r.impressions != null ? Number(r.impressions) : undefined,
+    reach: r.reach != null ? Number(r.reach) : undefined,
+    frequency: r.frequency,
+    cpm: r.cpm,
+    qualityRanking: r.qualityRanking,
+    engagementRateRanking: r.engagementRateRanking,
+    conversionRateRanking: r.conversionRateRanking,
+    linkClicks: r.linkClicks != null ? Number(r.linkClicks) : undefined,
+    clicksAll: r.clicksAll != null ? Number(r.clicksAll) : undefined,
+    cpc: r.cpc,
+    ctrLinkClick: r.ctrLinkClick,
+    landingPageViews: r.landingPageViews != null ? Number(r.landingPageViews) : undefined,
+    costPerLpv: r.costPerLpv,
+    purchaseValue: r.purchaseValue,
+    addToCart: r.addToCart != null ? Number(r.addToCart) : undefined,
+    initiateCheckout: r.initiateCheckout != null ? Number(r.initiateCheckout) : undefined,
+    costPerAddToCart: r.costPerAddToCart,
+    videoViews3s: r.videoViews3s != null ? Number(r.videoViews3s) : undefined,
+    videoThruplay: r.videoThruplay != null ? Number(r.videoThruplay) : undefined,
+    videoAvgWatchTime: r.videoAvgWatchTime,
+    country: r.country,
+    platform: r.platform,
+    placement: r.placement,
+    device: r.device,
+    age: r.age,
+    gender: r.gender,
+    delivery: r.delivery,
+    adId: r.adId,
+    campaignName: r.campaignName,
+    campaignId: r.campaignId,
+    adSetName: r.adSetName,
+    adSetId: r.adSetId,
+    dateStart: r.dateStart || new Date().toISOString().slice(0, 10),
+    dateEnd: r.dateEnd || new Date().toISOString().slice(0, 10),
+  }));
+}
+
+type BulkImportRow = ReturnType<typeof mapRowsForImport>[number];
+
+function splitBulkImportRows(rows: BulkImportRow[], accountId?: string) {
+  const encoder = new TextEncoder();
+  const emptyPayloadBytes = encoder.encode(JSON.stringify({ accountId, rows: [] })).length;
+  const chunks: BulkImportRow[][] = [];
+  let currentChunk: BulkImportRow[] = [];
+  let currentChunkBytes = emptyPayloadBytes;
+
+  for (const row of rows) {
+    const rowBytes = encoder.encode(JSON.stringify(row)).length;
+    const nextChunkBytes = currentChunkBytes + rowBytes + (currentChunk.length > 0 ? 1 : 0);
+
+    if (currentChunk.length > 0 && nextChunkBytes > MAX_BULK_IMPORT_PAYLOAD_BYTES) {
+      chunks.push(currentChunk);
+      currentChunk = [row];
+      currentChunkBytes = emptyPayloadBytes + rowBytes;
+      continue;
+    }
+
+    if (currentChunk.length === 0 && emptyPayloadBytes + rowBytes > MAX_BULK_IMPORT_PAYLOAD_BYTES) {
+      throw new Error("A single import row is too large to send. Reduce the imported columns and try again.");
+    }
+
+    currentChunk.push(row);
+    currentChunkBytes = nextChunkBytes;
+  }
+
+  if (currentChunk.length > 0) {
+    chunks.push(currentChunk);
+  }
+
+  return chunks;
+}
+
 export default function ImportPage() {
   const router = useRouter();
   const trpc = useTRPC();
+  const trpcClient = useTRPCClient();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -130,22 +214,52 @@ export default function ImportPage() {
     defaultValues: { accountId: "" },
   });
 
-  const importMutation = useMutation(
-    trpc.adCreative.bulkImport.mutationOptions({
-      onSuccess: (data) => {
-        queryClient.invalidateQueries({ queryKey: trpc.adCreative.list.queryKey() });
-        queryClient.invalidateQueries({ queryKey: trpc.ad.list.queryKey() });
-        const newCount = data.created.length;
-        const updatedCount = data.uniqueAds - newCount;
-        const parts = [];
-        if (newCount > 0) parts.push(`${newCount} new`);
-        if (updatedCount > 0) parts.push(`${updatedCount} updated`);
-        toast.success(`${parts.join(", ")} ad${data.uniqueAds > 1 ? "s" : ""} · ${data.perfLogs.toLocaleString()} perf rows`);
-        router.push("/creatives");
-      },
-      onError: (error) => toast.error(error.message),
-    }),
-  );
+  const importMutation = useMutation({
+    mutationKey: trpc.adCreative.bulkImport.mutationKey(),
+    mutationFn: async ({
+      accountId,
+      rows,
+    }: {
+      accountId?: string;
+      rows: BulkImportRow[];
+    }) => {
+      const rowChunks = splitBulkImportRows(rows, accountId);
+      const createdById = new Map<string, { id: string; name: string }>();
+      let perfLogs = 0;
+
+      for (const rowChunk of rowChunks) {
+        const result = await trpcClient.adCreative.bulkImport.mutate({
+          accountId,
+          rows: rowChunk,
+        });
+
+        for (const created of result.created) {
+          createdById.set(created.id, created);
+        }
+
+        perfLogs += result.perfLogs;
+      }
+
+      return {
+        created: [...createdById.values()],
+        totalRows: rows.length,
+        uniqueAds: new Set(rows.map((row) => row.adId || row.name)).size,
+        perfLogs,
+      };
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: trpc.adCreative.list.queryKey() });
+      queryClient.invalidateQueries({ queryKey: trpc.ad.list.queryKey() });
+      const newCount = data.created.length;
+      const updatedCount = data.uniqueAds - newCount;
+      const parts = [];
+      if (newCount > 0) parts.push(`${newCount} new`);
+      if (updatedCount > 0) parts.push(`${updatedCount} updated`);
+      toast.success(`${parts.join(", ")} ad${data.uniqueAds > 1 ? "s" : ""} · ${data.perfLogs.toLocaleString()} perf rows`);
+      router.push("/creatives");
+    },
+    onError: (error) => toast.error(error.message),
+  });
 
   function processFile(file: File) {
     setFileName(file.name);
@@ -205,49 +319,7 @@ export default function ImportPage() {
     }
     importMutation.mutate({
       accountId: accountId || undefined,
-      rows: rows.map((r) => ({
-        name: r.name || "Imported Ad",
-        roas: r.roas,
-        cpa: r.cpa,
-        ctr: r.ctr,
-        conversionRate: r.conversionRate,
-        spend: r.spend,
-        conversions: r.conversions != null ? Number(r.conversions) : undefined,
-        impressions: r.impressions != null ? Number(r.impressions) : undefined,
-        reach: r.reach != null ? Number(r.reach) : undefined,
-        frequency: r.frequency,
-        cpm: r.cpm,
-        qualityRanking: r.qualityRanking,
-        engagementRateRanking: r.engagementRateRanking,
-        conversionRateRanking: r.conversionRateRanking,
-        linkClicks: r.linkClicks != null ? Number(r.linkClicks) : undefined,
-        clicksAll: r.clicksAll != null ? Number(r.clicksAll) : undefined,
-        cpc: r.cpc,
-        ctrLinkClick: r.ctrLinkClick,
-        landingPageViews: r.landingPageViews != null ? Number(r.landingPageViews) : undefined,
-        costPerLpv: r.costPerLpv,
-        purchaseValue: r.purchaseValue,
-        addToCart: r.addToCart != null ? Number(r.addToCart) : undefined,
-        initiateCheckout: r.initiateCheckout != null ? Number(r.initiateCheckout) : undefined,
-        costPerAddToCart: r.costPerAddToCart,
-        videoViews3s: r.videoViews3s != null ? Number(r.videoViews3s) : undefined,
-        videoThruplay: r.videoThruplay != null ? Number(r.videoThruplay) : undefined,
-        videoAvgWatchTime: r.videoAvgWatchTime,
-        country: r.country,
-        platform: r.platform,
-        placement: r.placement,
-        device: r.device,
-        age: r.age,
-        gender: r.gender,
-        delivery: r.delivery,
-        adId: r.adId,
-        campaignName: r.campaignName,
-        campaignId: r.campaignId,
-        adSetName: r.adSetName,
-        adSetId: r.adSetId,
-        dateStart: r.dateStart || new Date().toISOString().slice(0, 10),
-        dateEnd: r.dateEnd || new Date().toISOString().slice(0, 10),
-      })),
+      rows: mapRowsForImport(rows),
     });
   }
 

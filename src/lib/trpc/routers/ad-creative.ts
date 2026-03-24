@@ -911,9 +911,17 @@ export const adCreativeRouter = router({
       if (input.accountId) {
         const dateEnds = perfRows.map((r) => r.dateEnd).filter(Boolean) as string[];
         const maxDataDate = dateEnds.sort().reverse()[0] ?? null;
+        const [account] = await db
+          .select({ dataDateEnd: accounts.dataDateEnd })
+          .from(accounts)
+          .where(eq(accounts.id, input.accountId));
+        const nextDataDateEnd = account?.dataDateEnd && maxDataDate
+          ? (account.dataDateEnd > maxDataDate ? account.dataDateEnd : maxDataDate)
+          : account?.dataDateEnd ?? maxDataDate;
+
         await db.update(accounts).set({
           lastImportedAt: new Date(),
-          ...(maxDataDate ? { dataDateEnd: maxDataDate } : {}),
+          ...(nextDataDateEnd ? { dataDateEnd: nextDataDateEnd } : {}),
         }).where(eq(accounts.id, input.accountId));
       }
 
