@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { useQueryState, parseAsString } from "nuqs";
+import { useQueryState, parseAsString, parseAsInteger } from "nuqs";
 import { useTRPC } from "@/lib/trpc/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ButtonGroup } from "@/components/ui/button-group";
 import {
   Select,
   SelectContent,
@@ -23,12 +24,17 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  Image,
-  LayoutTemplate,
-  Megaphone,
+  TrendingUp,
+  TrendingDown,
   Tag,
   Upload,
   ArrowRight,
+  DollarSign,
+  Target,
+  MousePointerClick,
+  ShoppingCart,
+  Trophy,
+  AlertTriangle,
 } from "lucide-react";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
 
@@ -39,59 +45,108 @@ function fmtMoney(val: unknown) {
   return `$${n >= 1000 ? n.toLocaleString("en-US", { maximumFractionDigits: 0 }) : n.toFixed(2)}`;
 }
 
+function fmtRoas(val: unknown) {
+  if (val == null || val === "") return "—";
+  const n = typeof val === "string" ? parseFloat(val) : Number(val);
+  if (isNaN(n)) return "—";
+  return `${n.toFixed(2)}x`;
+}
+
+function fmtPct(val: unknown) {
+  if (val == null || val === "") return "—";
+  const n = typeof val === "string" ? parseFloat(val) : Number(val);
+  if (isNaN(n)) return "—";
+  return `${n.toFixed(2)}%`;
+}
+
+function fmtNum(val: unknown) {
+  if (val == null || val === "") return "—";
+  const n = typeof val === "string" ? parseInt(val, 10) : Number(val);
+  if (isNaN(n)) return "—";
+  return n.toLocaleString("en-US");
+}
+
+const DATE_RANGES = [
+  { label: "7d", value: 7 },
+  { label: "14d", value: 14 },
+  { label: "30d", value: 30 },
+] as const;
+
 export default function DashboardPage() {
   const trpc = useTRPC();
 
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
+  const [days, setDays] = useQueryState("days", parseAsInteger.withDefault(7));
   const selectedAccountId = accountId || undefined;
 
   const accounts = useQuery(trpc.account.list.queryOptions());
-  const creatives = useQuery(
-    trpc.adCreative.list.queryOptions(
-      selectedAccountId ? { accountId: selectedAccountId } : undefined,
-    ),
+
+  const stats = useQuery(
+    trpc.adCreative.dashboardStats.queryOptions({
+      days,
+      accountId: selectedAccountId,
+    }),
   );
+
   const untaggedCreatives = useQuery(
     trpc.adCreative.list.queryOptions({
       ...(selectedAccountId ? { accountId: selectedAccountId } : {}),
       untaggedOnly: true,
     }),
   );
-  const ads = useQuery(trpc.ad.list.queryOptions());
-  const landingPages = useQuery(trpc.landingPage.list.queryOptions());
-  const isLoading =
-    accounts.isLoading ||
-    creatives.isLoading ||
-    ads.isLoading ||
-    landingPages.isLoading;
 
-  const creativeRows = creatives.data ?? [];
-  const recentCreatives = creativeRows.slice(0, 5);
-  const liveCreatives = creativeRows.filter(
-    (creative) => creative.adStatus === "active",
-  ).length;
-  const totalSpend = creativeRows.reduce((sum, creative) => {
-    const spend =
-      creative.totalSpend == null ? 0 : Number.parseFloat(creative.totalSpend);
-    return sum + (Number.isNaN(spend) ? 0 : spend);
-  }, 0);
+  const portfolio = stats.data?.portfolio;
+  const topPerformers = stats.data?.topPerformers ?? [];
+  const bottomPerformers = stats.data?.bottomPerformers ?? [];
 
-  const metrics = [
-    { label: "Creatives", value: creativeRows.length, icon: Image },
-    { label: "Live Creatives", value: liveCreatives, icon: Megaphone },
-    { label: "Landing Pages", value: landingPages.data?.length ?? 0, icon: LayoutTemplate },
-    { label: "Linked Ads", value: ads.data?.length ?? 0, icon: Tag },
+  const kpis = [
+    {
+      label: "Portfolio ROAS",
+      value: fmtRoas(portfolio?.roas),
+      icon: TrendingUp,
+      accent: "text-emerald-500",
+    },
+    {
+      label: "Avg CPA",
+      value: fmtMoney(portfolio?.cpa),
+      icon: Target,
+      accent: "text-blue-500",
+    },
+    {
+      label: "Avg CTR",
+      value: fmtPct(portfolio?.ctr),
+      icon: MousePointerClick,
+      accent: "text-violet-500",
+    },
+    {
+      label: "Conversions",
+      value: fmtNum(portfolio?.conversions),
+      icon: ShoppingCart,
+      accent: "text-amber-500",
+    },
   ];
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Header with account selector */}
+      {/* Header with date range + account selector */}
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Dashboard</h1>
         <div className="flex items-center gap-2">
+          <ButtonGroup>
+            {DATE_RANGES.map((range) => (
+              <Button
+                key={range.value}
+                size="sm"
+                variant={days === range.value ? "secondary" : "outline"}
+                onClick={() => setDays(range.value)}
+              >
+                {range.label}
+              </Button>
+            ))}
+          </ButtonGroup>
           {accounts.data && accounts.data.length > 0 && (
             <Select value={accountId || "all"} onValueChange={(v) => setAccountId(v === "all" ? "" : v)}>
-              <SelectTrigger className="h-8 w-auto gap-1 text-[13px]">
+              <SelectTrigger className="h-7 w-auto gap-1 text-[13px]">
                 <SelectValue placeholder="All accounts" />
               </SelectTrigger>
               <SelectContent>
@@ -109,34 +164,41 @@ export default function DashboardPage() {
         account={accountId ? accounts.data?.find((a) => a.id === accountId) : accounts.data?.[0]}
       />
 
-      {/* Key metrics */}
+      {/* KPI cards */}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {metrics.map((m) => (
-          <div key={m.label} className="rounded-lg border border-border px-3.5 py-3">
+        {kpis.map((kpi) => (
+          <div key={kpi.label} className="rounded-lg border border-border px-3.5 py-3">
             <div className="flex items-center gap-1.5 text-[13px] text-muted-foreground/70">
-              <m.icon className="size-3.5" />
-              {m.label}
+              <kpi.icon className={`size-3.5 ${kpi.accent}`} />
+              {kpi.label}
             </div>
-            {isLoading ? (
-              <Skeleton className="mt-1 h-6 w-16" />
+            {stats.isLoading ? (
+              <Skeleton className="mt-1 h-6 w-20" />
             ) : (
-              <div className="mt-0.5 flex items-baseline gap-1.5">
-                <span className="text-lg font-semibold tabular-nums leading-tight">
-                  {m.value}
-                </span>
-              </div>
+              <span className="mt-0.5 block text-lg font-semibold tabular-nums leading-tight">
+                {kpi.value}
+              </span>
             )}
           </div>
         ))}
       </div>
 
+      {/* Spend + Revenue bar */}
       <div className="rounded-lg border border-border px-4 py-3">
         <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-[13px] text-muted-foreground">Portfolio spend in visible creatives</p>
-            <p className="mt-1 text-lg font-semibold tabular-nums">
-              {isLoading ? "—" : fmtMoney(totalSpend)}
-            </p>
+          <div className="flex items-center gap-8">
+            <div>
+              <p className="text-[13px] text-muted-foreground">Spend</p>
+              <p className="mt-0.5 text-lg font-semibold tabular-nums">
+                {stats.isLoading ? "—" : fmtMoney(portfolio?.totalSpend)}
+              </p>
+            </div>
+            <div>
+              <p className="text-[13px] text-muted-foreground">Revenue</p>
+              <p className="mt-0.5 text-lg font-semibold tabular-nums">
+                {stats.isLoading ? "—" : fmtMoney(portfolio?.totalRevenue)}
+              </p>
+            </div>
           </div>
           <Button asChild size="sm" variant="outline" className="gap-1.5">
             <Link href="/import">
@@ -165,86 +227,162 @@ export default function DashboardPage() {
         </Link>
       )}
 
-      {/* Recent creatives */}
+      {/* Creative Leaderboard */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        {/* Top Performers */}
+        <LeaderboardTable
+          title="Top Performers"
+          icon={<Trophy className="size-3.5 text-emerald-500" />}
+          rows={topPerformers}
+          isLoading={stats.isLoading}
+          emptyMessage="No creatives with enough spend data yet"
+          accountId={accountId}
+        />
+
+        {/* Bottom Performers */}
+        <LeaderboardTable
+          title="Needs Attention"
+          icon={<AlertTriangle className="size-3.5 text-red-400" />}
+          rows={bottomPerformers}
+          isLoading={stats.isLoading}
+          emptyMessage="No underperformers detected"
+          accountId={accountId}
+        />
+      </div>
+    </div>
+  );
+}
+
+type LeaderboardRow = {
+  id: string;
+  name: string;
+  format: string | null;
+  totalSpend: string;
+  roas: string;
+  cpa: string | null;
+  ctr: string | null;
+  conversions: string;
+  adStatus: string | null;
+};
+
+function LeaderboardTable({
+  title,
+  icon,
+  rows,
+  isLoading,
+  emptyMessage,
+  accountId,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  rows: LeaderboardRow[];
+  isLoading: boolean;
+  emptyMessage: string;
+  accountId: string;
+}) {
+  if (isLoading) {
+    return (
       <div>
-        <div className="flex items-center justify-between mb-3">
+        <div className="mb-3 flex items-center gap-2">
+          {icon}
           <h2 className="text-[13px] font-medium uppercase tracking-wider text-muted-foreground/50">
-            Recent Creatives
+            {title}
           </h2>
-          <Button variant="ghost" size="sm" asChild className="text-[13px] text-muted-foreground">
-            <Link href={`/creatives${accountId ? `?account=${accountId}` : ""}`}>
-              View Creatives <ArrowRight className="ml-1 size-3" />
+        </div>
+        <div className="rounded-lg border divide-y">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-4 px-4 py-3">
+              <Skeleton className="h-4 w-40" />
+              <div className="flex-1" />
+              <Skeleton className="h-4 w-14" />
+              <Skeleton className="h-4 w-14" />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (rows.length === 0) {
+    return (
+      <div>
+        <div className="mb-3 flex items-center gap-2">
+          {icon}
+          <h2 className="text-[13px] font-medium uppercase tracking-wider text-muted-foreground/50">
+            {title}
+          </h2>
+        </div>
+        <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border py-12">
+          <p className="text-sm text-muted-foreground">{emptyMessage}</p>
+          <Button asChild size="sm" variant="outline" className="gap-1.5">
+            <Link href="/import">
+              <Upload className="size-3.5" /> Import Ads
             </Link>
           </Button>
         </div>
+      </div>
+    );
+  }
 
-        {creatives.isLoading ? (
-          <div className="rounded-lg border">
-            <div className="divide-y">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="flex items-center gap-4 px-4 py-3">
-                  <Skeleton className="h-4 w-40" />
-                  <Skeleton className="h-4 w-14" />
-                  <div className="flex-1" />
-                  <Skeleton className="h-4 w-12" />
-                  <Skeleton className="h-4 w-12" />
-                </div>
-              ))}
-              </div>
-            </div>
-        ) : recentCreatives.length > 0 ? (
-          <div className="rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Creative</TableHead>
-                  <TableHead>Format</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Spend</TableHead>
-                  <TableHead className="text-right">Meta Ad ID</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {recentCreatives.map((row) => (
-                  <TableRow key={row.id}>
-                    <TableCell>
-                      <Link href={`/creatives/${row.id}`} className="text-sm font-medium hover:underline">
+  return (
+    <div>
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {icon}
+          <h2 className="text-[13px] font-medium uppercase tracking-wider text-muted-foreground/50">
+            {title}
+          </h2>
+        </div>
+        <Button variant="ghost" size="sm" asChild className="text-[13px] text-muted-foreground">
+          <Link href={`/creatives${accountId ? `?account=${accountId}` : ""}`}>
+            View All <ArrowRight className="ml-1 size-3" />
+          </Link>
+        </Button>
+      </div>
+      <div className="rounded-lg border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Creative</TableHead>
+              <TableHead className="text-right">ROAS</TableHead>
+              <TableHead className="text-right">CPA</TableHead>
+              <TableHead className="text-right">Spend</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => {
+              const roas = row.roas ? parseFloat(row.roas) : null;
+              return (
+                <TableRow key={row.id}>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <Link href={`/creatives/${row.id}`} className="text-sm font-medium hover:underline truncate max-w-[200px]">
                         {row.name}
                       </Link>
-                    </TableCell>
-                    <TableCell>
-                      {row.format ? (
-                        <Badge variant="secondary" className="text-[11px] capitalize">{row.format}</Badge>
-                      ) : "—"}
-                    </TableCell>
-                    <TableCell className="text-sm">
-                      {row.adStatus ? (
-                        <Badge variant="outline" className="text-[11px] capitalize">
-                          {row.adStatus}
-                        </Badge>
-                      ) : "—"}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-sm">
-                      {fmtMoney(row.totalSpend)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-sm">
-                      {row.metaAdId || "—"}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border py-12">
-            <p className="text-sm text-muted-foreground">No performance data yet</p>
-            <Button asChild size="sm" variant="outline" className="gap-1.5">
-              <Link href="/import">
-                <Upload className="size-3.5" /> Import Ads
-              </Link>
-            </Button>
-          </div>
-        )}
+                      {row.format && (
+                        <Badge variant="secondary" className="text-[11px] capitalize shrink-0">{row.format}</Badge>
+                      )}
+                      {row.adStatus && (
+                        <Badge variant="outline" className="text-[11px] capitalize shrink-0">{row.adStatus}</Badge>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-sm">
+                    <span className={roas != null && roas >= 1 ? "text-emerald-500" : roas != null ? "text-red-400" : ""}>
+                      {fmtRoas(row.roas)}
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-sm">
+                    {fmtMoney(row.cpa)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-sm">
+                    {fmtMoney(row.totalSpend)}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
       </div>
     </div>
   );

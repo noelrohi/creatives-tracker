@@ -29,6 +29,7 @@ interface PerformanceLog {
   roas: string | null;
   cpa: string | null;
   ctr: string | null;
+  purchaseValue?: string | null;
   conversions: number | null;
   impressions: number | null;
   reach: number | null;
@@ -45,20 +46,56 @@ export function PerformanceChart({ logs, compact }: PerformanceChartProps) {
   const [activeMetric, setActiveMetric] = useState<MetricKey>("spend");
 
   const chartData = useMemo(() => {
-    const sorted = [...logs].sort(
-      (a, b) => new Date(a.dateStart).getTime() - new Date(b.dateStart).getTime(),
-    );
-    return sorted.map((log) => ({
-      date: log.dateStart,
-      spend: log.spend ? Number(log.spend) : 0,
-      roas: log.roas ? Number(log.roas) : 0,
-      cpa: log.cpa ? Number(log.cpa) : 0,
-      ctr: log.ctr ? Number(log.ctr) : 0,
-      conversions: log.conversions ?? 0,
-      impressions: log.impressions ?? 0,
-      reach: log.reach ?? 0,
-      cpm: log.cpm ? Number(log.cpm) : 0,
-    }));
+    const byDate = new Map<string, {
+      date: string;
+      spend: number;
+      purchaseValue: number;
+      conversions: number;
+      impressions: number;
+      reach: number;
+      weightedCtrNumerator: number;
+    }>();
+
+    for (const log of logs) {
+      const key = log.dateStart;
+      const bucket = byDate.get(key) ?? {
+        date: key,
+        spend: 0,
+        purchaseValue: 0,
+        conversions: 0,
+        impressions: 0,
+        reach: 0,
+        weightedCtrNumerator: 0,
+      };
+      const spend = log.spend ? Number(log.spend) : 0;
+      const purchaseValue = log.purchaseValue ? Number(log.purchaseValue) : 0;
+      const conversions = log.conversions ?? 0;
+      const impressions = log.impressions ?? 0;
+      const reach = log.reach ?? 0;
+      const ctr = log.ctr ? Number(log.ctr) : 0;
+
+      bucket.spend += spend;
+      bucket.purchaseValue += purchaseValue;
+      bucket.conversions += conversions;
+      bucket.impressions += impressions;
+      bucket.reach += reach;
+      bucket.weightedCtrNumerator += ctr * impressions;
+      byDate.set(key, bucket);
+    }
+
+    return [...byDate.values()]
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      .map((bucket) => ({
+        date: bucket.date,
+        spend: bucket.spend,
+        roas: bucket.spend > 0 ? bucket.purchaseValue / bucket.spend : 0,
+        cpa: bucket.conversions > 0 ? bucket.spend / bucket.conversions : 0,
+        ctr: bucket.impressions > 0 ? bucket.weightedCtrNumerator / bucket.impressions : 0,
+        conversions: bucket.conversions,
+        impressions: bucket.impressions,
+        reach: bucket.reach,
+        cpm: bucket.impressions > 0 ? (bucket.spend / bucket.impressions) * 1000 : 0,
+      }));
   }, [logs]);
 
   const availableMetrics = METRICS.filter((m) =>

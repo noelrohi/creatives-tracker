@@ -32,6 +32,7 @@ interface PerfLog {
   roas: string | null;
   cpa: string | null;
   spend: string | null;
+  purchaseValue?: string | null;
   conversions: number | null;
   ctr: string | null;
   impressions: number | null;
@@ -70,25 +71,26 @@ function analyzeByDimension(
   creatives: Creative[],
   creativePerf: Map<string, PerfLog[]>,
 ): DimensionResult[] {
-  const groups = new Map<string, { roas: number[]; count: number }>();
+  const groups = new Map<string, { spend: number; purchaseValue: number; count: number }>();
 
   for (const creative of creatives) {
     const value = creative[dimension] as string | null;
     if (!value) continue;
     const logs = creativePerf.get(creative.id) ?? [];
     if (logs.length === 0) continue;
-    if (!groups.has(value)) groups.set(value, { roas: [], count: 0 });
+    if (!groups.has(value)) groups.set(value, { spend: 0, purchaseValue: 0, count: 0 });
     const group = groups.get(value)!;
     group.count++;
     for (const log of logs) {
-      if (log.roas) group.roas.push(Number(log.roas));
+      group.spend += log.spend ? Number(log.spend) : 0;
+      group.purchaseValue += log.purchaseValue ? Number(log.purchaseValue) : 0;
     }
   }
 
   return Array.from(groups.entries())
     .map(([label, data]) => ({
       label: prettify(label),
-      roas: data.roas.length > 0 ? data.roas.reduce((a, b) => a + b, 0) / data.roas.length : 0,
+      roas: data.spend > 0 ? data.purchaseValue / data.spend : 0,
       count: data.count,
     }))
     .filter((r) => r.roas > 0)
@@ -172,15 +174,15 @@ export function CreativeInsights({ creatives, ads, performanceLogs }: CreativeIn
       .map((c) => {
         const logs = creativePerf.get(c.id) ?? [];
         if (logs.length === 0) return null;
-        const roasValues = logs.map((l) => Number(l.roas)).filter((v) => v > 0);
         const totalSpend = logs.reduce((sum, l) => sum + (l.spend ? Number(l.spend) : 0), 0);
+        const totalPurchaseValue = logs.reduce((sum, l) => sum + (l.purchaseValue ? Number(l.purchaseValue) : 0), 0);
         const totalConv = logs.reduce((sum, l) => sum + (l.conversions ?? 0), 0);
-        if (roasValues.length === 0 && totalSpend === 0) return null;
+        if (totalSpend === 0 && totalPurchaseValue === 0) return null;
         return {
           id: c.id,
           name: c.name,
           format: c.format,
-          avgRoas: roasValues.length > 0 ? roasValues.reduce((a, b) => a + b, 0) / roasValues.length : 0,
+          avgRoas: totalSpend > 0 ? totalPurchaseValue / totalSpend : 0,
           totalSpend,
           totalConv,
         };

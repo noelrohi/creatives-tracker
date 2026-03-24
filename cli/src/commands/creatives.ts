@@ -202,8 +202,14 @@ export function registerCreativeCommands(program: Command) {
             delivery:
               row.delivery !== undefined ? String(row.delivery) : undefined,
             adId: row.adId !== undefined ? String(row.adId) : undefined,
+            campaignName:
+              row.campaignName !== undefined
+                ? String(row.campaignName)
+                : undefined,
             campaignId:
               row.campaignId !== undefined ? String(row.campaignId) : undefined,
+            adSetName:
+              row.adSetName !== undefined ? String(row.adSetName) : undefined,
             adSetId:
               row.adSetId !== undefined ? String(row.adSetId) : undefined,
             dateStart: String(row.dateStart),

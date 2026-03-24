@@ -4,6 +4,8 @@ import {
   type ColumnDef,
   type SortingState,
   type RowSelectionState,
+  type VisibilityState,
+  type Table as TanstackTable,
   flexRender,
   getCoreRowModel,
   getSortedRowModel,
@@ -19,8 +21,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, SlidersHorizontal } from "lucide-react";
 
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
@@ -29,6 +39,9 @@ interface DataTableProps<TData, TValue> {
   onRowClick?: (row: TData) => void;
   rowSelection?: RowSelectionState;
   onRowSelectionChange?: (selection: RowSelectionState) => void;
+  columnVisibility?: VisibilityState;
+  onColumnVisibilityChange?: (visibility: VisibilityState) => void;
+  defaultColumnVisibility?: VisibilityState;
   meta?: Record<string, unknown>;
 }
 
@@ -39,19 +52,31 @@ export function DataTable<TData, TValue>({
   onRowClick,
   rowSelection,
   onRowSelectionChange,
+  columnVisibility: controlledVisibility,
+  onColumnVisibilityChange,
+  defaultColumnVisibility,
   meta,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [internalSelection, setInternalSelection] = useState<RowSelectionState>({});
+  const [internalVisibility, setInternalVisibility] = useState<VisibilityState>(
+    defaultColumnVisibility ?? {},
+  );
 
   const selection = rowSelection ?? internalSelection;
   const setSelection = onRowSelectionChange ?? setInternalSelection;
+  const visibility = controlledVisibility ?? internalVisibility;
+  const setVisibility = onColumnVisibilityChange ?? setInternalVisibility;
 
   const table = useReactTable({
     data,
     columns,
-    state: { sorting, rowSelection: selection },
+    state: { sorting, rowSelection: selection, columnVisibility: visibility },
     onSortingChange: setSorting,
+    onColumnVisibilityChange: (updater) => {
+      const next = typeof updater === "function" ? updater(visibility) : updater;
+      setVisibility(next);
+    },
     onRowSelectionChange: (updater) => {
       const next = typeof updater === "function" ? updater(selection) : updater;
       setSelection(next);
@@ -133,5 +158,53 @@ export function DataTable<TData, TValue>({
         </div>
       )}
     </div>
+  );
+}
+
+export function DataTableColumnToggle<TData>({
+  columns,
+  visibility,
+  onVisibilityChange,
+}: {
+  columns: ColumnDef<TData, unknown>[];
+  visibility: VisibilityState;
+  onVisibilityChange: (visibility: VisibilityState) => void;
+}) {
+  const toggleableColumns = columns.filter(
+    (col) => col.enableHiding !== false && (col.id || ("accessorKey" in col && col.accessorKey)),
+  );
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" className="gap-1.5">
+          <SlidersHorizontal className="size-3.5" />
+          Columns
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-44">
+        <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {toggleableColumns.map((col) => {
+          const id = col.id || ("accessorKey" in col ? (col.accessorKey as string) : "");
+          if (!id) return null;
+          const isVisible = visibility[id] !== false;
+          return (
+            <DropdownMenuCheckboxItem
+              key={id}
+              checked={isVisible}
+              onCheckedChange={(checked) =>
+                onVisibilityChange({ ...visibility, [id]: !!checked })
+              }
+              className="capitalize"
+            >
+              {typeof col.header === "string"
+                ? col.header
+                : id.replace(/([A-Z])/g, " $1").replace(/^./, (s) => s.toUpperCase())}
+            </DropdownMenuCheckboxItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

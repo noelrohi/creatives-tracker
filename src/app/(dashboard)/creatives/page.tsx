@@ -17,10 +17,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { DataTable } from "@/components/ui/data-table";
+import { DataTable, DataTableColumnToggle } from "@/components/ui/data-table";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { Search, Sparkles, Trash2, Upload, ArrowUpDown, ExternalLink } from "lucide-react";
+import { Search, Sparkles, Trash2, Upload, ArrowUpDown, MoreHorizontal, Copy } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
 import { toast } from "sonner";
@@ -64,14 +70,20 @@ interface Creative {
   updatedAt: Date;
   totalSpend: string | null;
   avgRoas: string | null;
+  avgCpa: string | null;
+  avgCtr: string | null;
   totalConversions: number | null;
   adStatus: string | null;
   metaAdId: string | null;
+  metaCampaignId: string | null;
+  metaAdSetId: string | null;
+  accountName: string | null;
 }
 
 const columns: ColumnDef<Creative>[] = [
   {
     id: "select",
+    enableHiding: false,
     header: ({ table }) => (
       <Checkbox
         checked={table.getIsAllPageRowsSelected()}
@@ -126,6 +138,15 @@ const columns: ColumnDef<Creative>[] = [
       );
     },
     size: 80,
+  },
+  {
+    accessorKey: "accountName",
+    header: "Account",
+    cell: ({ row }) => {
+      const name = row.getValue("accountName") as string | null;
+      if (!name) return <span className="text-muted-foreground/30">—</span>;
+      return <span className="text-sm text-muted-foreground truncate max-w-[120px]">{name}</span>;
+    },
   },
   {
     accessorKey: "format",
@@ -216,6 +237,47 @@ const columns: ColumnDef<Creative>[] = [
     meta: { className: "text-right" },
   },
   {
+    accessorKey: "avgCpa",
+    header: ({ column }) => (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="-ml-3 h-8"
+        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+      >
+        CPA
+        <ArrowUpDown className="ml-1.5 size-3.5" />
+      </Button>
+    ),
+    cell: ({ row }) => {
+      const val = row.getValue("avgCpa") as string | null;
+      if (val == null) return <span className="text-muted-foreground/30">—</span>;
+      const n = parseFloat(val);
+      return <span className="tabular-nums">${n >= 100 ? n.toFixed(0) : n.toFixed(2)}</span>;
+    },
+    meta: { className: "text-right" },
+  },
+  {
+    accessorKey: "avgCtr",
+    header: ({ column }) => (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="-ml-3 h-8"
+        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+      >
+        CTR
+        <ArrowUpDown className="ml-1.5 size-3.5" />
+      </Button>
+    ),
+    cell: ({ row }) => {
+      const val = row.getValue("avgCtr") as string | null;
+      if (val == null) return <span className="text-muted-foreground/30">—</span>;
+      return <span className="tabular-nums">{parseFloat(val).toFixed(2)}%</span>;
+    },
+    meta: { className: "text-right" },
+  },
+  {
     accessorKey: "totalConversions",
     header: ({ column }) => (
       <Button
@@ -236,29 +298,56 @@ const columns: ColumnDef<Creative>[] = [
     meta: { className: "text-right" },
   },
   {
-    accessorKey: "metaAdId",
+    id: "actions",
     header: "",
-    cell: ({ row, table }) => {
-      const metaId = row.getValue("metaAdId") as string | null;
-      if (!metaId) return null;
-      const metaAccountId = (table.options.meta as { metaAccountId?: string })?.metaAccountId ?? "";
-      const url = `https://www.facebook.com/adsmanager/manage/ads?act=${metaAccountId}&selected_ad_ids=${metaId}`;
+    cell: ({ row }) => {
+      const metaAdId = row.original.metaAdId;
+      const metaCampaignId = row.original.metaCampaignId;
+      const metaAdSetId = row.original.metaAdSetId;
+      if (!metaAdId && !metaCampaignId && !metaAdSetId) return null;
+
+      const copyToClipboard = (value: string, label: string) => {
+        navigator.clipboard.writeText(value);
+        toast.success(`${label} copied`);
+      };
+
       return (
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(e) => e.stopPropagation()}
-          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-          title="View in Meta Ads Manager"
-        >
-          <ExternalLink className="size-3" />
-          Meta
-        </a>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <MoreHorizontal className="size-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+            {metaAdId && (
+              <DropdownMenuItem onClick={() => copyToClipboard(metaAdId, "Ad ID")}>
+                <Copy className="size-3.5" />
+                Copy Ad ID
+              </DropdownMenuItem>
+            )}
+            {metaAdSetId && (
+              <DropdownMenuItem onClick={() => copyToClipboard(metaAdSetId, "Ad Set ID")}>
+                <Copy className="size-3.5" />
+                Copy Ad Set ID
+              </DropdownMenuItem>
+            )}
+            {metaCampaignId && (
+              <DropdownMenuItem onClick={() => copyToClipboard(metaCampaignId, "Campaign ID")}>
+                <Copy className="size-3.5" />
+                Copy Campaign ID
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
       );
     },
     enableSorting: false,
-    size: 60,
+    enableHiding: false,
+    size: 40,
   },
 ];
 
@@ -295,6 +384,11 @@ export default function CreativesPage() {
 
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [rowSelection, setRowSelection] = useState<Record<string, boolean>>({});
+  const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>({
+    angle: false,
+    awarenessLevel: false,
+    format: false,
+  });
 
   const deleteMutation = useMutation({
     ...trpc.adCreative.delete.mutationOptions(),
@@ -323,21 +417,17 @@ export default function CreativesPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Toolbar */}
+      {/* Header */}
       <div className="flex items-center gap-3">
         <h1 className="text-lg font-medium tracking-tight">Creatives</h1>
         {total > 0 && (
           <span className="text-[13px] tabular-nums text-muted-foreground/50">{total}</span>
         )}
-        <div className="flex-1" />
-        <Button size="sm" variant="outline" asChild className="gap-1.5">
-          <Link href="/import"><Upload className="size-3.5" /> Import</Link>
-        </Button>
       </div>
 
-      {/* Filters */}
+      {/* Filters + Actions */}
       <div className="flex items-center gap-2 flex-wrap">
-        <div className="relative flex-1 max-w-xs">
+        <div className="relative max-w-xs">
           <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/40" />
           <input
             placeholder="Search..."
@@ -387,6 +477,15 @@ export default function CreativesPage() {
         >
           Untagged
         </button>
+        <div className="flex-1" />
+        <DataTableColumnToggle
+          columns={columns}
+          visibility={columnVisibility}
+          onVisibilityChange={setColumnVisibility}
+        />
+        <Button size="sm" variant="outline" asChild className="gap-1.5">
+          <Link href="/import"><Upload className="size-3.5" /> Import</Link>
+        </Button>
       </div>
 
       <StaleDataBanner
@@ -409,6 +508,8 @@ export default function CreativesPage() {
           onRowClick={(row) => router.push(`/creatives/${row.id}`)}
           rowSelection={rowSelection}
           onRowSelectionChange={setRowSelection}
+          columnVisibility={columnVisibility}
+          onColumnVisibilityChange={setColumnVisibility}
           meta={{ metaAccountId }}
         />
       )}

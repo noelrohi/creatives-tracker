@@ -79,7 +79,7 @@ export const adRouter = router({
           notes: ads.notes,
           createdAt: ads.createdAt,
           totalSpend: sql<string | null>`sum(${performanceLogs.spend})`.as("total_spend"),
-          avgRoas: sql<string | null>`avg(${performanceLogs.roas})`.as("avg_roas"),
+          avgRoas: sql<string | null>`coalesce(sum(${performanceLogs.purchaseValue}), 0) / nullif(sum(${performanceLogs.spend}), 0)`.as("avg_roas"),
           totalConversions: sql<number | null>`sum(${performanceLogs.conversions})`.as("total_conversions"),
           minDate: sql<string | null>`min(${performanceLogs.dateStart})`.as("min_date"),
           maxDate: sql<string | null>`max(${performanceLogs.dateEnd})`.as("max_date"),

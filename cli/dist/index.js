@@ -4338,7 +4338,7 @@ var require_colors = __commonJS((exports, module) => {
   colors.stripColors = colors.strip = function(str) {
     return ("" + str).replace(/\x1B\[\d+m/g, "");
   };
-  var stylize = colors.stylize = function stylize(str, style) {
+  var stylize = colors.stylize = function stylize2(str, style) {
     if (!colors.enabled) {
       return str + "";
     }
@@ -4356,8 +4356,8 @@ var require_colors = __commonJS((exports, module) => {
     return str.replace(matchOperatorsRe, "\\$&");
   };
   function build(_styles) {
-    var builder = function builder() {
-      return applyStyle.apply(builder, arguments);
+    var builder = function builder2() {
+      return applyStyle.apply(builder2, arguments);
     };
     builder._styles = _styles;
     builder.__proto__ = proto;
@@ -4376,7 +4376,7 @@ var require_colors = __commonJS((exports, module) => {
     });
     return ret;
   }();
-  var proto = defineProps(function colors() {}, styles);
+  var proto = defineProps(function colors2() {}, styles);
   function applyStyle() {
     var args = Array.prototype.slice.call(arguments);
     var str = args.map(function(arg) {
@@ -4435,7 +4435,7 @@ var require_colors = __commonJS((exports, module) => {
     });
     return ret;
   }
-  var sequencer = function sequencer(map3, str) {
+  var sequencer = function sequencer2(map3, str) {
     var exploded = str.split("");
     exploded = exploded.map(map3);
     return exploded.join("");
@@ -7767,7 +7767,9 @@ function registerCreativeCommands(program2) {
           gender: row.gender !== undefined ? String(row.gender) : undefined,
           delivery: row.delivery !== undefined ? String(row.delivery) : undefined,
           adId: row.adId !== undefined ? String(row.adId) : undefined,
+          campaignName: row.campaignName !== undefined ? String(row.campaignName) : undefined,
           campaignId: row.campaignId !== undefined ? String(row.campaignId) : undefined,
+          adSetName: row.adSetName !== undefined ? String(row.adSetName) : undefined,
           adSetId: row.adSetId !== undefined ? String(row.adSetId) : undefined,
           dateStart: String(row.dateStart),
           dateEnd: String(row.dateEnd)
