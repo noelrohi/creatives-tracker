@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { eq, desc } from "drizzle-orm";
 import { router, baseProcedure } from "../init";
+import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { abTests, abTestVariants } from "@/schema/ab-test";
 import { ads } from "@/schema/ad";
 
 export const abTestRouter = router({
-  list: baseProcedure.query(async () => {
+  list: baseProcedure.meta(openApiQueryMeta("abTest", "list")).query(async () => {
     const tests = await db
       .select()
       .from(abTests)
@@ -27,6 +28,7 @@ export const abTestRouter = router({
   }),
 
   getById: baseProcedure
+    .meta(openApiQueryMeta("abTest", "getById"))
     .input(z.object({ id: z.string() }))
     .query(async ({ input }) => {
       const [test] = await db
@@ -51,6 +53,7 @@ export const abTestRouter = router({
     }),
 
   create: baseProcedure
+    .meta(openApiMutationMeta("abTest", "create"))
     .input(
       z
         .object({
@@ -71,6 +74,7 @@ export const abTestRouter = router({
     }),
 
   update: baseProcedure
+    .meta(openApiMutationMeta("abTest", "update"))
     .input(
       z.object({
         id: z.string(),
@@ -91,6 +95,7 @@ export const abTestRouter = router({
     }),
 
   delete: baseProcedure
+    .meta(openApiMutationMeta("abTest", "delete"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input }) => {
       await db
@@ -99,6 +104,7 @@ export const abTestRouter = router({
     }),
 
   addVariant: baseProcedure
+    .meta(openApiMutationMeta("abTest", "addVariant"))
     .input(
       z.object({
         abTestId: z.string(),
@@ -119,6 +125,7 @@ export const abTestRouter = router({
     }),
 
   removeVariant: baseProcedure
+    .meta(openApiMutationMeta("abTest", "removeVariant"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input }) => {
       await db

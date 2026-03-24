@@ -1,13 +1,14 @@
 import { z } from "zod";
 import { eq, desc, and, sql } from "drizzle-orm";
 import { router, baseProcedure } from "../init";
+import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
 import { ads } from "@/schema/ad";
 
 export const adSetRouter = router({
-  list: baseProcedure.query(async () => {
+  list: baseProcedure.meta(openApiQueryMeta("adSet", "list")).query(async () => {
     const rows = await db
       .select({
         id: adSets.id,
@@ -35,6 +36,7 @@ export const adSetRouter = router({
   }),
 
   listByCampaign: baseProcedure
+    .meta(openApiQueryMeta("adSet", "listByCampaign"))
     .input(z.object({ campaignId: z.string() }))
     .query(async ({ input }) => {
       const rows = await db
@@ -55,6 +57,7 @@ export const adSetRouter = router({
     }),
 
   getById: baseProcedure
+    .meta(openApiQueryMeta("adSet", "getById"))
     .input(z.object({ id: z.string() }))
     .query(async ({ input }) => {
       const [adSet] = await db
@@ -84,6 +87,7 @@ export const adSetRouter = router({
     }),
 
   create: baseProcedure
+    .meta(openApiMutationMeta("adSet", "create"))
     .input(
       z.object({
         name: z.string().optional(),
@@ -120,6 +124,7 @@ export const adSetRouter = router({
     }),
 
   update: baseProcedure
+    .meta(openApiMutationMeta("adSet", "update"))
     .input(
       z.object({
         id: z.string(),
@@ -156,6 +161,7 @@ export const adSetRouter = router({
     }),
 
   duplicate: baseProcedure
+    .meta(openApiMutationMeta("adSet", "duplicate"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input }) => {
       const [source] = await db
@@ -184,6 +190,7 @@ export const adSetRouter = router({
     }),
 
   bulkImport: baseProcedure
+    .meta(openApiMutationMeta("adSet", "bulkImport"))
     .input(
       z.object({
         campaignId: z.string(),
@@ -227,6 +234,7 @@ export const adSetRouter = router({
     }),
 
   delete: baseProcedure
+    .meta(openApiMutationMeta("adSet", "delete"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input }) => {
       await db

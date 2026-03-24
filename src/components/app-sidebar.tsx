@@ -17,8 +17,6 @@ import {
   LayoutDashboard,
   Upload,
   Image,
-  Sparkles,
-  FileText,
   Settings,
 } from "lucide-react";
 
@@ -26,8 +24,6 @@ const navItems = [
   { label: "Dashboard", href: "/", icon: LayoutDashboard },
   { label: "Import", href: "/import", icon: Upload },
   { label: "Creatives", href: "/creatives", icon: Image },
-  { label: "Insights", href: "/insights", icon: Sparkles },
-  { label: "Briefs", href: "/briefs", icon: FileText },
   { label: "Accounts", href: "/accounts", icon: Settings },
 ];
 

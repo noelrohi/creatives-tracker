@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { eq, and, ilike, desc } from "drizzle-orm";
 import { router, baseProcedure } from "../init";
+import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { tags, entityTags } from "@/schema/tag";
 
@@ -14,6 +15,7 @@ const entityTypeSchema = z.enum([
 
 export const tagRouter = router({
   search: baseProcedure
+    .meta(openApiQueryMeta("tag", "search"))
     .input(z.object({ query: z.string().optional() }).optional())
     .query(async ({ input }) => {
       if (input?.query) {
@@ -32,6 +34,7 @@ export const tagRouter = router({
     }),
 
   listForEntity: baseProcedure
+    .meta(openApiQueryMeta("tag", "listForEntity"))
     .input(
       z.object({
         entityType: entityTypeSchema,
@@ -53,6 +56,7 @@ export const tagRouter = router({
     }),
 
   attach: baseProcedure
+    .meta(openApiMutationMeta("tag", "attach"))
     .input(
       z.object({
         entityType: entityTypeSchema,
@@ -102,6 +106,7 @@ export const tagRouter = router({
     }),
 
   detach: baseProcedure
+    .meta(openApiMutationMeta("tag", "detach"))
     .input(
       z.object({
         entityType: entityTypeSchema,

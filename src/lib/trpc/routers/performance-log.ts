@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { eq, desc } from "drizzle-orm";
 import { router, baseProcedure } from "../init";
+import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { performanceLogs } from "@/schema/performance-log";
 
@@ -37,7 +38,9 @@ const perfFieldsNullable = {
 };
 
 export const performanceLogRouter = router({
-  listAll: baseProcedure.query(async () => {
+  listAll: baseProcedure
+    .meta(openApiQueryMeta("performanceLog", "listAll"))
+    .query(async () => {
     return db
       .select()
       .from(performanceLogs)
@@ -45,6 +48,7 @@ export const performanceLogRouter = router({
   }),
 
   listByAd: baseProcedure
+    .meta(openApiQueryMeta("performanceLog", "listByAd"))
     .input(z.object({ adId: z.string() }))
     .query(async ({ input }) => {
       return db
@@ -55,6 +59,7 @@ export const performanceLogRouter = router({
     }),
 
   create: baseProcedure
+    .meta(openApiMutationMeta("performanceLog", "create"))
     .input(
       z.object({
         adId: z.string(),
@@ -72,6 +77,7 @@ export const performanceLogRouter = router({
     }),
 
   bulkCreate: baseProcedure
+    .meta(openApiMutationMeta("performanceLog", "bulkCreate"))
     .input(
       z.object({
         adId: z.string(),
@@ -94,6 +100,7 @@ export const performanceLogRouter = router({
     }),
 
   update: baseProcedure
+    .meta(openApiMutationMeta("performanceLog", "update"))
     .input(
       z.object({
         id: z.string(),
@@ -113,6 +120,7 @@ export const performanceLogRouter = router({
     }),
 
   delete: baseProcedure
+    .meta(openApiMutationMeta("performanceLog", "delete"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input }) => {
       await db

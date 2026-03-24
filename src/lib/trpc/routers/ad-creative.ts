@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { eq, desc, ilike, and, sql, type SQL } from "drizzle-orm";
 import { router, baseProcedure } from "../init";
+import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { adCreatives } from "@/schema/ad-creative";
 import { landingPages } from "@/schema/landing-page";
@@ -10,6 +11,7 @@ import { accounts } from "@/schema/account";
 
 export const adCreativeRouter = router({
   list: baseProcedure
+    .meta(openApiQueryMeta("adCreative", "list"))
     .input(
       z
         .object({
@@ -101,6 +103,7 @@ export const adCreativeRouter = router({
     }),
 
   getById: baseProcedure
+    .meta(openApiQueryMeta("adCreative", "getById"))
     .input(z.object({ id: z.string() }))
     .query(async ({ input }) => {
       const [creative] = await db
@@ -129,6 +132,7 @@ export const adCreativeRouter = router({
     }),
 
   create: baseProcedure
+    .meta(openApiMutationMeta("adCreative", "create"))
     .input(z.object({ name: z.string().optional() }).optional())
     .mutation(async ({ input }) => {
       const [creative] = await db
@@ -141,6 +145,7 @@ export const adCreativeRouter = router({
     }),
 
   update: baseProcedure
+    .meta(openApiMutationMeta("adCreative", "update"))
     .input(
       z.object({
         id: z.string(),
@@ -171,6 +176,7 @@ export const adCreativeRouter = router({
     }),
 
   duplicate: baseProcedure
+    .meta(openApiMutationMeta("adCreative", "duplicate"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input }) => {
       const [source] = await db
@@ -198,6 +204,7 @@ export const adCreativeRouter = router({
     }),
 
   bulkImport: baseProcedure
+    .meta(openApiMutationMeta("adCreative", "bulkImport"))
     .input(
       z.object({
         accountId: z.string().optional(),
@@ -454,6 +461,7 @@ export const adCreativeRouter = router({
     }),
 
   getPerformance: baseProcedure
+    .meta(openApiQueryMeta("adCreative", "getPerformance"))
     .input(z.object({ id: z.string() }))
     .query(async ({ input }) => {
       // Creative-level aggregated metrics
@@ -514,6 +522,7 @@ export const adCreativeRouter = router({
     }),
 
   delete: baseProcedure
+    .meta(openApiMutationMeta("adCreative", "delete"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input }) => {
       // Delete linked ads (cascades to performance_logs via FK)

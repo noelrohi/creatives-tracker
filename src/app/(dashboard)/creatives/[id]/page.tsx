@@ -41,7 +41,6 @@ import {
   ArrowLeft,
   Copy,
   MoreHorizontalIcon,
-  Sparkles,
   Trash2,
 } from "lucide-react";
 import { TagInput } from "@/components/tag-input";
@@ -83,22 +82,6 @@ export default function CreativeDetailPage() {
         toast.success("Creative saved");
       },
       onError: (error) => toast.error(error.message),
-    }),
-  );
-
-  const analyzeMutation = useMutation(
-    trpc.ai.analyze.mutationOptions({
-      onSuccess: (suggestions) => {
-        if (suggestions.format) form.setValue("format", suggestions.format, { shouldDirty: true });
-        if (suggestions.angle) form.setValue("angle", suggestions.angle, { shouldDirty: true });
-        if (suggestions.persona) form.setValue("persona", suggestions.persona, { shouldDirty: true });
-        if (suggestions.awarenessLevel) form.setValue("awarenessLevel", suggestions.awarenessLevel, { shouldDirty: true });
-        if (suggestions.hook) form.setValue("hook", suggestions.hook, { shouldDirty: true });
-        if (suggestions.tone) form.setValue("tone", suggestions.tone, { shouldDirty: true });
-        if (suggestions.cta) form.setValue("cta", suggestions.cta, { shouldDirty: true });
-        toast.success("Fields auto-filled — review and save");
-      },
-      onError: (error) => toast.error(error.message || "Analysis failed"),
     }),
   );
 
@@ -290,25 +273,6 @@ export default function CreativeDetailPage() {
                 )}
               />
             </Field>
-
-            {assetUrl && (
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full gap-1.5"
-                size="sm"
-                onClick={() =>
-                  analyzeMutation.mutate({
-                    assetUrl: assetUrl,
-                    name: form.getValues("name"),
-                  })
-                }
-                disabled={analyzeMutation.isPending}
-              >
-                <Sparkles className="size-3.5" />
-                {analyzeMutation.isPending ? "Analyzing..." : "Auto-suggest Tags"}
-              </Button>
-            )}
 
             <Field data-invalid={!!form.formState.errors.name}>
               <FieldLabel htmlFor="creative-detail-name">Name</FieldLabel>

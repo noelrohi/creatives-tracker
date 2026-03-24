@@ -1,5 +1,6 @@
 import { initTRPC } from "@trpc/server";
 import superjson from "superjson";
+import type { OpenApiMeta } from "./openapi-meta";
 
 export async function createContext() {
   return {};
@@ -7,7 +8,7 @@ export async function createContext() {
 
 type Context = Awaited<ReturnType<typeof createContext>>;
 
-const t = initTRPC.context<Context>().create({
+const t = initTRPC.context<Context>().meta<OpenApiMeta>().create({
   transformer: superjson,
 });
 

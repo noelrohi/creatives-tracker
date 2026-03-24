@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { eq, desc, sql } from "drizzle-orm";
 import { router, baseProcedure } from "../init";
+import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { ads } from "@/schema/ad";
 import { adSets } from "@/schema/ad-set";
@@ -10,7 +11,7 @@ import { campaigns } from "@/schema/campaign";
 import { performanceLogs } from "@/schema/performance-log";
 
 export const adRouter = router({
-  list: baseProcedure.query(async () => {
+  list: baseProcedure.meta(openApiQueryMeta("ad", "list")).query(async () => {
     return db
       .select({
         id: ads.id,
@@ -39,6 +40,7 @@ export const adRouter = router({
   }),
 
   listByAdSet: baseProcedure
+    .meta(openApiQueryMeta("ad", "listByAdSet"))
     .input(z.object({ adSetId: z.string() }))
     .query(async ({ input }) => {
       return db
@@ -63,6 +65,7 @@ export const adRouter = router({
     }),
 
   listByCreative: baseProcedure
+    .meta(openApiQueryMeta("ad", "listByCreative"))
     .input(z.object({ adCreativeId: z.string() }))
     .query(async ({ input }) => {
       return db
@@ -91,6 +94,7 @@ export const adRouter = router({
     }),
 
   getById: baseProcedure
+    .meta(openApiQueryMeta("ad", "getById"))
     .input(z.object({ id: z.string() }))
     .query(async ({ input }) => {
       const [ad] = await db
@@ -123,6 +127,7 @@ export const adRouter = router({
     }),
 
   create: baseProcedure
+    .meta(openApiMutationMeta("ad", "create"))
     .input(
       z.object({
         name: z.string().optional(),
@@ -147,6 +152,7 @@ export const adRouter = router({
     }),
 
   update: baseProcedure
+    .meta(openApiMutationMeta("ad", "update"))
     .input(
       z.object({
         id: z.string(),
@@ -170,6 +176,7 @@ export const adRouter = router({
     }),
 
   duplicate: baseProcedure
+    .meta(openApiMutationMeta("ad", "duplicate"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input }) => {
       const [source] = await db
@@ -192,6 +199,7 @@ export const adRouter = router({
     }),
 
   bulkImport: baseProcedure
+    .meta(openApiMutationMeta("ad", "bulkImport"))
     .input(
       z.object({
         adSetId: z.string(),
@@ -247,6 +255,7 @@ export const adRouter = router({
     }),
 
   delete: baseProcedure
+    .meta(openApiMutationMeta("ad", "delete"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input }) => {
       await db

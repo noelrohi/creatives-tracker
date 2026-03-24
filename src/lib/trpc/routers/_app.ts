@@ -7,8 +7,6 @@ import { adRouter } from "./ad";
 import { performanceLogRouter } from "./performance-log";
 import { tagRouter } from "./tag";
 import { abTestRouter } from "./ab-test";
-import { aiRouter } from "./ai";
-import { insightsRouter } from "./insights";
 import { accountRouter } from "./account";
 
 export const appRouter = router({
@@ -20,8 +18,6 @@ export const appRouter = router({
   performanceLog: performanceLogRouter,
   tag: tagRouter,
   abTest: abTestRouter,
-  ai: aiRouter,
-  insights: insightsRouter,
   account: accountRouter,
 });
 

@@ -1,15 +1,19 @@
 import { z } from "zod";
 import { eq, desc } from "drizzle-orm";
 import { router, baseProcedure } from "../init";
+import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { landingPages, landingPageVersions } from "@/schema/landing-page";
 
 export const landingPageRouter = router({
-  list: baseProcedure.query(async () => {
+  list: baseProcedure
+    .meta(openApiQueryMeta("landingPage", "list"))
+    .query(async () => {
     return db.select().from(landingPages).orderBy(desc(landingPages.createdAt));
   }),
 
   getById: baseProcedure
+    .meta(openApiQueryMeta("landingPage", "getById"))
     .input(z.object({ id: z.string() }))
     .query(async ({ input }) => {
       const [page] = await db
@@ -28,6 +32,7 @@ export const landingPageRouter = router({
     }),
 
   create: baseProcedure
+    .meta(openApiMutationMeta("landingPage", "create"))
     .input(
       z.object({
         name: z.string().optional(),
@@ -59,6 +64,7 @@ export const landingPageRouter = router({
     }),
 
   update: baseProcedure
+    .meta(openApiMutationMeta("landingPage", "update"))
     .input(
       z.object({
         id: z.string(),
@@ -77,6 +83,7 @@ export const landingPageRouter = router({
     }),
 
   duplicate: baseProcedure
+    .meta(openApiMutationMeta("landingPage", "duplicate"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input }) => {
       const [source] = await db
@@ -106,12 +113,14 @@ export const landingPageRouter = router({
     }),
 
   delete: baseProcedure
+    .meta(openApiMutationMeta("landingPage", "delete"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input }) => {
       await db.delete(landingPages).where(eq(landingPages.id, input.id));
     }),
 
   createVersion: baseProcedure
+    .meta(openApiMutationMeta("landingPage", "createVersion"))
     .input(
       z.object({
         landingPageId: z.string(),
@@ -155,6 +164,7 @@ export const landingPageRouter = router({
     }),
 
   duplicateVersion: baseProcedure
+    .meta(openApiMutationMeta("landingPage", "duplicateVersion"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input }) => {
       const [source] = await db
@@ -191,6 +201,7 @@ export const landingPageRouter = router({
     }),
 
   listVersions: baseProcedure
+    .meta(openApiQueryMeta("landingPage", "listVersions"))
     .input(z.object({ landingPageId: z.string() }))
     .query(async ({ input }) => {
       return db
@@ -201,6 +212,7 @@ export const landingPageRouter = router({
     }),
 
   updateVersion: baseProcedure
+    .meta(openApiMutationMeta("landingPage", "updateVersion"))
     .input(
       z.object({
         id: z.string(),
@@ -229,6 +241,7 @@ export const landingPageRouter = router({
     }),
 
   deleteVersion: baseProcedure
+    .meta(openApiMutationMeta("landingPage", "deleteVersion"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input }) => {
       await db
