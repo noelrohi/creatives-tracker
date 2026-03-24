@@ -17,20 +17,18 @@ import {
   LayoutDashboard,
   Upload,
   Image,
-  Globe,
-  Columns3,
   Sparkles,
   FileText,
+  Settings,
 } from "lucide-react";
 
 const navItems = [
   { label: "Dashboard", href: "/", icon: LayoutDashboard },
   { label: "Import", href: "/import", icon: Upload },
   { label: "Creatives", href: "/creatives", icon: Image },
-  { label: "Landing Pages", href: "/landing-pages", icon: Globe },
-  { label: "Compare", href: "/compare", icon: Columns3 },
   { label: "Insights", href: "/insights", icon: Sparkles },
   { label: "Briefs", href: "/briefs", icon: FileText },
+  { label: "Accounts", href: "/accounts", icon: Settings },
 ];
 
 export function AppSidebar() {

@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useQueryState, parseAsStringLiteral, parseAsInteger } from "nuqs";
+import { useQueryState, parseAsStringLiteral, parseAsString, parseAsBoolean } from "nuqs";
+import { type ColumnDef } from "@tanstack/react-table";
 import { useTRPC } from "@/lib/trpc/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -16,39 +17,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Item,
-  ItemContent,
-  ItemTitle,
-  ItemDescription,
-  ItemMedia,
-  ItemGroup,
-  ItemActions,
-} from "@/components/ui/item";
+import { DataTable } from "@/components/ui/data-table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import {
-  Plus,
-  Search,
-  Image as ImageIcon,
-  Film,
-  User,
-  LayoutGrid,
-  List,
-  Sparkles,
-  ChevronLeft,
-  ChevronRight,
-  Trash2,
-  CheckSquare,
-  Upload,
-} from "lucide-react";
+import { Search, Sparkles, Trash2, Upload, ArrowUpDown, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CreativeFormDialog } from "./creative-form-dialog";
-import { ImportCSVDialog } from "@/components/import-csv-dialog";
-import type { MappedRow } from "@/lib/csv-parser";
+import { StaleDataBanner } from "@/components/data-freshness";
 import { toast } from "sonner";
-
-// ── Constants ────────────────────────────────────────────────────────
 
 const FORMATS = ["static", "video", "ugc", "carousel"] as const;
 const AWARENESS = [
@@ -58,13 +33,6 @@ const AWARENESS = [
   "product_aware",
   "most_aware",
 ] as const;
-
-const FORMAT_META: Record<string, { icon: React.ReactNode; label: string }> = {
-  static: { icon: <ImageIcon className="size-3.5" />, label: "Static" },
-  video: { icon: <Film className="size-3.5" />, label: "Video" },
-  ugc: { icon: <User className="size-3.5" />, label: "UGC" },
-  carousel: { icon: <LayoutGrid className="size-3.5" />, label: "Carousel" },
-};
 
 const AWARENESS_COLORS: Record<string, string> = {
   unaware: "bg-zinc-500/15 text-zinc-500 dark:text-zinc-400",
@@ -78,28 +46,227 @@ function prettify(s: string | null | undefined) {
   return s ? s.replace(/_/g, " ") : null;
 }
 
-const PAGE_SIZE = 12;
-
-// ── Selection props interface ────────────────────────────────────────
-
-interface SelectionProps {
-  selecting: boolean;
-  selected: Set<string>;
-  toggleSelect: (id: string) => void;
+interface Creative {
+  id: string;
+  name: string;
+  assetUrl: string | null;
+  format: string | null;
+  angle: string | null;
+  persona: string | null;
+  awarenessLevel: string | null;
+  hook: string | null;
+  tone: string[] | null;
+  cta: string | null;
+  landingPageId: string | null;
+  landingPageName: string | null;
+  notes: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  totalSpend: string | null;
+  avgRoas: string | null;
+  totalConversions: number | null;
+  adStatus: string | null;
+  metaAdId: string | null;
 }
 
-// ── Page ─────────────────────────────────────────────────────────────
+const columns: ColumnDef<Creative>[] = [
+  {
+    id: "select",
+    header: ({ table }) => (
+      <Checkbox
+        checked={table.getIsAllPageRowsSelected()}
+        onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
+        aria-label="Select all"
+      />
+    ),
+    cell: ({ row }) => (
+      <Checkbox
+        checked={row.getIsSelected()}
+        onCheckedChange={(value) => row.toggleSelected(!!value)}
+        onClick={(e) => e.stopPropagation()}
+        aria-label="Select row"
+      />
+    ),
+    enableSorting: false,
+    size: 40,
+  },
+  {
+    accessorKey: "name",
+    header: ({ column }) => (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="-ml-3 h-8"
+        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+      >
+        Name
+        <ArrowUpDown className="ml-1.5 size-3.5" />
+      </Button>
+    ),
+    cell: ({ row }) => (
+      <span className="line-clamp-1 font-medium">{row.getValue("name")}</span>
+    ),
+  },
+  {
+    accessorKey: "adStatus",
+    header: "Status",
+    cell: ({ row }) => {
+      const status = row.getValue("adStatus") as string | null;
+      if (!status) return <span className="text-muted-foreground/30">—</span>;
+      return (
+        <Badge
+          variant={status === "active" ? "outline" : "secondary"}
+          className={cn(
+            "text-[10px] capitalize",
+            status === "active" && "text-emerald-600 border-emerald-500/30",
+          )}
+        >
+          {status}
+        </Badge>
+      );
+    },
+    size: 80,
+  },
+  {
+    accessorKey: "format",
+    header: "Format",
+    cell: ({ row }) => {
+      const format = row.getValue("format") as string | null;
+      return format ? (
+        <Badge variant="secondary" className="text-[11px] capitalize">
+          {format}
+        </Badge>
+      ) : (
+        <span className="text-muted-foreground/30">—</span>
+      );
+    },
+  },
+  {
+    accessorKey: "angle",
+    header: "Angle",
+    cell: ({ row }) => {
+      const angle = row.getValue("angle") as string | null;
+      return angle ? (
+        <span className="line-clamp-1 text-sm">{angle}</span>
+      ) : (
+        <span className="text-muted-foreground/30">—</span>
+      );
+    },
+  },
+  {
+    accessorKey: "awarenessLevel",
+    header: "Awareness",
+    cell: ({ row }) => {
+      const level = row.getValue("awarenessLevel") as string | null;
+      return level ? (
+        <span
+          className={cn(
+            "inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium capitalize",
+            AWARENESS_COLORS[level] ?? "bg-muted text-muted-foreground",
+          )}
+        >
+          {prettify(level)}
+        </span>
+      ) : (
+        <span className="text-muted-foreground/30">—</span>
+      );
+    },
+  },
+  {
+    accessorKey: "totalSpend",
+    header: ({ column }) => (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="-ml-3 h-8"
+        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+      >
+        Spend
+        <ArrowUpDown className="ml-1.5 size-3.5" />
+      </Button>
+    ),
+    cell: ({ row }) => {
+      const val = row.getValue("totalSpend") as string | null;
+      if (val == null) return <span className="text-muted-foreground/30">—</span>;
+      const n = parseFloat(val);
+      return (
+        <span className="tabular-nums">${n >= 100 ? n.toFixed(0) : n.toFixed(2)}</span>
+      );
+    },
+    meta: { className: "text-right" },
+  },
+  {
+    accessorKey: "avgRoas",
+    header: ({ column }) => (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="-ml-3 h-8"
+        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+      >
+        ROAS
+        <ArrowUpDown className="ml-1.5 size-3.5" />
+      </Button>
+    ),
+    cell: ({ row }) => {
+      const val = row.getValue("avgRoas") as string | null;
+      if (val == null) return <span className="text-muted-foreground/30">—</span>;
+      return <span className="tabular-nums">{parseFloat(val).toFixed(2)}x</span>;
+    },
+    meta: { className: "text-right" },
+  },
+  {
+    accessorKey: "totalConversions",
+    header: ({ column }) => (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="-ml-3 h-8"
+        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+      >
+        Conv
+        <ArrowUpDown className="ml-1.5 size-3.5" />
+      </Button>
+    ),
+    cell: ({ row }) => {
+      const val = row.getValue("totalConversions") as number | null;
+      if (val == null) return <span className="text-muted-foreground/30">—</span>;
+      return <span className="tabular-nums">{val}</span>;
+    },
+    meta: { className: "text-right" },
+  },
+  {
+    accessorKey: "metaAdId",
+    header: "",
+    cell: ({ row, table }) => {
+      const metaId = row.getValue("metaAdId") as string | null;
+      if (!metaId) return null;
+      const metaAccountId = (table.options.meta as { metaAccountId?: string })?.metaAccountId ?? "";
+      const url = `https://www.facebook.com/adsmanager/manage/ads?act=${metaAccountId}&selected_ad_ids=${metaId}`;
+      return (
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+          title="View in Meta Ads Manager"
+        >
+          <ExternalLink className="size-3" />
+          Meta
+        </a>
+      );
+    },
+    enableSorting: false,
+    size: 60,
+  },
+];
 
 export default function CreativesPage() {
   const trpc = useTRPC();
   const router = useRouter();
   const queryClient = useQueryClient();
 
-  // URL state via nuqs
-  const [view, setView] = useQueryState(
-    "view",
-    parseAsStringLiteral(["grid", "list"] as const).withDefault("list"),
-  );
   const [format, setFormat] = useQueryState(
     "format",
     parseAsStringLiteral(FORMATS).withDefault(undefined as unknown as (typeof FORMATS)[number]),
@@ -109,357 +276,169 @@ export default function CreativesPage() {
     parseAsStringLiteral(AWARENESS).withDefault(undefined as unknown as (typeof AWARENESS)[number]),
   );
   const [search, setSearch] = useQueryState("q", { defaultValue: "" });
-  const [page, setPage] = useQueryState("page", parseAsInteger.withDefault(1));
+  const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
+  const [untagged, setUntagged] = useQueryState("untagged", parseAsBoolean.withDefault(false));
 
-  // Data
+  const accountsQuery = useQuery(trpc.account.list.queryOptions());
+  const metaAccountId = accountsQuery.data?.find((a) => a.id === accountId)?.metaAccountId
+    ?? accountsQuery.data?.[0]?.metaAccountId ?? "";
+
   const creatives = useQuery(
     trpc.adCreative.list.queryOptions({
       format: format || undefined,
       awarenessLevel: awareness || undefined,
       search: search || undefined,
+      accountId: accountId || undefined,
+      untaggedOnly: untagged || undefined,
     }),
   );
 
-  const [createOpen, setCreateOpen] = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
-
-  const importMutation = useMutation({
-    ...trpc.adCreative.bulkImport.mutationOptions(),
-    onSuccess: (data) => {
-      toast.success(`Imported ${data.length} creative${data.length > 1 ? "s" : ""}`);
-      queryClient.invalidateQueries({ queryKey: trpc.adCreative.list.queryKey() });
-      setImportOpen(false);
-    },
-    onError: (error) => toast.error(error.message),
-  });
-
-  const handleImport = (rows: MappedRow[]) => {
-    importMutation.mutate(
-      rows.map((r) => ({
-        name: r.name || "Imported Ad",
-        roas: r.roas,
-        cpa: r.cpa,
-        ctr: r.ctr,
-        conversionRate: r.conversionRate,
-        spend: r.spend,
-        conversions: r.conversions != null ? Number(r.conversions) : undefined,
-        impressions: r.impressions != null ? Number(r.impressions) : undefined,
-        reach: r.reach != null ? Number(r.reach) : undefined,
-        frequency: r.frequency,
-        cpm: r.cpm,
-        qualityRanking: r.qualityRanking,
-        engagementRateRanking: r.engagementRateRanking,
-        conversionRateRanking: r.conversionRateRanking,
-        linkClicks: r.linkClicks != null ? Number(r.linkClicks) : undefined,
-        clicksAll: r.clicksAll != null ? Number(r.clicksAll) : undefined,
-        cpc: r.cpc,
-        ctrLinkClick: r.ctrLinkClick,
-        landingPageViews: r.landingPageViews != null ? Number(r.landingPageViews) : undefined,
-        costPerLpv: r.costPerLpv,
-        purchaseValue: r.purchaseValue,
-        delivery: r.delivery,
-        dateStart: r.dateStart,
-        dateEnd: r.dateEnd,
-      })),
-    );
-  };
-
-  // Multi-select state
-  const [selecting, setSelecting] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [rowSelection, setRowSelection] = useState<Record<string, boolean>>({});
 
-  // Delete mutation
   const deleteMutation = useMutation({
     ...trpc.adCreative.delete.mutationOptions(),
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.adCreative.list.queryKey(),
-      });
+      queryClient.invalidateQueries({ queryKey: trpc.adCreative.list.queryKey() });
     },
   });
 
-  // Selection helpers
-  const toggleSelect = useCallback((id: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  }, []);
-
-  const toggleAll = useCallback(() => {
-    if (!creatives.data) return;
-    setSelected((prev) => {
-      if (prev.size === creatives.data.length) {
-        return new Set();
-      }
-      return new Set(creatives.data.map((c) => c.id));
-    });
-  }, [creatives.data]);
+  const selectedIds = Object.keys(rowSelection).filter((k) => rowSelection[k]);
+  const selectedCreativeIds = selectedIds
+    .map((idx) => creatives.data?.[Number(idx)]?.id)
+    .filter(Boolean) as string[];
 
   const handleBulkDelete = useCallback(async () => {
-    const ids = Array.from(selected);
     try {
-      await Promise.all(ids.map((id) => deleteMutation.mutateAsync({ id })));
-      toast.success(`Deleted ${ids.length} creative${ids.length > 1 ? "s" : ""}`);
-      setSelected(new Set());
-      setSelecting(false);
+      await Promise.all(selectedCreativeIds.map((id) => deleteMutation.mutateAsync({ id })));
+      toast.success(`Deleted ${selectedCreativeIds.length} creative${selectedCreativeIds.length > 1 ? "s" : ""}`);
+      setRowSelection({});
       setDeleteOpen(false);
     } catch {
       toast.error("Failed to delete some creatives");
     }
-  }, [selected, deleteMutation]);
+  }, [selectedCreativeIds, deleteMutation]);
 
-  const exitSelecting = useCallback(() => {
-    setSelecting(false);
-    setSelected(new Set());
-  }, []);
-
-  const selectionProps: SelectionProps = { selecting, selected, toggleSelect };
-
-  // Pagination
   const total = creatives.data?.length ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const safePage = Math.min(page, totalPages);
-  const paginated = useMemo(() => {
-    if (!creatives.data) return [];
-    const start = (safePage - 1) * PAGE_SIZE;
-    return creatives.data.slice(start, start + PAGE_SIZE);
-  }, [creatives.data, safePage]);
 
   return (
     <div className="flex flex-col gap-4">
-      {/* ── Toolbar ──────────────────────────────────────────── */}
+      {/* Toolbar */}
       <div className="flex items-center gap-3">
         <h1 className="text-lg font-medium tracking-tight">Creatives</h1>
-        {total > 0 ? (
-          <span className="text-[13px] tabular-nums text-muted-foreground/50">
-            {total}
-          </span>
-        ) : null}
-        <div className="flex-1" />
         {total > 0 && (
-          <Button
-            size="sm"
-            variant={selecting ? "ghost" : "outline"}
-            onClick={selecting ? exitSelecting : () => setSelecting(true)}
-            className="gap-1.5"
-          >
-            <CheckSquare className="size-3.5" />
-            {selecting ? "Cancel" : "Select"}
-          </Button>
+          <span className="text-[13px] tabular-nums text-muted-foreground/50">{total}</span>
         )}
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => setImportOpen(true)}
-          className="gap-1.5"
-        >
-          <Upload className="size-3.5" />
-          Import
-        </Button>
-        <Button
-          size="sm"
-          onClick={() => setCreateOpen(true)}
-          className="gap-1.5"
-        >
-          <Plus className="size-3.5" />
-          New
+        <div className="flex-1" />
+        <Button size="sm" variant="outline" asChild className="gap-1.5">
+          <Link href="/import"><Upload className="size-3.5" /> Import</Link>
         </Button>
       </div>
 
-      {/* ── Filters + View Toggle ────────────────────────────── */}
-      <div className="flex items-center gap-2">
+      {/* Filters */}
+      <div className="flex items-center gap-2 flex-wrap">
         <div className="relative flex-1 max-w-xs">
           <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/40" />
           <input
             placeholder="Search..."
             value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(1);
-            }}
+            onChange={(e) => setSearch(e.target.value)}
             className="h-8 w-full rounded-md bg-muted/40 pl-8 pr-3 text-[13px] outline-none placeholder:text-muted-foreground/30 focus:bg-muted/60 focus:ring-1 focus:ring-border transition-colors"
           />
         </div>
         <FilterPill
           value={format ?? "all"}
-          onValueChange={(v) => {
-            setFormat(v === "all" ? null : (v as (typeof FORMATS)[number]));
-            setPage(1);
-          }}
+          onValueChange={(v) => setFormat(v === "all" ? null : (v as (typeof FORMATS)[number]))}
           placeholder="Format"
           options={[
             { label: "All Formats", value: "all" },
-            ...FORMATS.map((f) => ({ label: FORMAT_META[f].label, value: f })),
+            ...FORMATS.map((f) => ({ label: f.charAt(0).toUpperCase() + f.slice(1), value: f })),
           ]}
         />
         <FilterPill
           value={awareness ?? "all"}
-          onValueChange={(v) => {
-            setAwareness(v === "all" ? null : (v as (typeof AWARENESS)[number]));
-            setPage(1);
-          }}
+          onValueChange={(v) => setAwareness(v === "all" ? null : (v as (typeof AWARENESS)[number]))}
           placeholder="Awareness"
           options={[
             { label: "All Levels", value: "all" },
-            ...AWARENESS.map((a) => ({
-              label: prettify(a)!,
-              value: a,
-            })),
+            ...AWARENESS.map((a) => ({ label: prettify(a)!, value: a })),
           ]}
         />
-        <div className="ml-auto flex items-center rounded-md border border-border/50 p-0.5">
-          <button
-            type="button"
-            onClick={() => setView("list")}
-            className={cn(
-              "flex size-7 items-center justify-center rounded-sm transition-colors",
-              view === "list"
-                ? "bg-muted text-foreground"
-                : "text-muted-foreground/50 hover:text-muted-foreground",
-            )}
-          >
-            <List className="size-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setView("grid")}
-            className={cn(
-              "flex size-7 items-center justify-center rounded-sm transition-colors",
-              view === "grid"
-                ? "bg-muted text-foreground"
-                : "text-muted-foreground/50 hover:text-muted-foreground",
-            )}
-          >
-            <LayoutGrid className="size-3.5" />
-          </button>
-        </div>
+        {accountsQuery.data && accountsQuery.data.length > 0 && (
+          <FilterPill
+            value={accountId || "all"}
+            onValueChange={(v) => setAccountId(v === "all" ? "" : v)}
+            placeholder="Account"
+            options={[
+              { label: "All Accounts", value: "all" },
+              ...accountsQuery.data.map((a) => ({ label: a.name, value: a.id })),
+            ]}
+          />
+        )}
+        <button
+          type="button"
+          onClick={() => setUntagged(!untagged)}
+          className={cn(
+            "h-8 rounded-md px-3 text-[13px] transition-colors",
+            untagged
+              ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+              : "bg-muted/40 text-muted-foreground hover:bg-muted/60",
+          )}
+        >
+          Untagged
+        </button>
       </div>
 
-      {/* ── Select All Row ─────────────────────────────────────── */}
-      {selecting && total > 0 && (
-        <div className="flex items-center gap-3 px-3 py-1.5">
-          <Checkbox
-            checked={selected.size === (creatives.data?.length ?? 0) && (creatives.data?.length ?? 0) > 0}
-            onCheckedChange={toggleAll}
-          />
-          <span className="text-xs text-muted-foreground">
-            {selected.size === 0
-              ? "Select all"
-              : `${selected.size} of ${creatives.data?.length ?? 0} selected`}
-          </span>
-        </div>
-      )}
+      <StaleDataBanner
+        account={accountsQuery.data?.find((a) => a.id === accountId) ?? accountsQuery.data?.[0]}
+      />
 
-      {/* ── Content ──────────────────────────────────────────── */}
+      {/* Data Table */}
       {creatives.isLoading ? (
-        view === "grid" ? (
-          <MasonryLoadingSkeleton />
-        ) : (
-          <ListLoadingSkeleton />
-        )
-      ) : paginated.length === 0 ? (
+        <TableLoadingSkeleton />
+      ) : total === 0 ? (
         <EmptyState
-          hasFilters={!!format || !!awareness || !!search}
-          onClear={() => {
-            setFormat(null);
-            setAwareness(null);
-            setSearch("");
-            setPage(1);
-          }}
-          onCreate={() => setCreateOpen(true)}
+          hasFilters={!!format || !!awareness || !!search || !!untagged}
+          onClear={() => { setFormat(null); setAwareness(null); setSearch(""); setUntagged(false); setAccountId(""); }}
+          onImport={() => router.push("/import")}
         />
-      ) : view === "grid" ? (
-        <MasonryGrid items={paginated} {...selectionProps} />
       ) : (
-        <ListView items={paginated} {...selectionProps} />
+        <DataTable
+          columns={columns}
+          data={(creatives.data ?? []) as Creative[]}
+          onRowClick={(row) => router.push(`/creatives/${row.id}`)}
+          rowSelection={rowSelection}
+          onRowSelectionChange={setRowSelection}
+          meta={{ metaAccountId }}
+        />
       )}
 
-      {/* ── Pagination ───────────────────────────────────────── */}
-      {totalPages > 1 ? (
-        <div className="flex items-center justify-center gap-2 pt-2">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8"
-            disabled={safePage <= 1}
-            onClick={() => setPage(safePage - 1)}
-          >
-            <ChevronLeft className="size-4" />
-          </Button>
-          <span className="text-[13px] tabular-nums text-muted-foreground">
-            {safePage} / {totalPages}
-          </span>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8"
-            disabled={safePage >= totalPages}
-            onClick={() => setPage(safePage + 1)}
-          >
-            <ChevronRight className="size-4" />
-          </Button>
-        </div>
-      ) : null}
-
-      {/* ── Floating Action Bar ──────────────────────────────── */}
-      {selected.size > 0 && (
+      {/* Floating action bar */}
+      {selectedCreativeIds.length > 0 && (
         <div className="fixed inset-x-0 bottom-6 z-50 flex justify-center">
           <div className="flex items-center gap-3 rounded-xl border border-border bg-background px-4 py-2.5 shadow-lg">
-            <span className="text-sm font-medium">
-              {selected.size} selected
-            </span>
-            <Button
-              size="sm"
-              variant="destructive"
-              className="gap-1.5"
-              onClick={() => setDeleteOpen(true)}
-            >
-              <Trash2 className="size-3.5" />
-              Delete
+            <span className="text-sm font-medium">{selectedCreativeIds.length} selected</span>
+            <Button size="sm" variant="destructive" className="gap-1.5" onClick={() => setDeleteOpen(true)}>
+              <Trash2 className="size-3.5" /> Delete
             </Button>
-            <Button size="sm" variant="ghost" onClick={exitSelecting}>
-              Cancel
-            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setRowSelection({})}>Cancel</Button>
           </div>
         </div>
       )}
 
-      {/* ── Confirm Bulk Delete Dialog ───────────────────────── */}
+      {/* Dialogs */}
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
-        title={`Delete ${selected.size} creative${selected.size > 1 ? "s" : ""}`}
-        description={`This will permanently delete ${selected.size} creative${selected.size > 1 ? "s" : ""}. This action cannot be undone.`}
+        title={`Delete ${selectedCreativeIds.length} creative${selectedCreativeIds.length > 1 ? "s" : ""}`}
+        description={`This will permanently delete ${selectedCreativeIds.length} creative${selectedCreativeIds.length > 1 ? "s" : ""}. This action cannot be undone.`}
         confirmLabel="Delete"
         onConfirm={handleBulkDelete}
         loading={deleteMutation.isPending}
       />
-
-      <ImportCSVDialog
-        open={importOpen}
-        onOpenChange={setImportOpen}
-        expectedLevel="ad"
-        onImport={handleImport}
-        importing={importMutation.isPending}
-      />
-
-      <CreativeFormDialog
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-        onSuccess={(id) => router.push(`/creatives/${id}`)}
-      />
     </div>
   );
 }
-
-// ── Filter pill ─────────────────────────────────────────────────────
 
 function FilterPill({
   value,
@@ -488,308 +467,14 @@ function FilterPill({
   );
 }
 
-// ── Masonry Grid View ───────────────────────────────────────────────
-
-type Creative = NonNullable<
-  ReturnType<ReturnType<typeof useTRPC>["adCreative"]["list"]["queryOptions"]>["queryKey"]
-> extends unknown
-  ? {
-      id: string;
-      name: string;
-      assetUrl: string | null;
-      format: string | null;
-      angle: string | null;
-      persona: string | null;
-      awarenessLevel: string | null;
-      hook: string | null;
-      tone: string[] | null;
-      cta: string | null;
-      landingPageName: string | null;
-      [key: string]: unknown;
-    }
-  : never;
-
-function MasonryGrid({ items, selecting, selected, toggleSelect }: { items: Creative[] } & SelectionProps) {
-  // CSS columns masonry — simple, no JS layout needed
-  return (
-    <div className="columns-2 gap-3 sm:columns-3 lg:columns-4 [&>*]:mb-3 [&>*]:break-inside-avoid">
-      {items.map((creative) => {
-        const isSelected = selected.has(creative.id);
-
-        const cardContent = (
-          <>
-            {/* Thumbnail — variable height for masonry effect */}
-            <div
-              className={cn(
-                "relative overflow-hidden bg-muted/20",
-                creative.assetUrl ? "aspect-auto" : "aspect-[4/3]",
-              )}
-            >
-              {creative.assetUrl ? (
-                creative.assetUrl.match(/\.(mp4|webm|mov)(\?|$)/i) ? (
-                  <div className="flex aspect-video items-center justify-center">
-                    <Film className="size-8 text-muted-foreground/15" />
-                  </div>
-                ) : (
-                  <img
-                    src={creative.assetUrl}
-                    alt={creative.name}
-                    className="w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
-                  />
-                )
-              ) : (
-                <div className="flex size-full items-center justify-center">
-                  <ImageIcon className="size-8 text-muted-foreground/10" />
-                </div>
-              )}
-
-              {/* Format chip */}
-              {creative.format ? (
-                <div className="absolute left-1.5 top-1.5 flex items-center gap-1 rounded-md bg-background/80 px-1.5 py-0.5 text-[10px] font-medium backdrop-blur-sm">
-                  {FORMAT_META[creative.format]?.icon}
-                  <span className="capitalize">
-                    {FORMAT_META[creative.format]?.label}
-                  </span>
-                </div>
-              ) : null}
-
-              {/* Checkbox overlay when selecting */}
-              {selecting && (
-                <div className="absolute right-1.5 top-1.5 z-10">
-                  <Checkbox
-                    checked={isSelected}
-                    onCheckedChange={() => toggleSelect(creative.id)}
-                    className="size-5 border-2 border-white bg-background/80 backdrop-blur-sm"
-                  />
-                </div>
-              )}
-
-              {/* Hover overlay — hook text */}
-              {creative.hook && !selecting ? (
-                <div className="absolute inset-0 flex items-end bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100">
-                  <p className="line-clamp-2 p-2.5 text-[11px] leading-relaxed text-white/90">
-                    &ldquo;{creative.hook}&rdquo;
-                  </p>
-                </div>
-              ) : null}
-            </div>
-
-            {/* Body */}
-            <div className="flex flex-col gap-1.5 p-2.5">
-              <span className="line-clamp-1 text-[13px] font-medium leading-tight">
-                {creative.name}
-              </span>
-
-              <div className="flex flex-wrap items-center gap-1">
-                {creative.awarenessLevel ? (
-                  <span
-                    className={cn(
-                      "inline-flex rounded px-1.5 py-px text-[10px] font-medium capitalize",
-                      AWARENESS_COLORS[creative.awarenessLevel] ??
-                        "bg-muted text-muted-foreground",
-                    )}
-                  >
-                    {prettify(creative.awarenessLevel)}
-                  </span>
-                ) : null}
-                {creative.angle ? (
-                  <span className="line-clamp-1 text-[11px] text-muted-foreground/50">
-                    {creative.angle}
-                  </span>
-                ) : null}
-              </div>
-
-              {creative.tone && creative.tone.length > 0 ? (
-                <div className="flex flex-wrap gap-1">
-                  {creative.tone.slice(0, 3).map((t) => (
-                    <Badge
-                      key={t}
-                      variant="secondary"
-                      className="h-[18px] rounded px-1 text-[10px] font-normal capitalize"
-                    >
-                      {t.replace(/_/g, " ")}
-                    </Badge>
-                  ))}
-                  {creative.tone.length > 3 ? (
-                    <span className="self-center text-[10px] text-muted-foreground/30">
-                      +{creative.tone.length - 3}
-                    </span>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          </>
-        );
-
-        if (selecting) {
-          return (
-            <div
-              key={creative.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => toggleSelect(creative.id)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  toggleSelect(creative.id);
-                }
-              }}
-              className={cn(
-                "group relative flex cursor-pointer flex-col overflow-hidden rounded-lg border border-border bg-card transition-all hover:border-border hover:shadow-sm",
-                isSelected && "ring-2 ring-primary",
-              )}
-            >
-              {cardContent}
-            </div>
-          );
-        }
-
-        return (
-          <Link
-            key={creative.id}
-            href={`/creatives/${creative.id}`}
-            className="group relative flex flex-col overflow-hidden rounded-lg border border-border bg-card transition-all hover:border-border hover:shadow-sm"
-          >
-            {cardContent}
-          </Link>
-        );
-      })}
-    </div>
-  );
-}
-
-// ── List View (using Item components) ───────────────────────────────
-
-function ListView({ items, selecting, selected, toggleSelect }: { items: Creative[] } & SelectionProps) {
-  return (
-    <ItemGroup>
-      {items.map((creative) => {
-        const isSelected = selected.has(creative.id);
-
-        const itemContent = (
-          <>
-            {selecting && (
-              <Checkbox
-                checked={isSelected}
-                onCheckedChange={() => toggleSelect(creative.id)}
-                onClick={(e: React.MouseEvent) => e.stopPropagation()}
-                className="self-center"
-              />
-            )}
-            <ItemMedia variant="image">
-              {creative.assetUrl &&
-              !creative.assetUrl.match(/\.(mp4|webm|mov)(\?|$)/i) ? (
-                <img src={creative.assetUrl} alt="" />
-              ) : (
-                <div className="flex size-full items-center justify-center bg-muted/30">
-                  {creative.format === "video" ? (
-                    <Film className="size-3.5 text-muted-foreground/30" />
-                  ) : (
-                    <ImageIcon className="size-3.5 text-muted-foreground/30" />
-                  )}
-                </div>
-              )}
-            </ItemMedia>
-
-            <ItemContent>
-              <ItemTitle>{creative.name}</ItemTitle>
-              <ItemDescription>
-                {[
-                  creative.angle,
-                  creative.persona,
-                  creative.landingPageName
-                    ? `→ ${creative.landingPageName}`
-                    : null,
-                ]
-                  .filter(Boolean)
-                  .join(" · ") || "No details yet"}
-              </ItemDescription>
-            </ItemContent>
-
-            <ItemActions>
-              {(creative as Record<string, unknown>).totalSpend != null && (
-                <span className="text-[11px] tabular-nums text-muted-foreground">
-                  ${Number((creative as Record<string, unknown>).totalSpend).toFixed(0)} spent
-                </span>
-              )}
-              {(creative as Record<string, unknown>).avgRoas != null && (
-                <Badge variant="outline" className="h-5 rounded px-1.5 text-[11px] font-normal tabular-nums">
-                  {Number((creative as Record<string, unknown>).avgRoas).toFixed(1)}x
-                </Badge>
-              )}
-              {creative.format ? (
-                <Badge
-                  variant="secondary"
-                  className="h-5 gap-1 rounded px-1.5 text-[11px] font-normal capitalize"
-                >
-                  {FORMAT_META[creative.format]?.icon}
-                  {FORMAT_META[creative.format]?.label}
-                </Badge>
-              ) : null}
-              {creative.awarenessLevel ? (
-                <span
-                  className={cn(
-                    "inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium capitalize",
-                    AWARENESS_COLORS[creative.awarenessLevel] ??
-                      "bg-muted text-muted-foreground",
-                  )}
-                >
-                  {prettify(creative.awarenessLevel)}
-                </span>
-              ) : null}
-            </ItemActions>
-          </>
-        );
-
-        if (selecting) {
-          return (
-            <Item key={creative.id} asChild variant="outline" size="sm">
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => toggleSelect(creative.id)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    toggleSelect(creative.id);
-                  }
-                }}
-                className={cn(
-                  "cursor-pointer hover:bg-muted/40",
-                  isSelected && "bg-muted/60",
-                )}
-              >
-                {itemContent}
-              </div>
-            </Item>
-          );
-        }
-
-        return (
-          <Item key={creative.id} asChild variant="outline" size="sm">
-            <Link
-              href={`/creatives/${creative.id}`}
-              className="hover:bg-muted/40"
-            >
-              {itemContent}
-            </Link>
-          </Item>
-        );
-      })}
-    </ItemGroup>
-  );
-}
-
-// ── Empty State ─────────────────────────────────────────────────────
-
 function EmptyState({
   hasFilters,
   onClear,
-  onCreate,
+  onImport,
 }: {
   hasFilters: boolean;
   onClear: () => void;
-  onCreate: () => void;
+  onImport: () => void;
 }) {
   return (
     <div className="flex flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-border py-20">
@@ -801,64 +486,37 @@ function EmptyState({
           {hasFilters ? "No creatives match your filters" : "No creatives yet"}
         </p>
         <p className="text-[13px] text-muted-foreground/40">
-          {hasFilters
-            ? "Try adjusting your search or filters."
-            : "Create your first creative to start tagging resolutions."}
+          {hasFilters ? "Try adjusting your search or filters." : "Import your Meta Ads Manager report to get started."}
         </p>
       </div>
       {hasFilters ? (
-        <Button size="sm" variant="ghost" onClick={onClear}>
-          Clear filters
-        </Button>
+        <Button size="sm" variant="ghost" onClick={onClear}>Clear filters</Button>
       ) : (
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={onCreate}
-        >
-          <Plus className="mr-1.5 size-3.5" /> Create Creative
+        <Button size="sm" variant="outline" onClick={onImport} className="gap-1.5">
+          <Upload className="size-3.5" /> Import Ads
         </Button>
       )}
     </div>
   );
 }
 
-// ── Loading Skeletons ───────────────────────────────────────────────
-
-function MasonryLoadingSkeleton() {
-  // Varied heights for masonry feel
-  const heights = [180, 140, 200, 160, 220, 150, 190, 170];
+function TableLoadingSkeleton() {
   return (
-    <div className="columns-2 gap-3 sm:columns-3 lg:columns-4 [&>*]:mb-3 [&>*]:break-inside-avoid">
-      {heights.map((h, i) => (
-        <div key={i} className="flex flex-col gap-2 rounded-lg border border-border p-0">
-          <Skeleton className="w-full rounded-b-none rounded-t-lg" style={{ height: h }} />
-          <div className="space-y-1.5 px-2.5 pb-2.5">
-            <Skeleton className="h-4 w-3/4" />
-            <Skeleton className="h-3 w-1/2" />
-          </div>
+    <div className="rounded-lg border">
+      <div className="divide-y">
+        <div className="grid grid-cols-8 gap-4 px-4 py-3">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <Skeleton key={i} className="h-4 w-full" />
+          ))}
         </div>
-      ))}
-    </div>
-  );
-}
-
-function ListLoadingSkeleton() {
-  return (
-    <div className="flex flex-col gap-2.5">
-      {Array.from({ length: 6 }).map((_, i) => (
-        <div
-          key={i}
-          className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5"
-        >
-          <Skeleton className="size-8 rounded" />
-          <div className="flex flex-1 flex-col gap-1">
-            <Skeleton className="h-4 w-40" />
-            <Skeleton className="h-3 w-56" />
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div key={i} className="grid grid-cols-8 gap-4 px-4 py-3">
+            {Array.from({ length: 8 }).map((_, j) => (
+              <Skeleton key={j} className="h-4 w-full" />
+            ))}
           </div>
-          <Skeleton className="h-5 w-16 rounded" />
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }

@@ -41,6 +41,21 @@ export const performanceLogs = pgTable(
     costPerLpv: numeric("cost_per_lpv"),
     // Purchase value
     purchaseValue: numeric("purchase_value"),
+    // Ecom funnel
+    addToCart: integer("add_to_cart"),
+    initiateCheckout: integer("initiate_checkout"),
+    costPerAddToCart: numeric("cost_per_add_to_cart"),
+    // Video metrics
+    videoViews3s: integer("video_views_3s"),
+    videoThruplay: integer("video_thruplay"),
+    videoAvgWatchTime: numeric("video_avg_watch_time"),
+    // Breakdowns
+    country: text("country"),
+    platform: text("platform"),
+    placement: text("placement"),
+    device: text("device"),
+    age: text("age"),
+    gender: text("gender"),
     // Ad quality (from Meta)
     qualityRanking: text("quality_ranking"),
     engagementRateRanking: text("engagement_rate_ranking"),

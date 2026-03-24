@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, sql } from "drizzle-orm";
 import { router, baseProcedure } from "../init";
 import { db } from "@/db";
 import { ads } from "@/schema/ad";
@@ -75,11 +75,18 @@ export const adRouter = router({
           status: ads.status,
           notes: ads.notes,
           createdAt: ads.createdAt,
+          totalSpend: sql<string | null>`sum(${performanceLogs.spend})`.as("total_spend"),
+          avgRoas: sql<string | null>`avg(${performanceLogs.roas})`.as("avg_roas"),
+          totalConversions: sql<number | null>`sum(${performanceLogs.conversions})`.as("total_conversions"),
+          minDate: sql<string | null>`min(${performanceLogs.dateStart})`.as("min_date"),
+          maxDate: sql<string | null>`max(${performanceLogs.dateEnd})`.as("max_date"),
         })
         .from(ads)
         .leftJoin(adSets, eq(ads.adSetId, adSets.id))
         .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
+        .leftJoin(performanceLogs, eq(performanceLogs.adId, ads.id))
         .where(eq(ads.adCreativeId, input.adCreativeId))
+        .groupBy(ads.id, ads.name, ads.adSetId, adSets.name, campaigns.name, ads.status, ads.notes, ads.createdAt)
         .orderBy(desc(ads.createdAt));
     }),
 

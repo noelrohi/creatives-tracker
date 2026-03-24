@@ -9,6 +9,7 @@ import { tagRouter } from "./tag";
 import { abTestRouter } from "./ab-test";
 import { aiRouter } from "./ai";
 import { insightsRouter } from "./insights";
+import { accountRouter } from "./account";
 
 export const appRouter = router({
   landingPage: landingPageRouter,
@@ -21,6 +22,7 @@ export const appRouter = router({
   abTest: abTestRouter,
   ai: aiRouter,
   insights: insightsRouter,
+  account: accountRouter,
 });
 
 export type AppRouter = typeof appRouter;

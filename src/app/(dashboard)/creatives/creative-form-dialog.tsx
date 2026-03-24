@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
 import { useForm, Controller } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTRPC } from "@/lib/trpc/client";
 import { toast } from "sonner";
@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldContent, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -24,44 +24,16 @@ import {
 } from "@/components/ui/select";
 import { MultiSelect } from "@/components/multi-select";
 import { FileUpload } from "@/components/file-upload";
-
-const FORMAT_OPTIONS = [
-  { label: "Static", value: "static" },
-  { label: "Video", value: "video" },
-  { label: "UGC", value: "ugc" },
-  { label: "Carousel", value: "carousel" },
-];
-
-const AWARENESS_OPTIONS = [
-  { label: "Unaware", value: "unaware" },
-  { label: "Problem Aware", value: "problem_aware" },
-  { label: "Solution Aware", value: "solution_aware" },
-  { label: "Product Aware", value: "product_aware" },
-  { label: "Most Aware", value: "most_aware" },
-];
-
-const TONE_OPTIONS = [
-  { label: "Clinical", value: "clinical" },
-  { label: "Casual", value: "casual" },
-  { label: "Fear-based", value: "fear_based" },
-  { label: "Aspirational", value: "aspirational" },
-  { label: "Urgent", value: "urgent" },
-  { label: "Humorous", value: "humorous" },
-];
-
-interface FormValues {
-  name: string;
-  assetUrl: string | null;
-  format: string | null;
-  angle: string | null;
-  persona: string | null;
-  awarenessLevel: string | null;
-  hook: string | null;
-  tone: string[] | null;
-  cta: string | null;
-  landingPageId: string | null;
-  notes: string | null;
-}
+import {
+  AWARENESS_OPTIONS,
+  creativeFormSchema,
+  FORMAT_OPTIONS,
+  getCreativeFormValues,
+  hasCreativeExtraValues,
+  TONE_OPTIONS,
+  toCreativeMutationInput,
+  type CreativeFormValues,
+} from "@/lib/creative-form";
 
 export interface CreativeFormDialogProps {
   open: boolean;
@@ -95,39 +67,10 @@ export function CreativeFormDialog({
 
   const landingPages = useQuery(trpc.landingPage.list.queryOptions());
 
-  const { control, handleSubmit, reset, register } = useForm<FormValues>({
-    defaultValues: {
-      name: creative?.name ?? "",
-      assetUrl: creative?.assetUrl ?? null,
-      format: creative?.format ?? null,
-      angle: creative?.angle ?? null,
-      persona: creative?.persona ?? null,
-      awarenessLevel: creative?.awarenessLevel ?? null,
-      hook: creative?.hook ?? null,
-      tone: creative?.tone ?? null,
-      cta: creative?.cta ?? null,
-      landingPageId: creative?.landingPageId ?? null,
-      notes: creative?.notes ?? null,
-    },
+  const form = useForm<CreativeFormValues>({
+    resolver: zodResolver(creativeFormSchema),
+    values: getCreativeFormValues(creative),
   });
-
-  useEffect(() => {
-    if (open) {
-      reset({
-        name: creative?.name ?? "",
-        assetUrl: creative?.assetUrl ?? null,
-        format: creative?.format ?? null,
-        angle: creative?.angle ?? null,
-        persona: creative?.persona ?? null,
-        awarenessLevel: creative?.awarenessLevel ?? null,
-        hook: creative?.hook ?? null,
-        tone: creative?.tone ?? null,
-        cta: creative?.cta ?? null,
-        landingPageId: creative?.landingPageId ?? null,
-        notes: creative?.notes ?? null,
-      });
-    }
-  }, [open, creative, reset]);
 
   const createMutation = useMutation({
     ...trpc.adCreative.create.mutationOptions(),
@@ -141,22 +84,14 @@ export function CreativeFormDialog({
 
   const isPending = createMutation.isPending || updateMutation.isPending;
 
-  const onSubmit = async (values: FormValues) => {
+  const onSubmit = async (values: CreativeFormValues) => {
+    const payload = toCreativeMutationInput(values);
+
     try {
       if (isEdit) {
         await updateMutation.mutateAsync({
           id: creative.id,
-          name: values.name || undefined,
-          assetUrl: values.assetUrl,
-          format: (values.format as "static" | "video" | "ugc" | "carousel") ?? null,
-          angle: values.angle,
-          persona: values.persona,
-          awarenessLevel: (values.awarenessLevel as "unaware" | "problem_aware" | "solution_aware" | "product_aware" | "most_aware") ?? null,
-          hook: values.hook,
-          tone: values.tone,
-          cta: values.cta,
-          landingPageId: values.landingPageId,
-          notes: values.notes,
+          ...payload,
         });
         queryClient.invalidateQueries({
           queryKey: trpc.adCreative.getById.queryKey({ id: creative.id }),
@@ -169,35 +104,13 @@ export function CreativeFormDialog({
         onSuccess?.(creative.id);
       } else {
         const created = await createMutation.mutateAsync({
-          name: values.name || undefined,
+          name: payload.name,
         });
 
-        // If there are additional fields, update them
-        const hasExtra =
-          values.assetUrl ||
-          values.format ||
-          values.angle ||
-          values.persona ||
-          values.awarenessLevel ||
-          values.hook ||
-          (values.tone && values.tone.length > 0) ||
-          values.cta ||
-          values.landingPageId ||
-          values.notes;
-
-        if (hasExtra) {
+        if (hasCreativeExtraValues(payload)) {
           await updateMutation.mutateAsync({
             id: created.id,
-            assetUrl: values.assetUrl,
-            format: (values.format as "static" | "video" | "ugc" | "carousel") ?? null,
-            angle: values.angle,
-            persona: values.persona,
-            awarenessLevel: (values.awarenessLevel as "unaware" | "problem_aware" | "solution_aware" | "product_aware" | "most_aware") ?? null,
-            hook: values.hook,
-            tone: values.tone,
-            cta: values.cta,
-            landingPageId: values.landingPageId,
-            notes: values.notes,
+            ...payload,
           });
         }
 
@@ -220,23 +133,39 @@ export function CreativeFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
+      <DialogContent
+        key={`${creative?.id ?? "new"}:${open ? "open" : "closed"}`}
+        className="sm:max-w-2xl max-h-[85vh] flex flex-col overflow-hidden"
+      >
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit Creative" : "New Creative"}</DialogTitle>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col overflow-hidden">
+        <form
+          onSubmit={form.handleSubmit(onSubmit)}
+          className="flex flex-col overflow-hidden"
+        >
           <div className="relative overflow-y-auto flex-1 px-1 -mx-1 [mask-image:linear-gradient(to_bottom,transparent,black_12px,black_calc(100%-12px),transparent)]">
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field className="sm:col-span-2">
-              <FieldLabel>Name</FieldLabel>
-              <Input {...register("name", { required: true })} placeholder="Creative name" />
+            <Field
+              className="sm:col-span-2"
+              data-invalid={!!form.formState.errors.name}
+            >
+              <FieldLabel htmlFor="creative-name">Name</FieldLabel>
+              <FieldContent>
+                <Input
+                  id="creative-name"
+                  {...form.register("name")}
+                  placeholder="Creative name"
+                />
+                <FieldError errors={[form.formState.errors.name]} />
+              </FieldContent>
             </Field>
 
             <Field className="sm:col-span-2">
               <FieldLabel>Asset</FieldLabel>
               <Controller
-                control={control}
+                control={form.control}
                 name="assetUrl"
                 render={({ field }) => (
                   <FileUpload
@@ -251,7 +180,7 @@ export function CreativeFormDialog({
             <Field>
               <FieldLabel>Format</FieldLabel>
               <Controller
-                control={control}
+                control={form.control}
                 name="format"
                 render={({ field }) => (
                   <Select
@@ -276,7 +205,7 @@ export function CreativeFormDialog({
             <Field>
               <FieldLabel>Awareness Level</FieldLabel>
               <Controller
-                control={control}
+                control={form.control}
                 name="awarenessLevel"
                 render={({ field }) => (
                   <Select
@@ -301,7 +230,7 @@ export function CreativeFormDialog({
             <Field>
               <FieldLabel>Angle</FieldLabel>
               <Input
-                {...register("angle")}
+                {...form.register("angle")}
                 placeholder="e.g., sleep quality"
               />
             </Field>
@@ -309,7 +238,7 @@ export function CreativeFormDialog({
             <Field>
               <FieldLabel>Persona</FieldLabel>
               <Input
-                {...register("persona")}
+                {...form.register("persona")}
                 placeholder="e.g., busy professionals"
               />
             </Field>
@@ -317,7 +246,7 @@ export function CreativeFormDialog({
             <Field className="sm:col-span-2">
               <FieldLabel>Hook</FieldLabel>
               <Input
-                {...register("hook")}
+                {...form.register("hook")}
                 placeholder="First 3 seconds or headline"
               />
             </Field>
@@ -325,13 +254,13 @@ export function CreativeFormDialog({
             <Field>
               <FieldLabel>Tone</FieldLabel>
               <Controller
-                control={control}
+                control={form.control}
                 name="tone"
                 render={({ field }) => (
                   <MultiSelect
                     options={TONE_OPTIONS}
-                    value={field.value ?? []}
-                    onChange={(v) => field.onChange(v.length > 0 ? v : null)}
+                    value={field.value}
+                    onChange={field.onChange}
                     placeholder="Select tone"
                   />
                 )}
@@ -341,7 +270,7 @@ export function CreativeFormDialog({
             <Field>
               <FieldLabel>CTA</FieldLabel>
               <Input
-                {...register("cta")}
+                {...form.register("cta")}
                 placeholder="e.g., Shop Now"
               />
             </Field>
@@ -349,7 +278,7 @@ export function CreativeFormDialog({
             <Field className="sm:col-span-2">
               <FieldLabel>Landing Page</FieldLabel>
               <Controller
-                control={control}
+                control={form.control}
                 name="landingPageId"
                 render={({ field }) => (
                   <Select
@@ -373,7 +302,7 @@ export function CreativeFormDialog({
 
             <Field className="sm:col-span-2">
               <FieldLabel>Notes</FieldLabel>
-              <Textarea {...register("notes")} placeholder="Add notes..." />
+              <Textarea {...form.register("notes")} placeholder="Add notes..." />
             </Field>
           </div>
           </div>

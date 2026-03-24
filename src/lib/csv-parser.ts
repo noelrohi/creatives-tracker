@@ -47,6 +47,8 @@ export function getLevelLabel(level: ImportLevel): string {
 export interface ColumnMapping {
   name: string | null;
   parentName: string | null;
+  campaignName: string | null;
+  adSetName: string | null;
   roas: string | null;
   cpa: string | null;
   ctr: string | null;
@@ -70,7 +72,26 @@ export interface ColumnMapping {
   landingPageViews: string | null;
   costPerLpv: string | null;
   purchaseValue: string | null;
+  // Ecom funnel
+  addToCart: string | null;
+  initiateCheckout: string | null;
+  costPerAddToCart: string | null;
+  // Video
+  videoViews3s: string | null;
+  videoThruplay: string | null;
+  videoAvgWatchTime: string | null;
+  // Breakdowns
+  country: string | null;
+  platform: string | null;
+  placement: string | null;
+  device: string | null;
+  age: string | null;
+  gender: string | null;
+  // Meta fields
   delivery: string | null;
+  adId: string | null;
+  campaignId: string | null;
+  adSetId: string | null;
 }
 
 interface SuggestionSet {
@@ -91,9 +112,12 @@ const SUGGESTIONS: SuggestionSet = {
     ad: ["Ad set name", "Ad set"],
   },
   shared: {
+    campaignName: ["Campaign name", "Campaign"],
+    adSetName: ["Ad set name", "Ad set"],
     roas: [
       "Purchase ROAS (return on ad spend)",
       "Purchase ROAS",
+      "Results ROAS",
       "ROAS",
     ],
     cpa: [
@@ -123,8 +147,8 @@ const SUGGESTIONS: SuggestionSet = {
     qualityRanking: ["Quality ranking"],
     engagementRateRanking: ["Engagement rate ranking"],
     conversionRateRanking: ["Conversion rate ranking"],
-    dateStart: ["Reporting starts", "Start date", "Date start"],
-    dateEnd: ["Reporting ends", "End date", "Date end"],
+    dateStart: ["Day", "Reporting starts", "Start date", "Date start"],
+    dateEnd: ["Day", "Reporting ends", "End date", "Date end"],
     // New fields
     linkClicks: ["Link clicks"],
     clicksAll: ["Clicks (all)"],
@@ -153,6 +177,66 @@ const SUGGESTIONS: SuggestionSet = {
       "Campaign delivery",
       "Delivery",
     ],
+    adId: [
+      "Ad ID",
+      "Ad id",
+    ],
+    campaignId: [
+      "Campaign ID",
+      "Campaign id",
+    ],
+    adSetId: [
+      "Ad set ID",
+      "Ad set id",
+    ],
+    // Ecom funnel
+    addToCart: [
+      "Adds to cart",
+      "Add to cart",
+      "Website adds to cart",
+    ],
+    initiateCheckout: [
+      "Checkouts initiated",
+      "Initiate checkout",
+      "Website checkouts initiated",
+    ],
+    costPerAddToCart: [
+      "Cost per add to cart",
+      "Cost per website add to cart",
+    ],
+    // Video
+    videoViews3s: [
+      "3-second video plays",
+      "3-second video views",
+      "Video plays at 3s",
+    ],
+    videoThruplay: [
+      "ThruPlays",
+      "ThruPlay",
+      "Video ThruPlays",
+    ],
+    videoAvgWatchTime: [
+      "Video average play time",
+      "Average video play time",
+      "Video avg watch time",
+    ],
+    // Breakdowns
+    country: ["Country"],
+    platform: [
+      "Publisher platform",
+      "Platform",
+    ],
+    placement: [
+      "Platform and placement",
+      "Placement",
+    ],
+    device: [
+      "Device platform",
+      "Device",
+      "Impression device",
+    ],
+    age: ["Age"],
+    gender: ["Gender"],
   },
 };
 
@@ -182,6 +266,8 @@ export function suggestMapping(
   const mapping: ColumnMapping = {
     name: null,
     parentName: null,
+    campaignName: null,
+    adSetName: null,
     roas: null,
     cpa: null,
     ctr: null,
@@ -204,7 +290,22 @@ export function suggestMapping(
     landingPageViews: null,
     costPerLpv: null,
     purchaseValue: null,
+    addToCart: null,
+    initiateCheckout: null,
+    costPerAddToCart: null,
+    videoViews3s: null,
+    videoThruplay: null,
+    videoAvgWatchTime: null,
+    country: null,
+    platform: null,
+    placement: null,
+    device: null,
+    age: null,
+    gender: null,
     delivery: null,
+    adId: null,
+    campaignId: null,
+    adSetId: null,
   };
 
   mapping.name = findHeader(headers, SUGGESTIONS.name[level]);
@@ -232,6 +333,8 @@ export function isMetaReport(headers: string[]): boolean {
 export interface MappedRow {
   name?: string;
   parentName?: string;
+  campaignName?: string;
+  adSetName?: string;
   roas?: string;
   cpa?: string;
   ctr?: string;
@@ -255,7 +358,22 @@ export interface MappedRow {
   landingPageViews?: number;
   costPerLpv?: string;
   purchaseValue?: string;
+  addToCart?: number;
+  initiateCheckout?: number;
+  costPerAddToCart?: string;
+  videoViews3s?: number;
+  videoThruplay?: number;
+  videoAvgWatchTime?: string;
+  country?: string;
+  platform?: string;
+  placement?: string;
+  device?: string;
+  age?: string;
+  gender?: string;
   delivery?: string;
+  adId?: string;
+  campaignId?: string;
+  adSetId?: string;
 }
 
 export function applyMapping(
@@ -284,11 +402,20 @@ export function applyMapping(
         const v = row[mapping.parentName]?.trim();
         if (v) mapped.parentName = v;
       }
+      if (mapping.campaignName) {
+        const v = row[mapping.campaignName]?.trim();
+        if (v) mapped.campaignName = v;
+      }
+      if (mapping.adSetName) {
+        const v = row[mapping.adSetName]?.trim();
+        if (v) mapped.adSetName = v;
+      }
 
       // Numeric fields
       for (const key of [
         "roas", "cpa", "ctr", "conversionRate", "spend", "frequency", "cpm",
         "cpc", "ctrLinkClick", "costPerLpv", "purchaseValue",
+        "costPerAddToCart", "videoAvgWatchTime",
       ] as const) {
         if (mapping[key]) {
           const val = parseNumeric(row[mapping[key]!]);
@@ -300,6 +427,7 @@ export function applyMapping(
       for (const key of [
         "conversions", "impressions", "reach",
         "linkClicks", "clicksAll", "landingPageViews",
+        "addToCart", "initiateCheckout", "videoViews3s", "videoThruplay",
       ] as const) {
         if (mapping[key]) {
           const raw = row[mapping[key]!]?.trim().replace(/[^0-9.-]/g, "");
@@ -308,10 +436,26 @@ export function applyMapping(
         }
       }
 
+      // ID fields
+      for (const key of ["adId", "campaignId", "adSetId"] as const) {
+        if (mapping[key]) {
+          const v = row[mapping[key]!]?.trim();
+          if (v && v !== "" && v !== "-") mapped[key] = v;
+        }
+      }
+
       // Delivery status
       if (mapping.delivery) {
         const v = row[mapping.delivery]?.trim().toLowerCase();
         if (v && v !== "-" && v !== "") mapped.delivery = v;
+      }
+
+      // Breakdown fields
+      for (const key of ["country", "platform", "placement", "device", "age", "gender"] as const) {
+        if (mapping[key]) {
+          const v = row[mapping[key]!]?.trim();
+          if (v && v !== "-" && v !== "") mapped[key] = v;
+        }
       }
 
       // Text fields (rankings)

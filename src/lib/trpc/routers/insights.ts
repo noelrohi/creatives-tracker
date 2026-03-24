@@ -1,26 +1,35 @@
 import { z } from "zod";
-import { eq, desc, sql, avg, count, sum, and, gte, lte } from "drizzle-orm";
+import { eq, desc, sql, avg, count, sum, and, gte, lte, isNull, or } from "drizzle-orm";
 import { router, baseProcedure } from "../init";
 import { db } from "@/db";
 import { adCreatives } from "@/schema/ad-creative";
 import { ads } from "@/schema/ad";
 import { performanceLogs } from "@/schema/performance-log";
 
-const resolutionFields = [
-  "format",
-  "angle",
-  "persona",
-  "awarenessLevel",
-  "tone",
-] as const;
+function daysAgo(days: number) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+function perfConditions(opts: { days?: number; dateStart?: string; dateEnd?: string; accountId?: string }) {
+  const conds = [];
+  if (opts.days) conds.push(gte(performanceLogs.dateStart, daysAgo(opts.days)));
+  if (opts.dateStart) conds.push(gte(performanceLogs.dateStart, opts.dateStart));
+  if (opts.dateEnd) conds.push(lte(performanceLogs.dateEnd, opts.dateEnd));
+  if (opts.accountId) conds.push(eq(ads.accountId, opts.accountId));
+  return conds.length > 0 ? and(...conds) : undefined;
+}
 
 export const insightsRouter = router({
   byField: baseProcedure
     .input(
       z.object({
         field: z.enum(["format", "awareness_level"]),
+        days: z.number().int().min(1).max(365).optional(),
         dateStart: z.string().optional(),
         dateEnd: z.string().optional(),
+        accountId: z.string().optional(),
       }),
     )
     .query(async ({ input }) => {
@@ -28,10 +37,6 @@ export const insightsRouter = router({
         input.field === "format"
           ? adCreatives.format
           : adCreatives.awarenessLevel;
-
-      const conditions = [];
-      if (input.dateStart) conditions.push(gte(performanceLogs.dateStart, input.dateStart));
-      if (input.dateEnd) conditions.push(lte(performanceLogs.dateEnd, input.dateEnd));
 
       const rows = await db
         .select({
@@ -47,7 +52,7 @@ export const insightsRouter = router({
         .from(performanceLogs)
         .innerJoin(ads, eq(performanceLogs.adId, ads.id))
         .innerJoin(adCreatives, eq(ads.adCreativeId, adCreatives.id))
-        .where(conditions.length > 0 ? and(...conditions) : undefined)
+        .where(perfConditions(input))
         .groupBy(column)
         .orderBy(desc(sql`avg(${performanceLogs.roas})`));
 
@@ -58,6 +63,8 @@ export const insightsRouter = router({
     .input(
       z.object({
         limit: z.number().int().min(1).max(50).default(10),
+        days: z.number().int().min(1).max(365).optional(),
+        accountId: z.string().optional(),
       }).optional(),
     )
     .query(async ({ input }) => {
@@ -72,6 +79,7 @@ export const insightsRouter = router({
         .from(performanceLogs)
         .innerJoin(ads, eq(performanceLogs.adId, ads.id))
         .innerJoin(adCreatives, eq(ads.adCreativeId, adCreatives.id))
+        .where(perfConditions({ days: input?.days, accountId: input?.accountId }))
         .groupBy(adCreatives.angle)
         .orderBy(desc(sql`avg(${performanceLogs.roas})`))
         .limit(input?.limit ?? 10);
@@ -84,6 +92,8 @@ export const insightsRouter = router({
       z.object({
         metric: z.enum(["roas", "cpa", "ctr"]).default("roas"),
         limit: z.number().int().min(1).max(20).default(10),
+        days: z.number().int().min(1).max(365).optional(),
+        accountId: z.string().optional(),
       }).optional(),
     )
     .query(async ({ input }) => {
@@ -96,6 +106,11 @@ export const insightsRouter = router({
             : performanceLogs.ctr;
 
       const orderDir = metric === "cpa" ? sql`avg(${metricCol}) ASC` : desc(sql`avg(${metricCol})`);
+
+      // Only include creatives that have the requested metric
+      const baseConds = perfConditions({ days: input?.days, accountId: input?.accountId });
+      const metricFilter = sql`${metricCol} IS NOT NULL`;
+      const where = baseConds ? and(baseConds, metricFilter) : metricFilter;
 
       const rows = await db
         .select({
@@ -113,6 +128,7 @@ export const insightsRouter = router({
         .from(performanceLogs)
         .innerJoin(ads, eq(performanceLogs.adId, ads.id))
         .innerJoin(adCreatives, eq(ads.adCreativeId, adCreatives.id))
+        .where(where)
         .groupBy(
           adCreatives.id,
           adCreatives.name,
@@ -131,14 +147,10 @@ export const insightsRouter = router({
     .input(
       z.object({
         days: z.number().int().min(1).max(365).default(30),
+        accountId: z.string().optional(),
       }).optional(),
     )
     .query(async ({ input }) => {
-      const days = input?.days ?? 30;
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - days);
-      const cutoffStr = cutoff.toISOString().slice(0, 10);
-
       const [row] = await db
         .select({
           totalSpend: sum(performanceLogs.spend).as("total_spend"),
@@ -151,7 +163,7 @@ export const insightsRouter = router({
         })
         .from(performanceLogs)
         .innerJoin(ads, eq(performanceLogs.adId, ads.id))
-        .where(gte(performanceLogs.dateStart, cutoffStr));
+        .where(perfConditions({ days: input?.days ?? 30, accountId: input?.accountId }));
 
       return row ?? {
         totalSpend: null,
@@ -162,5 +174,24 @@ export const insightsRouter = router({
         logCount: 0,
         creativeCount: 0,
       };
+    }),
+
+  untaggedCount: baseProcedure
+    .input(z.object({ accountId: z.string().optional() }).optional())
+    .query(async ({ input }) => {
+      const conds = [
+        isNull(adCreatives.format),
+        isNull(adCreatives.angle),
+        isNull(adCreatives.awarenessLevel),
+      ];
+
+      let query = db
+        .select({ count: count().as("count") })
+        .from(adCreatives)
+        .innerJoin(ads, eq(ads.adCreativeId, adCreatives.id))
+        .where(and(or(...conds), input?.accountId ? eq(ads.accountId, input.accountId) : undefined));
+
+      const [row] = await query;
+      return row?.count ?? 0;
     }),
 });

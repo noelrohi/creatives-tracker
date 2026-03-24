@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { useForm, Controller } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Field, FieldLabel, FieldError } from "@/components/ui/field";
 import {
   Sheet,
   SheetContent,
@@ -86,37 +88,58 @@ const ALL_FIELDS: {
   { key: "landingPageViews", label: "LP Views" },
   { key: "costPerLpv", label: "Cost per LPV" },
   { key: "purchaseValue", label: "Purchase Value" },
+  { key: "addToCart", label: "Add to Cart" },
+  { key: "initiateCheckout", label: "Initiate Checkout" },
+  { key: "costPerAddToCart", label: "Cost per ATC" },
+  { key: "videoViews3s", label: "3s Video Views" },
+  { key: "videoThruplay", label: "ThruPlays" },
+  { key: "videoAvgWatchTime", label: "Avg Watch Time" },
+  { key: "country", label: "Country" },
+  { key: "platform", label: "Platform" },
+  { key: "placement", label: "Placement" },
+  { key: "device", label: "Device" },
+  { key: "age", label: "Age" },
+  { key: "gender", label: "Gender" },
   { key: "delivery", label: "Delivery Status" },
+  { key: "adId", label: "Ad ID" },
+  { key: "campaignId", label: "Campaign ID" },
+  { key: "adSetId", label: "Ad Set ID" },
   { key: "dateStart", label: "Date Start", required: true },
   { key: "dateEnd", label: "Date End", required: true },
 ];
 
 function emptyMapping(): ColumnMapping {
   return {
-    name: null, parentName: null, roas: null, cpa: null, ctr: null,
+    name: null, parentName: null, campaignName: null, adSetName: null,
+    roas: null, cpa: null, ctr: null,
     conversionRate: null, spend: null, conversions: null, impressions: null,
     reach: null, frequency: null, cpm: null, qualityRanking: null,
     engagementRateRanking: null, conversionRateRanking: null,
     dateStart: null, dateEnd: null,
     linkClicks: null, clicksAll: null, cpc: null, ctrLinkClick: null,
     landingPageViews: null, costPerLpv: null, purchaseValue: null,
+    addToCart: null, initiateCheckout: null, costPerAddToCart: null,
+    videoViews3s: null, videoThruplay: null, videoAvgWatchTime: null,
+    country: null, platform: null, placement: null,
+    device: null, age: null, gender: null,
     delivery: null,
+    adId: null, campaignId: null, adSetId: null,
   };
 }
 
-export interface ParentOption {
+export interface AccountOption {
   id: string;
   name: string;
+  metaAccountId: string;
 }
 
 interface ImportCSVDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   expectedLevel: ImportLevel;
-  onImport: (rows: MappedRow[], parentId?: string | null) => void;
+  onImport: (rows: MappedRow[], accountId?: string) => void;
   importing?: boolean;
-  parentOptions?: ParentOption[];
-  parentLabel?: string;
+  accounts?: AccountOption[];
 }
 
 export function ImportCSVDialog({
@@ -125,15 +148,16 @@ export function ImportCSVDialog({
   expectedLevel,
   onImport,
   importing,
-  parentOptions,
-  parentLabel,
+  accounts,
 }: ImportCSVDialogProps) {
   const [parsed, setParsed] = useState<ParsedCSV | null>(null);
   const [detectedLevel, setDetectedLevel] = useState<ImportLevel>(expectedLevel);
   const [mapping, setMapping] = useState<ColumnMapping>(emptyMapping());
   const [skipZeroSpend, setSkipZeroSpend] = useState(true);
-  const [selectedParentId, setSelectedParentId] = useState<string | null>(null);
   const [showMapping, setShowMapping] = useState(false);
+  const accountForm = useForm<{ accountId: string }>({
+    defaultValues: { accountId: "" },
+  });
   const [autoDetected, setAutoDetected] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -143,7 +167,7 @@ export function ImportCSVDialog({
     setParsed(null);
     setMapping(emptyMapping());
     setDetectedLevel(expectedLevel);
-    setSelectedParentId(null);
+    accountForm.reset({ accountId: "" });
     setShowMapping(false);
     setAutoDetected(false);
     setDragging(false);
@@ -198,20 +222,30 @@ export function ImportCSVDialog({
     if (!parsed) return [];
     let rows = applyMapping(parsed.rows, mapping);
     if (skipZeroSpend) {
-      rows = rows.filter(
-        (r) => r.spend !== undefined && r.spend !== "0" && r.spend !== "0.00",
-      );
+      rows = rows.filter((r) => {
+        // Keep if row has any meaningful metric
+        const hasSpend = r.spend !== undefined && r.spend !== "0" && r.spend !== "0.00";
+        const hasClicks = (r.linkClicks && r.linkClicks > 0) || (r.clicksAll && r.clicksAll > 0);
+        const hasImpressions = r.impressions && r.impressions > 0;
+        const hasConversions = r.conversions && r.conversions > 0;
+        return hasSpend || hasClicks || hasImpressions || hasConversions;
+      });
     }
     return rows;
   }
 
   function handleImport() {
+    const accountId = accountForm.getValues("accountId");
+    if (hasAccounts && !accountId) {
+      accountForm.setError("accountId", { message: "Please select an account" });
+      return;
+    }
     const rows = getFilteredRows();
     if (rows.length === 0) {
       toast.error("No valid rows to import");
       return;
     }
-    onImport(rows, selectedParentId);
+    onImport(rows, accountId || undefined);
   }
 
   const filteredRows = getFilteredRows();
@@ -222,7 +256,9 @@ export function ImportCSVDialog({
     (f) => !f.hideForLevel?.includes(detectedLevel),
   );
   const levelLabel = getLevelLabel(detectedLevel);
-  const hasParentColumn = !!mapping.parentName;
+  const hasAccounts = accounts && accounts.length > 0;
+  const selectedAccountId = accountForm.watch("accountId");
+  const needsAccount = hasAccounts && !selectedAccountId;
 
   return (
     <Sheet open={open} onOpenChange={handleClose}>
@@ -322,7 +358,7 @@ export function ImportCSVDialog({
                     checked={skipZeroSpend}
                     onCheckedChange={(v) => setSkipZeroSpend(!!v)}
                   />
-                  Skip $0 spend
+                  Skip empty rows
                 </label>
               </div>
 
@@ -368,31 +404,42 @@ export function ImportCSVDialog({
                 </div>
               )}
 
-              {/* Parent selector */}
-              {parentOptions && parentOptions.length > 0 && !hasParentColumn && (
-                <div className="flex items-center gap-3 rounded-lg border px-4 py-3">
-                  <span className="text-sm font-medium shrink-0">
-                    {parentLabel || "Link to"}
-                  </span>
-                  <Select
-                    value={selectedParentId ?? "__none__"}
-                    onValueChange={(v) =>
-                      setSelectedParentId(v === "__none__" ? null : v)
-                    }
-                  >
-                    <SelectTrigger className="h-8 flex-1">
-                      <SelectValue placeholder="Select..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__">— None —</SelectItem>
-                      {parentOptions.map((opt) => (
-                        <SelectItem key={opt.id} value={opt.id}>
-                          {opt.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+              {/* Account selector */}
+              {hasAccounts && (
+                <Controller
+                  control={accountForm.control}
+                  name="accountId"
+                  rules={{ required: "Please select an account" }}
+                  render={({ field, fieldState }) => (
+                    <Field data-invalid={fieldState.invalid}>
+                      <FieldLabel>Account</FieldLabel>
+                      <Select
+                        value={field.value}
+                        onValueChange={(v) => {
+                          field.onChange(v);
+                          accountForm.clearErrors("accountId");
+                        }}
+                      >
+                        <SelectTrigger className="h-8" aria-invalid={fieldState.invalid}>
+                          <SelectValue placeholder="Select account..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {accounts!.map((a) => (
+                            <SelectItem key={a.id} value={a.id}>
+                              {a.name}
+                              <span className="ml-2 text-xs text-muted-foreground">
+                                ({a.metaAccountId})
+                              </span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {fieldState.error && (
+                        <FieldError errors={[fieldState.error]} />
+                      )}
+                    </Field>
+                  )}
+                />
               )}
 
               {/* Preview table */}
@@ -488,7 +535,7 @@ export function ImportCSVDialog({
             <Button
               type="button"
               onClick={() => handleImport()}
-              disabled={importing || totalRows === 0}
+              disabled={importing || totalRows === 0 || needsAccount}
             >
               {importing
                 ? "Importing..."
