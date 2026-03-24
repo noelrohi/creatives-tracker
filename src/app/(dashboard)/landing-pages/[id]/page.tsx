@@ -26,9 +26,9 @@ import {
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { toast } from "sonner";
 import { ArrowLeft, Copy, MoreHorizontalIcon, Pencil, Plus, Trash2 } from "lucide-react";
-import { LandingPageFormDialog } from "../landing-page-form-dialog";
+import { LandingPageFormDialog } from "@/components/blocks/landing-pages/landing-page-form-dialog";
 import { TagInput } from "@/components/tag-input";
-import { VersionDialog } from "../add-version-dialog";
+import { VersionDialog } from "@/components/blocks/landing-pages/version-dialog";
 
 export default function LandingPageDetailPage() {
   const trpc = useTRPC();

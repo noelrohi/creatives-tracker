@@ -53,13 +53,12 @@ export function VersionDialog({
 }: VersionDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
+      <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>
             {version ? `Edit v${version.version}` : "New Version"}
           </DialogTitle>
         </DialogHeader>
-        {/* Key forces remount when switching between create/edit, resetting form state */}
         <VersionForm
           key={version?.id ?? "new"}
           landingPageId={landingPageId}
@@ -71,10 +70,7 @@ export function VersionDialog({
   );
 }
 
-// Keep backward-compatible export
 export { VersionDialog as AddVersionDialog };
-
-// ── Constants ──────────────────────────────────────────────────────
 
 const PAGE_TYPE_OPTIONS = [
   { label: "Product Page", value: "product_page" },
@@ -97,8 +93,6 @@ const FUNNEL_POSITION_OPTIONS = [
   { label: "Retarget", value: "retarget" },
   { label: "Upsell", value: "upsell" },
 ] as const;
-
-// ── Form (child component, initializes from props) ─────────────────
 
 interface FormValues {
   url: string;
@@ -209,15 +203,11 @@ function VersionForm({
       onSubmit={handleSubmit(onSubmit)}
       className="flex flex-col overflow-hidden"
     >
-      <div className="relative overflow-y-auto flex-1 px-1 -mx-1 [mask-image:linear-gradient(to_bottom,transparent,black_12px,black_calc(100%-12px),transparent)]">
+      <div className="relative -mx-1 flex-1 overflow-y-auto px-1 [mask-image:linear-gradient(to_bottom,transparent,black_12px,black_calc(100%-12px),transparent)]">
         <div className="grid gap-4 sm:grid-cols-2">
           <Field className="sm:col-span-2">
             <FieldLabel>URL</FieldLabel>
-            <Input
-              {...register("url")}
-              placeholder="https://..."
-              type="url"
-            />
+            <Input {...register("url")} placeholder="https://..." type="url" />
           </Field>
 
           <Field>
@@ -323,14 +313,18 @@ function VersionForm({
         </div>
       </div>
 
-      <DialogFooter className="bg-transparent border-t-0 pt-4 mt-4">
+      <DialogFooter className="mt-4 border-t-0 bg-transparent pt-4">
         <Button type="button" variant="outline" onClick={onClose}>
           Cancel
         </Button>
         <Button type="submit" disabled={isPending}>
           {isPending
-            ? isEditing ? "Saving..." : "Creating..."
-            : isEditing ? "Save Changes" : "Create Version"}
+            ? isEditing
+              ? "Saving..."
+              : "Creating..."
+            : isEditing
+              ? "Save Changes"
+              : "Create Version"}
         </Button>
       </DialogFooter>
     </form>

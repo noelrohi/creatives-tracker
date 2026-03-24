@@ -16,6 +16,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { CreativeAdsTab } from "@/components/blocks/creatives/creative-ads-tab";
+import { CreativePerformanceTab } from "@/components/blocks/creatives/creative-performance-tab";
 import { Field, FieldContent, FieldError, FieldLabel } from "@/components/ui/field";
 import {
   Select,
@@ -38,18 +40,10 @@ import {
 import {
   ArrowLeft,
   Copy,
-  DollarSign,
-  Eye,
   MoreHorizontalIcon,
-  MousePointerClick,
-  ShoppingCart,
   Sparkles,
-  Target,
-  TrendingDown,
-  TrendingUp,
   Trash2,
 } from "lucide-react";
-import { DataFreshnessLabel } from "@/components/data-freshness";
 import { TagInput } from "@/components/tag-input";
 import {
   AWARENESS_OPTIONS,
@@ -60,60 +54,6 @@ import {
   toCreativeMutationInput,
   type CreativeFormValues,
 } from "@/lib/creative-form";
-
-function fmt(value: string | number | null | undefined, opts?: { prefix?: string; suffix?: string; decimals?: number }) {
-  if (value == null || value === "") return "—";
-  const num = typeof value === "string" ? parseFloat(value) : value;
-  if (isNaN(num)) return "—";
-  const decimals = opts?.decimals ?? 2;
-  const formatted = num >= 1000
-    ? `${(num / 1000).toFixed(1)}k`
-    : num.toFixed(decimals);
-  return `${opts?.prefix ?? ""}${formatted}${opts?.suffix ?? ""}`;
-}
-
-function MetricCard({
-  label,
-  value,
-  icon: Icon,
-  comparison,
-}: {
-  label: string;
-  value: string;
-  icon: React.ComponentType<{ className?: string }>;
-  comparison?: { value: number; label: string } | null;
-}) {
-  return (
-    <div className="flex flex-col gap-1 rounded-lg border border-border/50 bg-card px-3 py-2.5">
-      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/60">
-        <Icon className="size-3" />
-        {label}
-      </div>
-      <div className="text-lg font-semibold tracking-tight">{value}</div>
-      {comparison && comparison.value !== 0 && (
-        <div className="flex items-center gap-1 text-[11px]">
-          {comparison.value > 0 ? (
-            <TrendingUp className="size-3 text-emerald-500" />
-          ) : (
-            <TrendingDown className="size-3 text-red-400" />
-          )}
-          <span className={comparison.value > 0 ? "text-emerald-600" : "text-red-500"}>
-            {comparison.value > 0 ? "+" : ""}{comparison.value.toFixed(1)}%
-          </span>
-          <span className="text-muted-foreground/40">{comparison.label}</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function pctDiff(a: string | null | undefined, b: string | null | undefined): number | null {
-  if (!a || !b) return null;
-  const na = parseFloat(a);
-  const nb = parseFloat(b);
-  if (isNaN(na) || isNaN(nb) || nb === 0) return null;
-  return ((na - nb) / nb) * 100;
-}
 
 export default function CreativeDetailPage() {
   const trpc = useTRPC();
@@ -225,11 +165,6 @@ export default function CreativeDetailPage() {
     value: lp.id,
   }));
 
-  const hasPerf = perf.data && perf.data.logCount > 0;
-  const roasDiff = pctDiff(perf.data?.avgRoas, perf.data?.portfolioAvgRoas);
-  const cpaDiff = pctDiff(perf.data?.avgCpa, perf.data?.portfolioAvgCpa);
-  const ctrDiff = pctDiff(perf.data?.avgCtr, perf.data?.portfolioAvgCtr);
-
   return (
     <div className="mx-auto max-w-4xl pt-2">
       {/* Header */}
@@ -332,71 +267,10 @@ export default function CreativeDetailPage() {
 
         {/* Performance tab */}
         <TabsContent value="performance" className="pt-4">
-          {hasPerf ? (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  {perf.data.minDate && perf.data.maxDate && (
-                    <span className="text-[11px] text-muted-foreground/40">
-                      {perf.data.minDate} — {perf.data.maxDate}
-                    </span>
-                  )}
-                </div>
-                <DataFreshnessLabel account={accountsQuery.data?.[0]} />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-                <MetricCard
-                  label="Spend"
-                  value={fmt(perf.data.totalSpend, { prefix: "$" })}
-                  icon={DollarSign}
-                />
-                <MetricCard
-                  label="ROAS"
-                  value={fmt(perf.data.avgRoas, { suffix: "x" })}
-                  icon={TrendingUp}
-                  comparison={roasDiff != null ? { value: roasDiff, label: "vs avg" } : null}
-                />
-                <MetricCard
-                  label="CPA"
-                  value={fmt(perf.data.avgCpa, { prefix: "$" })}
-                  icon={Target}
-                  comparison={cpaDiff != null ? { value: -cpaDiff, label: "vs avg" } : null}
-                />
-                <MetricCard
-                  label="CTR"
-                  value={fmt(perf.data.avgCtr, { suffix: "%", decimals: 2 })}
-                  icon={MousePointerClick}
-                  comparison={ctrDiff != null ? { value: ctrDiff, label: "vs avg" } : null}
-                />
-                <MetricCard
-                  label="Conversions"
-                  value={fmt(perf.data.totalConversions, { decimals: 0 })}
-                  icon={ShoppingCart}
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <MetricCard
-                  label="Impressions"
-                  value={fmt(perf.data.totalImpressions, { decimals: 0 })}
-                  icon={Eye}
-                />
-                <MetricCard
-                  label="Link Clicks"
-                  value={fmt(perf.data.totalClicks, { decimals: 0 })}
-                  icon={MousePointerClick}
-                />
-              </div>
-            </div>
-          ) : (
-            <div className="rounded-lg border border-dashed border-border/40 px-4 py-12 text-center">
-              <p className="text-sm text-muted-foreground/50">No performance data yet</p>
-              <p className="text-[11px] text-muted-foreground/30 mt-1">
-                Import CSV data or link this creative to ads to see metrics
-              </p>
-            </div>
-          )}
+          <CreativePerformanceTab
+            perf={perf.data}
+            account={accountsQuery.data?.[0]}
+          />
         </TabsContent>
 
         {/* Details tab */}
@@ -590,64 +464,7 @@ export default function CreativeDetailPage() {
 
         {/* Ads tab */}
         <TabsContent value="ads" className="pt-4">
-          {linkedAds.data?.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-border/40 px-4 py-12 text-center">
-              <p className="text-sm text-muted-foreground/50">Not used in any ads yet</p>
-            </div>
-          ) : (
-            <div className="overflow-hidden rounded-lg border border-border/50">
-              <table className="w-full text-[13px]">
-                <thead>
-                  <tr className="border-b border-border/30 bg-muted/30 text-muted-foreground/60">
-                    <th className="px-3 py-2 text-left font-medium">Ad</th>
-                    <th className="px-3 py-2 text-left font-medium">Campaign</th>
-                    <th className="px-3 py-2 text-right font-medium">Spend</th>
-                    <th className="px-3 py-2 text-right font-medium">ROAS</th>
-                    <th className="px-3 py-2 text-right font-medium">Conv.</th>
-                    <th className="px-3 py-2 text-right font-medium">Dates</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {linkedAds.data?.map((ad) => (
-                    <tr key={ad.id} className="border-b border-border/20 last:border-0">
-                      <td className="px-3 py-2">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium truncate max-w-[200px]">{ad.name}</span>
-                          <Badge
-                            variant={ad.status === "active" ? "outline" : "secondary"}
-                            className={
-                              ad.status === "active"
-                                ? "text-[9px] text-emerald-600 border-emerald-200"
-                                : "text-[9px]"
-                            }
-                          >
-                            {ad.status === "active" ? "Active" : ad.status === "paused" ? "Paused" : "Archived"}
-                          </Badge>
-                        </div>
-                      </td>
-                      <td className="px-3 py-2 text-muted-foreground/60 truncate max-w-[140px]">
-                        {ad.campaignName ?? "—"}
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">
-                        {fmt(ad.totalSpend, { prefix: "$" })}
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">
-                        {fmt(ad.avgRoas, { suffix: "x" })}
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">
-                        {fmt(ad.totalConversions, { decimals: 0 })}
-                      </td>
-                      <td className="px-3 py-2 text-right text-muted-foreground/50 text-[11px]">
-                        {ad.minDate && ad.maxDate
-                          ? `${ad.minDate} — ${ad.maxDate}`
-                          : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <CreativeAdsTab ads={linkedAds.data} />
         </TabsContent>
       </Tabs>
 

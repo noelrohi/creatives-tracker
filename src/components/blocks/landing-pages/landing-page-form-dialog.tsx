@@ -47,7 +47,9 @@ export function LandingPageFormDialog({
   const createMutation = useMutation({
     ...trpc.landingPage.create.mutationOptions(),
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: trpc.landingPage.list.queryKey() });
+      queryClient.invalidateQueries({
+        queryKey: trpc.landingPage.list.queryKey(),
+      });
       toast.success("Landing page created");
       reset();
       onOpenChange(false);
@@ -61,7 +63,9 @@ export function LandingPageFormDialog({
   const updateMutation = useMutation({
     ...trpc.landingPage.update.mutationOptions(),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: trpc.landingPage.list.queryKey() });
+      queryClient.invalidateQueries({
+        queryKey: trpc.landingPage.list.queryKey(),
+      });
       if (landingPage) {
         queryClient.invalidateQueries({
           queryKey: trpc.landingPage.getById.queryKey({ id: landingPage.id }),
@@ -119,7 +123,7 @@ export function LandingPageFormDialog({
               />
             </Field>
           </FieldGroup>
-          <DialogFooter className="bg-transparent border-t-0">
+          <DialogFooter className="border-t-0 bg-transparent">
             <Button
               type="button"
               variant="outline"
