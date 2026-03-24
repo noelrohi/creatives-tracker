@@ -25,8 +25,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { Search, Sparkles, Trash2, Upload, ArrowUpDown, MoreHorizontal, Copy } from "lucide-react";
+import { Search, Sparkles, Trash2, Upload, ArrowUpDown, MoreHorizontal, Copy, ChevronsUpDown, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
 import { toast } from "sonner";
@@ -366,9 +368,11 @@ export default function CreativesPage() {
   );
   const [search, setSearch] = useQueryState("q", { defaultValue: "" });
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
+  const [adSetIds, setAdSetIds] = useQueryState("adSet", parseAsString.withDefault(""));
   const [untagged, setUntagged] = useQueryState("untagged", parseAsBoolean.withDefault(false));
 
   const accountsQuery = useQuery(trpc.account.list.queryOptions());
+  const adSetsQuery = useQuery(trpc.adSet.list.queryOptions());
   const metaAccountId = accountsQuery.data?.find((a) => a.id === accountId)?.metaAccountId
     ?? accountsQuery.data?.[0]?.metaAccountId ?? "";
 
@@ -378,6 +382,7 @@ export default function CreativesPage() {
       awarenessLevel: awareness || undefined,
       search: search || undefined,
       accountId: accountId || undefined,
+      adSetIds: adSetIds ? adSetIds.split(",") : undefined,
       untaggedOnly: untagged || undefined,
     }),
   );
@@ -465,6 +470,13 @@ export default function CreativesPage() {
             ]}
           />
         )}
+        {adSetsQuery.data && adSetsQuery.data.length > 0 && (
+          <AdSetCombobox
+            value={adSetIds ? adSetIds.split(",").filter(Boolean) : []}
+            onValueChange={(ids) => setAdSetIds(ids.length ? ids.join(",") : "")}
+            adSets={adSetsQuery.data}
+          />
+        )}
         <button
           type="button"
           onClick={() => setUntagged(!untagged)}
@@ -497,8 +509,8 @@ export default function CreativesPage() {
         <TableLoadingSkeleton />
       ) : total === 0 ? (
         <EmptyState
-          hasFilters={!!format || !!awareness || !!search || !!untagged}
-          onClear={() => { setFormat(null); setAwareness(null); setSearch(""); setUntagged(false); setAccountId(""); }}
+          hasFilters={!!format || !!awareness || !!search || !!untagged || !!adSetIds}
+          onClear={() => { setFormat(null); setAwareness(null); setSearch(""); setUntagged(false); setAccountId(""); setAdSetIds(""); }}
           onImport={() => router.push("/import")}
         />
       ) : (
@@ -565,6 +577,78 @@ function FilterPill({
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+function AdSetCombobox({
+  value,
+  onValueChange,
+  adSets,
+}: {
+  value: string[];
+  onValueChange: (v: string[]) => void;
+  adSets: { id: string; name: string }[];
+}) {
+  const [open, setOpen] = useState(false);
+
+  const toggle = (id: string) => {
+    onValueChange(
+      value.includes(id) ? value.filter((v) => v !== id) : [...value, id],
+    );
+  };
+
+  const label =
+    value.length === 0
+      ? "Ad Set"
+      : value.length === 1
+        ? adSets.find((a) => a.id === value[0])?.name ?? "1 ad set"
+        : `${value.length} ad sets`;
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          role="combobox"
+          aria-expanded={open}
+          className="h-8 w-auto gap-1 border-none bg-muted/40 px-3 text-[13px] shadow-none hover:bg-muted/60"
+        >
+          <span className="max-w-[200px] truncate">{label}</span>
+          <ChevronsUpDown className="size-3 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[260px] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Search ad sets..." className="h-8 text-[13px]" />
+          <CommandList>
+            <CommandEmpty>No ad sets found.</CommandEmpty>
+            <CommandGroup>
+              {value.length > 0 && (
+                <CommandItem
+                  value="__clear__"
+                  onSelect={() => { onValueChange([]); setOpen(false); }}
+                >
+                  Clear selection
+                </CommandItem>
+              )}
+              {adSets.map((a) => {
+                const isSelected = value.includes(a.id);
+                return (
+                  <CommandItem
+                    key={a.id}
+                    value={a.name}
+                    onSelect={() => toggle(a.id)}
+                  >
+                    <Check className={cn("mr-2 size-3.5", isSelected ? "opacity-100" : "opacity-0")} />
+                    <span className="truncate">{a.name}</span>
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
 

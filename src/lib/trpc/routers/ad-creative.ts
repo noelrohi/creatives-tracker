@@ -31,6 +31,7 @@ export const adCreativeRouter = router({
             .optional(),
           search: z.string().optional(),
           accountId: z.string().optional(),
+          adSetIds: z.array(z.string()).optional(),
           untaggedOnly: z.boolean().optional(),
         })
         .optional(),
@@ -50,6 +51,11 @@ export const adCreativeRouter = router({
       }
       if (input?.accountId) {
         conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = ${adCreatives.id} AND ad.account_id = ${input.accountId})`);
+      }
+      if (input?.adSetIds?.length) {
+        const placeholders = input.adSetIds.map((id) => sql`${id}`);
+        const inList = sql.join(placeholders, sql`, `);
+        conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = ${adCreatives.id} AND ad.ad_set_id IN (${inList}))`);
       }
       if (input?.untaggedOnly) {
         conditions.push(sql`(${adCreatives.format} IS NULL AND ${adCreatives.angle} IS NULL AND ${adCreatives.awarenessLevel} IS NULL)`);
@@ -143,6 +149,9 @@ export const adCreativeRouter = router({
         .object({
           days: z.number().int().min(1).max(90).default(7),
           accountId: z.string().optional(),
+          campaignIds: z.array(z.string()).optional(),
+          adSetIds: z.array(z.string()).optional(),
+          statuses: z.array(z.enum(["active", "paused", "archived"])).optional(),
         })
         .optional(),
     )
@@ -150,6 +159,15 @@ export const adCreativeRouter = router({
       const days = input?.days ?? 7;
       const accountFilter = input?.accountId
         ? sql`AND ad.account_id = ${input.accountId}`
+        : sql``;
+      const campaignFilter = input?.campaignIds?.length
+        ? sql`AND ad.ad_set_id IN (SELECT ast.id FROM ad_set ast WHERE ast.campaign_id IN (${sql.join(input.campaignIds.map((id) => sql`${id}`), sql`, `)}))`
+        : sql``;
+      const adSetFilter = input?.adSetIds?.length
+        ? sql`AND ad.ad_set_id IN (${sql.join(input.adSetIds.map((id) => sql`${id}`), sql`, `)})`
+        : sql``;
+      const statusFilter = input?.statuses?.length
+        ? sql`AND ad.status IN (${sql.join(input.statuses.map((s) => sql`${s}`), sql`, `)})`
         : sql``;
 
       const dateFilter = sql`pl.date_start >= current_date - ${days}::int`;
@@ -173,7 +191,7 @@ export const adCreativeRouter = router({
           sum(pl.conversions)::text as total_conversions
         FROM performance_log pl
         JOIN ad ON ad.id = pl.ad_id
-        WHERE ${dateFilter} ${accountFilter}
+        WHERE ${dateFilter} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter}
       `);
       const portfolio = (portfolioResult.rows as PortfolioRow[])[0];
 
@@ -204,7 +222,7 @@ export const adCreativeRouter = router({
         FROM ad_creative ac
         JOIN ad ON ad.ad_creative_id = ac.id
         JOIN performance_log pl ON pl.ad_id = ad.id
-        WHERE ${dateFilter} ${accountFilter}
+        WHERE ${dateFilter} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter}
         GROUP BY ac.id, ac.name, ac.format
         HAVING sum(pl.spend) >= 50
         ORDER BY coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST
@@ -212,7 +230,11 @@ export const adCreativeRouter = router({
       `);
       const topPerformers = topResult.rows as CreativeRow[];
 
-      // Bottom performers by ROAS (min $50 spend)
+      // Bottom performers by ROAS (min $50 spend, excluding top performers)
+      const topIds = topPerformers.map((r) => r.id);
+      const topExclude = topIds.length
+        ? sql`AND ac.id NOT IN (${sql.join(topIds.map((id) => sql`${id}`), sql`, `)})`
+        : sql``;
       const bottomResult = await db.execute(sql`
         SELECT
           ac.id,
@@ -227,7 +249,7 @@ export const adCreativeRouter = router({
         FROM ad_creative ac
         JOIN ad ON ad.ad_creative_id = ac.id
         JOIN performance_log pl ON pl.ad_id = ad.id
-        WHERE ${dateFilter} ${accountFilter}
+        WHERE ${dateFilter} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${topExclude}
         GROUP BY ac.id, ac.name, ac.format
         HAVING sum(pl.spend) >= 50
         ORDER BY coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) ASC NULLS FIRST

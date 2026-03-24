@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { useQueryState, parseAsString, parseAsInteger } from "nuqs";
@@ -15,6 +16,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import {
   Table,
   TableBody,
@@ -35,7 +38,10 @@ import {
   ShoppingCart,
   Trophy,
   AlertTriangle,
+  ChevronsUpDown,
+  Check,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
 
 function fmtMoney(val: unknown) {
@@ -76,15 +82,23 @@ export default function DashboardPage() {
   const trpc = useTRPC();
 
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
+  const [campaignIds, setCampaignIds] = useQueryState("campaign", parseAsString.withDefault(""));
+  const [adSetIds, setAdSetIds] = useQueryState("adSet", parseAsString.withDefault(""));
+  const [statuses, setStatuses] = useQueryState("status", parseAsString.withDefault("active"));
   const [days, setDays] = useQueryState("days", parseAsInteger.withDefault(7));
   const selectedAccountId = accountId || undefined;
 
   const accounts = useQuery(trpc.account.list.queryOptions());
+  const campaignsQuery = useQuery(trpc.campaign.list.queryOptions());
+  const adSetsQuery = useQuery(trpc.adSet.list.queryOptions());
 
   const stats = useQuery(
     trpc.adCreative.dashboardStats.queryOptions({
       days,
       accountId: selectedAccountId,
+      campaignIds: campaignIds ? campaignIds.split(",") : undefined,
+      adSetIds: adSetIds ? adSetIds.split(",") : undefined,
+      statuses: statuses ? statuses.split(",") as ("active" | "paused" | "archived")[] : undefined,
     }),
   );
 
@@ -157,6 +171,30 @@ export default function DashboardPage() {
               </SelectContent>
             </Select>
           )}
+          {campaignsQuery.data && campaignsQuery.data.length > 0 && (
+            <MultiCombobox
+              value={campaignIds ? campaignIds.split(",").filter(Boolean) : []}
+              onValueChange={(ids) => setCampaignIds(ids.length ? ids.join(",") : "")}
+              items={campaignsQuery.data}
+              placeholder="All campaigns"
+              searchPlaceholder="Search campaigns..."
+              emptyMessage="No campaigns found."
+            />
+          )}
+          {adSetsQuery.data && adSetsQuery.data.length > 0 && (
+            <MultiCombobox
+              value={adSetIds ? adSetIds.split(",").filter(Boolean) : []}
+              onValueChange={(ids) => setAdSetIds(ids.length ? ids.join(",") : "")}
+              items={adSetsQuery.data}
+              placeholder="All ad sets"
+              searchPlaceholder="Search ad sets..."
+              emptyMessage="No ad sets found."
+            />
+          )}
+          <StatusFilter
+            value={statuses ? statuses.split(",").filter(Boolean) : []}
+            onValueChange={(vals) => setStatuses(vals.length ? vals.join(",") : "")}
+          />
         </div>
       </div>
 
@@ -385,5 +423,157 @@ function LeaderboardTable({
         </Table>
       </div>
     </div>
+  );
+}
+
+function MultiCombobox({
+  value,
+  onValueChange,
+  items,
+  placeholder,
+  searchPlaceholder,
+  emptyMessage,
+}: {
+  value: string[];
+  onValueChange: (v: string[]) => void;
+  items: { id: string; name: string }[];
+  placeholder: string;
+  searchPlaceholder: string;
+  emptyMessage: string;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const toggle = (id: string) => {
+    onValueChange(
+      value.includes(id) ? value.filter((v) => v !== id) : [...value, id],
+    );
+  };
+
+  const label =
+    value.length === 0
+      ? placeholder
+      : value.length === 1
+        ? items.find((a) => a.id === value[0])?.name ?? "1 selected"
+        : `${value.length} selected`;
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className="h-7 w-auto gap-1 px-2.5 text-[13px]"
+        >
+          <span className="max-w-[160px] truncate">{label}</span>
+          <ChevronsUpDown className="size-3 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[260px] p-0" align="start">
+        <Command>
+          <CommandInput placeholder={searchPlaceholder} className="h-8 text-[13px]" />
+          <CommandList>
+            <CommandEmpty>{emptyMessage}</CommandEmpty>
+            <CommandGroup>
+              {value.length > 0 && (
+                <CommandItem
+                  value="__clear__"
+                  onSelect={() => { onValueChange([]); setOpen(false); }}
+                >
+                  Clear selection
+                </CommandItem>
+              )}
+              {items.map((a) => {
+                const isSelected = value.includes(a.id);
+                return (
+                  <CommandItem
+                    key={a.id}
+                    value={a.name}
+                    onSelect={() => toggle(a.id)}
+                  >
+                    <Check className={cn("mr-2 size-3.5", isSelected ? "opacity-100" : "opacity-0")} />
+                    <span className="truncate">{a.name}</span>
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+const STATUSES = [
+  { id: "active", name: "Active" },
+  { id: "paused", name: "Paused" },
+  { id: "archived", name: "Archived" },
+];
+
+function StatusFilter({
+  value,
+  onValueChange,
+}: {
+  value: string[];
+  onValueChange: (v: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const toggle = (id: string) => {
+    onValueChange(
+      value.includes(id) ? value.filter((v) => v !== id) : [...value, id],
+    );
+  };
+
+  const label =
+    value.length === 0 || value.length === STATUSES.length
+      ? "All statuses"
+      : value.length === 1
+        ? STATUSES.find((s) => s.id === value[0])?.name ?? value[0]
+        : `${value.length} statuses`;
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className="h-7 w-auto gap-1 px-2.5 text-[13px]"
+        >
+          <span>{label}</span>
+          <ChevronsUpDown className="size-3 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[180px] p-0" align="start">
+        <Command>
+          <CommandList>
+            <CommandGroup>
+              {value.length > 0 && value.length < STATUSES.length && (
+                <CommandItem
+                  value="__clear__"
+                  onSelect={() => { onValueChange([]); setOpen(false); }}
+                >
+                  All statuses
+                </CommandItem>
+              )}
+              {STATUSES.map((s) => {
+                const isSelected = value.includes(s.id);
+                return (
+                  <CommandItem
+                    key={s.id}
+                    value={s.name}
+                    onSelect={() => toggle(s.id)}
+                  >
+                    <Check className={cn("mr-2 size-3.5", isSelected ? "opacity-100" : "opacity-0")} />
+                    {s.name}
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
