@@ -53,10 +53,15 @@ const TAG_METADATA: Record<string, { name: string; description: string }> = {
 
 const dateAsString = z.string().describe("ISO 8601 date-time string");
 
-function selectSchema(table: Parameters<typeof createSelectSchema>[0]) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function selectSchema(table: any) {
   // Override Date columns to string for JSON Schema compatibility
   const schema = createSelectSchema(table);
-  const shape = (schema as z.ZodObject<z.ZodRawShape>).shape;
+
+  if (!("shape" in schema)) return schema;
+
+  const objSchema = schema as unknown as z.ZodObject<z.ZodRawShape>;
+  const shape = objSchema.shape;
   const overrides: Record<string, ZodTypeAny> = {};
 
   for (const [key, field] of Object.entries(shape)) {
@@ -71,7 +76,7 @@ function selectSchema(table: Parameters<typeof createSelectSchema>[0]) {
   }
 
   if (Object.keys(overrides).length > 0) {
-    return (schema as z.ZodObject<z.ZodRawShape>).extend(overrides);
+    return objSchema.extend(overrides);
   }
   return schema;
 }
