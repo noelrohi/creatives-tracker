@@ -148,6 +148,8 @@ export const adCreativeRouter = router({
       z
         .object({
           days: z.number().int().min(1).max(90).default(7),
+          from: z.string().optional(),
+          to: z.string().optional(),
           accountId: z.string().optional(),
           campaignIds: z.array(z.string()).optional(),
           adSetIds: z.array(z.string()).optional(),
@@ -170,7 +172,9 @@ export const adCreativeRouter = router({
         ? sql`AND ad.status IN (${sql.join(input.statuses.map((s) => sql`${s}`), sql`, `)})`
         : sql``;
 
-      const dateFilter = sql`pl.date_start >= current_date - ${days}::int`;
+      const dateFilter = input?.from && input?.to
+        ? sql`pl.date_start >= ${input.from}::date AND pl.date_start <= ${input.to}::date`
+        : sql`pl.date_start >= current_date - ${days}::int`;
 
       type PortfolioRow = {
         total_spend: string | null;

@@ -3,12 +3,13 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { useQueryState, parseAsString, parseAsInteger } from "nuqs";
+import { subDays, startOfDay, format } from "date-fns";
+import { useQueryState, parseAsString, parseAsIsoDate } from "nuqs";
 import { useTRPC } from "@/lib/trpc/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ButtonGroup } from "@/components/ui/button-group";
+import { DateRangePicker } from "@/components/blocks/dashboard/date-range-picker";
 import {
   Select,
   SelectContent,
@@ -28,11 +29,9 @@ import {
 } from "@/components/ui/table";
 import {
   TrendingUp,
-  TrendingDown,
   Tag,
   Upload,
   ArrowRight,
-  DollarSign,
   Target,
   MousePointerClick,
   ShoppingCart,
@@ -72,12 +71,6 @@ function fmtNum(val: unknown) {
   return n.toLocaleString("en-US");
 }
 
-const DATE_RANGES = [
-  { label: "7d", value: 7 },
-  { label: "14d", value: 14 },
-  { label: "30d", value: 30 },
-] as const;
-
 export default function DashboardPage() {
   const trpc = useTRPC();
 
@@ -85,7 +78,8 @@ export default function DashboardPage() {
   const [campaignIds, setCampaignIds] = useQueryState("campaign", parseAsString.withDefault(""));
   const [adSetIds, setAdSetIds] = useQueryState("adSet", parseAsString.withDefault(""));
   const [statuses, setStatuses] = useQueryState("status", parseAsString.withDefault("active"));
-  const [days, setDays] = useQueryState("days", parseAsInteger.withDefault(7));
+  const [from, setFrom] = useQueryState("from", parseAsIsoDate.withDefault(startOfDay(subDays(new Date(), 6))));
+  const [to, setTo] = useQueryState("to", parseAsIsoDate.withDefault(startOfDay(new Date())));
   const selectedAccountId = accountId || undefined;
 
   const accounts = useQuery(trpc.account.list.queryOptions());
@@ -94,7 +88,8 @@ export default function DashboardPage() {
 
   const stats = useQuery(
     trpc.adCreative.dashboardStats.queryOptions({
-      days,
+      from: format(from, "yyyy-MM-dd"),
+      to: format(to, "yyyy-MM-dd"),
       accountId: selectedAccountId,
       campaignIds: campaignIds ? campaignIds.split(",") : undefined,
       adSetIds: adSetIds ? adSetIds.split(",") : undefined,
@@ -146,18 +141,16 @@ export default function DashboardPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Dashboard</h1>
         <div className="flex items-center gap-2">
-          <ButtonGroup>
-            {DATE_RANGES.map((range) => (
-              <Button
-                key={range.value}
-                size="sm"
-                variant={days === range.value ? "secondary" : "outline"}
-                onClick={() => setDays(range.value)}
-              >
-                {range.label}
-              </Button>
-            ))}
-          </ButtonGroup>
+          <DateRangePicker
+            from={from}
+            to={to}
+            onChange={(range) => {
+              if (range) {
+                setFrom(range.from);
+                setTo(range.to);
+              }
+            }}
+          />
           {accounts.data && accounts.data.length > 0 && (
             <Select value={accountId || "all"} onValueChange={(v) => setAccountId(v === "all" ? "" : v)}>
               <SelectTrigger className="h-7 w-auto gap-1 text-[13px]">
