@@ -6,6 +6,7 @@ import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useQueryClient } from "@tanstack/react-query";
+import { format, parse } from "date-fns";
 import { useTRPC, useTRPCClient } from "@/lib/trpc/client";
 import { Button } from "@/components/ui/button";
 import { Field, FieldLabel, FieldError } from "@/components/ui/field";
@@ -29,6 +30,14 @@ const fetchSchema = z.object({
 type FetchValues = z.infer<typeof fetchSchema>;
 
 type SyncPhase = "idle" | "requesting" | "processing" | "downloading" | "importing" | "done";
+
+function formatDateOnly(date: Date) {
+  return format(date, "yyyy-MM-dd");
+}
+
+function parseDateOnly(value: string) {
+  return parse(value, "yyyy-MM-dd", new Date());
+}
 
 interface MetaApiTabProps {
   accounts: {
@@ -54,10 +63,10 @@ export function MetaApiTab({
   const [dateFrom, setDateFrom] = useState<string>(() => {
     const d = new Date();
     d.setDate(d.getDate() - 7);
-    return d.toISOString().slice(0, 10);
+    return formatDateOnly(d);
   });
   const [dateTo, setDateTo] = useState<string>(
-    () => new Date().toISOString().slice(0, 10),
+    () => formatDateOnly(new Date()),
   );
   // Breakdowns removed — Meta restricts combining them with action fields.
   // Use CSV import for breakdown-level data.
@@ -238,11 +247,11 @@ export function MetaApiTab({
         <Field>
           <FieldLabel>Date range</FieldLabel>
           <DateRangePicker
-            from={new Date(dateFrom)}
-            to={new Date(dateTo)}
+            from={parseDateOnly(dateFrom)}
+            to={parseDateOnly(dateTo)}
             onChange={(range) => {
-              if (range?.from) setDateFrom(range.from.toISOString().slice(0, 10));
-              if (range?.to) setDateTo(range.to.toISOString().slice(0, 10));
+              if (range?.from) setDateFrom(formatDateOnly(range.from));
+              if (range?.to) setDateTo(formatDateOnly(range.to));
             }}
           />
         </Field>
