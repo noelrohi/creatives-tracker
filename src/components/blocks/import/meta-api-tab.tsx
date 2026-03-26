@@ -6,7 +6,6 @@ import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useQueryClient } from "@tanstack/react-query";
-import { format, parse } from "date-fns";
 import { useTRPC, useTRPCClient } from "@/lib/trpc/client";
 import { Button } from "@/components/ui/button";
 import { Field, FieldLabel, FieldError } from "@/components/ui/field";
@@ -21,6 +20,7 @@ import { DateRangePicker } from "@/components/blocks/dashboard/date-range-picker
 import { Loader2, CloudDownload, Key, CirclePlus, Check } from "lucide-react";
 import { toast } from "sonner";
 import { mapRowsForImport, splitBulkImportRows } from "@/lib/import-utils";
+import { formatDateOnly, parseDateOnly } from "@/lib/date";
 import type { MappedRow } from "@/lib/csv-parser";
 
 const fetchSchema = z.object({
@@ -30,14 +30,6 @@ const fetchSchema = z.object({
 type FetchValues = z.infer<typeof fetchSchema>;
 
 type SyncPhase = "idle" | "requesting" | "processing" | "downloading" | "importing" | "done";
-
-function formatDateOnly(date: Date) {
-  return format(date, "yyyy-MM-dd");
-}
-
-function parseDateOnly(value: string) {
-  return parse(value, "yyyy-MM-dd", new Date());
-}
 
 interface MetaApiTabProps {
   accounts: {

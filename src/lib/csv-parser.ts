@@ -1,4 +1,5 @@
 import Papa from "papaparse";
+import { normalizeDateOnly } from "./date";
 
 export interface ParsedCSV {
   headers: string[];
@@ -481,10 +482,5 @@ function parseNumeric(value: string | undefined): string | undefined {
 }
 
 function normalizeDate(value: string): string {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
-  const date = new Date(value);
-  if (!isNaN(date.getTime())) {
-    return date.toISOString().split("T")[0];
-  }
-  return value;
+  return normalizeDateOnly(value);
 }

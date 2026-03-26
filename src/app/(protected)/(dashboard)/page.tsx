@@ -3,8 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { subDays, startOfDay, format } from "date-fns";
-import { useQueryState, parseAsString, parseAsIsoDate } from "nuqs";
+import { subDays } from "date-fns";
+import { useQueryState, parseAsString } from "nuqs";
 import { useTRPC } from "@/lib/trpc/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -41,6 +41,7 @@ import {
   Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
 
 function fmtMoney(val: unknown) {
@@ -78,9 +79,13 @@ export default function DashboardPage() {
   const [campaignIds, setCampaignIds] = useQueryState("campaign", parseAsString.withDefault(""));
   const [adSetIds, setAdSetIds] = useQueryState("adSet", parseAsString.withDefault(""));
   const [statuses, setStatuses] = useQueryState("status", parseAsString.withDefault("active"));
-  const [from, setFrom] = useQueryState("from", parseAsIsoDate.withDefault(startOfDay(subDays(new Date(), 6))));
-  const [to, setTo] = useQueryState("to", parseAsIsoDate.withDefault(startOfDay(new Date())));
+  const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
+  const [to, setTo] = useQueryState("to", parseAsString.withDefault(formatDateOnly(new Date())));
   const selectedAccountId = accountId || undefined;
+  const fromValue = isDateOnlyString(from) ? from : formatDateOnly(subDays(new Date(), 6));
+  const toValue = isDateOnlyString(to) ? to : formatDateOnly(new Date());
+  const fromDate = parseDateOnly(fromValue);
+  const toDate = parseDateOnly(toValue);
 
   const accounts = useQuery(trpc.adAccount.list.queryOptions());
   const campaignsQuery = useQuery(trpc.campaign.list.queryOptions());
@@ -88,8 +93,8 @@ export default function DashboardPage() {
 
   const stats = useQuery(
     trpc.adCreative.dashboardStats.queryOptions({
-      from: format(from, "yyyy-MM-dd"),
-      to: format(to, "yyyy-MM-dd"),
+      from: fromValue,
+      to: toValue,
       accountId: selectedAccountId,
       campaignIds: campaignIds ? campaignIds.split(",") : undefined,
       adSetIds: adSetIds ? adSetIds.split(",") : undefined,
@@ -142,12 +147,12 @@ export default function DashboardPage() {
         <h1 className="text-lg font-semibold">Dashboard</h1>
         <div className="flex items-center gap-2">
           <DateRangePicker
-            from={from}
-            to={to}
+            from={fromDate}
+            to={toDate}
             onChange={(range) => {
               if (range) {
-                setFrom(range.from);
-                setTo(range.to);
+                setFrom(formatDateOnly(range.from));
+                setTo(formatDateOnly(range.to));
               }
             }}
           />

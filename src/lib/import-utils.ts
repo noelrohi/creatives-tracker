@@ -1,4 +1,5 @@
 import type { MappedRow } from "./csv-parser";
+import { formatDateOnly } from "./date";
 
 export const MAX_BULK_IMPORT_PAYLOAD_BYTES = 1_000_000;
 
@@ -49,8 +50,8 @@ export function mapRowsForImport(rows: MappedRow[]) {
     campaignId: r.campaignId,
     adSetName: r.adSetName,
     adSetId: r.adSetId,
-    dateStart: r.dateStart || new Date().toISOString().slice(0, 10),
-    dateEnd: r.dateEnd || new Date().toISOString().slice(0, 10),
+    dateStart: r.dateStart || formatDateOnly(new Date()),
+    dateEnd: r.dateEnd || formatDateOnly(new Date()),
   }));
 }
 

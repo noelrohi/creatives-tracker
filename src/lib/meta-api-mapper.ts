@@ -1,4 +1,5 @@
 import type { MappedRow } from "./csv-parser";
+import { formatDateOnly } from "./date";
 
 interface MetaAction {
   action_type: string;
@@ -108,8 +109,8 @@ export function mapMetaInsightsToRows(
       qualityRanking: row.quality_ranking,
       engagementRateRanking: row.engagement_rate_ranking,
       conversionRateRanking: row.conversion_rate_ranking,
-      dateStart: row.date_start ?? new Date().toISOString().slice(0, 10),
-      dateEnd: row.date_stop ?? new Date().toISOString().slice(0, 10),
+      dateStart: row.date_start ?? formatDateOnly(new Date()),
+      dateEnd: row.date_stop ?? formatDateOnly(new Date()),
       // Breakdowns
       age: row.age,
       gender: row.gender,

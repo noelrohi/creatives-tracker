@@ -8,6 +8,7 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
+import { formatDateOnly, parseDateOnly } from "@/lib/date";
 
 type MetricKey = "spend" | "roas" | "cpa" | "ctr" | "conversions" | "impressions" | "reach" | "cpm";
 
@@ -84,7 +85,7 @@ export function PerformanceChart({ logs, compact }: PerformanceChartProps) {
     }
 
     return [...byDate.values()]
-      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      .sort((a, b) => a.date.localeCompare(b.date))
       .map((bucket) => ({
         date: bucket.date,
         spend: bucket.spend,
@@ -140,10 +141,7 @@ export function PerformanceChart({ logs, compact }: PerformanceChartProps) {
               dataKey="date"
               tickLine={false}
               axisLine={false}
-              tickFormatter={(v) => {
-                const d = new Date(v);
-                return `${d.getMonth() + 1}/${d.getDate()}`;
-              }}
+              tickFormatter={(value) => formatDateOnly(parseDateOnly(String(value))).slice(5).replace("-", "/")}
             />
             <YAxis tickLine={false} axisLine={false} width={50} />
             <ChartTooltip content={<ChartTooltipContent />} />
@@ -166,10 +164,7 @@ export function PerformanceChart({ logs, compact }: PerformanceChartProps) {
               dataKey="date"
               tickLine={false}
               axisLine={false}
-              tickFormatter={(v) => {
-                const d = new Date(v);
-                return `${d.getMonth() + 1}/${d.getDate()}`;
-              }}
+              tickFormatter={(value) => formatDateOnly(parseDateOnly(String(value))).slice(5).replace("-", "/")}
             />
             <YAxis tickLine={false} axisLine={false} width={50} />
             <ChartTooltip content={<ChartTooltipContent indicator="line" />} />
