@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { eq, and, ilike, desc } from "drizzle-orm";
-import { router, baseProcedure } from "../init";
+import { router, orgProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { tags, entityTags } from "@/schema/tag";
@@ -14,26 +14,27 @@ const entityTypeSchema = z.enum([
 ]);
 
 export const tagRouter = router({
-  search: baseProcedure
+  search: orgProcedure
     .meta(openApiQueryMeta("tag", "search"))
     .input(z.object({ query: z.string().optional() }).optional())
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       if (input?.query) {
         return db
           .select()
           .from(tags)
-          .where(ilike(tags.name, `%${input.query}%`))
+          .where(and(ilike(tags.name, `%${input.query}%`), eq(tags.organizationId, ctx.organizationId)))
           .orderBy(desc(tags.createdAt))
           .limit(20);
       }
       return db
         .select()
         .from(tags)
+        .where(eq(tags.organizationId, ctx.organizationId))
         .orderBy(desc(tags.createdAt))
         .limit(50);
     }),
 
-  listForEntity: baseProcedure
+  listForEntity: orgProcedure
     .meta(openApiQueryMeta("tag", "listForEntity"))
     .input(
       z.object({
@@ -41,7 +42,7 @@ export const tagRouter = router({
         entityId: z.string(),
       }),
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const rows = await db
         .select({ tag: tags, entityTag: entityTags })
         .from(entityTags)
@@ -50,12 +51,13 @@ export const tagRouter = router({
           and(
             eq(entityTags.entityType, input.entityType),
             eq(entityTags.entityId, input.entityId),
+            eq(entityTags.organizationId, ctx.organizationId),
           ),
         );
       return rows.map((r) => r.tag);
     }),
 
-  attach: baseProcedure
+  attach: orgProcedure
     .meta(openApiMutationMeta("tag", "attach"))
     .input(
       z.object({
@@ -65,12 +67,12 @@ export const tagRouter = router({
         tagColor: z.string().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       // Find or create tag
       let [tag] = await db
         .select()
         .from(tags)
-        .where(eq(tags.name, input.tagName));
+        .where(and(eq(tags.name, input.tagName), eq(tags.organizationId, ctx.organizationId)));
 
       if (!tag) {
         [tag] = await db
@@ -78,6 +80,7 @@ export const tagRouter = router({
           .values({
             name: input.tagName,
             color: input.tagColor,
+            organizationId: ctx.organizationId,
           })
           .returning();
       }
@@ -91,6 +94,7 @@ export const tagRouter = router({
             eq(entityTags.entityType, input.entityType),
             eq(entityTags.entityId, input.entityId),
             eq(entityTags.tagId, tag.id),
+            eq(entityTags.organizationId, ctx.organizationId),
           ),
         );
 
@@ -99,13 +103,14 @@ export const tagRouter = router({
           entityType: input.entityType,
           entityId: input.entityId,
           tagId: tag.id,
+          organizationId: ctx.organizationId,
         });
       }
 
       return tag;
     }),
 
-  detach: baseProcedure
+  detach: orgProcedure
     .meta(openApiMutationMeta("tag", "detach"))
     .input(
       z.object({
@@ -114,7 +119,7 @@ export const tagRouter = router({
         tagId: z.string(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       await db
         .delete(entityTags)
         .where(
@@ -122,6 +127,7 @@ export const tagRouter = router({
             eq(entityTags.entityType, input.entityType),
             eq(entityTags.entityId, input.entityId),
             eq(entityTags.tagId, input.tagId),
+            eq(entityTags.organizationId, ctx.organizationId),
           ),
         );
     }),

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { eq, desc, ilike, and, sql, type SQL } from "drizzle-orm";
-import { router, baseProcedure } from "../init";
+import { router, orgProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { adCreatives } from "@/schema/ad-creative";
@@ -9,10 +9,10 @@ import { ads } from "@/schema/ad";
 import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
 import { performanceLogs } from "@/schema/performance-log";
-import { accounts } from "@/schema/account";
+import { adAccounts } from "@/schema/account";
 
 export const adCreativeRouter = router({
-  list: baseProcedure
+  list: orgProcedure
     .meta(openApiQueryMeta("adCreative", "list"))
     .input(
       z
@@ -36,8 +36,8 @@ export const adCreativeRouter = router({
         })
         .optional(),
     )
-    .query(async ({ input }) => {
-      const conditions: SQL[] = [];
+    .query(async ({ input, ctx }) => {
+      const conditions: SQL[] = [eq(adCreatives.organizationId, ctx.organizationId)];
       if (input?.format) {
         conditions.push(eq(adCreatives.format, input.format));
       }
@@ -131,7 +131,7 @@ export const adCreativeRouter = router({
           )`.as("meta_ad_set_id"),
           accountName: sql<string | null>`(
             SELECT acc.name FROM ad
-            JOIN account acc ON acc.id = ad.account_id
+            JOIN ad_account acc ON acc.id = ad.account_id
             WHERE ad.ad_creative_id = ${adCreatives.id}
             LIMIT 1
           )`.as("account_name"),
@@ -142,7 +142,7 @@ export const adCreativeRouter = router({
         .orderBy(desc(adCreatives.createdAt));
     }),
 
-  dashboardStats: baseProcedure
+  dashboardStats: orgProcedure
     .meta(openApiQueryMeta("adCreative", "dashboardStats"))
     .input(
       z
@@ -157,7 +157,7 @@ export const adCreativeRouter = router({
         })
         .optional(),
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const days = input?.days ?? 7;
       const accountFilter = input?.accountId
         ? sql`AND ad.account_id = ${input.accountId}`
@@ -169,12 +169,12 @@ export const adCreativeRouter = router({
         ? sql`AND ad.ad_set_id IN (${sql.join(input.adSetIds.map((id) => sql`${id}`), sql`, `)})`
         : sql``;
       const statusFilter = input?.statuses?.length
-        ? sql`AND ad.status IN (${sql.join(input.statuses.map((s) => sql`${s}`), sql`, `)})`
+        ? sql`AND ad.status::text IN (${sql.join(input.statuses.map((s) => sql`${s}`), sql`, `)})`
         : sql``;
 
       const dateFilter = input?.from && input?.to
-        ? sql`pl.date_start >= ${input.from}::date AND pl.date_start <= ${input.to}::date`
-        : sql`pl.date_start >= current_date - ${days}::int`;
+        ? sql`pl.date_start <= ${input.to}::date AND pl.date_end >= ${input.from}::date`
+        : sql`pl.date_start <= current_date AND pl.date_end >= current_date - ${days}::int`;
 
       type PortfolioRow = {
         total_spend: string | null;
@@ -195,7 +195,7 @@ export const adCreativeRouter = router({
           sum(pl.conversions)::text as total_conversions
         FROM performance_log pl
         JOIN ad ON ad.id = pl.ad_id
-        WHERE ${dateFilter} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter}
+        WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter}
       `);
       const portfolio = (portfolioResult.rows as PortfolioRow[])[0];
 
@@ -226,7 +226,7 @@ export const adCreativeRouter = router({
         FROM ad_creative ac
         JOIN ad ON ad.ad_creative_id = ac.id
         JOIN performance_log pl ON pl.ad_id = ad.id
-        WHERE ${dateFilter} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter}
+        WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter}
         GROUP BY ac.id, ac.name, ac.format
         HAVING sum(pl.spend) >= 50
         ORDER BY coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST
@@ -253,7 +253,7 @@ export const adCreativeRouter = router({
         FROM ad_creative ac
         JOIN ad ON ad.ad_creative_id = ac.id
         JOIN performance_log pl ON pl.ad_id = ad.id
-        WHERE ${dateFilter} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${topExclude}
+        WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${topExclude}
         GROUP BY ac.id, ac.name, ac.format
         HAVING sum(pl.spend) >= 50
         ORDER BY coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) ASC NULLS FIRST
@@ -295,10 +295,10 @@ export const adCreativeRouter = router({
       };
     }),
 
-  getById: baseProcedure
+  getById: orgProcedure
     .meta(openApiQueryMeta("adCreative", "getById"))
     .input(z.object({ id: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const [creative] = await db
         .select({
           id: adCreatives.id,
@@ -319,25 +319,26 @@ export const adCreativeRouter = router({
         })
         .from(adCreatives)
         .leftJoin(landingPages, eq(adCreatives.landingPageId, landingPages.id))
-        .where(eq(adCreatives.id, input.id));
+        .where(and(eq(adCreatives.id, input.id), eq(adCreatives.organizationId, ctx.organizationId)));
       if (!creative) throw new Error("Ad creative not found");
       return creative;
     }),
 
-  create: baseProcedure
+  create: orgProcedure
     .meta(openApiMutationMeta("adCreative", "create"))
     .input(z.object({ name: z.string().optional() }).optional())
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const [creative] = await db
         .insert(adCreatives)
         .values({
           name: input?.name ?? "Untitled Creative",
+          organizationId: ctx.organizationId,
         })
         .returning();
       return creative;
     }),
 
-  update: baseProcedure
+  update: orgProcedure
     .meta(openApiMutationMeta("adCreative", "update"))
     .input(
       z.object({
@@ -358,24 +359,24 @@ export const adCreativeRouter = router({
         notes: z.string().nullable().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const { id, ...data } = input;
       const [creative] = await db
         .update(adCreatives)
         .set(data)
-        .where(eq(adCreatives.id, id))
+        .where(and(eq(adCreatives.id, id), eq(adCreatives.organizationId, ctx.organizationId)))
         .returning();
       return creative;
     }),
 
-  duplicate: baseProcedure
+  duplicate: orgProcedure
     .meta(openApiMutationMeta("adCreative", "duplicate"))
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const [source] = await db
         .select()
         .from(adCreatives)
-        .where(eq(adCreatives.id, input.id));
+        .where(and(eq(adCreatives.id, input.id), eq(adCreatives.organizationId, ctx.organizationId)));
       if (!source) throw new Error("Ad creative not found");
       const [duplicate] = await db
         .insert(adCreatives)
@@ -391,12 +392,13 @@ export const adCreativeRouter = router({
           cta: source.cta,
           landingPageId: source.landingPageId,
           notes: source.notes,
+          organizationId: ctx.organizationId,
         })
         .returning();
       return duplicate;
     }),
 
-  bulkImport: baseProcedure
+  bulkImport: orgProcedure
     .meta(openApiMutationMeta("adCreative", "bulkImport"))
     .input(
       z.object({
@@ -404,6 +406,8 @@ export const adCreativeRouter = router({
         rows: z.array(
           z.object({
             name: z.string(),
+          assetUrl: z.string().optional(),
+          format: z.enum(["static", "video", "ugc", "carousel"]).optional(),
           roas: z.string().optional(),
           cpa: z.string().optional(),
           ctr: z.string().optional(),
@@ -448,7 +452,7 @@ export const adCreativeRouter = router({
         ),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const normalizeName = (value?: string | null) => value?.trim() || undefined;
       const normalizeDimension = (value?: string | null) => value?.trim() || "";
       const normalizeDateValue = (value: string | Date) =>
@@ -553,6 +557,7 @@ export const adCreativeRouter = router({
             batch.map((campaign) => ({
               name: campaign.name,
               metaId: campaign.metaId,
+              organizationId: ctx.organizationId,
             })),
           ).returning({ id: campaigns.id, name: campaigns.name, metaId: campaigns.metaId });
           inserted.forEach((row, index) => {
@@ -648,6 +653,7 @@ export const adCreativeRouter = router({
               name: adSet.name,
               metaId: adSet.metaId,
               campaignId: adSet.campaignDbId,
+              organizationId: ctx.organizationId,
             })),
           ).returning({ id: adSets.id });
           inserted.forEach((row, index) => {
@@ -721,6 +727,18 @@ export const adCreativeRouter = router({
 
       // 4. Resolve a single canonical creative per imported name
       const importedCreativeNames = [...new Set([...adInfoMap.values()].map((ad) => ad.name))];
+      const importedCreativeMetaByName = new Map<string, {
+        assetUrl?: string;
+        format?: "static" | "video" | "ugc" | "carousel";
+      }>();
+      for (const row of input.rows) {
+        if (!row.assetUrl && !row.format) continue;
+        const existing = importedCreativeMetaByName.get(row.name);
+        importedCreativeMetaByName.set(row.name, {
+          assetUrl: existing?.assetUrl ?? row.assetUrl,
+          format: existing?.format ?? row.format,
+        });
+      }
       const creativeIdByName = new Map<string, string>();
       const createdCreatives: { id: string; name: string }[] = [];
 
@@ -734,7 +752,10 @@ export const adCreativeRouter = router({
           })
           .from(adCreatives)
           .leftJoin(ads, eq(ads.adCreativeId, adCreatives.id))
-          .where(sql`${adCreatives.name} IN (${sql.join(importedCreativeNames.map((name) => sql`${name}`), sql`, `)})`)
+          .where(and(
+            sql`${adCreatives.name} IN (${sql.join(importedCreativeNames.map((name) => sql`${name}`), sql`, `)})`,
+            eq(adCreatives.organizationId, ctx.organizationId),
+          ))
           .groupBy(adCreatives.id, adCreatives.name, adCreatives.createdAt)
           .orderBy(adCreatives.name, desc(sql<number>`count(${ads.id})`), adCreatives.createdAt);
 
@@ -750,13 +771,34 @@ export const adCreativeRouter = router({
         for (let i = 0; i < creativeNamesToCreate.length; i += 500) {
           const batch = creativeNamesToCreate.slice(i, i + 500);
           const inserted = await db.insert(adCreatives).values(
-            batch.map((name) => ({ name })),
+            batch.map((name) => ({
+              name,
+              organizationId: ctx.organizationId,
+              assetUrl: importedCreativeMetaByName.get(name)?.assetUrl,
+              format: importedCreativeMetaByName.get(name)?.format,
+            })),
           ).returning({ id: adCreatives.id, name: adCreatives.name });
           for (const creative of inserted) {
             creativeIdByName.set(creative.name, creative.id);
             createdCreatives.push(creative);
           }
         }
+      }
+
+      for (const [name, creativeId] of creativeIdByName) {
+        const meta = importedCreativeMetaByName.get(name);
+        if (!meta?.assetUrl && !meta?.format) continue;
+
+        await db.update(adCreatives).set({
+          ...(meta.assetUrl ? { assetUrl: meta.assetUrl } : {}),
+          ...(meta.format ? { format: meta.format } : {}),
+        }).where(
+          and(
+            eq(adCreatives.id, creativeId),
+            eq(adCreatives.organizationId, ctx.organizationId),
+            sql`(${adCreatives.assetUrl} IS NULL OR ${adCreatives.format} IS NULL)`,
+          ),
+        );
       }
 
       // 5. Batch create new ads
@@ -770,6 +812,7 @@ export const adCreativeRouter = router({
             status: normalizeStatus(info.delivery),
             metaId: info.metaAdId,
             accountId: input.accountId,
+            organizationId: ctx.organizationId,
           };
         });
 
@@ -863,6 +906,7 @@ export const adCreativeRouter = router({
           ...perfPayload,
           conversionRate,
           adId,
+          organizationId: ctx.organizationId,
         });
       }
 
@@ -938,17 +982,17 @@ export const adCreativeRouter = router({
         const dateEnds = perfRows.map((r) => r.dateEnd).filter(Boolean) as string[];
         const maxDataDate = dateEnds.sort().reverse()[0] ?? null;
         const [account] = await db
-          .select({ dataDateEnd: accounts.dataDateEnd })
-          .from(accounts)
-          .where(eq(accounts.id, input.accountId));
+          .select({ dataDateEnd: adAccounts.dataDateEnd })
+          .from(adAccounts)
+          .where(eq(adAccounts.id, input.accountId));
         const nextDataDateEnd = account?.dataDateEnd && maxDataDate
           ? (account.dataDateEnd > maxDataDate ? account.dataDateEnd : maxDataDate)
           : account?.dataDateEnd ?? maxDataDate;
 
-        await db.update(accounts).set({
+        await db.update(adAccounts).set({
           lastImportedAt: new Date(),
           ...(nextDataDateEnd ? { dataDateEnd: nextDataDateEnd } : {}),
-        }).where(eq(accounts.id, input.accountId));
+        }).where(eq(adAccounts.id, input.accountId));
       }
 
       return {
@@ -959,10 +1003,10 @@ export const adCreativeRouter = router({
       };
     }),
 
-  getPerformance: baseProcedure
+  getPerformance: orgProcedure
     .meta(openApiQueryMeta("adCreative", "getPerformance"))
     .input(z.object({ id: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       // Creative-level aggregated metrics
       const [creative] = await db
         .select({
@@ -1020,12 +1064,12 @@ export const adCreativeRouter = router({
       };
     }),
 
-  delete: baseProcedure
+  delete: orgProcedure
     .meta(openApiMutationMeta("adCreative", "delete"))
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       // Delete linked ads (cascades to performance_logs via FK)
       await db.delete(ads).where(eq(ads.adCreativeId, input.id));
-      await db.delete(adCreatives).where(eq(adCreatives.id, input.id));
+      await db.delete(adCreatives).where(and(eq(adCreatives.id, input.id), eq(adCreatives.organizationId, ctx.organizationId)));
     }),
 });

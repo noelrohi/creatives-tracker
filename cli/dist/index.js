@@ -7315,12 +7315,19 @@ function resolveApiUrl(command) {
   const options = getGlobalOptions(command);
   return options.url ?? process.env.ADSOLUTE_API_URL ?? DEFAULT_API_URL;
 }
-function createApiClient(baseUrl) {
+function resolveApiKey(command) {
+  const options = getGlobalOptions(command);
+  return options.apiKey ?? process.env.ADSOLUTE_API_KEY ?? undefined;
+}
+function createApiClient(baseUrl, apiKey) {
   return createTRPCClient({
     links: [
       httpBatchLink({
         url: `${baseUrl.replace(/\/$/, "")}/api/trpc`,
-        transformer: dist_default
+        transformer: dist_default,
+        headers: apiKey ? {
+          authorization: `Bearer ${apiKey}`
+        } : undefined
       })
     ]
   });
@@ -7428,7 +7435,7 @@ async function readCsvRows(filePath, integerFields = []) {
 }
 async function runCommand(command, action) {
   try {
-    const client = createApiClient(resolveApiUrl(command));
+    const client = createApiClient(resolveApiUrl(command), resolveApiKey(command));
     const result = await action(client);
     if (result !== undefined) {
       printOutput(result, Boolean(getGlobalOptions(command).table));
@@ -7449,13 +7456,13 @@ async function runCommand(command, action) {
 function registerAccountsCommands(program2) {
   const accounts = program2.command("accounts").description("Manage accounts");
   accounts.command("list").action(async (command) => {
-    await runCommand(command, (client) => client.account.list.query());
+    await runCommand(command, (client) => client.adAccount.list.query());
   });
   accounts.command("get <id>").action(async (id, command) => {
-    await runCommand(command, (client) => client.account.getById.query({ id }));
+    await runCommand(command, (client) => client.adAccount.getById.query({ id }));
   });
   accounts.command("create").requiredOption("--name <name>").requiredOption("--meta-account-id <metaAccountId>").option("--meta-access-token <metaAccessToken>").option("--notes <notes>").action(async (options, command) => {
-    await runCommand(command, (client) => client.account.create.mutate({
+    await runCommand(command, (client) => client.adAccount.create.mutate({
       name: options.name,
       metaAccountId: options.metaAccountId,
       metaAccessToken: options.metaAccessToken,
@@ -7463,7 +7470,7 @@ function registerAccountsCommands(program2) {
     }));
   });
   accounts.command("update <id>").option("--name <name>").option("--meta-account-id <metaAccountId>").option("--meta-access-token <metaAccessToken>").option("--notes <notes>").action(async (id, options, command) => {
-    await runCommand(command, (client) => client.account.update.mutate({
+    await runCommand(command, (client) => client.adAccount.update.mutate({
       id,
       ...compactObject({
         name: options.name,
@@ -7475,7 +7482,7 @@ function registerAccountsCommands(program2) {
   });
   accounts.command("delete <id>").action(async (id, command) => {
     await runCommand(command, async (client) => {
-      await client.account.delete.mutate({ id });
+      await client.adAccount.delete.mutate({ id });
       return { deleted: true, id };
     });
   });
@@ -7677,6 +7684,7 @@ var CREATIVE_IMPORT_INTEGER_FIELDS = [
   "videoViews3s",
   "videoThruplay"
 ];
+var CREATIVE_FORMATS = new Set(["static", "video", "ugc", "carousel"]);
 function registerCreativeCommands(program2) {
   const creatives = program2.command("creatives").description("Manage ad creatives");
   creatives.command("list").option("--format <format>").option("--awareness-level <awarenessLevel>").option("--search <search>").option("--account-id <accountId>").option("--untagged-only", "Show only untagged creatives").action(async (options, command) => {
@@ -7733,6 +7741,8 @@ function registerCreativeCommands(program2) {
         accountId: options.accountId,
         rows: rows.map((row) => ({
           name: String(row.name),
+          assetUrl: row.assetUrl !== undefined ? String(row.assetUrl) : undefined,
+          format: row.format !== undefined && CREATIVE_FORMATS.has(String(row.format)) ? String(row.format) : undefined,
           roas: row.roas !== undefined ? String(row.roas) : undefined,
           cpa: row.cpa !== undefined ? String(row.cpa) : undefined,
           ctr: row.ctr !== undefined ? String(row.ctr) : undefined,
@@ -7894,7 +7904,7 @@ function registerTagCommands(program2) {
 // src/index.ts
 async function main() {
   const program2 = new Command;
-  program2.name("adsolute").description("Typed CLI for the Adsolute tRPC API").option("--url <url>", "API base URL, defaults to ADSOLUTE_API_URL or http://localhost:3000").option("--table", "Render output in a table when possible").showHelpAfterError();
+  program2.name("adsolute").description("Typed CLI for the Adsolute tRPC API").option("--url <url>", "API base URL, defaults to ADSOLUTE_API_URL or http://localhost:3000").option("--api-key <key>", "Organization API key, defaults to ADSOLUTE_API_KEY").option("--table", "Render output in a table when possible").showHelpAfterError();
   registerAccountsCommands(program2);
   registerCampaignCommands(program2);
   registerAdSetCommands(program2);

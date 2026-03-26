@@ -71,6 +71,27 @@
       "when": 1774315851654,
       "tag": "0009_chemical_famine",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1774665600000,
+      "tag": "0010_add_auth_and_org_scoping",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1774490811720,
+      "tag": "0011_loose_ikaris",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1774496753101,
+      "tag": "0012_youthful_roulette",
+      "breakpoints": true
     }
   ]
 }

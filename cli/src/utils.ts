@@ -3,7 +3,13 @@ import { resolve } from "node:path";
 import Papa from "papaparse";
 import type { Command } from "commander";
 import { TRPCClientError } from "@trpc/client";
-import { type CliClient, createApiClient, getGlobalOptions, resolveApiUrl } from "./client.js";
+import {
+  type CliClient,
+  createApiClient,
+  getGlobalOptions,
+  resolveApiKey,
+  resolveApiUrl,
+} from "./client.js";
 import { printOutput } from "./output.js";
 
 export function parseList(value: string | undefined) {
@@ -83,7 +89,10 @@ export async function runCommand(
   action: (client: CliClient) => Promise<unknown>,
 ) {
   try {
-    const client = createApiClient(resolveApiUrl(command));
+    const client = createApiClient(
+      resolveApiUrl(command),
+      resolveApiKey(command),
+    );
     const result = await action(client);
     if (result !== undefined) {
       printOutput(result, Boolean(getGlobalOptions(command).table));

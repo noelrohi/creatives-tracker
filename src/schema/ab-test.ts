@@ -1,5 +1,11 @@
 import { relations } from "drizzle-orm";
-import { pgTable, pgEnum, text, timestamp, index } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  pgEnum,
+  text,
+  timestamp,
+  index,
+} from "drizzle-orm/pg-core";
 import { ads } from "./ad";
 
 export const abTestStatusEnum = pgEnum("ab_test_status", [
@@ -8,22 +14,27 @@ export const abTestStatusEnum = pgEnum("ab_test_status", [
   "paused",
 ]);
 
-export const abTests = pgTable("ab_test", {
-  id: text("id")
-    .primaryKey()
-    .$defaultFn(() => crypto.randomUUID()),
-  name: text("name").notNull().default("Untitled Test"),
-  hypothesis: text("hypothesis"),
-  status: abTestStatusEnum("status").notNull().default("running"),
-  winnerVariantId: text("winner_variant_id").references(() => ads.id, {
-    onDelete: "set null",
-  }),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at")
-    .defaultNow()
-    .$onUpdate(() => new Date())
-    .notNull(),
-});
+export const abTests = pgTable(
+  "ab_test",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    name: text("name").notNull().default("Untitled Test"),
+    hypothesis: text("hypothesis"),
+    organizationId: text("organization_id"),
+    status: abTestStatusEnum("status").notNull().default("running"),
+    winnerVariantId: text("winner_variant_id").references(() => ads.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [index("ab_test_organization_id_idx").on(table.organizationId)],
+);
 
 export const abTestRelations = relations(abTests, ({ one, many }) => ({
   winnerVariant: one(ads, {
@@ -46,11 +57,13 @@ export const abTestVariants = pgTable(
       .notNull()
       .references(() => ads.id, { onDelete: "cascade" }),
     label: text("label").notNull().default("variant"),
+    organizationId: text("organization_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
     index("ab_test_variant_ab_test_id_idx").on(table.abTestId),
     index("ab_test_variant_ad_id_idx").on(table.adId),
+    index("ab_test_variant_organization_id_idx").on(table.organizationId),
   ],
 );
 

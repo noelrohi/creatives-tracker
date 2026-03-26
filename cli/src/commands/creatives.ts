@@ -14,6 +14,8 @@ const CREATIVE_IMPORT_INTEGER_FIELDS = [
   "videoThruplay",
 ];
 
+const CREATIVE_FORMATS = new Set(["static", "video", "ugc", "carousel"]);
+
 export function registerCreativeCommands(program: Command) {
   const creatives = program
     .command("creatives")
@@ -126,6 +128,17 @@ export function registerCreativeCommands(program: Command) {
           accountId: options.accountId,
           rows: rows.map((row) => ({
             name: String(row.name),
+            assetUrl:
+              row.assetUrl !== undefined ? String(row.assetUrl) : undefined,
+            format:
+              row.format !== undefined &&
+              CREATIVE_FORMATS.has(String(row.format))
+                ? (String(row.format) as
+                    | "static"
+                    | "video"
+                    | "ugc"
+                    | "carousel")
+                : undefined,
             roas: row.roas !== undefined ? String(row.roas) : undefined,
             cpa: row.cpa !== undefined ? String(row.cpa) : undefined,
             ctr: row.ctr !== undefined ? String(row.ctr) : undefined,

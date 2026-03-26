@@ -22,6 +22,7 @@ export const adSets = pgTable(
     scheduleStart: timestamp("schedule_start"),
     scheduleEnd: timestamp("schedule_end"),
     metaId: text("meta_id").unique(),
+    organizationId: text("organization_id"),
     status: statusEnum("status").notNull().default("active"),
     notes: text("notes"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -30,7 +31,10 @@ export const adSets = pgTable(
       .$onUpdate(() => new Date())
       .notNull(),
   },
-  (table) => [index("ad_set_campaign_id_idx").on(table.campaignId)],
+  (table) => [
+    index("ad_set_campaign_id_idx").on(table.campaignId),
+    index("ad_set_organization_id_idx").on(table.organizationId),
+  ],
 );
 
 export const adSetRelations = relations(adSets, ({ one }) => ({

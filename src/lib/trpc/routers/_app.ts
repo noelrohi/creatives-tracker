@@ -7,7 +7,9 @@ import { adRouter } from "./ad";
 import { performanceLogRouter } from "./performance-log";
 import { tagRouter } from "./tag";
 import { abTestRouter } from "./ab-test";
-import { accountRouter } from "./account";
+import { adAccountRouter } from "./account";
+import { metaInsightsRouter } from "./meta-insights";
+import { apiKeyRouter } from "./api-key";
 
 export const appRouter = router({
   landingPage: landingPageRouter,
@@ -18,7 +20,9 @@ export const appRouter = router({
   performanceLog: performanceLogRouter,
   tag: tagRouter,
   abTest: abTestRouter,
-  account: accountRouter,
+  adAccount: adAccountRouter,
+  metaInsights: metaInsightsRouter,
+  apiKey: apiKeyRouter,
 });
 
 export type AppRouter = typeof appRouter;

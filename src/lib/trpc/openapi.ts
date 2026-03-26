@@ -12,7 +12,8 @@ import { adSets } from "@/schema/ad-set";
 import { ads } from "@/schema/ad";
 import { performanceLogs } from "@/schema/performance-log";
 import { tags, entityTags } from "@/schema/tag";
-import { accounts } from "@/schema/account";
+import { adAccounts } from "@/schema/account";
+import { apiKeys } from "@/schema/api-key";
 
 const EXCLUDED_OPENAPI_ROUTERS = new Set(["abTest"]);
 
@@ -45,9 +46,13 @@ const TAG_METADATA: Record<string, { name: string; description: string }> = {
     name: "Tags",
     description: "Manage tags and entity associations",
   },
-  account: {
-    name: "Accounts",
+  adAccount: {
+    name: "Ad Accounts",
     description: "Manage ad platform accounts",
+  },
+  apiKey: {
+    name: "API Keys",
+    description: "Manage organization-scoped API keys",
   },
 };
 
@@ -91,13 +96,204 @@ const selectSchemas: Record<string, ZodTypeAny> = {
   performanceLog: selectSchema(performanceLogs),
   tag: selectSchema(tags),
   entityTag: selectSchema(entityTags),
-  account: selectSchema(accounts),
+  adAccount: selectSchema(adAccounts),
+  apiKey: selectSchema(apiKeys),
+};
+
+const creativeListItemSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  assetUrl: z.string().nullable(),
+  format: z.string().nullable(),
+  angle: z.string().nullable(),
+  persona: z.string().nullable(),
+  awarenessLevel: z.string().nullable(),
+  hook: z.string().nullable(),
+  tone: z.array(z.string()).nullable(),
+  cta: z.string().nullable(),
+  landingPageId: z.string().nullable(),
+  landingPageName: z.string().nullable(),
+  notes: z.string().nullable(),
+  createdAt: dateAsString,
+  updatedAt: dateAsString,
+  totalSpend: z.string().nullable(),
+  avgRoas: z.string().nullable(),
+  totalConversions: z.number().nullable(),
+  adStatus: z.string().nullable(),
+  metaAdId: z.string().nullable(),
+  avgCpa: z.string().nullable(),
+  avgCtr: z.string().nullable(),
+  metaCampaignId: z.string().nullable(),
+  metaAdSetId: z.string().nullable(),
+  accountName: z.string().nullable(),
+});
+
+const creativeGetByIdSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  assetUrl: z.string().nullable(),
+  format: z.string().nullable(),
+  angle: z.string().nullable(),
+  persona: z.string().nullable(),
+  awarenessLevel: z.string().nullable(),
+  hook: z.string().nullable(),
+  tone: z.array(z.string()).nullable(),
+  cta: z.string().nullable(),
+  landingPageId: z.string().nullable(),
+  landingPageName: z.string().nullable(),
+  notes: z.string().nullable(),
+  createdAt: dateAsString,
+  updatedAt: dateAsString,
+});
+
+const creativePerformerSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  format: z.string().nullable(),
+  totalSpend: z.string(),
+  roas: z.string(),
+  cpa: z.string().nullable(),
+  ctr: z.string().nullable(),
+  conversions: z.string(),
+  adStatus: z.string().nullable(),
+});
+
+const customResponseSchemas: Record<string, Record<string, ZodTypeAny>> = {
+  adAccount: {
+    list: z.array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        metaAccountId: z.string(),
+        notes: z.string().nullable(),
+        lastImportedAt: dateAsString.nullable(),
+        dataDateEnd: z.string().nullable(),
+        organizationId: z.string().nullable(),
+        createdAt: dateAsString,
+        updatedAt: dateAsString,
+        hasMetaAccessToken: z.boolean(),
+      }),
+    ),
+    getById: z.object({
+      id: z.string(),
+      name: z.string(),
+      metaAccountId: z.string(),
+      notes: z.string().nullable(),
+      lastImportedAt: dateAsString.nullable(),
+      dataDateEnd: z.string().nullable(),
+      organizationId: z.string().nullable(),
+      createdAt: dateAsString,
+      updatedAt: dateAsString,
+      hasMetaAccessToken: z.boolean(),
+    }),
+    create: z.object({
+      id: z.string(),
+      name: z.string(),
+      metaAccountId: z.string(),
+      notes: z.string().nullable(),
+      lastImportedAt: dateAsString.nullable(),
+      dataDateEnd: z.string().nullable(),
+      organizationId: z.string().nullable(),
+      createdAt: dateAsString,
+      updatedAt: dateAsString,
+      hasMetaAccessToken: z.boolean(),
+    }),
+    update: z.object({
+      id: z.string(),
+      name: z.string(),
+      metaAccountId: z.string(),
+      notes: z.string().nullable(),
+      lastImportedAt: dateAsString.nullable(),
+      dataDateEnd: z.string().nullable(),
+      organizationId: z.string().nullable(),
+      createdAt: dateAsString,
+      updatedAt: dateAsString,
+      hasMetaAccessToken: z.boolean(),
+    }),
+  },
+  adCreative: {
+    list: z.array(creativeListItemSchema),
+    getById: creativeGetByIdSchema,
+    dashboardStats: z.object({
+      portfolio: z.object({
+        totalSpend: z.string().nullable(),
+        totalRevenue: z.string().nullable(),
+        roas: z.string().nullable(),
+        cpa: z.string().nullable(),
+        ctr: z.string().nullable(),
+        conversions: z.string().nullable(),
+      }),
+      topPerformers: z.array(creativePerformerSchema),
+      bottomPerformers: z.array(creativePerformerSchema),
+    }),
+    bulkImport: z.object({
+      created: z.array(z.object({ id: z.string(), name: z.string() })),
+      totalRows: z.number(),
+      uniqueAds: z.number(),
+      perfLogs: z.number(),
+    }),
+    getPerformance: z.object({
+      totalSpend: z.string().nullable(),
+      avgRoas: z.string().nullable(),
+      avgCpa: z.string().nullable(),
+      avgCtr: z.string().nullable(),
+      totalConversions: z.number().nullable(),
+      totalImpressions: z.number().nullable(),
+      totalClicks: z.number().nullable(),
+      logCount: z.number(),
+      minDate: z.string().nullable(),
+      maxDate: z.string().nullable(),
+      portfolioAvgRoas: z.string().nullable(),
+      portfolioAvgCpa: z.string().nullable(),
+      portfolioAvgCtr: z.string().nullable(),
+      liveStatus: z.enum(["active", "paused", "no_ads"]),
+    }),
+  },
+  apiKey: {
+    list: z.array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        prefix: z.string(),
+        scopes: z.array(z.string()).nullable(),
+        lastUsedAt: dateAsString.nullable(),
+        expiresAt: dateAsString.nullable(),
+        revokedAt: dateAsString.nullable(),
+        createdAt: dateAsString,
+        createdByUserId: z.string().nullable(),
+      }),
+    ),
+    create: z.object({
+      id: z.string(),
+      name: z.string(),
+      prefix: z.string(),
+      scopes: z.array(z.string()).nullable(),
+      expiresAt: dateAsString.nullable(),
+      createdAt: dateAsString,
+      key: z.string(),
+    }),
+    revoke: z.object({
+      id: z.string(),
+      revokedAt: dateAsString.nullable(),
+    }),
+    delete: z.object({
+      id: z.string(),
+    }),
+  },
 };
 
 function getResponseSchema(
   routerName: string,
   procedureName: string,
 ): JsonSchema | undefined {
+  const customSchema = customResponseSchemas[routerName]?.[procedureName];
+  if (customSchema) {
+    return toJSONSchema(customSchema, {
+      target: "openapi-3.0",
+      reused: "inline",
+    }) as JsonSchema;
+  }
+
   const baseSchema = selectSchemas[routerName];
   if (!baseSchema) return undefined;
 
@@ -408,10 +604,16 @@ export function generateOpenApiDocument(baseUrl: string) {
   const procedures = getOpenApiProcedures();
 
   for (const procedure of procedures) {
+    const security =
+      procedure.routerName === "apiKey"
+        ? [{ sessionCookie: [] }]
+        : [{ bearerAuth: [] }, { sessionCookie: [] }];
+
     const operation: Record<string, unknown> = {
       operationId: `${procedure.routerName}.${procedure.procedureName}`,
       tags: procedure.tags,
       summary: procedure.summary,
+      security,
       responses: {
         "200": {
           description: "Successful response",
@@ -462,13 +664,31 @@ export function generateOpenApiDocument(baseUrl: string) {
         "REST API for managing ad campaigns, creatives, landing pages, and performance analytics.",
     },
     servers: [{ url: baseUrl }],
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "API Key",
+          description:
+            "Organization-scoped API key sent as `Authorization: Bearer <key>`.",
+        },
+        sessionCookie: {
+          type: "apiKey",
+          in: "cookie",
+          name: "better-auth.session_token",
+          description:
+            "Better Auth session cookie for signed-in organization members.",
+        },
+      },
+    },
     tags,
     paths,
   };
 }
 
-async function getCaller() {
-  return appRouter.createCaller(await createContext());
+async function getCaller(request?: Request) {
+  return appRouter.createCaller(await createContext(request ? { req: request } : undefined));
 }
 
 export async function callOpenApiProcedure(
@@ -495,7 +715,7 @@ export async function callOpenApiProcedure(
   }
 
   try {
-    const caller = await getCaller();
+    const caller = await getCaller(request);
     const routerCaller = (caller as Record<string, Record<string, unknown>>)[
       routerName
     ];

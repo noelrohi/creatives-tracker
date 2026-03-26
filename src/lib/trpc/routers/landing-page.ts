@@ -1,25 +1,25 @@
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
-import { router, baseProcedure } from "../init";
+import { eq, and, desc } from "drizzle-orm";
+import { router, orgProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { landingPages, landingPageVersions } from "@/schema/landing-page";
 
 export const landingPageRouter = router({
-  list: baseProcedure
+  list: orgProcedure
     .meta(openApiQueryMeta("landingPage", "list"))
-    .query(async () => {
-    return db.select().from(landingPages).orderBy(desc(landingPages.createdAt));
+    .query(async ({ ctx }) => {
+    return db.select().from(landingPages).where(eq(landingPages.organizationId, ctx.organizationId)).orderBy(desc(landingPages.createdAt));
   }),
 
-  getById: baseProcedure
+  getById: orgProcedure
     .meta(openApiQueryMeta("landingPage", "getById"))
     .input(z.object({ id: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const [page] = await db
         .select()
         .from(landingPages)
-        .where(eq(landingPages.id, input.id));
+        .where(and(eq(landingPages.id, input.id), eq(landingPages.organizationId, ctx.organizationId)));
       if (!page) throw new Error("Landing page not found");
 
       const versions = await db
@@ -31,7 +31,7 @@ export const landingPageRouter = router({
       return { ...page, versions };
     }),
 
-  create: baseProcedure
+  create: orgProcedure
     .meta(openApiMutationMeta("landingPage", "create"))
     .input(
       z.object({
@@ -39,12 +39,13 @@ export const landingPageRouter = router({
         url: z.string().optional(),
       }).optional(),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const [page] = await db
         .insert(landingPages)
         .values({
           name: input?.name || "Untitled Landing Page",
           url: input?.url || "",
+          organizationId: ctx.organizationId,
         })
         .returning();
 
@@ -58,12 +59,13 @@ export const landingPageRouter = router({
         benefits: [],
         socialProofType: [],
         funnelPosition: "cold_traffic_entry",
+        organizationId: ctx.organizationId,
       });
 
       return page;
     }),
 
-  update: baseProcedure
+  update: orgProcedure
     .meta(openApiMutationMeta("landingPage", "update"))
     .input(
       z.object({
@@ -72,30 +74,31 @@ export const landingPageRouter = router({
         url: z.string().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const { id, ...data } = input;
       const [page] = await db
         .update(landingPages)
         .set(data)
-        .where(eq(landingPages.id, id))
+        .where(and(eq(landingPages.id, id), eq(landingPages.organizationId, ctx.organizationId)))
         .returning();
       return page;
     }),
 
-  duplicate: baseProcedure
+  duplicate: orgProcedure
     .meta(openApiMutationMeta("landingPage", "duplicate"))
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const [source] = await db
         .select()
         .from(landingPages)
-        .where(eq(landingPages.id, input.id));
+        .where(and(eq(landingPages.id, input.id), eq(landingPages.organizationId, ctx.organizationId)));
       if (!source) throw new Error("Landing page not found");
       const [duplicate] = await db
         .insert(landingPages)
         .values({
           name: `Copy of ${source.name}`,
           url: source.url,
+          organizationId: ctx.organizationId,
         })
         .returning();
       // Auto-create v1 for the duplicate (per spec: no version duplication)
@@ -108,18 +111,19 @@ export const landingPageRouter = router({
         benefits: [],
         socialProofType: [],
         funnelPosition: "cold_traffic_entry",
+        organizationId: ctx.organizationId,
       });
       return duplicate;
     }),
 
-  delete: baseProcedure
+  delete: orgProcedure
     .meta(openApiMutationMeta("landingPage", "delete"))
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
-      await db.delete(landingPages).where(eq(landingPages.id, input.id));
+    .mutation(async ({ input, ctx }) => {
+      await db.delete(landingPages).where(and(eq(landingPages.id, input.id), eq(landingPages.organizationId, ctx.organizationId)));
     }),
 
-  createVersion: baseProcedure
+  createVersion: orgProcedure
     .meta(openApiMutationMeta("landingPage", "createVersion"))
     .input(
       z.object({
@@ -140,7 +144,7 @@ export const landingPageRouter = router({
         notes: z.string().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       // Get the next version number
       const [latest] = await db
         .select({ version: landingPageVersions.version })
@@ -158,19 +162,20 @@ export const landingPageRouter = router({
         .values({
           ...input,
           version: nextVersion,
+          organizationId: ctx.organizationId,
         })
         .returning();
       return version;
     }),
 
-  duplicateVersion: baseProcedure
+  duplicateVersion: orgProcedure
     .meta(openApiMutationMeta("landingPage", "duplicateVersion"))
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const [source] = await db
         .select()
         .from(landingPageVersions)
-        .where(eq(landingPageVersions.id, input.id));
+        .where(and(eq(landingPageVersions.id, input.id), eq(landingPageVersions.organizationId, ctx.organizationId)));
       if (!source) throw new Error("Version not found");
 
       const [latest] = await db
@@ -195,23 +200,24 @@ export const landingPageRouter = router({
           socialProofType: source.socialProofType,
           funnelPosition: source.funnelPosition,
           notes: source.notes,
+          organizationId: ctx.organizationId,
         })
         .returning();
       return duplicate;
     }),
 
-  listVersions: baseProcedure
+  listVersions: orgProcedure
     .meta(openApiQueryMeta("landingPage", "listVersions"))
     .input(z.object({ landingPageId: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       return db
         .select()
         .from(landingPageVersions)
-        .where(eq(landingPageVersions.landingPageId, input.landingPageId))
+        .where(and(eq(landingPageVersions.landingPageId, input.landingPageId), eq(landingPageVersions.organizationId, ctx.organizationId)))
         .orderBy(desc(landingPageVersions.version));
     }),
 
-  updateVersion: baseProcedure
+  updateVersion: orgProcedure
     .meta(openApiMutationMeta("landingPage", "updateVersion"))
     .input(
       z.object({
@@ -230,22 +236,22 @@ export const landingPageRouter = router({
         notes: z.string().nullable().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const { id, ...data } = input;
       const [version] = await db
         .update(landingPageVersions)
         .set(data)
-        .where(eq(landingPageVersions.id, id))
+        .where(and(eq(landingPageVersions.id, id), eq(landingPageVersions.organizationId, ctx.organizationId)))
         .returning();
       return version;
     }),
 
-  deleteVersion: baseProcedure
+  deleteVersion: orgProcedure
     .meta(openApiMutationMeta("landingPage", "deleteVersion"))
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       await db
         .delete(landingPageVersions)
-        .where(eq(landingPageVersions.id, input.id));
+        .where(and(eq(landingPageVersions.id, input.id), eq(landingPageVersions.organizationId, ctx.organizationId)));
     }),
 });

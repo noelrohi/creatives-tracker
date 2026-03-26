@@ -4,7 +4,7 @@ import { statusEnum } from "./enums";
 import { adSets } from "./ad-set";
 import { adCreatives } from "./ad-creative";
 import { landingPageVersions } from "./landing-page";
-import { accounts } from "./account";
+import { adAccounts } from "./account";
 
 export const ads = pgTable(
   "ad",
@@ -24,10 +24,11 @@ export const ads = pgTable(
       () => landingPageVersions.id,
       { onDelete: "set null" },
     ),
-    accountId: text("account_id").references(() => accounts.id, {
+    accountId: text("account_id").references(() => adAccounts.id, {
       onDelete: "set null",
     }),
     metaId: text("meta_id").unique(),
+    organizationId: text("organization_id"),
     status: statusEnum("status").notNull().default("active"),
     notes: text("notes"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -40,13 +41,14 @@ export const ads = pgTable(
     index("ad_ad_set_id_idx").on(table.adSetId),
     index("ad_creative_id_idx").on(table.adCreativeId),
     index("ad_lp_version_id_idx").on(table.landingPageVersionId),
+    index("ad_organization_id_idx").on(table.organizationId),
   ],
 );
 
 export const adRelations = relations(ads, ({ one }) => ({
-  account: one(accounts, {
+  account: one(adAccounts, {
     fields: [ads.accountId],
-    references: [accounts.id],
+    references: [adAccounts.id],
   }),
   adSet: one(adSets, {
     fields: [ads.adSetId],

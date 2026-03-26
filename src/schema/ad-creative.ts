@@ -23,6 +23,7 @@ export const adCreatives = pgTable(
       { onDelete: "set null" },
     ),
     notes: text("notes"),
+    organizationId: text("organization_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -33,6 +34,7 @@ export const adCreatives = pgTable(
     index("ad_creative_landing_page_id_idx").on(table.landingPageId),
     index("ad_creative_format_idx").on(table.format),
     index("ad_creative_awareness_level_idx").on(table.awarenessLevel),
+    index("ad_creative_organization_id_idx").on(table.organizationId),
   ],
 );
 

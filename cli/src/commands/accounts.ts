@@ -5,12 +5,12 @@ export function registerAccountsCommands(program: Command) {
   const accounts = program.command("accounts").description("Manage accounts");
 
   accounts.command("list").action(async (command) => {
-    await runCommand(command, (client) => client.account.list.query());
+    await runCommand(command, (client) => client.adAccount.list.query());
   });
 
   accounts.command("get <id>").action(async (id, command) => {
     await runCommand(command, (client) =>
-      client.account.getById.query({ id }),
+      client.adAccount.getById.query({ id }),
     );
   });
 
@@ -22,7 +22,7 @@ export function registerAccountsCommands(program: Command) {
     .option("--notes <notes>")
     .action(async (options, command) => {
       await runCommand(command, (client) =>
-        client.account.create.mutate({
+        client.adAccount.create.mutate({
           name: options.name,
           metaAccountId: options.metaAccountId,
           metaAccessToken: options.metaAccessToken,
@@ -39,7 +39,7 @@ export function registerAccountsCommands(program: Command) {
     .option("--notes <notes>")
     .action(async (id, options, command) => {
       await runCommand(command, (client) =>
-        client.account.update.mutate({
+        client.adAccount.update.mutate({
           id,
           ...compactObject({
             name: options.name,
@@ -53,7 +53,7 @@ export function registerAccountsCommands(program: Command) {
 
   accounts.command("delete <id>").action(async (id, command) => {
     await runCommand(command, async (client) => {
-      await client.account.delete.mutate({ id });
+      await client.adAccount.delete.mutate({ id });
       return { deleted: true, id };
     });
   });

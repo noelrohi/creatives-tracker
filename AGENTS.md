@@ -10,7 +10,7 @@ This file provides guidance to coding agents when working with code in this repo
 - **Lint:** `bun run lint` (ESLint)
 - **DB generate:** `bun run db:generate`
 - **DB migrate:** `bun run db:migrate`
-- **DB push:** `bun run db:push`
+- **DB push:** disabled by design. Generate a migration with `bun run db:generate`, then apply it with `bun run db:migrate`
 - **DB studio:** `bun run db:studio`
 
 ## Architecture

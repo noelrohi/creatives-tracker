@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { eq, desc, and, sql } from "drizzle-orm";
-import { router, baseProcedure } from "../init";
+import { router, orgProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { adSets } from "@/schema/ad-set";
@@ -8,7 +8,7 @@ import { campaigns } from "@/schema/campaign";
 import { ads } from "@/schema/ad";
 
 export const adSetRouter = router({
-  list: baseProcedure.meta(openApiQueryMeta("adSet", "list")).query(async () => {
+  list: orgProcedure.meta(openApiQueryMeta("adSet", "list")).query(async ({ ctx }) => {
     const rows = await db
       .select({
         id: adSets.id,
@@ -31,14 +31,15 @@ export const adSetRouter = router({
       })
       .from(adSets)
       .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
+      .where(eq(adSets.organizationId, ctx.organizationId))
       .orderBy(desc(adSets.createdAt));
     return rows;
   }),
 
-  listByCampaign: baseProcedure
+  listByCampaign: orgProcedure
     .meta(openApiQueryMeta("adSet", "listByCampaign"))
     .input(z.object({ campaignId: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const rows = await db
         .select({
           id: adSets.id,
@@ -51,15 +52,15 @@ export const adSetRouter = router({
           adCount: sql<number>`(SELECT count(*) FROM ad WHERE ad.ad_set_id = ${adSets.id})`.as("ad_count"),
         })
         .from(adSets)
-        .where(eq(adSets.campaignId, input.campaignId))
+        .where(and(eq(adSets.campaignId, input.campaignId), eq(adSets.organizationId, ctx.organizationId)))
         .orderBy(desc(adSets.createdAt));
       return rows;
     }),
 
-  getById: baseProcedure
+  getById: orgProcedure
     .meta(openApiQueryMeta("adSet", "getById"))
     .input(z.object({ id: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const [adSet] = await db
         .select({
           id: adSets.id,
@@ -81,12 +82,12 @@ export const adSetRouter = router({
         })
         .from(adSets)
         .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
-        .where(eq(adSets.id, input.id));
+        .where(and(eq(adSets.id, input.id), eq(adSets.organizationId, ctx.organizationId)));
       if (!adSet) throw new Error("Ad set not found");
       return adSet;
     }),
 
-  create: baseProcedure
+  create: orgProcedure
     .meta(openApiMutationMeta("adSet", "create"))
     .input(
       z.object({
@@ -103,7 +104,7 @@ export const adSetRouter = router({
         metaId: z.string().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const [adSet] = await db
         .insert(adSets)
         .values({
@@ -118,12 +119,13 @@ export const adSetRouter = router({
           demographics: input.demographics,
           scheduleStart: input.scheduleStart ? new Date(input.scheduleStart) : undefined,
           scheduleEnd: input.scheduleEnd ? new Date(input.scheduleEnd) : undefined,
+          organizationId: ctx.organizationId,
         })
         .returning();
       return adSet;
     }),
 
-  update: baseProcedure
+  update: orgProcedure
     .meta(openApiMutationMeta("adSet", "update"))
     .input(
       z.object({
@@ -143,7 +145,7 @@ export const adSetRouter = router({
         notes: z.string().nullable().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const { id, scheduleStart, scheduleEnd, ...rest } = input;
       const data: Record<string, unknown> = { ...rest };
       if (scheduleStart !== undefined) {
@@ -155,19 +157,19 @@ export const adSetRouter = router({
       const [adSet] = await db
         .update(adSets)
         .set(data)
-        .where(eq(adSets.id, id))
+        .where(and(eq(adSets.id, id), eq(adSets.organizationId, ctx.organizationId)))
         .returning();
       return adSet;
     }),
 
-  duplicate: baseProcedure
+  duplicate: orgProcedure
     .meta(openApiMutationMeta("adSet", "duplicate"))
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const [source] = await db
         .select()
         .from(adSets)
-        .where(eq(adSets.id, input.id));
+        .where(and(eq(adSets.id, input.id), eq(adSets.organizationId, ctx.organizationId)));
       if (!source) throw new Error("Ad set not found");
       const [duplicate] = await db
         .insert(adSets)
@@ -184,12 +186,13 @@ export const adSetRouter = router({
           scheduleEnd: source.scheduleEnd,
           status: source.status,
           notes: source.notes,
+          organizationId: ctx.organizationId,
         })
         .returning();
       return duplicate;
     }),
 
-  bulkImport: baseProcedure
+  bulkImport: orgProcedure
     .meta(openApiMutationMeta("adSet", "bulkImport"))
     .input(
       z.object({
@@ -203,7 +206,7 @@ export const adSetRouter = router({
         ),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const results: { id: string; name: string }[] = [];
       for (const row of input.rows) {
         const [existing] = await db
@@ -213,6 +216,7 @@ export const adSetRouter = router({
             and(
               eq(adSets.name, row.name),
               eq(adSets.campaignId, input.campaignId),
+              eq(adSets.organizationId, ctx.organizationId),
             ),
           );
         if (existing) {
@@ -226,6 +230,7 @@ export const adSetRouter = router({
             campaignId: input.campaignId,
             dailyBudget: row.dailyBudget,
             costCap: row.costCap,
+            organizationId: ctx.organizationId,
           })
           .returning();
         results.push({ id: adSet.id, name: adSet.name });
@@ -233,12 +238,12 @@ export const adSetRouter = router({
       return results;
     }),
 
-  delete: baseProcedure
+  delete: orgProcedure
     .meta(openApiMutationMeta("adSet", "delete"))
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       await db
         .delete(adSets)
-        .where(eq(adSets.id, input.id));
+        .where(and(eq(adSets.id, input.id), eq(adSets.organizationId, ctx.organizationId)));
     }),
 });

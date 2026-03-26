@@ -63,9 +63,13 @@ export const performanceLogs = pgTable(
     // Date range
     dateStart: date("date_start").notNull(),
     dateEnd: date("date_end").notNull(),
+    organizationId: text("organization_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  (table) => [index("performance_log_ad_id_idx").on(table.adId)],
+  (table) => [
+    index("performance_log_ad_id_idx").on(table.adId),
+    index("performance_log_organization_id_idx").on(table.organizationId),
+  ],
 );
 
 export const performanceLogRelations = relations(performanceLogs, ({ one }) => ({

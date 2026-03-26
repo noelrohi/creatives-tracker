@@ -16,6 +16,7 @@ async function main() {
     .name("adsolute")
     .description("Typed CLI for the Adsolute tRPC API")
     .option("--url <url>", "API base URL, defaults to ADSOLUTE_API_URL or http://localhost:3000")
+    .option("--api-key <key>", "Organization API key, defaults to ADSOLUTE_API_KEY")
     .option("--table", "Render output in a table when possible")
     .showHelpAfterError();
 

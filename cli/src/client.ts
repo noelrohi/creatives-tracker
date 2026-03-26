@@ -8,6 +8,7 @@ const DEFAULT_API_URL = "http://localhost:3000";
 export type CliClient = ReturnType<typeof createApiClient>;
 
 type GlobalOptions = {
+  apiKey?: string;
   table?: boolean;
   url?: string;
 };
@@ -21,12 +22,22 @@ export function resolveApiUrl(command: Command) {
   return options.url ?? process.env.ADSOLUTE_API_URL ?? DEFAULT_API_URL;
 }
 
-export function createApiClient(baseUrl: string) {
+export function resolveApiKey(command: Command) {
+  const options = getGlobalOptions(command);
+  return options.apiKey ?? process.env.ADSOLUTE_API_KEY ?? undefined;
+}
+
+export function createApiClient(baseUrl: string, apiKey?: string) {
   return createTRPCClient<AppRouter>({
     links: [
       httpBatchLink({
         url: `${baseUrl.replace(/\/$/, "")}/api/trpc`,
         transformer: superjson,
+        headers: apiKey
+          ? {
+              authorization: `Bearer ${apiKey}`,
+            }
+          : undefined,
       }),
     ],
   });

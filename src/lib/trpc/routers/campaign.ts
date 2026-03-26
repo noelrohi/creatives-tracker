@@ -1,45 +1,52 @@
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
-import { router, baseProcedure } from "../init";
+import { eq, and, desc } from "drizzle-orm";
+import { router, orgProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { campaigns } from "@/schema/campaign";
 
 export const campaignRouter = router({
-  list: baseProcedure.meta(openApiQueryMeta("campaign", "list")).query(async () => {
+  list: orgProcedure.meta(openApiQueryMeta("campaign", "list")).query(async ({ ctx }) => {
     return db
       .select()
       .from(campaigns)
+      .where(eq(campaigns.organizationId, ctx.organizationId))
       .orderBy(desc(campaigns.createdAt));
   }),
 
-  getById: baseProcedure
+  getById: orgProcedure
     .meta(openApiQueryMeta("campaign", "getById"))
     .input(z.object({ id: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const [campaign] = await db
         .select()
         .from(campaigns)
-        .where(eq(campaigns.id, input.id));
+        .where(
+          and(
+            eq(campaigns.id, input.id),
+            eq(campaigns.organizationId, ctx.organizationId),
+          ),
+        );
       if (!campaign) throw new Error("Campaign not found");
       return campaign;
     }),
 
-  create: baseProcedure
+  create: orgProcedure
     .meta(openApiMutationMeta("campaign", "create"))
     .input(z.object({ name: z.string().optional(), metaId: z.string().optional() }).optional())
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const [campaign] = await db
         .insert(campaigns)
         .values({
           name: input?.name ?? "Untitled Campaign",
           metaId: input?.metaId,
+          organizationId: ctx.organizationId,
         })
         .returning();
       return campaign;
     }),
 
-  update: baseProcedure
+  update: orgProcedure
     .meta(openApiMutationMeta("campaign", "update"))
     .input(
       z.object({
@@ -54,24 +61,34 @@ export const campaignRouter = router({
         notes: z.string().nullable().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const { id, ...data } = input;
       const [campaign] = await db
         .update(campaigns)
         .set(data)
-        .where(eq(campaigns.id, id))
+        .where(
+          and(
+            eq(campaigns.id, id),
+            eq(campaigns.organizationId, ctx.organizationId),
+          ),
+        )
         .returning();
       return campaign;
     }),
 
-  duplicate: baseProcedure
+  duplicate: orgProcedure
     .meta(openApiMutationMeta("campaign", "duplicate"))
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const [source] = await db
         .select()
         .from(campaigns)
-        .where(eq(campaigns.id, input.id));
+        .where(
+          and(
+            eq(campaigns.id, input.id),
+            eq(campaigns.organizationId, ctx.organizationId),
+          ),
+        );
       if (!source) throw new Error("Campaign not found");
       const [duplicate] = await db
         .insert(campaigns)
@@ -80,12 +97,13 @@ export const campaignRouter = router({
           objective: source.objective,
           status: source.status,
           notes: source.notes,
+          organizationId: ctx.organizationId,
         })
         .returning();
       return duplicate;
     }),
 
-  bulkImport: baseProcedure
+  bulkImport: orgProcedure
     .meta(openApiMutationMeta("campaign", "bulkImport"))
     .input(
       z.object({
@@ -96,14 +114,18 @@ export const campaignRouter = router({
         ),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const results: { id: string; name: string }[] = [];
       for (const row of input.rows) {
-        // Skip if campaign with same name already exists
         const [existing] = await db
           .select({ id: campaigns.id })
           .from(campaigns)
-          .where(eq(campaigns.name, row.name));
+          .where(
+            and(
+              eq(campaigns.name, row.name),
+              eq(campaigns.organizationId, ctx.organizationId),
+            ),
+          );
         if (existing) {
           results.push({ id: existing.id, name: row.name });
           continue;
@@ -112,6 +134,7 @@ export const campaignRouter = router({
           .insert(campaigns)
           .values({
             name: row.name,
+            organizationId: ctx.organizationId,
           })
           .returning();
         results.push({ id: campaign.id, name: campaign.name });
@@ -119,12 +142,17 @@ export const campaignRouter = router({
       return results;
     }),
 
-  delete: baseProcedure
+  delete: orgProcedure
     .meta(openApiMutationMeta("campaign", "delete"))
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       await db
         .delete(campaigns)
-        .where(eq(campaigns.id, input.id));
+        .where(
+          and(
+            eq(campaigns.id, input.id),
+            eq(campaigns.organizationId, ctx.organizationId),
+          ),
+        );
     }),
 });

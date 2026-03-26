@@ -1,32 +1,71 @@
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
-import { router, baseProcedure } from "../init";
+import { eq, and, desc } from "drizzle-orm";
+import { router, orgProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
-import { accounts } from "@/schema/account";
+import { adAccounts } from "@/schema/account";
 
-export const accountRouter = router({
-  list: baseProcedure.meta(openApiQueryMeta("account", "list")).query(async () => {
-    return db
+const publicAdAccountSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  metaAccountId: z.string(),
+  notes: z.string().nullable(),
+  lastImportedAt: z.date().nullable(),
+  dataDateEnd: z.string().nullable(),
+  organizationId: z.string().nullable(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+  hasMetaAccessToken: z.boolean(),
+});
+
+function sanitizeAccount(account: typeof adAccounts.$inferSelect) {
+  return publicAdAccountSchema.parse({
+    id: account.id,
+    name: account.name,
+    metaAccountId: account.metaAccountId,
+    notes: account.notes,
+    lastImportedAt: account.lastImportedAt,
+    dataDateEnd: account.dataDateEnd,
+    organizationId: account.organizationId,
+    createdAt: account.createdAt,
+    updatedAt: account.updatedAt,
+    hasMetaAccessToken: Boolean(account.metaAccessToken),
+  });
+}
+
+export const adAccountRouter = router({
+  list: orgProcedure
+    .meta(openApiQueryMeta("adAccount", "list"))
+    .output(z.array(publicAdAccountSchema))
+    .query(async ({ ctx }) => {
+      const accounts = await db
       .select()
-      .from(accounts)
-      .orderBy(desc(accounts.createdAt));
-  }),
-
-  getById: baseProcedure
-    .meta(openApiQueryMeta("account", "getById"))
-    .input(z.object({ id: z.string() }))
-    .query(async ({ input }) => {
-      const [account] = await db
-        .select()
-        .from(accounts)
-        .where(eq(accounts.id, input.id));
-      if (!account) throw new Error("Account not found");
-      return account;
+      .from(adAccounts)
+      .where(eq(adAccounts.organizationId, ctx.organizationId))
+      .orderBy(desc(adAccounts.createdAt));
+      return accounts.map(sanitizeAccount);
     }),
 
-  create: baseProcedure
-    .meta(openApiMutationMeta("account", "create"))
+  getById: orgProcedure
+    .meta(openApiQueryMeta("adAccount", "getById"))
+    .input(z.object({ id: z.string() }))
+    .output(publicAdAccountSchema)
+    .query(async ({ input, ctx }) => {
+      const [account] = await db
+        .select()
+        .from(adAccounts)
+        .where(
+          and(
+            eq(adAccounts.id, input.id),
+            eq(adAccounts.organizationId, ctx.organizationId),
+          ),
+        );
+      if (!account) throw new Error("Account not found");
+      return sanitizeAccount(account);
+    }),
+
+  create: orgProcedure
+    .meta(openApiMutationMeta("adAccount", "create"))
     .input(
       z.object({
         name: z.string().min(1),
@@ -35,16 +74,17 @@ export const accountRouter = router({
         notes: z.string().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .output(publicAdAccountSchema)
+    .mutation(async ({ input, ctx }) => {
       const [account] = await db
-        .insert(accounts)
-        .values(input)
+        .insert(adAccounts)
+        .values({ ...input, organizationId: ctx.organizationId })
         .returning();
-      return account;
+      return sanitizeAccount(account);
     }),
 
-  update: baseProcedure
-    .meta(openApiMutationMeta("account", "update"))
+  update: orgProcedure
+    .meta(openApiMutationMeta("adAccount", "update"))
     .input(
       z.object({
         id: z.string(),
@@ -54,20 +94,33 @@ export const accountRouter = router({
         notes: z.string().nullable().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .output(publicAdAccountSchema)
+    .mutation(async ({ input, ctx }) => {
       const { id, ...data } = input;
       const [account] = await db
-        .update(accounts)
+        .update(adAccounts)
         .set(data)
-        .where(eq(accounts.id, id))
+        .where(
+          and(
+            eq(adAccounts.id, id),
+            eq(adAccounts.organizationId, ctx.organizationId),
+          ),
+        )
         .returning();
-      return account;
+      return sanitizeAccount(account);
     }),
 
-  delete: baseProcedure
-    .meta(openApiMutationMeta("account", "delete"))
+  delete: orgProcedure
+    .meta(openApiMutationMeta("adAccount", "delete"))
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
-      await db.delete(accounts).where(eq(accounts.id, input.id));
+    .mutation(async ({ input, ctx }) => {
+      await db
+        .delete(adAccounts)
+        .where(
+          and(
+            eq(adAccounts.id, input.id),
+            eq(adAccounts.organizationId, ctx.organizationId),
+          ),
+        );
     }),
 });

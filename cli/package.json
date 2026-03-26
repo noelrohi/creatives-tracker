@@ -7,7 +7,7 @@
     "adsolute": "./dist/index.js"
   },
   "scripts": {
-    "build": "bun build ./src/index.ts --target=node --format=esm --outdir ./dist",
+    "build": "rm -rf ./dist && bun build ./src/index.ts --target=node --format=esm --outdir ./dist",
     "dev": "tsx src/index.ts"
   },
   "dependencies": {

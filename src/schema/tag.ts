@@ -17,9 +17,13 @@ export const tags = pgTable(
       .$defaultFn(() => crypto.randomUUID()),
     name: text("name").notNull(),
     color: text("color"),
+    organizationId: text("organization_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  (table) => [unique("tag_name_unique").on(table.name)],
+  (table) => [
+    unique("tag_name_org_unique").on(table.name, table.organizationId),
+    index("tag_organization_id_idx").on(table.organizationId),
+  ],
 );
 
 export const entityTags = pgTable(
@@ -33,11 +37,13 @@ export const entityTags = pgTable(
     tagId: text("tag_id")
       .notNull()
       .references(() => tags.id, { onDelete: "cascade" }),
+    organizationId: text("organization_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
     index("entity_tag_entity_idx").on(table.entityType, table.entityId),
     index("entity_tag_tag_id_idx").on(table.tagId),
+    index("entity_tag_organization_id_idx").on(table.organizationId),
     unique("entity_tag_unique").on(table.entityType, table.entityId, table.tagId),
   ],
 );

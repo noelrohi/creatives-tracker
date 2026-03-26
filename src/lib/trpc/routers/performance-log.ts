@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
-import { router, baseProcedure } from "../init";
+import { eq, and, desc } from "drizzle-orm";
+import { router, orgProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { performanceLogs } from "@/schema/performance-log";
@@ -38,27 +38,28 @@ const perfFieldsNullable = {
 };
 
 export const performanceLogRouter = router({
-  listAll: baseProcedure
+  listAll: orgProcedure
     .meta(openApiQueryMeta("performanceLog", "listAll"))
-    .query(async () => {
+    .query(async ({ ctx }) => {
     return db
       .select()
       .from(performanceLogs)
+      .where(eq(performanceLogs.organizationId, ctx.organizationId))
       .orderBy(desc(performanceLogs.dateStart));
   }),
 
-  listByAd: baseProcedure
+  listByAd: orgProcedure
     .meta(openApiQueryMeta("performanceLog", "listByAd"))
     .input(z.object({ adId: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       return db
         .select()
         .from(performanceLogs)
-        .where(eq(performanceLogs.adId, input.adId))
+        .where(and(eq(performanceLogs.adId, input.adId), eq(performanceLogs.organizationId, ctx.organizationId)))
         .orderBy(desc(performanceLogs.dateStart));
     }),
 
-  create: baseProcedure
+  create: orgProcedure
     .meta(openApiMutationMeta("performanceLog", "create"))
     .input(
       z.object({
@@ -68,15 +69,15 @@ export const performanceLogRouter = router({
         ...perfFields,
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const [log] = await db
         .insert(performanceLogs)
-        .values(input)
+        .values({ ...input, organizationId: ctx.organizationId })
         .returning();
       return log;
     }),
 
-  bulkCreate: baseProcedure
+  bulkCreate: orgProcedure
     .meta(openApiMutationMeta("performanceLog", "bulkCreate"))
     .input(
       z.object({
@@ -90,16 +91,17 @@ export const performanceLogRouter = router({
         ),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       if (input.rows.length === 0) return [];
       const values = input.rows.map((row) => ({
         ...row,
         adId: input.adId,
+        organizationId: ctx.organizationId,
       }));
       return db.insert(performanceLogs).values(values).returning();
     }),
 
-  update: baseProcedure
+  update: orgProcedure
     .meta(openApiMutationMeta("performanceLog", "update"))
     .input(
       z.object({
@@ -109,22 +111,22 @@ export const performanceLogRouter = router({
         ...perfFieldsNullable,
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const { id, ...data } = input;
       const [log] = await db
         .update(performanceLogs)
         .set(data)
-        .where(eq(performanceLogs.id, id))
+        .where(and(eq(performanceLogs.id, id), eq(performanceLogs.organizationId, ctx.organizationId)))
         .returning();
       return log;
     }),
 
-  delete: baseProcedure
+  delete: orgProcedure
     .meta(openApiMutationMeta("performanceLog", "delete"))
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       await db
         .delete(performanceLogs)
-        .where(eq(performanceLogs.id, input.id));
+        .where(and(eq(performanceLogs.id, input.id), eq(performanceLogs.organizationId, ctx.organizationId)));
     }),
 });

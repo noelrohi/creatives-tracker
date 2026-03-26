@@ -1,16 +1,17 @@
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
-import { router, baseProcedure } from "../init";
+import { eq, and, desc } from "drizzle-orm";
+import { router, orgProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { abTests, abTestVariants } from "@/schema/ab-test";
 import { ads } from "@/schema/ad";
 
 export const abTestRouter = router({
-  list: baseProcedure.meta(openApiQueryMeta("abTest", "list")).query(async () => {
+  list: orgProcedure.meta(openApiQueryMeta("abTest", "list")).query(async ({ ctx }) => {
     const tests = await db
       .select()
       .from(abTests)
+      .where(eq(abTests.organizationId, ctx.organizationId))
       .orderBy(desc(abTests.createdAt));
 
     // Fetch variant counts
@@ -27,14 +28,14 @@ export const abTestRouter = router({
     return testsWithCounts;
   }),
 
-  getById: baseProcedure
+  getById: orgProcedure
     .meta(openApiQueryMeta("abTest", "getById"))
     .input(z.object({ id: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const [test] = await db
         .select()
         .from(abTests)
-        .where(eq(abTests.id, input.id));
+        .where(and(eq(abTests.id, input.id), eq(abTests.organizationId, ctx.organizationId)));
       if (!test) throw new Error("A/B test not found");
 
       const variants = await db
@@ -52,7 +53,7 @@ export const abTestRouter = router({
       return { ...test, variants };
     }),
 
-  create: baseProcedure
+  create: orgProcedure
     .meta(openApiMutationMeta("abTest", "create"))
     .input(
       z
@@ -62,18 +63,19 @@ export const abTestRouter = router({
         })
         .optional(),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const [test] = await db
         .insert(abTests)
         .values({
           name: input?.name || "Untitled Test",
           hypothesis: input?.hypothesis,
+          organizationId: ctx.organizationId,
         })
         .returning();
       return test;
     }),
 
-  update: baseProcedure
+  update: orgProcedure
     .meta(openApiMutationMeta("abTest", "update"))
     .input(
       z.object({
@@ -84,26 +86,26 @@ export const abTestRouter = router({
         winnerVariantId: z.string().nullable().optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const { id, ...data } = input;
       const [test] = await db
         .update(abTests)
         .set(data)
-        .where(eq(abTests.id, id))
+        .where(and(eq(abTests.id, id), eq(abTests.organizationId, ctx.organizationId)))
         .returning();
       return test;
     }),
 
-  delete: baseProcedure
+  delete: orgProcedure
     .meta(openApiMutationMeta("abTest", "delete"))
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       await db
         .delete(abTests)
-        .where(eq(abTests.id, input.id));
+        .where(and(eq(abTests.id, input.id), eq(abTests.organizationId, ctx.organizationId)));
     }),
 
-  addVariant: baseProcedure
+  addVariant: orgProcedure
     .meta(openApiMutationMeta("abTest", "addVariant"))
     .input(
       z.object({
@@ -112,24 +114,25 @@ export const abTestRouter = router({
         label: z.string().min(1),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const [variant] = await db
         .insert(abTestVariants)
         .values({
           abTestId: input.abTestId,
           adId: input.adId,
           label: input.label,
+          organizationId: ctx.organizationId,
         })
         .returning();
       return variant;
     }),
 
-  removeVariant: baseProcedure
+  removeVariant: orgProcedure
     .meta(openApiMutationMeta("abTest", "removeVariant"))
     .input(z.object({ id: z.string() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       await db
         .delete(abTestVariants)
-        .where(eq(abTestVariants.id, input.id));
+        .where(and(eq(abTestVariants.id, input.id), eq(abTestVariants.organizationId, ctx.organizationId)));
     }),
 });

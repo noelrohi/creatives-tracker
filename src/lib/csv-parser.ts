@@ -332,6 +332,8 @@ export function isMetaReport(headers: string[]): boolean {
 
 export interface MappedRow {
   name?: string;
+  assetUrl?: string;
+  format?: "static" | "video" | "ugc" | "carousel";
   parentName?: string;
   campaignName?: string;
   adSetName?: string;
