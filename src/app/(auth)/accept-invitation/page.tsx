@@ -1,10 +1,11 @@
 "use client";
 
-import { Suspense, useState, useEffect } from "react";
+import { Suspense, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { toast } from "sonner";
 import { authClient } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,8 +32,7 @@ function AcceptInvitationContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const invitationId = searchParams.get("invitationId");
-
-  const [serverError, setServerError] = useState("");
+  const hasShownMissingInvitationToast = useRef(false);
   const { data: session } = authClient.useSession();
 
   const form = useForm<AcceptValues>({
@@ -41,8 +41,9 @@ function AcceptInvitationContent() {
   });
 
   useEffect(() => {
-    if (!invitationId) {
-      setServerError(
+    if (!invitationId && !hasShownMissingInvitationToast.current) {
+      hasShownMissingInvitationToast.current = true;
+      toast.error(
         "No invitation found. Please use the link from your invitation email.",
       );
     }
@@ -50,7 +51,6 @@ function AcceptInvitationContent() {
 
   async function onSubmit(data: AcceptValues) {
     if (!invitationId) return;
-    setServerError("");
 
     if (!session) {
       const { error: signUpError } = await authClient.signUp.email({
@@ -60,7 +60,7 @@ function AcceptInvitationContent() {
       });
 
       if (signUpError) {
-        setServerError(signUpError.message ?? "Sign up failed");
+        toast.error(signUpError.message ?? "Sign up failed");
         return;
       }
     }
@@ -69,7 +69,7 @@ function AcceptInvitationContent() {
       await authClient.organization.acceptInvitation({ invitationId });
 
     if (acceptError) {
-      setServerError(acceptError.message ?? "Failed to accept invitation");
+      toast.error(acceptError.message ?? "Failed to accept invitation");
       return;
     }
 
@@ -80,13 +80,12 @@ function AcceptInvitationContent() {
   async function handleAcceptOnly(e: React.FormEvent) {
     e.preventDefault();
     if (!invitationId) return;
-    setServerError("");
 
     const { error: acceptError } =
       await authClient.organization.acceptInvitation({ invitationId });
 
     if (acceptError) {
-      setServerError(acceptError.message ?? "Failed to accept invitation");
+      toast.error(acceptError.message ?? "Failed to accept invitation");
       return;
     }
 
@@ -129,9 +128,6 @@ function AcceptInvitationContent() {
         </div>
 
         <form onSubmit={handleAcceptOnly}>
-          {serverError && (
-            <p className="mb-4 text-sm text-destructive">{serverError}</p>
-          )}
           <Button type="submit" size="lg" className="w-full">
             Accept invitation
           </Button>
@@ -215,10 +211,6 @@ function AcceptInvitationContent() {
             </Field>
           )}
         />
-
-        {serverError && (
-          <p className="text-sm text-destructive">{serverError}</p>
-        )}
 
         <Button
           type="submit"

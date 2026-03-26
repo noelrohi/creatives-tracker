@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { toast } from "sonner";
 import { authClient } from "@/lib/auth-client";
 import { activateFirstOrganization } from "@/lib/organization-client";
 import { Button } from "@/components/ui/button";
@@ -22,7 +22,6 @@ type SignInValues = z.infer<typeof signInSchema>;
 
 export default function SignInPage() {
   const router = useRouter();
-  const [serverError, setServerError] = useState("");
 
   const form = useForm<SignInValues>({
     resolver: zodResolver(signInSchema),
@@ -30,15 +29,13 @@ export default function SignInPage() {
   });
 
   async function onSubmit(data: SignInValues) {
-    setServerError("");
-
     const { error } = await authClient.signIn.email({
       email: data.email,
       password: data.password,
     });
 
     if (error) {
-      setServerError(error.message ?? "Sign in failed");
+      toast.error(error.message ?? "Sign in failed");
       return;
     }
 
@@ -51,7 +48,7 @@ export default function SignInPage() {
         return;
       }
     } catch (activeOrgError) {
-      setServerError(
+      toast.error(
         activeOrgError instanceof Error
           ? activeOrgError.message
           : "Failed to load organization",
@@ -117,10 +114,6 @@ export default function SignInPage() {
             </Field>
           )}
         />
-
-        {serverError && (
-          <p className="text-sm text-destructive">{serverError}</p>
-        )}
 
         <Button
           type="submit"

@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { toast } from "sonner";
 import { authClient } from "@/lib/auth-client";
 import { createOrganizationWithUniqueSlug } from "@/lib/organization-client";
 import { Button } from "@/components/ui/button";
@@ -29,7 +29,6 @@ type SignUpValues = z.infer<typeof signUpSchema>;
 
 export default function SignUpPage() {
   const router = useRouter();
-  const [serverError, setServerError] = useState("");
 
   const form = useForm<SignUpValues>({
     resolver: zodResolver(signUpSchema),
@@ -37,8 +36,6 @@ export default function SignUpPage() {
   });
 
   async function onSubmit(data: SignUpValues) {
-    setServerError("");
-
     const { error: signUpError } = await authClient.signUp.email({
       name: data.name,
       email: data.email,
@@ -46,7 +43,7 @@ export default function SignUpPage() {
     });
 
     if (signUpError) {
-      setServerError(signUpError.message ?? "Sign up failed");
+      toast.error(signUpError.message ?? "Sign up failed");
       return;
     }
 
@@ -60,13 +57,11 @@ export default function SignUpPage() {
         });
 
       if (activeOrgError) {
-        setServerError(
-          activeOrgError.message ?? "Failed to activate organization",
-        );
+        toast.error(activeOrgError.message ?? "Failed to activate organization");
         return;
       }
     } catch (error) {
-      setServerError(
+      toast.error(
         error instanceof Error
           ? `${error.message}. Your account was created. Finish setup by creating an organization.`
           : "Your account was created. Finish setup by creating an organization.",
@@ -181,10 +176,6 @@ export default function SignUpPage() {
             </Field>
           )}
         />
-
-        {serverError && (
-          <p className="text-sm text-destructive">{serverError}</p>
-        )}
 
         <Button
           type="submit"
