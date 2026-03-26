@@ -230,6 +230,9 @@ export const metaInsightsRouter = router({
             if (preview.assetUrl) {
               row.assetUrl = preview.assetUrl;
             }
+            if (preview.videoUrl) {
+              row.videoUrl = preview.videoUrl;
+            }
             if (preview.format) {
               row.format = preview.format;
             }

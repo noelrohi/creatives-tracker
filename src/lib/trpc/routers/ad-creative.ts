@@ -66,6 +66,7 @@ export const adCreativeRouter = router({
           id: adCreatives.id,
           name: adCreatives.name,
           assetUrl: adCreatives.assetUrl,
+          videoUrl: adCreatives.videoUrl,
           format: adCreatives.format,
           angle: adCreatives.angle,
           persona: adCreatives.persona,
@@ -304,6 +305,7 @@ export const adCreativeRouter = router({
           id: adCreatives.id,
           name: adCreatives.name,
           assetUrl: adCreatives.assetUrl,
+          videoUrl: adCreatives.videoUrl,
           format: adCreatives.format,
           angle: adCreatives.angle,
           persona: adCreatives.persona,
@@ -383,6 +385,7 @@ export const adCreativeRouter = router({
         .values({
           name: `Copy of ${source.name}`,
           assetUrl: source.assetUrl,
+          videoUrl: source.videoUrl,
           format: source.format,
           angle: source.angle,
           persona: source.persona,
@@ -406,46 +409,47 @@ export const adCreativeRouter = router({
         rows: z.array(
           z.object({
             name: z.string(),
-          assetUrl: z.string().optional(),
-          format: z.enum(["static", "video", "ugc", "carousel"]).optional(),
-          roas: z.string().optional(),
-          cpa: z.string().optional(),
-          ctr: z.string().optional(),
-          conversionRate: z.string().optional(),
-          spend: z.string().optional(),
-          conversions: z.number().int().optional(),
-          impressions: z.number().int().optional(),
-          reach: z.number().int().optional(),
-          frequency: z.string().optional(),
-          cpm: z.string().optional(),
-          qualityRanking: z.string().optional(),
-          engagementRateRanking: z.string().optional(),
-          conversionRateRanking: z.string().optional(),
-          linkClicks: z.number().int().optional(),
-          clicksAll: z.number().int().optional(),
-          cpc: z.string().optional(),
-          ctrLinkClick: z.string().optional(),
-          landingPageViews: z.number().int().optional(),
-          costPerLpv: z.string().optional(),
-          purchaseValue: z.string().optional(),
-          addToCart: z.number().int().optional(),
-          initiateCheckout: z.number().int().optional(),
-          costPerAddToCart: z.string().optional(),
-          videoViews3s: z.number().int().optional(),
-          videoThruplay: z.number().int().optional(),
-          videoAvgWatchTime: z.string().optional(),
-          country: z.string().optional(),
-          platform: z.string().optional(),
-          placement: z.string().optional(),
-          device: z.string().optional(),
-          age: z.string().optional(),
-          gender: z.string().optional(),
-          delivery: z.string().optional(),
-          adId: z.string().optional(),
-          campaignName: z.string().optional(),
-          campaignId: z.string().optional(),
-          adSetName: z.string().optional(),
-          adSetId: z.string().optional(),
+            assetUrl: z.string().optional(),
+            videoUrl: z.string().optional(),
+            format: z.enum(["static", "video", "ugc", "carousel"]).optional(),
+            roas: z.string().optional(),
+            cpa: z.string().optional(),
+            ctr: z.string().optional(),
+            conversionRate: z.string().optional(),
+            spend: z.string().optional(),
+            conversions: z.number().int().optional(),
+            impressions: z.number().int().optional(),
+            reach: z.number().int().optional(),
+            frequency: z.string().optional(),
+            cpm: z.string().optional(),
+            qualityRanking: z.string().optional(),
+            engagementRateRanking: z.string().optional(),
+            conversionRateRanking: z.string().optional(),
+            linkClicks: z.number().int().optional(),
+            clicksAll: z.number().int().optional(),
+            cpc: z.string().optional(),
+            ctrLinkClick: z.string().optional(),
+            landingPageViews: z.number().int().optional(),
+            costPerLpv: z.string().optional(),
+            purchaseValue: z.string().optional(),
+            addToCart: z.number().int().optional(),
+            initiateCheckout: z.number().int().optional(),
+            costPerAddToCart: z.string().optional(),
+            videoViews3s: z.number().int().optional(),
+            videoThruplay: z.number().int().optional(),
+            videoAvgWatchTime: z.string().optional(),
+            country: z.string().optional(),
+            platform: z.string().optional(),
+            placement: z.string().optional(),
+            device: z.string().optional(),
+            age: z.string().optional(),
+            gender: z.string().optional(),
+            delivery: z.string().optional(),
+            adId: z.string().optional(),
+            campaignName: z.string().optional(),
+            campaignId: z.string().optional(),
+            adSetName: z.string().optional(),
+            adSetId: z.string().optional(),
             dateStart: z.string(),
             dateEnd: z.string(),
           }),
@@ -729,13 +733,15 @@ export const adCreativeRouter = router({
       const importedCreativeNames = [...new Set([...adInfoMap.values()].map((ad) => ad.name))];
       const importedCreativeMetaByName = new Map<string, {
         assetUrl?: string;
+        videoUrl?: string;
         format?: "static" | "video" | "ugc" | "carousel";
       }>();
       for (const row of input.rows) {
-        if (!row.assetUrl && !row.format) continue;
+        if (!row.assetUrl && !row.videoUrl && !row.format) continue;
         const existing = importedCreativeMetaByName.get(row.name);
         importedCreativeMetaByName.set(row.name, {
           assetUrl: existing?.assetUrl ?? row.assetUrl,
+          videoUrl: existing?.videoUrl ?? row.videoUrl,
           format: existing?.format ?? row.format,
         });
       }
@@ -775,6 +781,7 @@ export const adCreativeRouter = router({
               name,
               organizationId: ctx.organizationId,
               assetUrl: importedCreativeMetaByName.get(name)?.assetUrl,
+              videoUrl: importedCreativeMetaByName.get(name)?.videoUrl,
               format: importedCreativeMetaByName.get(name)?.format,
             })),
           ).returning({ id: adCreatives.id, name: adCreatives.name });
@@ -787,16 +794,17 @@ export const adCreativeRouter = router({
 
       for (const [name, creativeId] of creativeIdByName) {
         const meta = importedCreativeMetaByName.get(name);
-        if (!meta?.assetUrl && !meta?.format) continue;
+        if (!meta?.assetUrl && !meta?.videoUrl && !meta?.format) continue;
 
         await db.update(adCreatives).set({
           ...(meta.assetUrl ? { assetUrl: meta.assetUrl } : {}),
+          ...(meta.videoUrl ? { videoUrl: meta.videoUrl } : {}),
           ...(meta.format ? { format: meta.format } : {}),
         }).where(
           and(
             eq(adCreatives.id, creativeId),
             eq(adCreatives.organizationId, ctx.organizationId),
-            sql`(${adCreatives.assetUrl} IS NULL OR ${adCreatives.format} IS NULL)`,
+            sql`(${adCreatives.assetUrl} IS NULL OR ${adCreatives.videoUrl} IS NULL OR ${adCreatives.format} IS NULL)`,
           ),
         );
       }

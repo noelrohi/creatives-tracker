@@ -11,6 +11,7 @@ export const adCreatives = pgTable(
       .$defaultFn(() => crypto.randomUUID()),
     name: text("name").notNull().default("Untitled Creative"),
     assetUrl: text("asset_url"),
+    videoUrl: text("video_url"),
     format: formatEnum("format"),
     angle: text("angle"),
     persona: text("persona"),

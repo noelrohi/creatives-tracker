@@ -54,6 +54,10 @@ import {
   type CreativeFormValues,
 } from "@/lib/creative-form";
 
+function isVideoFileUrl(value: string | null | undefined) {
+  return Boolean(value?.match(/\.(mp4|webm|mov)(\?|$)/i));
+}
+
 export default function CreativeDetailPage() {
   const trpc = useTRPC();
   const params = useParams();
@@ -110,6 +114,9 @@ export default function CreativeDetailPage() {
 
   const assetUrl = useWatch({ control: form.control, name: "assetUrl" });
   const format = useWatch({ control: form.control, name: "format" });
+  const playableVideoUrl = isVideoFileUrl(assetUrl)
+    ? assetUrl
+    : creative.data?.videoUrl ?? null;
 
   if (creative.isLoading) {
     return (
@@ -213,8 +220,17 @@ export default function CreativeDetailPage() {
 
       {/* Asset preview */}
       <div className="overflow-hidden rounded-lg border border-border/40 bg-muted/20 mb-5">
-        {assetUrl ? (
-          assetUrl.match(/\.(mp4|webm|mov)(\?|$)/i) ? (
+        {playableVideoUrl ? (
+          <video
+            src={playableVideoUrl}
+            poster={assetUrl && assetUrl !== playableVideoUrl ? assetUrl : undefined}
+            controls
+            playsInline
+            preload="metadata"
+            className="w-full max-h-[400px]"
+          />
+        ) : assetUrl ? (
+          isVideoFileUrl(assetUrl) ? (
             <video
               src={assetUrl}
               controls
@@ -233,7 +249,7 @@ export default function CreativeDetailPage() {
           </div>
         )}
       </div>
-      {assetUrl && format === "video" && !assetUrl.match(/\.(mp4|webm|mov)(\?|$)/i) && (
+      {assetUrl && format === "video" && !playableVideoUrl && (
         <p className="mb-5 text-xs text-muted-foreground">
           Meta only exposes a thumbnail preview for this video creative with the current permissions.
         </p>

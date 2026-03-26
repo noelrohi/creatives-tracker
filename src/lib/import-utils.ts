@@ -7,6 +7,7 @@ export function mapRowsForImport(rows: MappedRow[]) {
   return rows.map((r) => ({
     name: r.name || "Imported Ad",
     assetUrl: r.assetUrl,
+    videoUrl: r.videoUrl,
     format: r.format,
     roas: r.roas,
     cpa: r.cpa,

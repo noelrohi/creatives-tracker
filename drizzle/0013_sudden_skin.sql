@@ -1,0 +1,1 @@
+ALTER TABLE "ad_creative" ADD COLUMN "video_url" text;
