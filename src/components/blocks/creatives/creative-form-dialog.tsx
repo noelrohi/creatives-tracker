@@ -4,6 +4,7 @@ import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTRPC } from "@/lib/trpc/client";
+import { getUserFacingErrorMessage } from "@/lib/errors";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -79,12 +80,14 @@ export function CreativeFormDialog({
 
   const createMutation = useMutation({
     ...trpc.adCreative.create.mutationOptions(),
-    onError: (error) => toast.error(error.message),
+    onError: (error) =>
+      toast.error(getUserFacingErrorMessage(error, "Failed to create creative.")),
   });
 
   const updateMutation = useMutation({
     ...trpc.adCreative.update.mutationOptions(),
-    onError: (error) => toast.error(error.message),
+    onError: (error) =>
+      toast.error(getUserFacingErrorMessage(error, "Failed to update creative.")),
   });
 
   const isPending = createMutation.isPending || updateMutation.isPending;

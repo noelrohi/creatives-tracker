@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { eq, and, desc } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import { router, orgProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
@@ -76,11 +77,34 @@ export const adAccountRouter = router({
     )
     .output(publicAdAccountSchema)
     .mutation(async ({ input, ctx }) => {
-      const [account] = await db
-        .insert(adAccounts)
-        .values({ ...input, organizationId: ctx.organizationId })
-        .returning();
-      return sanitizeAccount(account);
+      try {
+        const [account] = await db
+          .insert(adAccounts)
+          .values({ ...input, organizationId: ctx.organizationId })
+          .returning();
+        return sanitizeAccount(account);
+      } catch (error) {
+        const code =
+          typeof error === "object" && error !== null && "code" in error
+            ? String(error.code)
+            : undefined;
+        const constraint =
+          typeof error === "object" && error !== null && "constraint" in error
+            ? String(error.constraint)
+            : undefined;
+
+        if (
+          code === "23505" &&
+          constraint === "ad_account_meta_account_id_unique"
+        ) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "This Meta account is already connected.",
+          });
+        }
+
+        throw error;
+      }
     }),
 
   update: orgProcedure

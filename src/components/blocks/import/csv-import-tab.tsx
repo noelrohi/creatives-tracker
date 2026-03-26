@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/table";
 import { Upload, FileSpreadsheet, Check, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
+import { getUserFacingErrorMessage } from "@/lib/errors";
 import {
   parseCSV,
   detectLevel,
@@ -187,7 +188,8 @@ export function CsvImportTab({
       toast.success(`${parts.join(", ")} ad${data.uniqueAds > 1 ? "s" : ""} · ${data.perfLogs.toLocaleString()} perf rows`);
       router.push("/creatives");
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) =>
+      toast.error(getUserFacingErrorMessage(error, "Import failed.")),
   });
 
   function processFile(file: File) {

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { authClient } from "@/lib/auth-client";
+import { getUserFacingErrorMessage } from "@/lib/errors";
 import { createOrganizationWithUniqueSlug } from "@/lib/organization-client";
 import { toast } from "sonner";
 import {
@@ -107,7 +108,9 @@ export function AppSidebar() {
     });
 
     if (error) {
-      toast.error(error.message ?? "Failed to switch organization");
+      toast.error(
+        getUserFacingErrorMessage(error, "Failed to switch workspace."),
+      );
       return;
     }
 
@@ -127,9 +130,7 @@ export function AppSidebar() {
       data = await createOrganizationWithUniqueSlug(newOrgName);
     } catch (error) {
       toast.error(
-        error instanceof Error
-          ? error.message
-          : "Failed to create organization",
+        getUserFacingErrorMessage(error, "Failed to create workspace."),
       );
       setCreating(false);
       return;

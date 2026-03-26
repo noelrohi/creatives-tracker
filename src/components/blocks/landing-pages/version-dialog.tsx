@@ -3,6 +3,7 @@
 import { useForm, Controller } from "react-hook-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTRPC } from "@/lib/trpc/client";
+import { getUserFacingErrorMessage } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -155,7 +156,8 @@ function VersionForm({
       toast.success("Version created");
       onClose();
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) =>
+      toast.error(getUserFacingErrorMessage(error, "Failed to create version.")),
   });
 
   const updateMutation = useMutation({
@@ -165,7 +167,8 @@ function VersionForm({
       toast.success("Version updated");
       onClose();
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) =>
+      toast.error(getUserFacingErrorMessage(error, "Failed to update version.")),
   });
 
   const isPending = createMutation.isPending || updateMutation.isPending;

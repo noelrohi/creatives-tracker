@@ -5,6 +5,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTRPC, useTRPCClient } from "@/lib/trpc/client";
+import { getUserFacingErrorMessage } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -21,6 +22,7 @@ import {
   FieldDescription,
 } from "@/components/ui/field";
 import { Loader2 } from "lucide-react";
+import { toast } from "sonner";
 
 const schema = z.object({
   name: z.string().min(1, "Name is required."),
@@ -71,6 +73,11 @@ export function InlineAccountDialog({
         metaAccessToken: data.metaAccessToken || undefined,
         notes: data.notes || undefined,
       }),
+    onError: (error) => {
+      toast.error(
+        getUserFacingErrorMessage(error, "Failed to create account."),
+      );
+    },
     onSuccess: (account) => {
       queryClient.invalidateQueries({
         queryKey: trpc.adAccount.list.queryKey(),
@@ -170,12 +177,6 @@ export function InlineAccountDialog({
               </Field>
             )}
           />
-
-          {mutation.error && (
-            <p className="text-sm text-destructive">
-              {mutation.error.message}
-            </p>
-          )}
 
           <Button type="submit" disabled={mutation.isPending}>
             {mutation.isPending && <Loader2 className="animate-spin" />}

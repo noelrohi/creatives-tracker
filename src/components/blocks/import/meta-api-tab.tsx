@@ -7,6 +7,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTRPC, useTRPCClient } from "@/lib/trpc/client";
+import { getUserFacingErrorMessage } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Field, FieldLabel, FieldError } from "@/components/ui/field";
 import {
@@ -65,7 +66,6 @@ export function MetaApiTab({
   const [phase, setPhase] = useState<SyncPhase>("idle");
   const [progress, setProgress] = useState(0);
   const [fetchedRows, setFetchedRows] = useState<MappedRow[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const form = useForm<FetchValues>({
@@ -81,7 +81,6 @@ export function MetaApiTab({
   }, []);
 
   async function handleSync(data: FetchValues) {
-    setError(null);
     setFetchedRows(null);
     setProgress(0);
 
@@ -172,7 +171,7 @@ export function MetaApiTab({
         `${parts.join(", ")} ad${uniqueAds > 1 ? "s" : ""} · ${totalPerfLogs.toLocaleString()} perf rows`,
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Sync failed");
+      toast.error(getUserFacingErrorMessage(err, "Sync failed."));
       setPhase("idle");
     }
   }
@@ -250,8 +249,6 @@ export function MetaApiTab({
 
 {/* Breakdowns omitted — Meta restricts combining them with action metrics.
    Use the CSV import tab for breakdown-level data. */}
-
-        {error && <p className="text-sm text-destructive">{error}</p>}
 
         <Button
           onClick={() => void form.handleSubmit(handleSync)()}

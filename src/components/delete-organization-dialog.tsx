@@ -5,6 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { Loader2, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
+import { getUserFacingErrorMessage } from "@/lib/errors";
 import { activateFirstOrganization } from "@/lib/organization-client";
 import { useTRPC } from "@/lib/trpc/client";
 import { Button } from "@/components/ui/button";
@@ -71,7 +72,7 @@ export function DeleteOrganizationDialog({
       router.refresh();
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to delete workspace",
+        getUserFacingErrorMessage(error, "Failed to delete workspace."),
       );
     }
   }

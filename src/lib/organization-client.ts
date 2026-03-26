@@ -1,4 +1,5 @@
 import { authClient } from "@/lib/auth-client";
+import { getUserFacingErrorMessage } from "@/lib/errors";
 
 type OrganizationSummary = {
   id: string;
@@ -59,7 +60,9 @@ export async function activateFirstOrganization() {
   });
 
   if (error) {
-    throw new Error(error.message ?? "Failed to activate organization");
+    throw new Error(
+      getUserFacingErrorMessage(error, "Failed to activate workspace."),
+    );
   }
 
   return {
@@ -89,5 +92,10 @@ export async function createOrganizationWithUniqueSlug(name: string) {
     }
   }
 
-  throw new Error(lastError ?? "Failed to create organization");
+  throw new Error(
+    getUserFacingErrorMessage(
+      { message: lastError },
+      "Failed to create workspace.",
+    ),
+  );
 }

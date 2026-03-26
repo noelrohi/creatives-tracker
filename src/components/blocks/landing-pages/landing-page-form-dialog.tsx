@@ -3,6 +3,7 @@
 import { useForm } from "react-hook-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTRPC } from "@/lib/trpc/client";
+import { getUserFacingErrorMessage } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -56,7 +57,9 @@ export function LandingPageFormDialog({
       onSuccess?.(data.id);
     },
     onError: (error) => {
-      toast.error(error.message);
+      toast.error(
+        getUserFacingErrorMessage(error, "Failed to create landing page."),
+      );
     },
   });
 
@@ -75,7 +78,9 @@ export function LandingPageFormDialog({
       onOpenChange(false);
     },
     onError: (error) => {
-      toast.error(error.message);
+      toast.error(
+        getUserFacingErrorMessage(error, "Failed to update landing page."),
+      );
     },
   });
 
