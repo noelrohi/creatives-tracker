@@ -7,6 +7,7 @@ import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { authClient } from "@/lib/auth-client";
+import { activateFirstOrganization } from "@/lib/organization-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, FieldLabel, FieldError } from "@/components/ui/field";
@@ -38,6 +39,23 @@ export default function SignInPage() {
 
     if (error) {
       setServerError(error.message ?? "Sign in failed");
+      return;
+    }
+
+    try {
+      const { organizations } = await activateFirstOrganization();
+
+      if (organizations.length === 0) {
+        router.push("/create-organization");
+        router.refresh();
+        return;
+      }
+    } catch (activeOrgError) {
+      setServerError(
+        activeOrgError instanceof Error
+          ? activeOrgError.message
+          : "Failed to load organization",
+      );
       return;
     }
 

@@ -7,6 +7,7 @@ import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { authClient } from "@/lib/auth-client";
+import { createOrganizationWithUniqueSlug } from "@/lib/organization-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -50,17 +51,9 @@ export default function SignUpPage() {
     }
 
     const orgName = data.orgName || `${data.name}'s Organization`;
-    const { data: organization, error: orgError } = await authClient.organization.create({
-      name: orgName,
-      slug: orgName.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-    });
 
-    if (orgError) {
-      setServerError(orgError.message ?? "Failed to create organization");
-      return;
-    }
-
-    if (organization) {
+    try {
+      const organization = await createOrganizationWithUniqueSlug(orgName);
       const { error: activeOrgError } =
         await authClient.organization.setActive({
           organizationId: organization.id,
@@ -72,6 +65,15 @@ export default function SignUpPage() {
         );
         return;
       }
+    } catch (error) {
+      setServerError(
+        error instanceof Error
+          ? `${error.message}. Your account was created. Finish setup by creating an organization.`
+          : "Your account was created. Finish setup by creating an organization.",
+      );
+      router.push("/create-organization");
+      router.refresh();
+      return;
     }
 
     router.push("/");

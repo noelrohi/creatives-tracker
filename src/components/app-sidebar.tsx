@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { authClient } from "@/lib/auth-client";
+import { createOrganizationWithUniqueSlug } from "@/lib/organization-client";
 import { toast } from "sonner";
 import {
   Sidebar,
@@ -96,14 +97,16 @@ export function AppSidebar() {
     if (!newOrgName.trim()) return;
     setCreating(true);
 
-    const slug = newOrgName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    const { data, error } = await authClient.organization.create({
-      name: newOrgName,
-      slug,
-    });
+    let data;
 
-    if (error) {
-      toast.error(error.message ?? "Failed to create organization");
+    try {
+      data = await createOrganizationWithUniqueSlug(newOrgName);
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to create organization",
+      );
       setCreating(false);
       return;
     }

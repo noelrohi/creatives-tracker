@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
 
 export function OrgGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
   const { data: session, isPending: sessionPending } =
     authClient.useSession();
   const { data: orgs, isPending: orgsPending } =
@@ -20,7 +21,9 @@ export function OrgGuard({ children }: { children: React.ReactNode }) {
 
     // No orgs at all — redirect to sign-up to create one
     if (orgs && orgs.length === 0) {
-      router.push("/sign-up");
+      if (pathname !== "/create-organization") {
+        router.push("/create-organization");
+      }
       return;
     }
 
@@ -31,7 +34,7 @@ export function OrgGuard({ children }: { children: React.ReactNode }) {
         router.refresh();
       })();
     }
-  }, [session, orgs, activeOrg, sessionPending, orgsPending, router]);
+  }, [session, orgs, activeOrg, sessionPending, orgsPending, router, pathname]);
 
   // Still loading
   if (sessionPending || orgsPending) {
@@ -40,6 +43,10 @@ export function OrgGuard({ children }: { children: React.ReactNode }) {
         <div className="size-5 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
       </div>
     );
+  }
+
+  if (pathname === "/create-organization" && orgs && orgs.length === 0) {
+    return <>{children}</>;
   }
 
   // No active org yet (setting it)
