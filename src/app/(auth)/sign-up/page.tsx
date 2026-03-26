@@ -50,7 +50,7 @@ export default function SignUpPage() {
     }
 
     const orgName = data.orgName || `${data.name}'s Organization`;
-    const { error: orgError } = await authClient.organization.create({
+    const { data: organization, error: orgError } = await authClient.organization.create({
       name: orgName,
       slug: orgName.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
     });
@@ -58,6 +58,20 @@ export default function SignUpPage() {
     if (orgError) {
       setServerError(orgError.message ?? "Failed to create organization");
       return;
+    }
+
+    if (organization) {
+      const { error: activeOrgError } =
+        await authClient.organization.setActive({
+          organizationId: organization.id,
+        });
+
+      if (activeOrgError) {
+        setServerError(
+          activeOrgError.message ?? "Failed to activate organization",
+        );
+        return;
+      }
     }
 
     router.push("/");
