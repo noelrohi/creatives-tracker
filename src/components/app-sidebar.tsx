@@ -1,7 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
+import { authClient } from "@/lib/auth-client";
+import { toast } from "sonner";
 import {
   Sidebar,
   SidebarContent,
@@ -15,13 +19,34 @@ import {
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   BookOpen,
+  Building2,
+  ChevronDown,
   CirclePlus,
+  Key,
   LayoutDashboard,
+  LogOut,
   Upload,
   Image,
   Settings,
+  Plus,
+  UserPlus,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 const navItems = [
   { label: "Dashboard", href: "/", icon: LayoutDashboard },
@@ -31,16 +56,108 @@ const navItems = [
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const { data: session, refetch: refetchSession } = authClient.useSession();
+  const { data: orgs } = authClient.useListOrganizations();
+  const { data: activeOrg } = authClient.useActiveOrganization();
+  const [showNewOrg, setShowNewOrg] = useState(false);
+  const [newOrgName, setNewOrgName] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  async function handleSignOut() {
+    await authClient.signOut();
+    queryClient.clear();
+    router.push("/sign-in");
+    router.refresh();
+  }
+
+  async function switchOrg(orgId: string) {
+    if (orgId === activeOrg?.id) {
+      return;
+    }
+
+    const { error } = await authClient.organization.setActive({
+      organizationId: orgId,
+    });
+
+    if (error) {
+      toast.error(error.message ?? "Failed to switch organization");
+      return;
+    }
+
+    await refetchSession();
+    queryClient.clear();
+    router.refresh();
+  }
+
+  async function handleCreateOrg(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newOrgName.trim()) return;
+    setCreating(true);
+
+    const slug = newOrgName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const { data, error } = await authClient.organization.create({
+      name: newOrgName,
+      slug,
+    });
+
+    if (error) {
+      toast.error(error.message ?? "Failed to create organization");
+      setCreating(false);
+      return;
+    }
+
+    if (data) {
+      await authClient.organization.setActive({ organizationId: data.id });
+    }
+
+    setNewOrgName("");
+    setShowNewOrg(false);
+    setCreating(false);
+    await refetchSession();
+    queryClient.clear();
+    router.refresh();
+  }
 
   return (
+    <>
     <Sidebar variant="inset">
       <SidebarHeader>
-        <div className="flex items-center gap-2 px-2 py-1">
-          <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary text-sm font-semibold text-primary-foreground">
-            A
-          </div>
-          <span className="text-sm font-semibold">Adsolute</span>
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent">
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary text-sm font-semibold text-primary-foreground">
+                {activeOrg?.name?.[0]?.toUpperCase() ?? "A"}
+              </div>
+              <div className="flex flex-1 flex-col truncate">
+                <span className="truncate text-sm font-semibold">
+                  {activeOrg?.name ?? "Adsolute"}
+                </span>
+              </div>
+              <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-56">
+            {orgs?.map((org) => (
+              <DropdownMenuItem
+                key={org.id}
+                onClick={() => switchOrg(org.id)}
+              >
+                <Building2 className="mr-2 size-4" />
+                <span className="truncate">{org.name}</span>
+                {org.id === activeOrg?.id && (
+                  <span className="ml-auto text-xs text-muted-foreground">Active</span>
+                )}
+              </DropdownMenuItem>
+            ))}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => setShowNewOrg(true)}>
+              <Plus className="mr-2 size-4" />
+              Create organization
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
@@ -103,8 +220,71 @@ export function AppSidebar() {
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
+          <SidebarMenuItem>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <SidebarMenuButton tooltip={session?.user?.name ?? "User"}>
+                  <div className="flex size-5 items-center justify-center rounded-full bg-muted text-xs font-medium">
+                    {session?.user?.name?.[0]?.toUpperCase() ?? "?"}
+                  </div>
+                  <span className="truncate">{session?.user?.name ?? "User"}</span>
+                  <ChevronDown className="ml-auto size-4" />
+                </SidebarMenuButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56">
+                <DropdownMenuItem disabled>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {session?.user?.email}
+                  </span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <Link href="/settings/members">
+                    <UserPlus className="mr-2 size-4" />
+                    Invite members
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/settings/api-keys">
+                    <Key className="mr-2 size-4" />
+                    API keys
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={handleSignOut}>
+                  <LogOut className="mr-2 size-4" />
+                  Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
     </Sidebar>
+
+      <Dialog open={showNewOrg} onOpenChange={setShowNewOrg}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Create organization</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleCreateOrg} className="flex flex-col gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="new-org-name">Name</Label>
+              <Input
+                id="new-org-name"
+                value={newOrgName}
+                onChange={(e) => setNewOrgName(e.target.value)}
+                placeholder="My Company"
+                required
+                autoFocus
+              />
+            </div>
+            <Button type="submit" disabled={creating} className="w-full">
+              {creating ? "Creating..." : "Create"}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
