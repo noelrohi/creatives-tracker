@@ -512,7 +512,12 @@ export const adCreativeRouter = router({
         const rows = await db
           .select({ id: campaigns.id, name: campaigns.name, metaId: campaigns.metaId })
           .from(campaigns)
-          .where(sql`${campaigns.metaId} IN (${sql.join(campaignMetaIds.map((id) => sql`${id}`), sql`, `)})`);
+          .where(
+            and(
+              sql`${campaigns.metaId} IN (${sql.join(campaignMetaIds.map((id) => sql`${id}`), sql`, `)})`,
+              eq(campaigns.organizationId, ctx.organizationId),
+            ),
+          );
         for (const row of rows) {
           if (row.metaId) existingCampaignByMetaId.set(row.metaId, row);
         }
@@ -526,7 +531,12 @@ export const adCreativeRouter = router({
         const rows = await db
           .select({ id: campaigns.id, name: campaigns.name, metaId: campaigns.metaId })
           .from(campaigns)
-          .where(sql`${campaigns.name} IN (${sql.join(campaignNamesWithoutMeta.map((name) => sql`${name}`), sql`, `)})`);
+          .where(
+            and(
+              sql`${campaigns.name} IN (${sql.join(campaignNamesWithoutMeta.map((name) => sql`${name}`), sql`, `)})`,
+              eq(campaigns.organizationId, ctx.organizationId),
+            ),
+          );
         for (const row of rows) {
           existingCampaignByName.set(row.name, row);
         }
@@ -547,7 +557,12 @@ export const adCreativeRouter = router({
             await db.update(campaigns).set({
               name: campaign.name,
               ...(campaign.metaId ? { metaId: campaign.metaId } : {}),
-            }).where(eq(campaigns.id, existing.id));
+            }).where(
+              and(
+                eq(campaigns.id, existing.id),
+                eq(campaigns.organizationId, ctx.organizationId),
+              ),
+            );
           }
           continue;
         }
@@ -598,7 +613,12 @@ export const adCreativeRouter = router({
         const rows = await db
           .select({ id: adSets.id, name: adSets.name, metaId: adSets.metaId, campaignId: adSets.campaignId })
           .from(adSets)
-          .where(sql`${adSets.metaId} IN (${sql.join(adSetMetaIds.map((id) => sql`${id}`), sql`, `)})`);
+          .where(
+            and(
+              sql`${adSets.metaId} IN (${sql.join(adSetMetaIds.map((id) => sql`${id}`), sql`, `)})`,
+              eq(adSets.organizationId, ctx.organizationId),
+            ),
+          );
         for (const row of rows) {
           if (row.metaId) existingAdSetByMetaId.set(row.metaId, row);
         }
@@ -612,7 +632,12 @@ export const adCreativeRouter = router({
         const rows = await db
           .select({ id: adSets.id, name: adSets.name, metaId: adSets.metaId, campaignId: adSets.campaignId })
           .from(adSets)
-          .where(sql`${adSets.name} IN (${sql.join(adSetNamesWithoutMeta.map((name) => sql`${name}`), sql`, `)})`);
+          .where(
+            and(
+              sql`${adSets.name} IN (${sql.join(adSetNamesWithoutMeta.map((name) => sql`${name}`), sql`, `)})`,
+              eq(adSets.organizationId, ctx.organizationId),
+            ),
+          );
         for (const row of rows) {
           const matches = existingAdSetsByName.get(row.name) ?? [];
           matches.push(row);
@@ -637,7 +662,12 @@ export const adCreativeRouter = router({
               name: adSet.name,
               campaignId: adSet.campaignDbId,
               ...(adSet.metaId ? { metaId: adSet.metaId } : {}),
-            }).where(eq(adSets.id, existing.id));
+            }).where(
+              and(
+                eq(adSets.id, existing.id),
+                eq(adSets.organizationId, ctx.organizationId),
+              ),
+            );
           }
           continue;
         }
@@ -695,7 +725,12 @@ export const adCreativeRouter = router({
         const rows = await db
           .select({ id: ads.id, name: ads.name, adCreativeId: ads.adCreativeId, adSetId: ads.adSetId, metaId: ads.metaId })
           .from(ads)
-          .where(sql`${ads.metaId} IN (${sql.join(metaIds.map((m) => sql`${m}`), sql`, `)})`);
+          .where(
+            and(
+              sql`${ads.metaId} IN (${sql.join(metaIds.map((m) => sql`${m}`), sql`, `)})`,
+              eq(ads.organizationId, ctx.organizationId),
+            ),
+          );
         for (const row of rows) {
           if (row.metaId) existingByMetaId.set(row.metaId, row);
         }
@@ -712,7 +747,12 @@ export const adCreativeRouter = router({
         const rows = await db
           .select({ id: ads.id, name: ads.name, adCreativeId: ads.adCreativeId, adSetId: ads.adSetId })
           .from(ads)
-          .where(sql`${ads.name} IN (${sql.join(unmatchedNames.map((n) => sql`${n}`), sql`, `)})`);
+          .where(
+            and(
+              sql`${ads.name} IN (${sql.join(unmatchedNames.map((n) => sql`${n}`), sql`, `)})`,
+              eq(ads.organizationId, ctx.organizationId),
+            ),
+          );
         for (const row of rows) {
           existingByName.set(row.name, row);
         }
@@ -840,7 +880,9 @@ export const adCreativeRouter = router({
           ...(info.adSetDbId ? { adSetId: info.adSetDbId } : {}),
           ...(info.metaAdId ? { metaId: info.metaAdId } : {}),
           ...(input.accountId ? { accountId: input.accountId } : {}),
-        }).where(eq(ads.id, existing.id));
+        }).where(
+          and(eq(ads.id, existing.id), eq(ads.organizationId, ctx.organizationId)),
+        );
       }
 
       if (importedCreativeNames.length > 0) {
@@ -853,6 +895,7 @@ export const adCreativeRouter = router({
             and(
               sql`${adCreatives.name} IN (${sql.join(importedCreativeNames.map((name) => sql`${name}`), sql`, `)})`,
               sql`${adCreatives.id} NOT IN (${sql.join(canonicalCreativeIds.map((id) => sql`${id}`), sql`, `)})`,
+              eq(adCreatives.organizationId, ctx.organizationId),
             ),
           )
           .groupBy(adCreatives.id)
@@ -871,7 +914,12 @@ export const adCreativeRouter = router({
         ? await db
             .select({ id: ads.id, name: ads.name, metaId: ads.metaId })
             .from(ads)
-            .where(sql`${ads.name} IN (${sql.join(allAdNames.map((n) => sql`${n}`), sql`, `)})`)
+            .where(
+              and(
+                sql`${ads.name} IN (${sql.join(allAdNames.map((n) => sql`${n}`), sql`, `)})`,
+                eq(ads.organizationId, ctx.organizationId),
+              ),
+            )
         : [];
       const adIdByName = new Map(allAds.map((a) => [a.name, a.id]));
       const adIdByMetaId = new Map(allAds.filter((a) => a.metaId).map((a) => [a.metaId!, a.id]));
@@ -945,6 +993,7 @@ export const adCreativeRouter = router({
                 sql`${performanceLogs.adId} IN (${sql.join(importAdIds.map((id) => sql`${id}`), sql`, `)})`,
                 sql`${performanceLogs.dateStart} >= ${minDate}`,
                 sql`${performanceLogs.dateEnd} <= ${maxDate}`,
+                eq(performanceLogs.organizationId, ctx.organizationId),
               ),
             );
 
@@ -992,7 +1041,12 @@ export const adCreativeRouter = router({
         const [account] = await db
           .select({ dataDateEnd: adAccounts.dataDateEnd })
           .from(adAccounts)
-          .where(eq(adAccounts.id, input.accountId));
+          .where(
+            and(
+              eq(adAccounts.id, input.accountId),
+              eq(adAccounts.organizationId, ctx.organizationId),
+            ),
+          );
         const nextDataDateEnd = account?.dataDateEnd && maxDataDate
           ? (account.dataDateEnd > maxDataDate ? account.dataDateEnd : maxDataDate)
           : account?.dataDateEnd ?? maxDataDate;
@@ -1000,7 +1054,12 @@ export const adCreativeRouter = router({
         await db.update(adAccounts).set({
           lastImportedAt: new Date(),
           ...(nextDataDateEnd ? { dataDateEnd: nextDataDateEnd } : {}),
-        }).where(eq(adAccounts.id, input.accountId));
+        }).where(
+          and(
+            eq(adAccounts.id, input.accountId),
+            eq(adAccounts.organizationId, ctx.organizationId),
+          ),
+        );
       }
 
       return {
@@ -1031,7 +1090,12 @@ export const adCreativeRouter = router({
         })
         .from(performanceLogs)
         .innerJoin(ads, eq(performanceLogs.adId, ads.id))
-        .where(eq(ads.adCreativeId, input.id));
+        .where(
+          and(
+            eq(ads.adCreativeId, input.id),
+            eq(ads.organizationId, ctx.organizationId),
+          ),
+        );
 
       // Portfolio averages for comparison
       const [portfolio] = await db
@@ -1040,13 +1104,20 @@ export const adCreativeRouter = router({
           avgCpa: sql<string | null>`coalesce(sum(${performanceLogs.spend}), 0) / nullif(sum(${performanceLogs.conversions}), 0)`,
           avgCtr: sql<string | null>`coalesce(sum(${performanceLogs.ctr} * ${performanceLogs.impressions}), 0) / nullif(sum(${performanceLogs.impressions}), 0)`,
         })
-        .from(performanceLogs);
+        .from(performanceLogs)
+        .innerJoin(ads, eq(performanceLogs.adId, ads.id))
+        .where(eq(ads.organizationId, ctx.organizationId));
 
       // Derive live status from linked ads
       const adStatuses = await db
         .select({ status: ads.status })
         .from(ads)
-        .where(eq(ads.adCreativeId, input.id));
+        .where(
+          and(
+            eq(ads.adCreativeId, input.id),
+            eq(ads.organizationId, ctx.organizationId),
+          ),
+        );
 
       const liveStatus = adStatuses.length === 0
         ? "no_ads"
@@ -1077,7 +1148,12 @@ export const adCreativeRouter = router({
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
       // Delete linked ads (cascades to performance_logs via FK)
-      await db.delete(ads).where(eq(ads.adCreativeId, input.id));
+      await db.delete(ads).where(
+        and(
+          eq(ads.adCreativeId, input.id),
+          eq(ads.organizationId, ctx.organizationId),
+        ),
+      );
       await db.delete(adCreatives).where(and(eq(adCreatives.id, input.id), eq(adCreatives.organizationId, ctx.organizationId)));
     }),
 });

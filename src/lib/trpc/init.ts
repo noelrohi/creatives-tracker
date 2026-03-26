@@ -53,11 +53,25 @@ export async function createContext(options?: ContextOptions) {
   const session = await auth.api.getSession({
     headers: requestHeaders,
   });
+
+  let organizationId = session?.session?.activeOrganizationId ?? null;
+
+  if (session && organizationId) {
+    try {
+      const activeMember = await auth.api.getActiveMember({
+        headers: requestHeaders,
+      });
+      organizationId = activeMember?.organizationId ?? null;
+    } catch {
+      organizationId = null;
+    }
+  }
+
   return {
     session,
     principalType: session ? "session" as const : "anonymous" as const,
     userId: session?.user?.id ?? null,
-    organizationId: session?.session?.activeOrganizationId ?? null,
+    organizationId,
     apiKeyId: null,
     apiKeyScopes: [] as string[],
   };
