@@ -18,7 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { DateRangePicker } from "@/components/blocks/dashboard/date-range-picker";
-import { Loader2, CloudDownload, Key, CirclePlus, Check } from "lucide-react";
+import { Loader2, CloudDownload, Key, CirclePlus, Check, Download } from "lucide-react";
 import { toast } from "sonner";
 import { mapRowsForImport, splitBulkImportRows } from "@/lib/import-utils";
 import { formatDateOnly, parseDateOnly } from "@/lib/date";
@@ -40,6 +40,60 @@ interface MetaApiTabProps {
     hasMetaAccessToken: boolean;
   }[];
   onRequestCreateAccount: () => void;
+}
+
+function exportRowsAsCsv(rows: MappedRow[], filename: string) {
+  const columns: { key: keyof MappedRow; header: string }[] = [
+    { key: "dateStart", header: "date_start" },
+    { key: "dateEnd", header: "date_end" },
+    { key: "campaignName", header: "campaign_name" },
+    { key: "campaignId", header: "campaign_id" },
+    { key: "adSetName", header: "adset_name" },
+    { key: "adSetId", header: "adset_id" },
+    { key: "name", header: "ad_name" },
+    { key: "adId", header: "ad_id" },
+    { key: "spend", header: "spend" },
+    { key: "impressions", header: "impressions" },
+    { key: "reach", header: "reach" },
+    { key: "frequency", header: "frequency" },
+    { key: "cpm", header: "cpm" },
+    { key: "cpc", header: "cpc" },
+    { key: "ctr", header: "ctr" },
+    { key: "conversions", header: "conversions" },
+    { key: "purchaseValue", header: "purchase_value" },
+    { key: "roas", header: "roas" },
+    { key: "cpa", header: "cpa" },
+    { key: "linkClicks", header: "link_clicks" },
+    { key: "landingPageViews", header: "landing_page_views" },
+    { key: "addToCart", header: "add_to_cart" },
+    { key: "initiateCheckout", header: "initiate_checkout" },
+    { key: "qualityRanking", header: "quality_ranking" },
+    { key: "engagementRateRanking", header: "engagement_rate_ranking" },
+    { key: "conversionRateRanking", header: "conversion_rate_ranking" },
+    { key: "videoViews3s", header: "video_views_3s" },
+    { key: "videoThruplay", header: "video_thruplay" },
+    { key: "videoAvgWatchTime", header: "video_avg_watch_time" },
+  ];
+
+  const escape = (v: string) =>
+    v.includes(",") || v.includes('"') || v.includes("\n")
+      ? `"${v.replace(/"/g, '""')}"`
+      : v;
+
+  const header = columns.map((c) => c.header).join(",");
+  const lines = rows.map((row) =>
+    columns.map((c) => escape(String(row[c.key] ?? ""))).join(","),
+  );
+
+  const blob = new Blob([header + "\n" + lines.join("\n")], {
+    type: "text/csv",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export function MetaApiTab({
@@ -311,9 +365,24 @@ export function MetaApiTab({
               {dateFrom} — {dateTo}
             </span>
           </div>
-          <Button variant="outline" size="sm" onClick={() => router.push("/creatives")}>
-            View creatives
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                exportRowsAsCsv(
+                  fetchedRows!,
+                  `metrics_${dateFrom}_${dateTo}.csv`,
+                )
+              }
+            >
+              <Download className="size-3.5" />
+              Export CSV
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => router.push("/creatives")}>
+              View creatives
+            </Button>
+          </div>
         </div>
       )}
     </div>
