@@ -42,52 +42,23 @@ interface MetaApiTabProps {
   onRequestCreateAccount: () => void;
 }
 
-function exportRowsAsCsv(rows: MappedRow[], filename: string) {
-  const columns: { key: keyof MappedRow; header: string }[] = [
-    { key: "dateStart", header: "date_start" },
-    { key: "dateEnd", header: "date_end" },
-    { key: "campaignName", header: "campaign_name" },
-    { key: "campaignId", header: "campaign_id" },
-    { key: "adSetName", header: "adset_name" },
-    { key: "adSetId", header: "adset_id" },
-    { key: "name", header: "ad_name" },
-    { key: "adId", header: "ad_id" },
-    { key: "spend", header: "spend" },
-    { key: "impressions", header: "impressions" },
-    { key: "reach", header: "reach" },
-    { key: "frequency", header: "frequency" },
-    { key: "cpm", header: "cpm" },
-    { key: "cpc", header: "cpc" },
-    { key: "ctr", header: "ctr" },
-    { key: "conversions", header: "conversions" },
-    { key: "purchaseValue", header: "purchase_value" },
-    { key: "roas", header: "roas" },
-    { key: "cpa", header: "cpa" },
-    { key: "linkClicks", header: "link_clicks" },
-    { key: "landingPageViews", header: "landing_page_views" },
-    { key: "addToCart", header: "add_to_cart" },
-    { key: "initiateCheckout", header: "initiate_checkout" },
-    { key: "qualityRanking", header: "quality_ranking" },
-    { key: "engagementRateRanking", header: "engagement_rate_ranking" },
-    { key: "conversionRateRanking", header: "conversion_rate_ranking" },
-    { key: "videoViews3s", header: "video_views_3s" },
-    { key: "videoThruplay", header: "video_thruplay" },
-    { key: "videoAvgWatchTime", header: "video_avg_watch_time" },
-  ];
+function downloadCsv(rows: Record<string, unknown>[], filename: string) {
+  if (rows.length === 0) return;
 
+  const headers = Object.keys(rows[0]!);
   const escape = (v: string) =>
     v.includes(",") || v.includes('"') || v.includes("\n")
       ? `"${v.replace(/"/g, '""')}"`
       : v;
 
-  const header = columns.map((c) => c.header).join(",");
-  const lines = rows.map((row) =>
-    columns.map((c) => escape(String(row[c.key] ?? ""))).join(","),
-  );
+  const lines = [
+    headers.join(","),
+    ...rows.map((row) =>
+      headers.map((h) => escape(String(row[h] ?? ""))).join(","),
+    ),
+  ];
 
-  const blob = new Blob([header + "\n" + lines.join("\n")], {
-    type: "text/csv",
-  });
+  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -120,6 +91,7 @@ export function MetaApiTab({
   const [phase, setPhase] = useState<SyncPhase>("idle");
   const [progress, setProgress] = useState(0);
   const [fetchedRows, setFetchedRows] = useState<MappedRow[] | null>(null);
+  const [exporting, setExporting] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const form = useForm<FetchValues>({
@@ -230,6 +202,35 @@ export function MetaApiTab({
     }
   }
 
+  async function handleExport() {
+    const accountId = form.getValues("accountId");
+    if (!accountId) {
+      toast.error("Select an account first.");
+      return;
+    }
+
+    setExporting(true);
+    try {
+      const rows = await trpcClient.performanceLog.exportByAccount.query({
+        accountId,
+        dateFrom,
+        dateTo,
+      });
+
+      if (rows.length === 0) {
+        toast.info("No data found for the selected date range.");
+        return;
+      }
+
+      downloadCsv(rows, `metrics_${dateFrom}_${dateTo}.csv`);
+      toast.success(`Exported ${rows.length.toLocaleString()} rows`);
+    } catch (err) {
+      toast.error(getUserFacingErrorMessage(err, "Export failed."));
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const isSyncing = phase !== "idle" && phase !== "done";
 
   // No accounts with tokens
@@ -304,17 +305,31 @@ export function MetaApiTab({
 {/* Breakdowns omitted — Meta restricts combining them with action metrics.
    Use the CSV import tab for breakdown-level data. */}
 
-        <Button
-          onClick={() => void form.handleSubmit(handleSync)()}
-          disabled={isSyncing}
-        >
-          {isSyncing ? (
-            <Loader2 className="animate-spin" />
-          ) : (
-            <CloudDownload className="size-4" />
-          )}
-          {isSyncing ? "Syncing..." : "Sync data"}
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            onClick={() => void form.handleSubmit(handleSync)()}
+            disabled={isSyncing || exporting}
+          >
+            {isSyncing ? (
+              <Loader2 className="animate-spin" />
+            ) : (
+              <CloudDownload className="size-4" />
+            )}
+            {isSyncing ? "Syncing..." : "Sync data"}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={handleExport}
+            disabled={isSyncing || exporting}
+          >
+            {exporting ? (
+              <Loader2 className="animate-spin" />
+            ) : (
+              <Download className="size-4" />
+            )}
+            {exporting ? "Exporting..." : "Export CSV"}
+          </Button>
+        </div>
       </div>
 
       {/* Progress */}
@@ -365,24 +380,9 @@ export function MetaApiTab({
               {dateFrom} — {dateTo}
             </span>
           </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                exportRowsAsCsv(
-                  fetchedRows!,
-                  `metrics_${dateFrom}_${dateTo}.csv`,
-                )
-              }
-            >
-              <Download className="size-3.5" />
-              Export CSV
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => router.push("/creatives")}>
-              View creatives
-            </Button>
-          </div>
+          <Button variant="outline" size="sm" onClick={() => router.push("/creatives")}>
+            View creatives
+          </Button>
         </div>
       )}
     </div>

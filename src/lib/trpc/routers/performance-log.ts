@@ -1,9 +1,12 @@
 import { z } from "zod";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, gte, lte } from "drizzle-orm";
 import { router, orgProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { performanceLogs } from "@/schema/performance-log";
+import { ads } from "@/schema/ad";
+import { adSets } from "@/schema/ad-set";
+import { campaigns } from "@/schema/campaign";
 
 const perfFields = {
   roas: z.string().optional(),
@@ -128,5 +131,69 @@ export const performanceLogRouter = router({
       await db
         .delete(performanceLogs)
         .where(and(eq(performanceLogs.id, input.id), eq(performanceLogs.organizationId, ctx.organizationId)));
+    }),
+
+  exportByAccount: orgProcedure
+    .input(
+      z.object({
+        accountId: z.string(),
+        dateFrom: z.string(),
+        dateTo: z.string(),
+      }),
+    )
+    .query(async ({ input, ctx }) => {
+      const rows = await db
+        .select({
+          dateStart: performanceLogs.dateStart,
+          dateEnd: performanceLogs.dateEnd,
+          campaignName: campaigns.name,
+          campaignMetaId: campaigns.metaId,
+          adSetName: adSets.name,
+          adSetMetaId: adSets.metaId,
+          adName: ads.name,
+          adMetaId: ads.metaId,
+          spend: performanceLogs.spend,
+          impressions: performanceLogs.impressions,
+          reach: performanceLogs.reach,
+          frequency: performanceLogs.frequency,
+          cpm: performanceLogs.cpm,
+          cpc: performanceLogs.cpc,
+          ctr: performanceLogs.ctr,
+          conversions: performanceLogs.conversions,
+          purchaseValue: performanceLogs.purchaseValue,
+          roas: performanceLogs.roas,
+          cpa: performanceLogs.cpa,
+          linkClicks: performanceLogs.linkClicks,
+          landingPageViews: performanceLogs.landingPageViews,
+          addToCart: performanceLogs.addToCart,
+          initiateCheckout: performanceLogs.initiateCheckout,
+          qualityRanking: performanceLogs.qualityRanking,
+          engagementRateRanking: performanceLogs.engagementRateRanking,
+          conversionRateRanking: performanceLogs.conversionRateRanking,
+          videoViews3s: performanceLogs.videoViews3s,
+          videoThruplay: performanceLogs.videoThruplay,
+          videoAvgWatchTime: performanceLogs.videoAvgWatchTime,
+          country: performanceLogs.country,
+          platform: performanceLogs.platform,
+          placement: performanceLogs.placement,
+          device: performanceLogs.device,
+          age: performanceLogs.age,
+          gender: performanceLogs.gender,
+        })
+        .from(performanceLogs)
+        .innerJoin(ads, eq(performanceLogs.adId, ads.id))
+        .leftJoin(adSets, eq(ads.adSetId, adSets.id))
+        .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
+        .where(
+          and(
+            eq(ads.accountId, input.accountId),
+            eq(performanceLogs.organizationId, ctx.organizationId),
+            gte(performanceLogs.dateStart, input.dateFrom),
+            lte(performanceLogs.dateEnd, input.dateTo),
+          ),
+        )
+        .orderBy(desc(performanceLogs.dateStart));
+
+      return rows;
     }),
 });
