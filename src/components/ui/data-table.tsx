@@ -2,10 +2,10 @@
 
 import {
   type ColumnDef,
+  type Row,
   type SortingState,
   type RowSelectionState,
   type VisibilityState,
-  type Table as TanstackTable,
   flexRender,
   getCoreRowModel,
   getSortedRowModel,
@@ -36,6 +36,7 @@ interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
   data: TData[];
   pageSize?: number;
+  getRowId?: (originalRow: TData, index: number, parent?: Row<TData>) => string;
   onRowClick?: (row: TData) => void;
   rowSelection?: RowSelectionState;
   onRowSelectionChange?: (selection: RowSelectionState) => void;
@@ -49,6 +50,7 @@ export function DataTable<TData, TValue>({
   columns,
   data,
   pageSize = 20,
+  getRowId,
   onRowClick,
   rowSelection,
   onRowSelectionChange,
@@ -71,6 +73,7 @@ export function DataTable<TData, TValue>({
   const table = useReactTable({
     data,
     columns,
+    getRowId,
     state: { sorting, rowSelection: selection, columnVisibility: visibility },
     onSortingChange: setSorting,
     onColumnVisibilityChange: (updater) => {

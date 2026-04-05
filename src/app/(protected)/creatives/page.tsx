@@ -28,12 +28,33 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { Search, Sparkles, Trash2, Upload, ArrowUpDown, MoreHorizontal, Copy, ChevronsUpDown, Check } from "lucide-react";
+import {
+  Search,
+  Sparkles,
+  Trash2,
+  Upload,
+  ArrowUpDown,
+  MoreHorizontal,
+  Copy,
+  ChevronsUpDown,
+  Check,
+  ImageIcon,
+  Video,
+  UserCheck,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
 import { toast } from "sonner";
 
 const FORMATS = ["static", "video", "ugc", "carousel"] as const;
+const SORT_OPTIONS = [
+  "last_synced_desc",
+  "last_synced_asc",
+  "created_desc",
+  "created_asc",
+  "name_asc",
+  "name_desc",
+] as const;
 const AWARENESS = [
   "unaware",
   "problem_aware",
@@ -54,10 +75,32 @@ function prettify(s: string | null | undefined) {
   return s ? s.replace(/_/g, " ") : null;
 }
 
+function toTimestamp(value: Date | string | null | undefined) {
+  if (!value) return 0;
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+}
+
+function formatDateTime(value: Date | string) {
+  const date = value instanceof Date ? value : new Date(value);
+  return {
+    date: date.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }),
+    time: date.toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    }),
+  };
+}
+
 interface Creative {
   id: string;
   name: string;
   assetUrl: string | null;
+  videoUrl: string | null;
   format: string | null;
   angle: string | null;
   persona: string | null;
@@ -82,6 +125,49 @@ interface Creative {
   accountName: string | null;
 }
 
+function MediaPreview({ creative }: { creative: Creative }) {
+  const href = creative.videoUrl || creative.assetUrl;
+
+  if (!href) {
+    return (
+      <div className="flex size-10 items-center justify-center rounded-md bg-muted">
+        <ImageIcon className="size-4 text-muted-foreground/40" />
+      </div>
+    );
+  }
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(event) => event.stopPropagation()}
+      className="block"
+    >
+      {creative.assetUrl ? (
+        <div className="relative size-10 overflow-hidden rounded-md bg-muted">
+          <img
+            src={creative.assetUrl}
+            alt=""
+            className="size-full object-cover"
+          />
+          {creative.format === "video" && (
+            <Video className="absolute inset-0 m-auto size-4 text-white drop-shadow" />
+          )}
+        </div>
+      ) : (
+        <div className="flex size-10 items-center justify-center rounded-md bg-muted">
+          {creative.format === "video" ? (
+            <Video className="size-4 text-muted-foreground/60" />
+          ) : (
+            <ImageIcon className="size-4 text-muted-foreground/40" />
+          )}
+        </div>
+      )}
+    </a>
+  );
+}
+
 const columns: ColumnDef<Creative>[] = [
   {
     id: "select",
@@ -103,6 +189,13 @@ const columns: ColumnDef<Creative>[] = [
     ),
     enableSorting: false,
     size: 40,
+  },
+  {
+    id: "media",
+    header: "Media",
+    cell: ({ row }) => <MediaPreview creative={row.original} />,
+    enableSorting: false,
+    size: 56,
   },
   {
     accessorKey: "name",
@@ -148,6 +241,29 @@ const columns: ColumnDef<Creative>[] = [
       const name = row.getValue("accountName") as string | null;
       if (!name) return <span className="text-muted-foreground/30">—</span>;
       return <span className="text-sm text-muted-foreground truncate max-w-[120px]">{name}</span>;
+    },
+  },
+  {
+    accessorKey: "updatedAt",
+    header: ({ column }) => (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="-ml-3 h-8"
+        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+      >
+        Last Synced
+        <ArrowUpDown className="ml-1.5 size-3.5" />
+      </Button>
+    ),
+    cell: ({ row }) => {
+      const formatted = formatDateTime(row.original.updatedAt);
+      return (
+        <div className="min-w-[108px]">
+          <div className="text-sm tabular-nums">{formatted.date}</div>
+          <div className="text-xs text-muted-foreground tabular-nums">{formatted.time}</div>
+        </div>
+      );
     },
   },
   {
@@ -370,6 +486,10 @@ export default function CreativesPage() {
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
   const [adSetIds, setAdSetIds] = useQueryState("adSet", parseAsString.withDefault(""));
   const [untagged, setUntagged] = useQueryState("untagged", parseAsBoolean.withDefault(false));
+  const [sort, setSort] = useQueryState(
+    "sort",
+    parseAsStringLiteral(SORT_OPTIONS).withDefault("last_synced_desc"),
+  );
 
   const accountsQuery = useQuery(trpc.adAccount.list.queryOptions());
   const adSetsQuery = useQuery(trpc.adSet.list.queryOptions());
@@ -402,10 +522,33 @@ export default function CreativesPage() {
     },
   });
 
+  const ownershipMutation = useMutation({
+    ...trpc.adCreative.bulkUpdateOwnership.mutationOptions(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: trpc.adCreative.list.queryKey() });
+    },
+  });
+
+  const creativeRows = [...(creatives.data ?? [])].sort((left, right) => {
+    switch (sort) {
+      case "last_synced_asc":
+        return toTimestamp(left.updatedAt) - toTimestamp(right.updatedAt);
+      case "created_desc":
+        return toTimestamp(right.createdAt) - toTimestamp(left.createdAt);
+      case "created_asc":
+        return toTimestamp(left.createdAt) - toTimestamp(right.createdAt);
+      case "name_asc":
+        return left.name.localeCompare(right.name);
+      case "name_desc":
+        return right.name.localeCompare(left.name);
+      case "last_synced_desc":
+      default:
+        return toTimestamp(right.updatedAt) - toTimestamp(left.updatedAt);
+    }
+  });
+
   const selectedIds = Object.keys(rowSelection).filter((k) => rowSelection[k]);
-  const selectedCreativeIds = selectedIds
-    .map((idx) => creatives.data?.[Number(idx)]?.id)
-    .filter(Boolean) as string[];
+  const selectedCreativeIds = selectedIds;
 
   const handleBulkDelete = useCallback(async () => {
     try {
@@ -418,7 +561,17 @@ export default function CreativesPage() {
     }
   }, [selectedCreativeIds, deleteMutation]);
 
-  const total = creatives.data?.length ?? 0;
+  const handleMarkAsOwn = useCallback(async () => {
+    try {
+      await ownershipMutation.mutateAsync({ ids: selectedCreativeIds, ownership: "ours" });
+      toast.success(`Marked ${selectedCreativeIds.length} creative${selectedCreativeIds.length > 1 ? "s" : ""} as own`);
+      setRowSelection({});
+    } catch {
+      toast.error("Failed to update ownership");
+    }
+  }, [selectedCreativeIds, ownershipMutation]);
+
+  const total = creativeRows.length;
 
   return (
     <div className="flex flex-col gap-4">
@@ -477,6 +630,19 @@ export default function CreativesPage() {
             adSets={adSetsQuery.data}
           />
         )}
+        <FilterPill
+          value={sort}
+          onValueChange={(value) => setSort(value as (typeof SORT_OPTIONS)[number])}
+          placeholder="Sort"
+          options={[
+            { label: "Last synced ↓", value: "last_synced_desc" },
+            { label: "Last synced ↑", value: "last_synced_asc" },
+            { label: "Newest created", value: "created_desc" },
+            { label: "Oldest created", value: "created_asc" },
+            { label: "Name A-Z", value: "name_asc" },
+            { label: "Name Z-A", value: "name_desc" },
+          ]}
+        />
         <button
           type="button"
           onClick={() => setUntagged(!untagged)}
@@ -516,7 +682,8 @@ export default function CreativesPage() {
       ) : (
         <DataTable
           columns={columns}
-          data={(creatives.data ?? []) as Creative[]}
+          data={creativeRows as Creative[]}
+          getRowId={(row) => row.id}
           onRowClick={(row) => router.push(`/creatives/${row.id}`)}
           rowSelection={rowSelection}
           onRowSelectionChange={setRowSelection}
@@ -531,6 +698,9 @@ export default function CreativesPage() {
         <div className="fixed inset-x-0 bottom-6 z-50 flex justify-center">
           <div className="flex items-center gap-3 rounded-xl border border-border bg-background px-4 py-2.5 shadow-lg">
             <span className="text-sm font-medium">{selectedCreativeIds.length} selected</span>
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={handleMarkAsOwn} disabled={ownershipMutation.isPending}>
+              <UserCheck className="size-3.5" /> Mark as Own
+            </Button>
             <Button size="sm" variant="destructive" className="gap-1.5" onClick={() => setDeleteOpen(true)}>
               <Trash2 className="size-3.5" /> Delete
             </Button>

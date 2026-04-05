@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, desc, ilike, and, sql, type SQL } from "drizzle-orm";
+import { eq, desc, ilike, and, inArray, sql, type SQL } from "drizzle-orm";
 import { router, orgProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
@@ -465,6 +465,27 @@ export const adCreativeRouter = router({
         })
         .returning();
       return duplicate;
+    }),
+
+  bulkUpdateOwnership: orgProcedure
+    .meta(openApiMutationMeta("adCreative", "bulkUpdateOwnership"))
+    .input(
+      z.object({
+        ids: z.array(z.string()).min(1),
+        ownership: z.enum(["ours", "theirs"]),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      await db
+        .update(adCreatives)
+        .set({ ownership: input.ownership })
+        .where(
+          and(
+            inArray(adCreatives.id, input.ids),
+            eq(adCreatives.organizationId, ctx.organizationId),
+          ),
+        );
+      return { updated: input.ids.length };
     }),
 
   bulkImport: orgProcedure

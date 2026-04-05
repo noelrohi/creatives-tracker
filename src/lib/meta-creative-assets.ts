@@ -13,6 +13,7 @@ export type MetaCreativePreview = {
 type MetaAdCreativeResponse = {
   id?: string;
   creative?: {
+    image_hash?: string;
     image_url?: string;
     effective_image_url?: string;
     thumbnail_url?: string;
@@ -22,11 +23,13 @@ type MetaAdCreativeResponse = {
     object_story_spec?: {
       link_data?: {
         picture?: string;
-        image_url?: string;
+        image_hash?: string;
         link?: string;
       };
       video_data?: {
         image_url?: string;
+        image_hash?: string;
+        video_id?: string;
         call_to_action?: {
           value?: { link?: string };
         };
@@ -38,11 +41,13 @@ type MetaAdCreativeResponse = {
     effective_object_story_spec?: {
       link_data?: {
         picture?: string;
-        image_url?: string;
+        image_hash?: string;
         link?: string;
       };
       video_data?: {
         image_url?: string;
+        image_hash?: string;
+        video_id?: string;
         call_to_action?: {
           value?: { link?: string };
         };
@@ -54,9 +59,11 @@ type MetaAdCreativeResponse = {
     asset_feed_spec?: {
       images?: Array<{
         hash?: string;
+        url?: string;
       }>;
       videos?: Array<{
         video_id?: string;
+        thumbnail_url?: string;
       }>;
     };
   };
@@ -76,10 +83,23 @@ type MetaVideoSourceResponse = {
 const META_IDS_CHUNK_SIZE = 50;
 const META_IMAGE_HASH_CHUNK_SIZE = 50;
 
+function getStorySpecs(
+  creative: MetaAdCreativeResponse["creative"],
+): Array<
+  NonNullable<MetaAdCreativeResponse["creative"]>["object_story_spec"]
+> {
+  return [
+    creative?.object_story_spec,
+    creative?.effective_object_story_spec,
+  ].filter(Boolean);
+}
+
 function getCreativeVideoId(
   creative: MetaAdCreativeResponse["creative"],
 ): string | undefined {
   return creative?.video_id
+    ?? creative?.object_story_spec?.video_data?.video_id
+    ?? creative?.effective_object_story_spec?.video_data?.video_id
     ?? creative?.asset_feed_spec?.videos?.find((video) => video.video_id)?.video_id;
 }
 
@@ -104,10 +124,17 @@ function inferCreativeFormat(
   }
   if (
     creative?.effective_image_url ||
+    creative?.image_hash ||
     creative?.image_url ||
-    creative?.object_story_spec?.link_data?.image_url ||
-    creative?.effective_object_story_spec?.link_data?.image_url ||
+    creative?.object_story_spec?.link_data?.picture ||
+    creative?.object_story_spec?.link_data?.image_hash ||
+    creative?.object_story_spec?.video_data?.image_url ||
+    creative?.object_story_spec?.video_data?.image_hash ||
     creative?.object_story_spec?.photo_data?.url ||
+    creative?.effective_object_story_spec?.link_data?.picture ||
+    creative?.effective_object_story_spec?.link_data?.image_hash ||
+    creative?.effective_object_story_spec?.video_data?.image_url ||
+    creative?.effective_object_story_spec?.video_data?.image_hash ||
     creative?.effective_object_story_spec?.photo_data?.url ||
     creative?.asset_feed_spec?.images?.length ||
     creative?.thumbnail_url
@@ -128,16 +155,15 @@ async function fetchJson<T>(url: URL): Promise<T | null> {
 /**
  * Extract the best available image URL from a creative.
  * Priority (highest quality first):
- *   1. effective_image_url — the actual displayed image (most reliable, high-res)
+ *   1. effective_image_url — resolved image from Meta
  *   2. image_url — the originally uploaded image
- *   3. object_story_spec.link_data.image_url — full-res link ad image
- *   4. effective_object_story_spec.link_data.image_url — fallback link ad image
- *   5. object_story_spec.video_data.image_url — video poster
- *   6. effective_object_story_spec.video_data.image_url — fallback video poster
- *   7. object_story_spec.photo_data.url — photo ad image
- *   8. effective_object_story_spec.photo_data.url — fallback photo ad
- *   9. resolved image hash from act_xxx/adimages
- *  10. thumbnail_url — last resort (small)
+ *   3. object_story_spec/effective_object_story_spec link_data.picture — link ad image
+ *   4. object_story_spec/effective_object_story_spec video_data.image_url — video poster
+ *   5. object_story_spec/effective_object_story_spec photo_data.url — photo ad image
+ *   6. resolved image hash from creative/story spec/asset_feed_spec
+ *   7. asset_feed_spec image url — dynamic creative asset URL
+ *   8. asset_feed_spec video thumbnail_url — dynamic video poster
+ *   9. thumbnail_url — last resort (small)
  */
 function getBestImageUrl(
   creative: MetaAdCreativeResponse["creative"],
@@ -146,18 +172,33 @@ function getBestImageUrl(
   if (creative?.effective_image_url) return creative.effective_image_url;
   if (creative?.image_url) return creative.image_url;
 
-  const spec = creative?.object_story_spec;
-  const effSpec = creative?.effective_object_story_spec;
-  if (spec?.link_data?.image_url) return spec.link_data.image_url;
-  if (effSpec?.link_data?.image_url) return effSpec.link_data.image_url;
-  if (spec?.video_data?.image_url) return spec.video_data.image_url;
-  if (effSpec?.video_data?.image_url) return effSpec.video_data.image_url;
-  if (spec?.photo_data?.url) return spec.photo_data.url;
-  if (effSpec?.photo_data?.url) return effSpec.photo_data.url;
+  const specs = getStorySpecs(creative);
+  for (const spec of specs) {
+    if (spec?.link_data?.picture) return spec.link_data.picture;
+  }
+  for (const spec of specs) {
+    if (spec?.video_data?.image_url) return spec.video_data.image_url;
+  }
+  for (const spec of specs) {
+    if (spec?.photo_data?.url) return spec.photo_data.url;
+  }
 
-  const imageHash = creative?.asset_feed_spec?.images?.find((image) => image.hash)?.hash;
-  const resolved = imageHash ? resolvedImageUrls.get(imageHash) : undefined;
-  if (resolved) return resolved;
+  const imageHashes = [
+    creative?.image_hash,
+    ...specs.flatMap((spec) => [spec?.link_data?.image_hash, spec?.video_data?.image_hash]),
+    ...(creative?.asset_feed_spec?.images?.map((image) => image.hash) ?? []),
+  ].filter(Boolean) as string[];
+
+  for (const imageHash of imageHashes) {
+    const resolved = resolvedImageUrls.get(imageHash);
+    if (resolved) return resolved;
+  }
+
+  const dynamicImageUrl = creative?.asset_feed_spec?.images?.find((image) => image.url)?.url;
+  if (dynamicImageUrl) return dynamicImageUrl;
+
+  const dynamicVideoThumbnail = creative?.asset_feed_spec?.videos?.find((video) => video.thumbnail_url)?.thumbnail_url;
+  if (dynamicVideoThumbnail) return dynamicVideoThumbnail;
 
   if (creative?.thumbnail_url) return creative.thumbnail_url;
 
@@ -168,12 +209,14 @@ function getDestinationUrl(
   creative: MetaAdCreativeResponse["creative"],
 ): string | undefined {
   if (creative?.link_url) return creative.link_url;
-  const spec = creative?.object_story_spec;
-  const effSpec = creative?.effective_object_story_spec;
-  if (spec?.link_data?.link) return spec.link_data.link;
-  if (effSpec?.link_data?.link) return effSpec.link_data.link;
-  if (spec?.video_data?.call_to_action?.value?.link) return spec.video_data.call_to_action.value.link;
-  if (effSpec?.video_data?.call_to_action?.value?.link) return effSpec.video_data.call_to_action.value.link;
+  for (const spec of getStorySpecs(creative)) {
+    if (spec?.link_data?.link) return spec.link_data.link;
+  }
+  for (const spec of getStorySpecs(creative)) {
+    if (spec?.video_data?.call_to_action?.value?.link) {
+      return spec.video_data.call_to_action.value.link;
+    }
+  }
   return undefined;
 }
 
@@ -307,7 +350,7 @@ export async function fetchMetaCreativePreviewsForAds(input: {
     url.searchParams.set("ids", chunk.join(","));
     url.searchParams.set(
       "fields",
-      "creative{effective_image_url,image_url,thumbnail_url,link_url,video_id,object_type,object_story_spec,effective_object_story_spec,asset_feed_spec}",
+      "creative{image_hash,image_url,effective_image_url,thumbnail_url,link_url,video_id,object_type,object_story_spec,effective_object_story_spec,asset_feed_spec}",
     );
 
     const response = await fetchJson<Record<string, MetaAdCreativeResponse>>(url);
@@ -322,7 +365,14 @@ export async function fetchMetaCreativePreviewsForAds(input: {
 
   const imageHashes = [...new Set(
     [...creativesByAdId.values()]
-      .map((creative) => creative?.asset_feed_spec?.images?.find((image) => image.hash)?.hash)
+      .flatMap((creative) => [
+        creative?.image_hash,
+        creative?.object_story_spec?.link_data?.image_hash,
+        creative?.object_story_spec?.video_data?.image_hash,
+        creative?.effective_object_story_spec?.link_data?.image_hash,
+        creative?.effective_object_story_spec?.video_data?.image_hash,
+        ...(creative?.asset_feed_spec?.images?.map((image) => image.hash) ?? []),
+      ])
       .filter(Boolean) as string[],
   )];
   const resolvedImageUrls = imageHashes.length > 0
