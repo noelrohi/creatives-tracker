@@ -55,6 +55,7 @@ const SORT_OPTIONS = [
   "name_asc",
   "name_desc",
 ] as const;
+const OWNERSHIP = ["ours", "theirs"] as const;
 const AWARENESS = [
   "unaware",
   "problem_aware",
@@ -123,6 +124,7 @@ interface Creative {
   metaCampaignId: string | null;
   metaAdSetId: string | null;
   accountName: string | null;
+  ownership: string | null;
 }
 
 function MediaPreview({ creative }: { creative: Creative }) {
@@ -242,6 +244,27 @@ const columns: ColumnDef<Creative>[] = [
       if (!name) return <span className="text-muted-foreground/30">—</span>;
       return <span className="text-sm text-muted-foreground truncate max-w-[120px]">{name}</span>;
     },
+  },
+  {
+    accessorKey: "ownership",
+    header: "Ownership",
+    cell: ({ row }) => {
+      const val = row.getValue("ownership") as string | null;
+      if (!val) return <span className="text-muted-foreground/30">—</span>;
+      return (
+        <Badge
+          variant="secondary"
+          className={cn(
+            "text-[10px] capitalize",
+            val === "ours" && "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+            val === "theirs" && "bg-zinc-500/15 text-zinc-500 dark:text-zinc-400",
+          )}
+        >
+          {val}
+        </Badge>
+      );
+    },
+    size: 90,
   },
   {
     accessorKey: "updatedAt",
@@ -485,6 +508,10 @@ export default function CreativesPage() {
   const [search, setSearch] = useQueryState("q", { defaultValue: "" });
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
   const [adSetIds, setAdSetIds] = useQueryState("adSet", parseAsString.withDefault(""));
+  const [ownership, setOwnership] = useQueryState(
+    "ownership",
+    parseAsStringLiteral(OWNERSHIP).withDefault(undefined as unknown as (typeof OWNERSHIP)[number]),
+  );
   const [untagged, setUntagged] = useQueryState("untagged", parseAsBoolean.withDefault(false));
   const [sort, setSort] = useQueryState(
     "sort",
@@ -503,6 +530,7 @@ export default function CreativesPage() {
       search: search || undefined,
       accountId: accountId || undefined,
       adSetIds: adSetIds ? adSetIds.split(",") : undefined,
+      ownership: ownership || undefined,
       untaggedOnly: untagged || undefined,
     }),
   );
@@ -623,6 +651,16 @@ export default function CreativesPage() {
             ]}
           />
         )}
+        <FilterPill
+          value={ownership ?? "all"}
+          onValueChange={(v) => setOwnership(v === "all" ? null : (v as (typeof OWNERSHIP)[number]))}
+          placeholder="Ownership"
+          options={[
+            { label: "All Ownership", value: "all" },
+            { label: "Ours", value: "ours" },
+            { label: "Theirs", value: "theirs" },
+          ]}
+        />
         {adSetsQuery.data && adSetsQuery.data.length > 0 && (
           <AdSetCombobox
             value={adSetIds ? adSetIds.split(",").filter(Boolean) : []}
@@ -675,8 +713,8 @@ export default function CreativesPage() {
         <TableLoadingSkeleton />
       ) : total === 0 ? (
         <EmptyState
-          hasFilters={!!format || !!awareness || !!search || !!untagged || !!adSetIds}
-          onClear={() => { setFormat(null); setAwareness(null); setSearch(""); setUntagged(false); setAccountId(""); setAdSetIds(""); }}
+          hasFilters={!!format || !!awareness || !!search || !!untagged || !!adSetIds || !!ownership}
+          onClear={() => { setFormat(null); setAwareness(null); setSearch(""); setUntagged(false); setAccountId(""); setAdSetIds(""); setOwnership(null); }}
           onImport={() => router.push("/import")}
         />
       ) : (

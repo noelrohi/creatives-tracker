@@ -15,30 +15,11 @@ type MetaAdCreativeResponse = {
   creative?: {
     image_hash?: string;
     image_url?: string;
-    effective_image_url?: string;
     thumbnail_url?: string;
     link_url?: string;
     video_id?: string;
     object_type?: string;
     object_story_spec?: {
-      link_data?: {
-        picture?: string;
-        image_hash?: string;
-        link?: string;
-      };
-      video_data?: {
-        image_url?: string;
-        image_hash?: string;
-        video_id?: string;
-        call_to_action?: {
-          value?: { link?: string };
-        };
-      };
-      photo_data?: {
-        url?: string;
-      };
-    };
-    effective_object_story_spec?: {
       link_data?: {
         picture?: string;
         image_hash?: string;
@@ -88,10 +69,7 @@ function getStorySpecs(
 ): Array<
   NonNullable<MetaAdCreativeResponse["creative"]>["object_story_spec"]
 > {
-  return [
-    creative?.object_story_spec,
-    creative?.effective_object_story_spec,
-  ].filter(Boolean);
+  return [creative?.object_story_spec].filter(Boolean);
 }
 
 function getCreativeVideoId(
@@ -99,7 +77,6 @@ function getCreativeVideoId(
 ): string | undefined {
   return creative?.video_id
     ?? creative?.object_story_spec?.video_data?.video_id
-    ?? creative?.effective_object_story_spec?.video_data?.video_id
     ?? creative?.asset_feed_spec?.videos?.find((video) => video.video_id)?.video_id;
 }
 
@@ -115,7 +92,6 @@ function inferCreativeFormat(
   }
   if (
     creative?.object_story_spec?.video_data
-    || creative?.effective_object_story_spec?.video_data
   ) {
     return "video";
   }
@@ -123,7 +99,6 @@ function inferCreativeFormat(
     return "video";
   }
   if (
-    creative?.effective_image_url ||
     creative?.image_hash ||
     creative?.image_url ||
     creative?.object_story_spec?.link_data?.picture ||
@@ -131,11 +106,6 @@ function inferCreativeFormat(
     creative?.object_story_spec?.video_data?.image_url ||
     creative?.object_story_spec?.video_data?.image_hash ||
     creative?.object_story_spec?.photo_data?.url ||
-    creative?.effective_object_story_spec?.link_data?.picture ||
-    creative?.effective_object_story_spec?.link_data?.image_hash ||
-    creative?.effective_object_story_spec?.video_data?.image_url ||
-    creative?.effective_object_story_spec?.video_data?.image_hash ||
-    creative?.effective_object_story_spec?.photo_data?.url ||
     creative?.asset_feed_spec?.images?.length ||
     creative?.thumbnail_url
   ) {
@@ -155,21 +125,19 @@ async function fetchJson<T>(url: URL): Promise<T | null> {
 /**
  * Extract the best available image URL from a creative.
  * Priority (highest quality first):
- *   1. effective_image_url — resolved image from Meta
- *   2. image_url — the originally uploaded image
- *   3. object_story_spec/effective_object_story_spec link_data.picture — link ad image
- *   4. object_story_spec/effective_object_story_spec video_data.image_url — video poster
- *   5. object_story_spec/effective_object_story_spec photo_data.url — photo ad image
- *   6. resolved image hash from creative/story spec/asset_feed_spec
- *   7. asset_feed_spec image url — dynamic creative asset URL
- *   8. asset_feed_spec video thumbnail_url — dynamic video poster
- *   9. thumbnail_url — last resort (small)
+ *   1. image_url — the originally uploaded image
+ *   2. object_story_spec link_data.picture — link ad image
+ *   3. object_story_spec video_data.image_url — video poster
+ *   4. object_story_spec photo_data.url — photo ad image
+ *   5. resolved image hash from creative/story spec/asset_feed_spec
+ *   6. asset_feed_spec image url — dynamic creative asset URL
+ *   7. asset_feed_spec video thumbnail_url — dynamic video poster
+ *   8. thumbnail_url — last resort (small)
  */
 function getBestImageUrl(
   creative: MetaAdCreativeResponse["creative"],
   resolvedImageUrls: Map<string, string>,
 ): string | null {
-  if (creative?.effective_image_url) return creative.effective_image_url;
   if (creative?.image_url) return creative.image_url;
 
   const specs = getStorySpecs(creative);
@@ -267,6 +235,51 @@ function getVideoExtension(
   return "mp4";
 }
 
+function getImageExtension(
+  contentType: string | null,
+  sourceUrl: string,
+): string {
+  const normalizedContentType = contentType?.split(";")[0]?.trim().toLowerCase();
+  switch (normalizedContentType) {
+    case "image/jpeg":
+      return "jpg";
+    case "image/png":
+      return "png";
+    case "image/webp":
+      return "webp";
+    case "image/gif":
+      return "gif";
+    case "image/avif":
+      return "avif";
+    case "image/svg+xml":
+      return "svg";
+    default:
+      break;
+  }
+
+  try {
+    const pathname = new URL(sourceUrl).pathname;
+    const match = pathname.match(/\.([a-z0-9]+)$/i);
+    if (match?.[1]) {
+      const extension = match[1].toLowerCase();
+      return extension === "jpeg" ? "jpg" : extension;
+    }
+  } catch {
+    return "jpg";
+  }
+
+  return "jpg";
+}
+
+function isBlobUrl(value: string): boolean {
+  try {
+    const hostname = new URL(value).hostname;
+    return hostname.endsWith("blob.vercel-storage.com");
+  } catch {
+    return false;
+  }
+}
+
 async function fetchVideoSourceUrl(input: {
   videoId: string;
   accessToken: string;
@@ -320,6 +333,41 @@ async function fetchAndUploadVideo(input: {
   }
 }
 
+async function fetchAndUploadImage(input: {
+  adMetaId: string;
+  assetUrl: string;
+}): Promise<string | null> {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    return input.assetUrl;
+  }
+  if (isBlobUrl(input.assetUrl)) {
+    return input.assetUrl;
+  }
+
+  try {
+    const imageResponse = await fetch(input.assetUrl);
+    if (!imageResponse.ok) {
+      return null;
+    }
+
+    const contentType = imageResponse.headers.get("content-type");
+    const extension = getImageExtension(contentType, input.assetUrl);
+    const env = process.env.NODE_ENV === "production" ? "prod" : "dev";
+    const pathname = `${env}/meta-previews/${input.adMetaId}.${extension}`;
+    const body = imageResponse.body ?? await imageResponse.arrayBuffer();
+
+    const blob = await put(pathname, body, {
+      access: "public",
+      allowOverwrite: true,
+      contentType: contentType ?? undefined,
+    });
+
+    return blob.url;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchAdImageUrls(input: {
   imageHashes: string[];
   metaAccountId: string;
@@ -351,6 +399,7 @@ export async function fetchMetaCreativePreviewsForAds(input: {
   adMetaIds: string[];
   metaAccountId: string;
   accessToken: string;
+  assetUrlMode?: "direct" | "uploaded";
   videoUrlMode?: "none" | "uploaded" | "direct";
 }) {
   const previews = new Map<string, MetaCreativePreview>();
@@ -363,7 +412,7 @@ export async function fetchMetaCreativePreviewsForAds(input: {
     url.searchParams.set("ids", chunk.join(","));
     url.searchParams.set(
       "fields",
-      "creative{image_hash,image_url,effective_image_url,thumbnail_url,link_url,video_id,object_type,object_story_spec,effective_object_story_spec,asset_feed_spec}",
+      "creative{image_hash,image_url,thumbnail_url,link_url,video_id,object_type,object_story_spec,asset_feed_spec}",
     );
 
     const response = await fetchJson<Record<string, MetaAdCreativeResponse>>(url);
@@ -382,8 +431,6 @@ export async function fetchMetaCreativePreviewsForAds(input: {
         creative?.image_hash,
         creative?.object_story_spec?.link_data?.image_hash,
         creative?.object_story_spec?.video_data?.image_hash,
-        creative?.effective_object_story_spec?.link_data?.image_hash,
-        creative?.effective_object_story_spec?.video_data?.image_hash,
         ...(creative?.asset_feed_spec?.images?.map((image) => image.hash) ?? []),
       ])
       .filter(Boolean) as string[],
@@ -400,6 +447,32 @@ export async function fetchMetaCreativePreviewsForAds(input: {
     const creative = creativesByAdId.get(adMetaId);
     if (creative) {
       previews.set(adMetaId, toPreview(creative, resolvedImageUrls));
+    }
+  }
+
+  const assetUrlMode = input.assetUrlMode ?? "uploaded";
+  if (assetUrlMode === "uploaded") {
+    const uploadedAssetUrls = new Map<string, string | null>();
+    for (const adMetaId of input.adMetaIds) {
+      const preview = previews.get(adMetaId);
+      if (!preview?.assetUrl) {
+        continue;
+      }
+
+      if (!uploadedAssetUrls.has(preview.assetUrl)) {
+        uploadedAssetUrls.set(
+          preview.assetUrl,
+          await fetchAndUploadImage({
+            adMetaId,
+            assetUrl: preview.assetUrl,
+          }),
+        );
+      }
+
+      const uploadedAssetUrl = uploadedAssetUrls.get(preview.assetUrl);
+      if (uploadedAssetUrl) {
+        preview.assetUrl = uploadedAssetUrl;
+      }
     }
   }
 
@@ -444,12 +517,14 @@ export async function fetchMetaCreativePreview(input: {
   adMetaId: string;
   metaAccountId: string;
   accessToken: string;
+  assetUrlMode?: "direct" | "uploaded";
   videoUrlMode?: "none" | "uploaded" | "direct";
 }): Promise<MetaCreativePreview | null> {
   const previews = await fetchMetaCreativePreviewsForAds({
     adMetaIds: [input.adMetaId],
     metaAccountId: input.metaAccountId,
     accessToken: input.accessToken,
+    assetUrlMode: input.assetUrlMode,
     videoUrlMode: input.videoUrlMode,
   });
   return previews.get(input.adMetaId) ?? null;

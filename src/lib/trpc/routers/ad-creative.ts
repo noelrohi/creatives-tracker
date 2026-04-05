@@ -72,6 +72,13 @@ export const adCreativeRouter = router({
           name: adCreatives.name,
           assetUrl: adCreatives.assetUrl,
           videoUrl: adCreatives.videoUrl,
+          destinationUrl: sql<string | null>`(
+            SELECT ad.destination_url FROM ad
+            WHERE ad.ad_creative_id = ${adCreatives.id}
+              AND ad.destination_url IS NOT NULL
+            ORDER BY ad.updated_at DESC NULLS LAST, ad.created_at DESC
+            LIMIT 1
+          )`.as("destination_url"),
           format: adCreatives.format,
           angle: adCreatives.angle,
           persona: adCreatives.persona,
@@ -370,6 +377,13 @@ export const adCreativeRouter = router({
           name: adCreatives.name,
           assetUrl: adCreatives.assetUrl,
           videoUrl: adCreatives.videoUrl,
+          destinationUrl: sql<string | null>`(
+            SELECT ad.destination_url FROM ad
+            WHERE ad.ad_creative_id = ${adCreatives.id}
+              AND ad.destination_url IS NOT NULL
+            ORDER BY ad.updated_at DESC NULLS LAST, ad.created_at DESC
+            LIMIT 1
+          )`.as("destination_url"),
           format: adCreatives.format,
           angle: adCreatives.angle,
           persona: adCreatives.persona,

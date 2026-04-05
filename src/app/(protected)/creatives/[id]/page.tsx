@@ -40,6 +40,7 @@ import {
 import {
   ArrowLeft,
   Copy,
+  ExternalLink,
   MoreHorizontalIcon,
   Trash2,
 } from "lucide-react";
@@ -72,7 +73,6 @@ export default function CreativeDetailPage() {
 
   const creative = useQuery(trpc.adCreative.getById.queryOptions({ id }));
   const perf = useQuery(trpc.adCreative.getPerformance.queryOptions({ id }));
-  const landingPages = useQuery(trpc.landingPage.list.queryOptions());
   const linkedAds = useQuery(trpc.ad.listByCreative.queryOptions({ adCreativeId: id }));
   const accountsQuery = useQuery(trpc.adAccount.list.queryOptions());
 
@@ -174,11 +174,6 @@ export default function CreativeDetailPage() {
       </div>
     );
   }
-
-  const landingPageOptions = (landingPages.data ?? []).map((lp) => ({
-    label: lp.name,
-    value: lp.id,
-  }));
 
   return (
     <div className="mx-auto max-w-4xl pt-2">
@@ -463,28 +458,21 @@ export default function CreativeDetailPage() {
             </div>
 
             <Field>
-              <FieldLabel>Landing Page</FieldLabel>
-              <Controller
-                control={form.control}
-                name="landingPageId"
-                render={({ field }) => (
-                  <Select
-                    value={field.value ?? ""}
-                    onValueChange={(v) => field.onChange(v || null)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select landing page" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {landingPageOptions.map((opt) => (
-                        <SelectItem key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+              <FieldLabel>Attributed Landing Page</FieldLabel>
+              <div className="flex gap-2">
+                <Input
+                  value={creative.data.destinationUrl ?? ""}
+                  readOnly
+                  placeholder="No attributed landing page URL found"
+                />
+                {creative.data.destinationUrl && (
+                  <Button type="button" variant="outline" size="icon-sm" asChild>
+                    <a href={creative.data.destinationUrl} target="_blank" rel="noopener noreferrer" aria-label="Open landing page">
+                      <ExternalLink />
+                    </a>
+                  </Button>
                 )}
-              />
+              </div>
             </Field>
 
             <Field>
