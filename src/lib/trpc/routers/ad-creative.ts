@@ -154,8 +154,8 @@ export const adCreativeRouter = router({
       z.object({
         from: z.string(),
         to: z.string(),
-        accountId: z.string().optional(),
-        ownership: z.enum(["ours", "theirs"]).optional(),
+        accountId: z.string().nullish(),
+        ownership: z.enum(["ours", "theirs"]).nullish(),
       }).optional(),
     )
     .query(async ({ input, ctx }) => {
