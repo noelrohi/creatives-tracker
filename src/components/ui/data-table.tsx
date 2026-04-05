@@ -2,6 +2,7 @@
 
 import {
   type ColumnDef,
+  type PaginationState,
   type Row,
   type SortingState,
   type RowSelectionState,
@@ -60,6 +61,10 @@ export function DataTable<TData, TValue>({
   meta,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = useState<SortingState>([]);
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize,
+  });
   const [internalSelection, setInternalSelection] = useState<RowSelectionState>({});
   const [internalVisibility, setInternalVisibility] = useState<VisibilityState>(
     defaultColumnVisibility ?? {},
@@ -74,8 +79,15 @@ export function DataTable<TData, TValue>({
     data,
     columns,
     getRowId,
-    state: { sorting, rowSelection: selection, columnVisibility: visibility },
+    state: {
+      sorting,
+      pagination,
+      rowSelection: selection,
+      columnVisibility: visibility,
+    },
+    autoResetPageIndex: false,
     onSortingChange: setSorting,
+    onPaginationChange: setPagination,
     onColumnVisibilityChange: (updater) => {
       const next = typeof updater === "function" ? updater(visibility) : updater;
       setVisibility(next);
@@ -87,7 +99,6 @@ export function DataTable<TData, TValue>({
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    initialState: { pagination: { pageSize } },
     meta,
   });
 
