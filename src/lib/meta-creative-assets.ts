@@ -7,23 +7,48 @@ export type MetaCreativePreview = {
   assetUrl: string | null;
   format: "static" | "video" | null;
   videoUrl?: string;
+  destinationUrl?: string;
 };
 
 type MetaAdCreativeResponse = {
   id?: string;
   creative?: {
     image_url?: string;
+    effective_image_url?: string;
     thumbnail_url?: string;
+    link_url?: string;
     video_id?: string;
     object_type?: string;
     object_story_spec?: {
+      link_data?: {
+        picture?: string;
+        image_url?: string;
+        link?: string;
+      };
       video_data?: {
         image_url?: string;
+        call_to_action?: {
+          value?: { link?: string };
+        };
+      };
+      photo_data?: {
+        url?: string;
       };
     };
     effective_object_story_spec?: {
+      link_data?: {
+        picture?: string;
+        image_url?: string;
+        link?: string;
+      };
       video_data?: {
         image_url?: string;
+        call_to_action?: {
+          value?: { link?: string };
+        };
+      };
+      photo_data?: {
+        url?: string;
       };
     };
     asset_feed_spec?: {
@@ -78,7 +103,12 @@ function inferCreativeFormat(
     return "video";
   }
   if (
+    creative?.effective_image_url ||
     creative?.image_url ||
+    creative?.object_story_spec?.link_data?.image_url ||
+    creative?.effective_object_story_spec?.link_data?.image_url ||
+    creative?.object_story_spec?.photo_data?.url ||
+    creative?.effective_object_story_spec?.photo_data?.url ||
     creative?.asset_feed_spec?.images?.length ||
     creative?.thumbnail_url
   ) {
@@ -95,57 +125,69 @@ async function fetchJson<T>(url: URL): Promise<T | null> {
   return (await response.json()) as T;
 }
 
+/**
+ * Extract the best available image URL from a creative.
+ * Priority (highest quality first):
+ *   1. effective_image_url — the actual displayed image (most reliable, high-res)
+ *   2. image_url — the originally uploaded image
+ *   3. object_story_spec.link_data.image_url — full-res link ad image
+ *   4. effective_object_story_spec.link_data.image_url — fallback link ad image
+ *   5. object_story_spec.video_data.image_url — video poster
+ *   6. effective_object_story_spec.video_data.image_url — fallback video poster
+ *   7. object_story_spec.photo_data.url — photo ad image
+ *   8. effective_object_story_spec.photo_data.url — fallback photo ad
+ *   9. resolved image hash from act_xxx/adimages
+ *  10. thumbnail_url — last resort (small)
+ */
+function getBestImageUrl(
+  creative: MetaAdCreativeResponse["creative"],
+  resolvedImageUrls: Map<string, string>,
+): string | null {
+  if (creative?.effective_image_url) return creative.effective_image_url;
+  if (creative?.image_url) return creative.image_url;
+
+  const spec = creative?.object_story_spec;
+  const effSpec = creative?.effective_object_story_spec;
+  if (spec?.link_data?.image_url) return spec.link_data.image_url;
+  if (effSpec?.link_data?.image_url) return effSpec.link_data.image_url;
+  if (spec?.video_data?.image_url) return spec.video_data.image_url;
+  if (effSpec?.video_data?.image_url) return effSpec.video_data.image_url;
+  if (spec?.photo_data?.url) return spec.photo_data.url;
+  if (effSpec?.photo_data?.url) return effSpec.photo_data.url;
+
+  const imageHash = creative?.asset_feed_spec?.images?.find((image) => image.hash)?.hash;
+  const resolved = imageHash ? resolvedImageUrls.get(imageHash) : undefined;
+  if (resolved) return resolved;
+
+  if (creative?.thumbnail_url) return creative.thumbnail_url;
+
+  return null;
+}
+
+function getDestinationUrl(
+  creative: MetaAdCreativeResponse["creative"],
+): string | undefined {
+  if (creative?.link_url) return creative.link_url;
+  const spec = creative?.object_story_spec;
+  const effSpec = creative?.effective_object_story_spec;
+  if (spec?.link_data?.link) return spec.link_data.link;
+  if (effSpec?.link_data?.link) return effSpec.link_data.link;
+  if (spec?.video_data?.call_to_action?.value?.link) return spec.video_data.call_to_action.value.link;
+  if (effSpec?.video_data?.call_to_action?.value?.link) return effSpec.video_data.call_to_action.value.link;
+  return undefined;
+}
+
 function toPreview(
   creative: MetaAdCreativeResponse["creative"],
   resolvedImageUrls: Map<string, string>,
 ): MetaCreativePreview {
   const format = inferCreativeFormat(creative);
-
-  if (format === "video") {
-    const videoPoster = creative?.object_story_spec?.video_data?.image_url
-      ?? creative?.effective_object_story_spec?.video_data?.image_url;
-    if (videoPoster) {
-      return {
-        assetUrl: videoPoster,
-        format,
-      };
-    }
-
-    if (creative?.thumbnail_url) {
-      return {
-        assetUrl: creative.thumbnail_url,
-        format,
-      };
-    }
-  }
-
-  if (creative?.image_url) {
-    return {
-      assetUrl: creative.image_url,
-      format: format ?? "static",
-    };
-  }
-
-  const imageHash = creative?.asset_feed_spec?.images?.find((image) => image.hash)
-    ?.hash;
-  const resolved = imageHash ? resolvedImageUrls.get(imageHash) : undefined;
-  if (resolved) {
-    return {
-      assetUrl: resolved,
-      format: format ?? "static",
-    };
-  }
-
-  if (creative?.thumbnail_url) {
-    return {
-      assetUrl: creative.thumbnail_url,
-      format: format ?? "static",
-    };
-  }
+  const assetUrl = getBestImageUrl(creative, resolvedImageUrls);
 
   return {
-    assetUrl: null,
-    format,
+    assetUrl,
+    format: format ?? (assetUrl ? "static" : null),
+    destinationUrl: getDestinationUrl(creative),
   };
 }
 
@@ -265,7 +307,7 @@ export async function fetchMetaCreativePreviewsForAds(input: {
     url.searchParams.set("ids", chunk.join(","));
     url.searchParams.set(
       "fields",
-      "creative{image_url,thumbnail_url,video_id,object_type,object_story_spec,effective_object_story_spec,asset_feed_spec}",
+      "creative{effective_image_url,image_url,thumbnail_url,link_url,video_id,object_type,object_story_spec,effective_object_story_spec,asset_feed_spec}",
     );
 
     const response = await fetchJson<Record<string, MetaAdCreativeResponse>>(url);

@@ -9,6 +9,7 @@ export function mapRowsForImport(rows: MappedRow[]) {
     assetUrl: r.assetUrl,
     videoUrl: r.videoUrl,
     format: r.format,
+    destinationUrl: r.destinationUrl,
     roas: r.roas,
     cpa: r.cpa,
     ctr: r.ctr,

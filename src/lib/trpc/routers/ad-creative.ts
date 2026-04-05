@@ -446,6 +446,7 @@ export const adCreativeRouter = router({
             gender: z.string().optional(),
             delivery: z.string().optional(),
             adId: z.string().optional(),
+            destinationUrl: z.string().optional(),
             campaignName: z.string().optional(),
             campaignId: z.string().optional(),
             adSetName: z.string().optional(),
@@ -697,7 +698,7 @@ export const adCreativeRouter = router({
       }
 
       // 1. Collect unique ads from import, keyed by metaAdId (primary) or name (fallback)
-      const adInfoMap = new Map<string, { name: string; delivery?: string; metaAdId?: string; adSetDbId?: string }>();
+      const adInfoMap = new Map<string, { name: string; delivery?: string; metaAdId?: string; adSetDbId?: string; destinationUrl?: string }>();
       for (const row of input.rows) {
         const key = row.adId || row.name;
         const adSetKey = normalizeName(row.adSetId)
@@ -714,6 +715,7 @@ export const adCreativeRouter = router({
             delivery: row.delivery,
             metaAdId: row.adId,
             adSetDbId: adSetKey ? adSetIdByKey.get(adSetKey) : undefined,
+            destinationUrl: row.destinationUrl,
           });
         }
       }
@@ -859,6 +861,7 @@ export const adCreativeRouter = router({
             adCreativeId: creativeIdByName.get(info.name),
             status: normalizeStatus(info.delivery),
             metaId: info.metaAdId,
+            destinationUrl: info.destinationUrl,
             accountId: input.accountId,
             organizationId: ctx.organizationId,
           };
@@ -879,6 +882,7 @@ export const adCreativeRouter = router({
           ...(creativeIdByName.get(info.name) ? { adCreativeId: creativeIdByName.get(info.name) } : {}),
           ...(info.adSetDbId ? { adSetId: info.adSetDbId } : {}),
           ...(info.metaAdId ? { metaId: info.metaAdId } : {}),
+          ...(info.destinationUrl ? { destinationUrl: info.destinationUrl } : {}),
           ...(input.accountId ? { accountId: input.accountId } : {}),
         }).where(
           and(eq(ads.id, existing.id), eq(ads.organizationId, ctx.organizationId)),

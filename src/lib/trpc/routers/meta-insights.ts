@@ -236,6 +236,9 @@ export const metaInsightsRouter = router({
             if (preview.format) {
               row.format = preview.format;
             }
+            if (preview.destinationUrl) {
+              row.destinationUrl = preview.destinationUrl;
+            }
           }
         }
       }
