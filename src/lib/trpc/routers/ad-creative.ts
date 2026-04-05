@@ -10,6 +10,7 @@ import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
 import { performanceLogs } from "@/schema/performance-log";
 import { adAccounts } from "@/schema/account";
+import { fetchMetaCreativePreview, fetchMetaCreativePreviewsForAds } from "@/lib/meta-creative-assets";
 
 export const adCreativeRouter = router({
   list: orgProcedure
@@ -390,6 +391,46 @@ export const adCreativeRouter = router({
       return creative;
     }),
 
+  fetchMetaPreview: orgProcedure
+    .meta(openApiMutationMeta("adCreative", "fetchMetaPreview"))
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      const [linkedMetaAd] = await db
+        .select({
+          metaAdId: ads.metaId,
+          metaAccountId: adAccounts.metaAccountId,
+          metaAccessToken: adAccounts.metaAccessToken,
+        })
+        .from(ads)
+        .innerJoin(adAccounts, eq(ads.accountId, adAccounts.id))
+        .where(
+          and(
+            eq(ads.adCreativeId, input.id),
+            eq(ads.organizationId, ctx.organizationId),
+            sql`${ads.metaId} IS NOT NULL`,
+            sql`${adAccounts.metaAccessToken} IS NOT NULL`,
+          ),
+        )
+        .limit(1);
+
+      if (!linkedMetaAd?.metaAdId || !linkedMetaAd.metaAccessToken) {
+        throw new Error("No linked Meta ad with API access was found for this creative");
+      }
+
+      const preview = await fetchMetaCreativePreview({
+        adMetaId: linkedMetaAd.metaAdId,
+        metaAccountId: linkedMetaAd.metaAccountId,
+        accessToken: linkedMetaAd.metaAccessToken,
+        videoUrlMode: "direct",
+      });
+
+      if (!preview) {
+        throw new Error("Meta preview is not available for this creative");
+      }
+
+      return preview;
+    }),
+
   create: orgProcedure
     .meta(openApiMutationMeta("adCreative", "create"))
     .input(z.object({ name: z.string().optional() }).optional())
@@ -545,6 +586,7 @@ export const adCreativeRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      const rows = input.rows.map((row) => ({ ...row }));
       const normalizeName = (value?: string | null) => value?.trim() || undefined;
       const normalizeDimension = (value?: string | null) => value?.trim() || "";
       const normalizeDateValue = (value: string | Date) =>
@@ -577,9 +619,64 @@ export const adCreativeRouter = router({
         normalizeDimension(row.gender),
       ].join("|");
 
+      const [accountRecord] = input.accountId
+        ? await db
+            .select({
+              metaAccountId: adAccounts.metaAccountId,
+              metaAccessToken: adAccounts.metaAccessToken,
+              dataDateEnd: adAccounts.dataDateEnd,
+            })
+            .from(adAccounts)
+            .where(
+              and(
+                eq(adAccounts.id, input.accountId),
+                eq(adAccounts.organizationId, ctx.organizationId),
+              ),
+            )
+        : [];
+
+      const adIdsNeedingPreview = accountRecord?.metaAccessToken
+        ? [...new Set(
+            rows
+              .filter((row) =>
+                row.adId
+                && (!row.assetUrl || !row.videoUrl || !row.format || !row.destinationUrl),
+              )
+              .map((row) => row.adId as string),
+          )]
+        : [];
+
+      if (accountRecord?.metaAccessToken && adIdsNeedingPreview.length > 0) {
+        const previews = await fetchMetaCreativePreviewsForAds({
+          adMetaIds: adIdsNeedingPreview,
+          metaAccountId: accountRecord.metaAccountId,
+          accessToken: accountRecord.metaAccessToken,
+          videoUrlMode: "none",
+        });
+
+        for (const row of rows) {
+          if (!row.adId) continue;
+          const preview = previews.get(row.adId);
+          if (!preview) continue;
+
+          if (!row.assetUrl && preview.assetUrl) {
+            row.assetUrl = preview.assetUrl;
+          }
+          if (!row.videoUrl && preview.videoUrl) {
+            row.videoUrl = preview.videoUrl;
+          }
+          if (!row.format && preview.format) {
+            row.format = preview.format;
+          }
+          if (!row.destinationUrl && preview.destinationUrl) {
+            row.destinationUrl = preview.destinationUrl;
+          }
+        }
+      }
+
       // 1. Upsert campaigns from imported hierarchy data
       const campaignInfoMap = new Map<string, { name: string; metaId?: string }>();
-      for (const row of input.rows) {
+      for (const row of rows) {
         const campaignName = normalizeName(row.campaignName);
         const campaignMetaId = normalizeName(row.campaignId);
         if (!campaignName && !campaignMetaId) continue;
@@ -675,7 +772,7 @@ export const adCreativeRouter = router({
 
       // 2. Upsert ad sets from imported hierarchy data
       const adSetInfoMap = new Map<string, { name: string; metaId?: string; campaignDbId: string }>();
-      for (const row of input.rows) {
+      for (const row of rows) {
         const adSetName = normalizeName(row.adSetName);
         const adSetMetaId = normalizeName(row.adSetId);
         const campaignName = normalizeName(row.campaignName);
@@ -786,7 +883,7 @@ export const adCreativeRouter = router({
 
       // 1. Collect unique ads from import, keyed by metaAdId (primary) or name (fallback)
       const adInfoMap = new Map<string, { name: string; delivery?: string; metaAdId?: string; adSetDbId?: string; destinationUrl?: string }>();
-      for (const row of input.rows) {
+      for (const row of rows) {
         const key = row.adId || row.name;
         const adSetKey = normalizeName(row.adSetId)
           ?? (() => {
@@ -865,7 +962,7 @@ export const adCreativeRouter = router({
         videoUrl?: string;
         format?: "static" | "video" | "ugc" | "carousel";
       }>();
-      for (const row of input.rows) {
+      for (const row of rows) {
         if (!row.assetUrl && !row.videoUrl && !row.format) continue;
         const existing = importedCreativeMetaByName.get(row.name);
         importedCreativeMetaByName.set(row.name, {
@@ -1018,7 +1115,7 @@ export const adCreativeRouter = router({
       // 8. Replace only the exact imported breakdown rows, then bulk insert
       const perfRows: (typeof performanceLogs.$inferInsert)[] = [];
 
-      for (const row of input.rows) {
+      for (const row of rows) {
         const adId = (row.adId && adIdByMetaId.get(row.adId)) || adIdByName.get(row.name);
         if (!adId) continue;
 
@@ -1129,18 +1226,9 @@ export const adCreativeRouter = router({
       if (input.accountId) {
         const dateEnds = perfRows.map((r) => r.dateEnd).filter(Boolean) as string[];
         const maxDataDate = dateEnds.sort().reverse()[0] ?? null;
-        const [account] = await db
-          .select({ dataDateEnd: adAccounts.dataDateEnd })
-          .from(adAccounts)
-          .where(
-            and(
-              eq(adAccounts.id, input.accountId),
-              eq(adAccounts.organizationId, ctx.organizationId),
-            ),
-          );
-        const nextDataDateEnd = account?.dataDateEnd && maxDataDate
-          ? (account.dataDateEnd > maxDataDate ? account.dataDateEnd : maxDataDate)
-          : account?.dataDateEnd ?? maxDataDate;
+        const nextDataDateEnd = accountRecord?.dataDateEnd && maxDataDate
+          ? (accountRecord.dataDateEnd > maxDataDate ? accountRecord.dataDateEnd : maxDataDate)
+          : accountRecord?.dataDateEnd ?? maxDataDate;
 
         await db.update(adAccounts).set({
           lastImportedAt: new Date(),
@@ -1155,7 +1243,7 @@ export const adCreativeRouter = router({
 
       return {
         created: results,
-        totalRows: input.rows.length,
+        totalRows: rows.length,
         uniqueAds: adInfoMap.size,
         perfLogs: perfRows.length,
       };

@@ -267,6 +267,22 @@ function getVideoExtension(
   return "mp4";
 }
 
+async function fetchVideoSourceUrl(input: {
+  videoId: string;
+  accessToken: string;
+}): Promise<string | null> {
+  try {
+    const videoUrl = new URL(`${GRAPH_API_BASE}/${input.videoId}`);
+    videoUrl.searchParams.set("access_token", input.accessToken);
+    videoUrl.searchParams.set("fields", "source");
+
+    const video = await fetchJson<MetaVideoSourceResponse>(videoUrl);
+    return video?.source ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchAndUploadVideo(input: {
   videoId: string;
   accessToken: string;
@@ -276,22 +292,18 @@ async function fetchAndUploadVideo(input: {
   }
 
   try {
-    const videoUrl = new URL(`${GRAPH_API_BASE}/${input.videoId}`);
-    videoUrl.searchParams.set("access_token", input.accessToken);
-    videoUrl.searchParams.set("fields", "source");
-
-    const video = await fetchJson<MetaVideoSourceResponse>(videoUrl);
-    if (!video?.source) {
+    const sourceUrl = await fetchVideoSourceUrl(input);
+    if (!sourceUrl) {
       return null;
     }
 
-    const videoResponse = await fetch(video.source);
+    const videoResponse = await fetch(sourceUrl);
     if (!videoResponse.ok) {
       return null;
     }
 
     const contentType = videoResponse.headers.get("content-type");
-    const extension = getVideoExtension(contentType, video.source);
+    const extension = getVideoExtension(contentType, sourceUrl);
     const env = process.env.NODE_ENV === "production" ? "prod" : "dev";
     const pathname = `${env}/meta-videos/${input.videoId}.${extension}`;
     const body = videoResponse.body ?? await videoResponse.arrayBuffer();
@@ -339,6 +351,7 @@ export async function fetchMetaCreativePreviewsForAds(input: {
   adMetaIds: string[];
   metaAccountId: string;
   accessToken: string;
+  videoUrlMode?: "none" | "uploaded" | "direct";
 }) {
   const previews = new Map<string, MetaCreativePreview>();
   const creativesByAdId = new Map<string, MetaAdCreativeResponse["creative"]>();
@@ -390,26 +403,37 @@ export async function fetchMetaCreativePreviewsForAds(input: {
     }
   }
 
-  const uploadedVideoUrls = new Map<string, string | null>();
-  for (const adMetaId of input.adMetaIds) {
-    const creative = creativesByAdId.get(adMetaId);
-    const preview = previews.get(adMetaId);
-    const videoId = getCreativeVideoId(creative);
+  const videoUrlMode = input.videoUrlMode ?? "none";
+  if (videoUrlMode !== "none") {
+    const videoUrls = new Map<string, string | null>();
+    for (const adMetaId of input.adMetaIds) {
+      const creative = creativesByAdId.get(adMetaId);
+      const preview = previews.get(adMetaId);
+      const videoId = getCreativeVideoId(creative);
 
-    if (!preview || preview.format !== "video" || !videoId) {
-      continue;
-    }
+      if (!preview || preview.format !== "video" || !videoId) {
+        continue;
+      }
 
-    if (!uploadedVideoUrls.has(videoId)) {
-      uploadedVideoUrls.set(videoId, await fetchAndUploadVideo({
-        videoId,
-        accessToken: input.accessToken,
-      }));
-    }
+      if (!videoUrls.has(videoId)) {
+        videoUrls.set(
+          videoId,
+          videoUrlMode === "uploaded"
+            ? await fetchAndUploadVideo({
+                videoId,
+                accessToken: input.accessToken,
+              })
+            : await fetchVideoSourceUrl({
+                videoId,
+                accessToken: input.accessToken,
+              }),
+        );
+      }
 
-    const videoUrl = uploadedVideoUrls.get(videoId);
-    if (videoUrl) {
-      preview.videoUrl = videoUrl;
+      const videoUrl = videoUrls.get(videoId);
+      if (videoUrl) {
+        preview.videoUrl = videoUrl;
+      }
     }
   }
 
@@ -420,11 +444,13 @@ export async function fetchMetaCreativePreview(input: {
   adMetaId: string;
   metaAccountId: string;
   accessToken: string;
+  videoUrlMode?: "none" | "uploaded" | "direct";
 }): Promise<MetaCreativePreview | null> {
   const previews = await fetchMetaCreativePreviewsForAds({
     adMetaIds: [input.adMetaId],
     metaAccountId: input.metaAccountId,
     accessToken: input.accessToken,
+    videoUrlMode: input.videoUrlMode,
   });
   return previews.get(input.adMetaId) ?? null;
 }

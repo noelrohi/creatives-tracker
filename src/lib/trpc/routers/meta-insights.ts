@@ -221,6 +221,7 @@ export const metaInsightsRouter = router({
             adMetaIds,
             metaAccountId: account.metaAccountId,
             accessToken: account.metaAccessToken,
+            videoUrlMode: "none",
           });
 
           for (const row of rows) {

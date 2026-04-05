@@ -54,6 +54,7 @@ import {
   toCreativeMutationInput,
   type CreativeFormValues,
 } from "@/lib/creative-form";
+import type { MetaCreativePreview } from "@/lib/meta-creative-assets";
 
 function isVideoFileUrl(value: string | null | undefined) {
   return Boolean(value?.match(/\.(mp4|webm|mov)(\?|$)/i));
@@ -67,6 +68,7 @@ export default function CreativeDetailPage() {
   const id = params.id as string;
 
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [metaPreview, setMetaPreview] = useState<MetaCreativePreview | null>(null);
 
   const creative = useQuery(trpc.adCreative.getById.queryOptions({ id }));
   const perf = useQuery(trpc.adCreative.getPerformance.queryOptions({ id }));
@@ -109,15 +111,36 @@ export default function CreativeDetailPage() {
     onError: (error) => toast.error(error.message || "Failed to delete"),
   });
 
+  const metaPreviewMutation = useMutation(
+    trpc.adCreative.fetchMetaPreview.mutationOptions({
+      onSuccess: (preview) => {
+        setMetaPreview(preview);
+        if (preview.videoUrl) {
+          toast.success("Loaded Meta preview");
+          return;
+        }
+        if (preview.assetUrl) {
+          toast.success("Loaded Meta poster preview");
+          return;
+        }
+        toast.error("Meta preview is not available for this creative");
+      },
+      onError: (error) => toast.error(error.message || "Failed to load Meta preview"),
+    }),
+  );
+
   function onSubmit(values: CreativeFormValues) {
     updateMutation.mutate({ id, ...toCreativeMutationInput(values) });
   }
 
   const assetUrl = useWatch({ control: form.control, name: "assetUrl" });
   const format = useWatch({ control: form.control, name: "format" });
-  const playableVideoUrl = isVideoFileUrl(assetUrl)
+  const displayAssetUrl = assetUrl ?? metaPreview?.assetUrl ?? null;
+  const previewFormat = format ?? metaPreview?.format ?? creative.data?.format ?? null;
+  const playableVideoUrl = metaPreview?.videoUrl ?? (isVideoFileUrl(assetUrl)
     ? assetUrl
-    : creative.data?.videoUrl ?? null;
+    : creative.data?.videoUrl ?? null);
+  const canFetchMetaPreview = (!displayAssetUrl || (previewFormat === "video" && !playableVideoUrl));
 
   if (creative.isLoading) {
     return (
@@ -224,22 +247,22 @@ export default function CreativeDetailPage() {
         {playableVideoUrl ? (
           <video
             src={playableVideoUrl}
-            poster={assetUrl && assetUrl !== playableVideoUrl ? assetUrl : undefined}
+            poster={displayAssetUrl && displayAssetUrl !== playableVideoUrl ? displayAssetUrl : undefined}
             controls
             playsInline
             preload="metadata"
             className="w-full max-h-[400px]"
           />
-        ) : assetUrl ? (
-          isVideoFileUrl(assetUrl) ? (
+        ) : displayAssetUrl ? (
+          isVideoFileUrl(displayAssetUrl) ? (
             <video
-              src={assetUrl}
+              src={displayAssetUrl}
               controls
               className="w-full max-h-[400px]"
             />
           ) : (
             <img
-              src={assetUrl}
+              src={displayAssetUrl}
               alt={creative.data.name}
               className="w-full object-contain max-h-[400px]"
             />
@@ -250,10 +273,25 @@ export default function CreativeDetailPage() {
           </div>
         )}
       </div>
-      {assetUrl && format === "video" && !playableVideoUrl && (
-        <p className="mb-5 text-xs text-muted-foreground">
-          Meta only exposes a thumbnail preview for this video creative with the current permissions.
-        </p>
+      {(canFetchMetaPreview || (displayAssetUrl && previewFormat === "video" && !playableVideoUrl)) && (
+        <div className="mb-5 flex items-center gap-3">
+          <p className="text-xs text-muted-foreground">
+            {displayAssetUrl && previewFormat === "video" && !playableVideoUrl
+              ? "This creative currently only has a poster thumbnail. Load a fresh Meta preview to try direct playback."
+              : "This creative is missing media preview data. Load a fresh preview from Meta on demand."}
+          </p>
+          {canFetchMetaPreview && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => metaPreviewMutation.mutate({ id })}
+              disabled={metaPreviewMutation.isPending}
+            >
+              {metaPreviewMutation.isPending ? "Loading..." : "Preview From Meta"}
+            </Button>
+          )}
+        </div>
       )}
 
       {/* Tabs */}
