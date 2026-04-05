@@ -177,11 +177,16 @@ export const adCreativeRouter = router({
       if (input?.ownership) {
         conditions.push(eq(adCreatives.ownership, input.ownership));
       }
-      if (input?.from) {
-        conditions.push(sql`${performanceLogs.dateStart} >= ${input.from}`);
-      }
-      if (input?.to) {
-        conditions.push(sql`${performanceLogs.dateEnd} <= ${input.to}`);
+      // Performance rows can be stored as multi-day windows (for example a
+      // 7-day imported report), so the tracker should include any row that
+      // overlaps the selected range instead of requiring full containment.
+      if (input?.from && input?.to) {
+        conditions.push(sql`${performanceLogs.dateStart} <= ${input.to}`);
+        conditions.push(sql`${performanceLogs.dateEnd} >= ${input.from}`);
+      } else if (input?.from) {
+        conditions.push(sql`${performanceLogs.dateEnd} >= ${input.from}`);
+      } else if (input?.to) {
+        conditions.push(sql`${performanceLogs.dateStart} <= ${input.to}`);
       }
 
       return db
