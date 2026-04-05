@@ -231,6 +231,7 @@ export const adCreativeRouter = router({
           campaignIds: z.array(z.string()).optional(),
           adSetIds: z.array(z.string()).optional(),
           statuses: z.array(z.enum(["active", "paused", "archived"])).optional(),
+          ownership: z.enum(["ours", "theirs"]).optional(),
         })
         .optional(),
     )
@@ -238,6 +239,9 @@ export const adCreativeRouter = router({
       const days = input?.days ?? 7;
       const accountFilter = input?.accountId
         ? sql`AND ad.account_id = ${input.accountId}`
+        : sql``;
+      const ownershipFilter = input?.ownership
+        ? sql`AND ac.ownership = ${input.ownership}`
         : sql``;
       const campaignFilter = input?.campaignIds?.length
         ? sql`AND ad.ad_set_id IN (SELECT ast.id FROM ad_set ast WHERE ast.campaign_id IN (${sql.join(input.campaignIds.map((id) => sql`${id}`), sql`, `)}))`
@@ -272,7 +276,8 @@ export const adCreativeRouter = router({
           sum(pl.conversions)::text as total_conversions
         FROM performance_log pl
         JOIN ad ON ad.id = pl.ad_id
-        WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter}
+        JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+        WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter}
       `);
       const portfolio = (portfolioResult.rows as PortfolioRow[])[0];
 
@@ -303,11 +308,11 @@ export const adCreativeRouter = router({
         FROM ad_creative ac
         JOIN ad ON ad.ad_creative_id = ac.id
         JOIN performance_log pl ON pl.ad_id = ad.id
-        WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter}
+        WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter}
         GROUP BY ac.id, ac.name, ac.format
         HAVING sum(pl.spend) >= 50
-        ORDER BY coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST
-        LIMIT 5
+        ORDER BY sum(pl.conversions) DESC NULLS LAST, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST
+        LIMIT 10
       `);
       const topPerformers = topResult.rows as CreativeRow[];
 
@@ -330,11 +335,11 @@ export const adCreativeRouter = router({
         FROM ad_creative ac
         JOIN ad ON ad.ad_creative_id = ac.id
         JOIN performance_log pl ON pl.ad_id = ad.id
-        WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${topExclude}
+        WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter} ${topExclude}
         GROUP BY ac.id, ac.name, ac.format
         HAVING sum(pl.spend) >= 50
-        ORDER BY coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) ASC NULLS FIRST
-        LIMIT 5
+        ORDER BY sum(pl.conversions) ASC NULLS FIRST, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) ASC NULLS FIRST
+        LIMIT 10
       `);
       const bottomPerformers = bottomResult.rows as CreativeRow[];
 

@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { subDays } from "date-fns";
@@ -31,10 +30,9 @@ import {
   Target,
   MousePointerClick,
   ShoppingCart,
-  Download,
-  ExternalLink,
-  Image as ImageIcon,
-  Video,
+  Trophy,
+  AlertTriangle,
+  ArrowRight,
 } from "lucide-react";
 import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
@@ -67,100 +65,143 @@ function fmtNum(val: unknown) {
   return n.toLocaleString("en-US");
 }
 
-function fmtDate(val: unknown) {
-  if (val == null || val === "") return "—";
-  const str = String(val);
-  try {
-    return new Date(str + "T00:00:00").toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-    });
-  } catch {
-    return str;
-  }
-}
-
-type TrackerRow = {
-  adId: string;
-  adName: string;
-  creativeId: string | null;
-  creativeName: string | null;
-  assetUrl: string | null;
-  videoUrl: string | null;
+type LeaderboardRow = {
+  id: string;
+  name: string;
   format: string | null;
-  ownership: string | null;
-  destinationUrl: string | null;
-  dateStart: string | null;
-  dateEnd: string | null;
-  spend: string | null;
-  roas: string | null;
+  totalSpend: string;
+  roas: string;
   cpa: string | null;
   ctr: string | null;
-  conversions: number | null;
-  impressions: number | null;
-  linkClicks: number | null;
-  purchaseValue: string | null;
-  landingPageViews: number | null;
+  conversions: string;
+  adStatus: string | null;
 };
 
-function downloadTrackerCsv(rows: TrackerRow[], filename: string) {
-  const headers = [
-    "Date",
-    "Ad Name",
-    "Creative",
-    "Format",
-    "Ownership",
-    "Asset URL",
-    "Video URL",
-    "Landing Page URL",
-    "Spend",
-    "ROAS",
-    "CPA",
-    "CTR",
-    "Conversions",
-    "Impressions",
-    "Link Clicks",
-    "Revenue",
-    "LP Views",
-  ];
-  const csvRows = rows.map((r) => [
-    r.dateStart ?? "",
-    r.adName,
-    r.creativeName ?? "",
-    r.format ?? "",
-    r.ownership ?? "",
-    r.assetUrl ?? "",
-    r.videoUrl ?? "",
-    r.destinationUrl ?? "",
-    r.spend ?? "",
-    r.roas ?? "",
-    r.cpa ?? "",
-    r.ctr ?? "",
-    r.conversions ?? "",
-    r.impressions ?? "",
-    r.linkClicks ?? "",
-    r.purchaseValue ?? "",
-    r.landingPageViews ?? "",
-  ]);
+function LeaderboardTable({
+  title,
+  icon,
+  rows,
+  isLoading,
+  emptyMessage,
+  accountId,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  rows: LeaderboardRow[];
+  isLoading: boolean;
+  emptyMessage: string;
+  accountId: string;
+}) {
+  if (isLoading) {
+    return (
+      <div>
+        <div className="mb-3 flex items-center gap-2">
+          {icon}
+          <h2 className="text-[13px] font-medium uppercase tracking-wider text-muted-foreground/50">
+            {title}
+          </h2>
+        </div>
+        <div className="rounded-lg border divide-y">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-4 px-4 py-3">
+              <Skeleton className="h-4 w-40" />
+              <div className="flex-1" />
+              <Skeleton className="h-4 w-14" />
+              <Skeleton className="h-4 w-14" />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
-  const csv = [headers, ...csvRows]
-    .map((row) =>
-      row.map((cell) => {
-        const str = String(cell);
-        return str.includes(",") || str.includes('"') || str.includes("\n")
-          ? `"${str.replace(/"/g, '""')}"`
-          : str;
-      }).join(","),
-    )
-    .join("\n");
+  if (rows.length === 0) {
+    return (
+      <div>
+        <div className="mb-3 flex items-center gap-2">
+          {icon}
+          <h2 className="text-[13px] font-medium uppercase tracking-wider text-muted-foreground/50">
+            {title}
+          </h2>
+        </div>
+        <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border py-12">
+          <p className="text-sm text-muted-foreground">{emptyMessage}</p>
+          <Button asChild size="sm" variant="outline" className="gap-1.5">
+            <Link href="/import">
+              <Upload className="size-3.5" /> Import Ads
+            </Link>
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
-  const blob = new Blob([csv], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
+  return (
+    <div>
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {icon}
+          <h2 className="text-[13px] font-medium uppercase tracking-wider text-muted-foreground/50">
+            {title}
+          </h2>
+        </div>
+        <Button variant="ghost" size="sm" asChild className="text-[13px] text-muted-foreground">
+          <Link href={`/creatives${accountId ? `?account=${accountId}` : ""}`}>
+            View All <ArrowRight className="ml-1 size-3" />
+          </Link>
+        </Button>
+      </div>
+      <div className="rounded-lg border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Creative</TableHead>
+              <TableHead className="text-right">Conv</TableHead>
+              <TableHead className="text-right">ROAS</TableHead>
+              <TableHead className="text-right">CPA</TableHead>
+              <TableHead className="text-right">Spend</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => {
+              const roas = row.roas ? parseFloat(row.roas) : null;
+              return (
+                <TableRow key={row.id}>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <Link href={`/creatives/${row.id}`} className="text-sm font-medium hover:underline truncate max-w-[200px]">
+                        {row.name}
+                      </Link>
+                      {row.format && (
+                        <Badge variant="secondary" className="text-[11px] capitalize shrink-0">{row.format}</Badge>
+                      )}
+                      {row.adStatus && (
+                        <Badge variant="outline" className="text-[11px] capitalize shrink-0">{row.adStatus}</Badge>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-sm font-medium">
+                    {fmtNum(row.conversions)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-sm">
+                    <span className={roas != null && roas >= 1 ? "text-emerald-500" : roas != null ? "text-red-400" : ""}>
+                      {fmtRoas(row.roas)}
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-sm">
+                    {fmtMoney(row.cpa)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-sm">
+                    {fmtMoney(row.totalSpend)}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  );
 }
 
 export default function DashboardPage() {
@@ -179,8 +220,8 @@ export default function DashboardPage() {
 
   const accounts = useQuery(trpc.adAccount.list.queryOptions());
 
-  const tracker = useQuery(
-    trpc.adCreative.trackerList.queryOptions({
+  const stats = useQuery(
+    trpc.adCreative.dashboardStats.queryOptions({
       from: fromValue,
       to: toValue,
       accountId: selectedAccountId,
@@ -188,30 +229,22 @@ export default function DashboardPage() {
     }),
   );
 
-  const rows = (tracker.data ?? []) as TrackerRow[];
-
-  // Compute summary KPIs from tracker data
-  const totalSpend = rows.reduce((sum, r) => sum + (r.spend ? parseFloat(r.spend) : 0), 0);
-  const totalRevenue = rows.reduce((sum, r) => sum + (r.purchaseValue ? parseFloat(r.purchaseValue) : 0), 0);
-  const totalConversions = rows.reduce((sum, r) => sum + (r.conversions ?? 0), 0);
-  const avgRoas = totalSpend > 0 ? totalRevenue / totalSpend : 0;
-  const avgCpa = totalConversions > 0 ? totalSpend / totalConversions : 0;
-  const totalImpressions = rows.reduce((sum, r) => sum + (r.impressions ?? 0), 0);
-  const totalClicks = rows.reduce((sum, r) => sum + (r.linkClicks ?? 0), 0);
-  const avgCtr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
+  const portfolio = stats.data?.portfolio;
+  const topPerformers = stats.data?.topPerformers ?? [];
+  const bottomPerformers = stats.data?.bottomPerformers ?? [];
 
   const kpis = [
-    { label: "ROAS", value: avgRoas > 0 ? `${avgRoas.toFixed(2)}x` : "—", icon: TrendingUp, accent: "text-emerald-500" },
-    { label: "CPA", value: avgCpa > 0 ? fmtMoney(avgCpa) : "—", icon: Target, accent: "text-blue-500" },
-    { label: "CTR", value: avgCtr > 0 ? `${avgCtr.toFixed(2)}%` : "—", icon: MousePointerClick, accent: "text-violet-500" },
-    { label: "Conversions", value: totalConversions > 0 ? fmtNum(totalConversions) : "—", icon: ShoppingCart, accent: "text-amber-500" },
+    { label: "ROAS", value: fmtRoas(portfolio?.roas), icon: TrendingUp, accent: "text-emerald-500" },
+    { label: "CPA", value: fmtMoney(portfolio?.cpa), icon: Target, accent: "text-blue-500" },
+    { label: "CTR", value: fmtPct(portfolio?.ctr), icon: MousePointerClick, accent: "text-violet-500" },
+    { label: "Conversions", value: fmtNum(portfolio?.conversions), icon: ShoppingCart, accent: "text-amber-500" },
   ];
 
   return (
     <div className="flex flex-col gap-6">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Tracker</h1>
+        <h1 className="text-lg font-semibold">Dashboard</h1>
         <div className="flex items-center gap-2">
           <DateRangePicker
             from={fromDate}
@@ -236,25 +269,16 @@ export default function DashboardPage() {
               </SelectContent>
             </Select>
           )}
-          <Select value={ownership || "ours"} onValueChange={setOwnership}>
+          <Select value={ownership || "all"} onValueChange={setOwnership}>
             <SelectTrigger className="h-7 w-auto gap-1 text-[13px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="all">All</SelectItem>
               <SelectItem value="ours">Ours</SelectItem>
               <SelectItem value="theirs">Theirs</SelectItem>
-              <SelectItem value="all">All</SelectItem>
             </SelectContent>
           </Select>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 gap-1.5 text-[13px]"
-            disabled={rows.length === 0}
-            onClick={() => downloadTrackerCsv(rows, `tracker_${fromValue}_${toValue}.csv`)}
-          >
-            <Download className="size-3.5" /> Export
-          </Button>
           <Button asChild size="sm" variant="outline" className="h-7 gap-1.5 text-[13px]">
             <Link href="/import">
               <Upload className="size-3.5" /> Import
@@ -275,7 +299,7 @@ export default function DashboardPage() {
               <kpi.icon className={`size-3.5 ${kpi.accent}`} />
               {kpi.label}
             </div>
-            {tracker.isLoading ? (
+            {stats.isLoading ? (
               <Skeleton className="mt-1 h-6 w-20" />
             ) : (
               <span className="mt-0.5 block text-lg font-semibold tabular-nums leading-tight">
@@ -292,145 +316,37 @@ export default function DashboardPage() {
           <div>
             <p className="text-[13px] text-muted-foreground">Spend</p>
             <p className="mt-0.5 text-lg font-semibold tabular-nums">
-              {tracker.isLoading ? "—" : fmtMoney(totalSpend)}
+              {stats.isLoading ? "—" : fmtMoney(portfolio?.totalSpend)}
             </p>
           </div>
           <div>
             <p className="text-[13px] text-muted-foreground">Revenue</p>
             <p className="mt-0.5 text-lg font-semibold tabular-nums">
-              {tracker.isLoading ? "—" : fmtMoney(totalRevenue)}
+              {stats.isLoading ? "—" : fmtMoney(portfolio?.totalRevenue)}
             </p>
           </div>
         </div>
       </div>
 
-      {/* Tracker Table */}
-      {tracker.isLoading ? (
-        <div className="rounded-lg border divide-y">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="flex items-center gap-4 px-4 py-3">
-              <Skeleton className="size-8 rounded" />
-              <Skeleton className="h-4 w-40" />
-              <div className="flex-1" />
-              <Skeleton className="h-4 w-14" />
-              <Skeleton className="h-4 w-14" />
-              <Skeleton className="h-4 w-14" />
-            </div>
-          ))}
-        </div>
-      ) : rows.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border py-16">
-          <p className="text-sm text-muted-foreground">No active ads found for this period</p>
-          <Button asChild size="sm" variant="outline" className="gap-1.5">
-            <Link href="/import">
-              <Upload className="size-3.5" /> Import Ads
-            </Link>
-          </Button>
-        </div>
-      ) : (
-        <div className="rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-[50px]">Media</TableHead>
-                <TableHead>Ad</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Landing Page</TableHead>
-                <TableHead className="text-right">Spend</TableHead>
-                <TableHead className="text-right">ROAS</TableHead>
-                <TableHead className="text-right">CPA</TableHead>
-                <TableHead className="text-right">CTR</TableHead>
-                <TableHead className="text-right">Conv</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((row, i) => {
-                const roas = row.roas ? parseFloat(row.roas) : null;
-                return (
-                  <TableRow key={`${row.adId}-${row.dateStart}-${i}`}>
-                    <TableCell>
-                      {row.assetUrl ? (
-                        <a href={row.videoUrl || row.assetUrl} target="_blank" rel="noopener noreferrer">
-                          {row.format === "video" ? (
-                            <div className="relative size-9 rounded bg-muted flex items-center justify-center overflow-hidden">
-                              <img
-                                src={row.assetUrl}
-                                alt=""
-                                className="size-9 rounded object-cover"
-                              />
-                              <Video className="absolute size-3.5 text-white drop-shadow" />
-                            </div>
-                          ) : (
-                            <img
-                              src={row.assetUrl}
-                              alt=""
-                              className="size-9 rounded object-cover"
-                            />
-                          )}
-                        </a>
-                      ) : (
-                        <div className="size-9 rounded bg-muted flex items-center justify-center">
-                          <ImageIcon className="size-3.5 text-muted-foreground/40" />
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Link
-                          href={`/creatives/${row.creativeId}`}
-                          className="text-sm font-medium hover:underline truncate max-w-[220px]"
-                        >
-                          {row.adName}
-                        </Link>
-                        {row.ownership && (
-                          <Badge variant="secondary" className="text-[10px] capitalize shrink-0">
-                            {row.ownership}
-                          </Badge>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground tabular-nums whitespace-nowrap">
-                      {fmtDate(row.dateStart)}
-                    </TableCell>
-                    <TableCell>
-                      {row.destinationUrl ? (
-                        <a
-                          href={row.destinationUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground truncate max-w-[200px]"
-                        >
-                          {new URL(row.destinationUrl).hostname.replace("www.", "")}
-                          <ExternalLink className="size-3 shrink-0" />
-                        </a>
-                      ) : (
-                        <span className="text-sm text-muted-foreground/40">—</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-sm">
-                      {fmtMoney(row.spend)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-sm">
-                      <span className={roas != null && roas >= 1 ? "text-emerald-500" : roas != null ? "text-red-400" : ""}>
-                        {fmtRoas(row.roas)}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-sm">
-                      {fmtMoney(row.cpa)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-sm">
-                      {fmtPct(row.ctr)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-sm">
-                      {fmtNum(row.conversions)}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </div>
-      )}
+      {/* Creative Leaderboard */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <LeaderboardTable
+          title="Top Performers"
+          icon={<Trophy className="size-3.5 text-emerald-500" />}
+          rows={topPerformers}
+          isLoading={stats.isLoading}
+          emptyMessage="No creatives with enough spend data yet"
+          accountId={accountId}
+        />
+        <LeaderboardTable
+          title="Needs Attention"
+          icon={<AlertTriangle className="size-3.5 text-red-400" />}
+          rows={bottomPerformers}
+          isLoading={stats.isLoading}
+          emptyMessage="No underperformers detected"
+          accountId={accountId}
+        />
+      </div>
     </div>
   );
 }
