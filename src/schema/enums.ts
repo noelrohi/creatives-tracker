@@ -35,6 +35,11 @@ export const funnelPositionEnum = pgEnum("funnel_position", [
   "upsell",
 ]);
 
+export const ownershipEnum = pgEnum("ownership", [
+  "ours",
+  "theirs",
+]);
+
 export const objectiveEnum = pgEnum("objective", [
   "conversions",
   "traffic",

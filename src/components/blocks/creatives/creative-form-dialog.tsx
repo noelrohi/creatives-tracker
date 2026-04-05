@@ -52,6 +52,7 @@ export interface CreativeFormDialogProps {
     angle: string | null;
     persona: string | null;
     awarenessLevel: string | null;
+    ownership: string | null;
     hook: string | null;
     tone: string[] | null;
     cta: string | null;

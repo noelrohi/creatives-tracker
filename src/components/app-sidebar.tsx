@@ -53,7 +53,7 @@ import { Label } from "@/components/ui/label";
 import { DeleteOrganizationDialog } from "@/components/delete-organization-dialog";
 
 const navItems = [
-  { label: "Dashboard", href: "/", icon: LayoutDashboard },
+  { label: "Tracker", href: "/", icon: LayoutDashboard },
   { label: "Creatives", href: "/creatives", icon: Image },
   { label: "Accounts", href: "/accounts", icon: Settings },
 ];

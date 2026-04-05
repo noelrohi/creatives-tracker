@@ -32,6 +32,7 @@ export const adCreativeRouter = router({
           search: z.string().optional(),
           accountId: z.string().optional(),
           adSetIds: z.array(z.string()).optional(),
+          ownership: z.enum(["ours", "theirs"]).optional(),
           untaggedOnly: z.boolean().optional(),
         })
         .optional(),
@@ -57,6 +58,9 @@ export const adCreativeRouter = router({
         const inList = sql.join(placeholders, sql`, `);
         conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = ${adCreatives.id} AND ad.ad_set_id IN (${inList}))`);
       }
+      if (input?.ownership) {
+        conditions.push(eq(adCreatives.ownership, input.ownership));
+      }
       if (input?.untaggedOnly) {
         conditions.push(sql`(${adCreatives.format} IS NULL AND ${adCreatives.angle} IS NULL AND ${adCreatives.awarenessLevel} IS NULL)`);
       }
@@ -76,6 +80,7 @@ export const adCreativeRouter = router({
           cta: adCreatives.cta,
           landingPageId: adCreatives.landingPageId,
           landingPageName: landingPages.name,
+          ownership: adCreatives.ownership,
           notes: adCreatives.notes,
           createdAt: adCreatives.createdAt,
           updatedAt: adCreatives.updatedAt,
@@ -141,6 +146,64 @@ export const adCreativeRouter = router({
         .leftJoin(landingPages, eq(adCreatives.landingPageId, landingPages.id))
         .where(conditions.length > 0 ? and(...conditions) : undefined)
         .orderBy(desc(adCreatives.createdAt));
+    }),
+
+  trackerList: orgProcedure
+    .meta(openApiQueryMeta("adCreative", "trackerList"))
+    .input(
+      z.object({
+        from: z.string(),
+        to: z.string(),
+        accountId: z.string().optional(),
+        ownership: z.enum(["ours", "theirs"]).optional(),
+      }).optional(),
+    )
+    .query(async ({ input, ctx }) => {
+      const conditions: SQL[] = [
+        eq(ads.organizationId, ctx.organizationId),
+        eq(ads.status, "active"),
+      ];
+      if (input?.accountId) {
+        conditions.push(eq(ads.accountId, input.accountId));
+      }
+      if (input?.ownership) {
+        conditions.push(eq(adCreatives.ownership, input.ownership));
+      }
+      if (input?.from) {
+        conditions.push(sql`${performanceLogs.dateStart} >= ${input.from}`);
+      }
+      if (input?.to) {
+        conditions.push(sql`${performanceLogs.dateEnd} <= ${input.to}`);
+      }
+
+      return db
+        .select({
+          adId: ads.id,
+          adName: ads.name,
+          creativeId: adCreatives.id,
+          creativeName: adCreatives.name,
+          assetUrl: adCreatives.assetUrl,
+          videoUrl: adCreatives.videoUrl,
+          format: adCreatives.format,
+          ownership: adCreatives.ownership,
+          destinationUrl: ads.destinationUrl,
+          dateStart: performanceLogs.dateStart,
+          dateEnd: performanceLogs.dateEnd,
+          spend: performanceLogs.spend,
+          roas: performanceLogs.roas,
+          cpa: performanceLogs.cpa,
+          ctr: performanceLogs.ctr,
+          conversions: performanceLogs.conversions,
+          impressions: performanceLogs.impressions,
+          linkClicks: performanceLogs.linkClicks,
+          purchaseValue: performanceLogs.purchaseValue,
+          landingPageViews: performanceLogs.landingPageViews,
+        })
+        .from(performanceLogs)
+        .innerJoin(ads, eq(performanceLogs.adId, ads.id))
+        .leftJoin(adCreatives, eq(ads.adCreativeId, adCreatives.id))
+        .where(and(...conditions))
+        .orderBy(desc(performanceLogs.dateStart), ads.name);
     }),
 
   dashboardStats: orgProcedure
@@ -315,6 +378,7 @@ export const adCreativeRouter = router({
           cta: adCreatives.cta,
           landingPageId: adCreatives.landingPageId,
           landingPageName: landingPages.name,
+          ownership: adCreatives.ownership,
           notes: adCreatives.notes,
           createdAt: adCreatives.createdAt,
           updatedAt: adCreatives.updatedAt,
@@ -358,6 +422,7 @@ export const adCreativeRouter = router({
         tone: z.array(z.string()).nullable().optional(),
         cta: z.string().nullable().optional(),
         landingPageId: z.string().nullable().optional(),
+        ownership: z.enum(["ours", "theirs"]).nullable().optional(),
         notes: z.string().nullable().optional(),
       }),
     )
@@ -394,6 +459,7 @@ export const adCreativeRouter = router({
           tone: source.tone,
           cta: source.cta,
           landingPageId: source.landingPageId,
+          ownership: source.ownership,
           notes: source.notes,
           organizationId: ctx.organizationId,
         })

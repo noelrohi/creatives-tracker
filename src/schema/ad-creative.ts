@@ -1,7 +1,7 @@
 import { relations } from "drizzle-orm";
 import { pgTable, text, timestamp, index } from "drizzle-orm/pg-core";
 import { landingPages } from "./landing-page";
-import { formatEnum, awarenessLevelEnum } from "./enums";
+import { formatEnum, awarenessLevelEnum, ownershipEnum } from "./enums";
 
 export const adCreatives = pgTable(
   "ad_creative",
@@ -23,6 +23,7 @@ export const adCreatives = pgTable(
       () => landingPages.id,
       { onDelete: "set null" },
     ),
+    ownership: ownershipEnum("ownership"),
     notes: text("notes"),
     organizationId: text("organization_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),

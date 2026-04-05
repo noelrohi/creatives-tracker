@@ -8,6 +8,7 @@ const awarenessValues = [
   "product_aware",
   "most_aware",
 ] as const;
+const ownershipValues = ["ours", "theirs"] as const;
 
 export const FORMAT_OPTIONS = [
   { label: "Static", value: "static" },
@@ -22,6 +23,11 @@ export const AWARENESS_OPTIONS = [
   { label: "Solution Aware", value: "solution_aware" },
   { label: "Product Aware", value: "product_aware" },
   { label: "Most Aware", value: "most_aware" },
+];
+
+export const OWNERSHIP_OPTIONS = [
+  { label: "Ours", value: "ours" },
+  { label: "Theirs", value: "theirs" },
 ];
 
 export const TONE_OPTIONS = [
@@ -44,6 +50,7 @@ export const creativeFormSchema = z.object({
   tone: z.array(z.string()),
   cta: z.string(),
   landingPageId: z.string().nullable(),
+  ownership: z.enum(ownershipValues).nullable(),
   notes: z.string(),
 });
 
@@ -56,6 +63,7 @@ type CreativeFormSource = {
   angle: string | null;
   persona: string | null;
   awarenessLevel: string | null;
+  ownership: string | null;
   hook: string | null;
   tone: string[] | null;
   cta: string | null;
@@ -68,6 +76,14 @@ function normalizeFormat(
 ): (typeof formatValues)[number] | null {
   return value && formatValues.includes(value as (typeof formatValues)[number])
     ? (value as (typeof formatValues)[number])
+    : null;
+}
+
+function normalizeOwnership(
+  value: string | null | undefined,
+): (typeof ownershipValues)[number] | null {
+  return value && ownershipValues.includes(value as (typeof ownershipValues)[number])
+    ? (value as (typeof ownershipValues)[number])
     : null;
 }
 
@@ -94,6 +110,7 @@ export function getCreativeFormValues(
     tone: creative?.tone ?? [],
     cta: creative?.cta ?? "",
     landingPageId: creative?.landingPageId ?? null,
+    ownership: normalizeOwnership(creative?.ownership),
     notes: creative?.notes ?? "",
   };
 }
@@ -115,6 +132,7 @@ export function toCreativeMutationInput(values: CreativeFormValues) {
     tone: values.tone.length > 0 ? values.tone : null,
     cta: emptyToNull(values.cta),
     landingPageId: values.landingPageId,
+    ownership: values.ownership,
     notes: emptyToNull(values.notes),
   };
 }

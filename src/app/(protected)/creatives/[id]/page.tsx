@@ -48,6 +48,7 @@ import {
   AWARENESS_OPTIONS,
   creativeFormSchema,
   FORMAT_OPTIONS,
+  OWNERSHIP_OPTIONS,
   getCreativeFormValues,
   TONE_OPTIONS,
   toCreativeMutationInput,
@@ -308,7 +309,7 @@ export default function CreativeDetailPage() {
               </FieldContent>
             </Field>
 
-            <div className="grid gap-3 grid-cols-2">
+            <div className="grid gap-3 grid-cols-3">
               <Field>
                 <FieldLabel>Format</FieldLabel>
                 <Controller
@@ -349,6 +350,31 @@ export default function CreativeDetailPage() {
                       </SelectTrigger>
                       <SelectContent>
                         {AWARENESS_OPTIONS.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </Field>
+
+              <Field>
+                <FieldLabel>Ownership</FieldLabel>
+                <Controller
+                  control={form.control}
+                  name="ownership"
+                  render={({ field }) => (
+                    <Select
+                      value={field.value ?? ""}
+                      onValueChange={(v) => field.onChange(v || null)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {OWNERSHIP_OPTIONS.map((opt) => (
                           <SelectItem key={opt.value} value={opt.value}>
                             {opt.label}
                           </SelectItem>
