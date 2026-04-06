@@ -513,6 +513,33 @@ export async function fetchMetaCreativePreviewsForAds(input: {
   return previews;
 }
 
+/**
+ * Fetch the ad preview iframe URL from Meta.
+ * This works even without video download permissions since Meta hosts the player.
+ */
+export async function fetchMetaAdPreviewUrl(input: {
+  adMetaId: string;
+  accessToken: string;
+}): Promise<string | null> {
+  const url = new URL(`${GRAPH_API_BASE}/${input.adMetaId}/previews`);
+  url.searchParams.set("access_token", input.accessToken);
+  url.searchParams.set("ad_format", "MOBILE_FEED_STANDARD");
+
+  const response = await fetchJson<{
+    data?: Array<{ body?: string }>;
+  }>(url);
+
+  const body = response?.data?.[0]?.body;
+  if (!body) return null;
+
+  // Extract the iframe src URL from the HTML
+  const srcMatch = body.match(/src="([^"]+)"/);
+  if (!srcMatch) return null;
+
+  // Decode HTML entities (&amp; -> &)
+  return srcMatch[1].replace(/&amp;/g, "&");
+}
+
 export async function fetchMetaCreativePreview(input: {
   adMetaId: string;
   metaAccountId: string;

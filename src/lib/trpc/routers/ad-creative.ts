@@ -9,7 +9,7 @@ import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
 import { performanceLogs } from "@/schema/performance-log";
 import { adAccounts } from "@/schema/account";
-import { fetchMetaCreativePreview, fetchMetaCreativePreviewsForAds } from "@/lib/meta-creative-assets";
+import { fetchMetaCreativePreview, fetchMetaCreativePreviewsForAds, fetchMetaAdPreviewUrl } from "@/lib/meta-creative-assets";
 
 export const adCreativeRouter = router({
   list: orgProcedure
@@ -512,6 +512,85 @@ export const adCreativeRouter = router({
       };
     }),
 
+  getDailyPortfolioPerformance: orgProcedure
+    .meta(openApiQueryMeta("adCreative", "getDailyPortfolioPerformance"))
+    .input(
+      z.object({
+        from: z.string().optional(),
+        to: z.string().optional(),
+        accountId: z.string().optional(),
+        ownership: z.enum(["ours", "theirs"]).optional(),
+      }).optional(),
+    )
+    .query(async ({ input, ctx }) => {
+      const accountFilter = input?.accountId
+        ? sql`AND ad.account_id = ${input.accountId}`
+        : sql``;
+      const ownershipFilter = input?.ownership
+        ? input.ownership === "theirs"
+          ? sql`AND (ac.ownership IS NULL OR ac.ownership != 'ours')`
+          : sql`AND ac.ownership = ${input.ownership}`
+        : sql``;
+
+      const dateFilter = input?.from && input?.to
+        ? sql`pl.date_start <= ${input.to}::date AND pl.date_end >= ${input.from}::date`
+        : sql`pl.date_start <= current_date AND pl.date_end >= current_date - 7`;
+
+      type DailyRow = {
+        date_start: string;
+        date_end: string;
+        spend: string | null;
+        purchase_value: string | null;
+        roas: string | null;
+        cpa: string | null;
+        ctr: string | null;
+        conversions: number | null;
+        impressions: number | null;
+        reach: number | null;
+        cpm: string | null;
+        link_clicks: number | null;
+      };
+
+      const result = await db.execute(sql`
+        SELECT
+          pl.date_start::text as date_start,
+          pl.date_end::text as date_end,
+          sum(pl.spend)::text as spend,
+          sum(pl.purchase_value)::text as purchase_value,
+          (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text as roas,
+          (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as cpa,
+          (coalesce(sum(pl.ctr * pl.impressions), 0) / nullif(sum(pl.impressions), 0))::text as ctr,
+          sum(pl.conversions)::int as conversions,
+          sum(pl.impressions)::int as impressions,
+          sum(pl.reach)::int as reach,
+          (case when sum(pl.impressions) > 0 then (sum(pl.spend) / sum(pl.impressions)) * 1000 else null end)::text as cpm,
+          sum(pl.link_clicks)::int as link_clicks
+        FROM performance_log pl
+        JOIN ad ON ad.id = pl.ad_id
+        JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+        WHERE ${dateFilter}
+          AND ad.organization_id = ${ctx.organizationId}
+          ${accountFilter} ${ownershipFilter}
+        GROUP BY pl.date_start, pl.date_end
+        ORDER BY pl.date_start
+      `);
+
+      return (result.rows as DailyRow[]).map((r) => ({
+        dateStart: r.date_start,
+        dateEnd: r.date_end,
+        spend: r.spend,
+        purchaseValue: r.purchase_value,
+        roas: r.roas,
+        cpa: r.cpa,
+        ctr: r.ctr,
+        conversions: r.conversions,
+        impressions: r.impressions,
+        reach: r.reach,
+        cpm: r.cpm,
+        linkClicks: r.link_clicks,
+      }));
+    }),
+
   getById: orgProcedure
     .meta(openApiQueryMeta("adCreative", "getById"))
     .input(z.object({ id: z.string() }))
@@ -545,6 +624,39 @@ export const adCreativeRouter = router({
         .where(and(eq(adCreatives.id, input.id), eq(adCreatives.organizationId, ctx.organizationId)));
       if (!creative) throw new Error("Ad creative not found");
       return creative;
+    }),
+
+  getAdPreviewUrl: orgProcedure
+    .meta(openApiQueryMeta("adCreative", "getAdPreviewUrl"))
+    .input(z.object({ id: z.string() }))
+    .query(async ({ input, ctx }) => {
+      const [linkedMetaAd] = await db
+        .select({
+          metaAdId: ads.metaId,
+          metaAccessToken: adAccounts.metaAccessToken,
+        })
+        .from(ads)
+        .innerJoin(adAccounts, eq(ads.accountId, adAccounts.id))
+        .where(
+          and(
+            eq(ads.adCreativeId, input.id),
+            eq(ads.organizationId, ctx.organizationId),
+            sql`${ads.metaId} IS NOT NULL`,
+            sql`${adAccounts.metaAccessToken} IS NOT NULL`,
+          ),
+        )
+        .limit(1);
+
+      if (!linkedMetaAd?.metaAdId || !linkedMetaAd.metaAccessToken) {
+        return { previewUrl: null };
+      }
+
+      const previewUrl = await fetchMetaAdPreviewUrl({
+        adMetaId: linkedMetaAd.metaAdId,
+        accessToken: linkedMetaAd.metaAccessToken,
+      });
+
+      return { previewUrl };
     }),
 
   fetchMetaPreview: orgProcedure
@@ -1412,10 +1524,10 @@ export const adCreativeRouter = router({
         eq(ads.organizationId, ctx.organizationId),
       ];
       if (input.from) {
-        dateConditions.push(sql`${performanceLogs.dateStart} >= ${input.from}::date`);
+        dateConditions.push(sql`${performanceLogs.dateEnd} >= ${input.from}::date`);
       }
       if (input.to) {
-        dateConditions.push(sql`${performanceLogs.dateEnd} <= ${input.to}::date`);
+        dateConditions.push(sql`${performanceLogs.dateStart} <= ${input.to}::date`);
       }
 
       // Creative-level aggregated metrics
@@ -1441,10 +1553,10 @@ export const adCreativeRouter = router({
         eq(ads.organizationId, ctx.organizationId),
       ];
       if (input.from) {
-        portfolioDateConditions.push(sql`${performanceLogs.dateStart} >= ${input.from}::date`);
+        portfolioDateConditions.push(sql`${performanceLogs.dateEnd} >= ${input.from}::date`);
       }
       if (input.to) {
-        portfolioDateConditions.push(sql`${performanceLogs.dateEnd} <= ${input.to}::date`);
+        portfolioDateConditions.push(sql`${performanceLogs.dateStart} <= ${input.to}::date`);
       }
 
       const [portfolio] = await db
@@ -1501,10 +1613,10 @@ export const adCreativeRouter = router({
         eq(ads.organizationId, ctx.organizationId),
       ];
       if (input.from) {
-        conditions.push(sql`${performanceLogs.dateStart} >= ${input.from}::date`);
+        conditions.push(sql`${performanceLogs.dateEnd} >= ${input.from}::date`);
       }
       if (input.to) {
-        conditions.push(sql`${performanceLogs.dateEnd} <= ${input.to}::date`);
+        conditions.push(sql`${performanceLogs.dateStart} <= ${input.to}::date`);
       }
 
       const rows = await db

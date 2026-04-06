@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import {
   ChartContainer,
   ChartTooltip,
@@ -134,49 +134,30 @@ export function PerformanceChart({ logs, compact }: PerformanceChartProps) {
         config={chartConfig}
         className={compact ? "aspect-[3/1]" : "aspect-[5/2]"}
       >
-        {chartData.length <= 3 ? (
-          <BarChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-            <CartesianGrid vertical={false} />
-            <XAxis
-              dataKey="date"
-              tickLine={false}
-              axisLine={false}
-              tickFormatter={(value) => formatDateOnly(parseDateOnly(String(value))).slice(5).replace("-", "/")}
-            />
-            <YAxis tickLine={false} axisLine={false} width={50} />
-            <ChartTooltip content={<ChartTooltipContent />} />
-            <Bar
-              dataKey={metric.key}
-              fill={`var(--color-${metric.key})`}
-              radius={[4, 4, 0, 0]}
-            />
-          </BarChart>
-        ) : (
-          <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-            <defs>
-              <linearGradient id={`fill-${metric.key}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={`var(--color-${metric.key})`} stopOpacity={0.3} />
-                <stop offset="100%" stopColor={`var(--color-${metric.key})`} stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid vertical={false} />
-            <XAxis
-              dataKey="date"
-              tickLine={false}
-              axisLine={false}
-              tickFormatter={(value) => formatDateOnly(parseDateOnly(String(value))).slice(5).replace("-", "/")}
-            />
-            <YAxis tickLine={false} axisLine={false} width={50} />
-            <ChartTooltip content={<ChartTooltipContent indicator="line" />} />
-            <Area
-              type="monotone"
-              dataKey={metric.key}
-              stroke={`var(--color-${metric.key})`}
-              strokeWidth={2}
-              fill={`url(#fill-${metric.key})`}
-            />
-          </AreaChart>
-        )}
+        <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+          <defs>
+            <linearGradient id={`fill-${metric.key}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={`var(--color-${metric.key})`} stopOpacity={0.3} />
+              <stop offset="100%" stopColor={`var(--color-${metric.key})`} stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid vertical={false} />
+          <XAxis
+            dataKey="date"
+            tickLine={false}
+            axisLine={false}
+            tickFormatter={(value) => formatDateOnly(parseDateOnly(String(value))).slice(5).replace("-", "/")}
+          />
+          <YAxis tickLine={false} axisLine={false} width={50} />
+          <ChartTooltip content={<ChartTooltipContent indicator="line" />} />
+          <Area
+            type="monotone"
+            dataKey={metric.key}
+            stroke={`var(--color-${metric.key})`}
+            strokeWidth={2}
+            fill={`url(#fill-${metric.key})`}
+          />
+        </AreaChart>
       </ChartContainer>
     </div>
   );

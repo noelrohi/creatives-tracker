@@ -40,6 +40,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   ArrowLeft,
   Copy,
   MoreHorizontalIcon,
@@ -72,6 +78,7 @@ export default function CreativeDetailPage() {
 
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [metaPreview, setMetaPreview] = useState<MetaCreativePreview | null>(null);
+  const [wantsVideo, setWantsVideo] = useState(false);
   const [dateRange, setDateRange] = useState<{ from: Date; to: Date }>({
     from: subDays(new Date(), 29),
     to: new Date(),
@@ -88,6 +95,13 @@ export default function CreativeDetailPage() {
   const dailyPerf = useQuery(trpc.adCreative.getDailyPerformance.queryOptions(dateParams));
   const linkedAds = useQuery(trpc.ad.listByCreative.queryOptions({ adCreativeId: id }));
   const accountsQuery = useQuery(trpc.adAccount.list.queryOptions());
+
+  // Fetch ad preview iframe URL from Meta on demand (user clicks play)
+  const adPreviewQuery = useQuery({
+    ...trpc.adCreative.getAdPreviewUrl.queryOptions({ id }),
+    enabled: wantsVideo,
+    staleTime: 1000 * 60 * 30,
+  });
 
   const form = useForm<CreativeFormValues>({
     resolver: zodResolver(creativeFormSchema),
@@ -128,8 +142,10 @@ export default function CreativeDetailPage() {
     trpc.adCreative.fetchMetaPreview.mutationOptions({
       onSuccess: (preview) => {
         setMetaPreview(preview);
+        // Refresh the creative query so persisted URLs are reflected
+        queryClient.invalidateQueries({ queryKey: trpc.adCreative.getById.queryKey({ id }) });
         if (preview.videoUrl) {
-          toast.success("Loaded Meta preview");
+          toast.success("Video loaded");
           return;
         }
         if (preview.assetUrl) {
@@ -150,9 +166,10 @@ export default function CreativeDetailPage() {
   const format = useWatch({ control: form.control, name: "format" });
   const displayAssetUrl = assetUrl ?? metaPreview?.assetUrl ?? null;
   const previewFormat = format ?? metaPreview?.format ?? creative.data?.format ?? null;
-  const playableVideoUrl = metaPreview?.videoUrl ?? (isVideoFileUrl(assetUrl)
-    ? assetUrl
-    : creative.data?.videoUrl ?? null);
+  const playableVideoUrl = metaPreview?.videoUrl
+    ?? (isVideoFileUrl(assetUrl) ? assetUrl : creative.data?.videoUrl ?? null);
+  const adPreviewUrl = adPreviewQuery.data?.previewUrl ?? null;
+  const isLoadingVideo = wantsVideo && adPreviewQuery.isLoading;
   const canFetchMetaPreview = (!displayAssetUrl || (previewFormat === "video" && !playableVideoUrl));
 
   if (creative.isLoading) {
@@ -267,7 +284,12 @@ export default function CreativeDetailPage() {
               className="w-full max-h-[400px]"
             />
           ) : previewFormat === "video" ? (
-            <div className="flex items-center justify-center py-10">
+            <button
+              type="button"
+              className="flex w-full items-center justify-center py-10 cursor-pointer group"
+              disabled={isLoadingVideo}
+              onClick={() => setWantsVideo(true)}
+            >
               <div className="relative">
                 <img
                   src={displayAssetUrl}
@@ -275,12 +297,16 @@ export default function CreativeDetailPage() {
                   className="object-contain max-h-[280px] rounded"
                 />
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="rounded-full bg-black/50 p-3">
-                    <PlayIcon className="size-8 text-white" fill="white" />
+                  <div className="rounded-full bg-black/50 p-3 group-hover:bg-black/70 transition-colors">
+                    {isLoadingVideo ? (
+                      <div className="size-8 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                    ) : (
+                      <PlayIcon className="size-8 text-white" fill="white" />
+                    )}
                   </div>
                 </div>
               </div>
-            </div>
+            </button>
           ) : (
             <img
               src={displayAssetUrl}
@@ -294,24 +320,35 @@ export default function CreativeDetailPage() {
           </div>
         )}
       </div>
-      {(canFetchMetaPreview || (displayAssetUrl && previewFormat === "video" && !playableVideoUrl)) && (
-        <div className="mb-5 flex items-center gap-3">
-          <p className="text-xs text-muted-foreground">
-            {displayAssetUrl && previewFormat === "video" && !playableVideoUrl
-              ? "This creative currently only has a poster thumbnail. Load a fresh Meta preview to try direct playback."
-              : "This creative is missing media preview data. Load a fresh preview from Meta on demand."}
-          </p>
-          {canFetchMetaPreview && (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => metaPreviewMutation.mutate({ id })}
-              disabled={metaPreviewMutation.isPending}
-            >
-              {metaPreviewMutation.isPending ? "Loading..." : "Preview From Meta"}
-            </Button>
+
+      {/* Meta ad preview dialog */}
+      <Dialog open={wantsVideo && !!adPreviewUrl} onOpenChange={setWantsVideo}>
+        <DialogContent className="sm:max-w-[360px] p-0 gap-0 overflow-hidden">
+          <DialogHeader className="px-4 pt-4 pb-3">
+            <DialogTitle className="text-sm">Ad Preview</DialogTitle>
+          </DialogHeader>
+          {adPreviewUrl && (
+            <div className="bg-white">
+              <iframe
+                src={adPreviewUrl}
+                className="w-full border-none aspect-[9/16]"
+                scrolling="yes"
+              />
+            </div>
           )}
+        </DialogContent>
+      </Dialog>
+      {canFetchMetaPreview && !displayAssetUrl && (
+        <div className="mb-5 flex items-center gap-3">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => metaPreviewMutation.mutate({ id })}
+            disabled={metaPreviewMutation.isPending}
+          >
+            {metaPreviewMutation.isPending ? "Loading..." : "Load Preview From Meta"}
+          </Button>
         </div>
       )}
 

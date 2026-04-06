@@ -25,6 +25,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  DollarSign,
   TrendingUp,
   Upload,
   Target,
@@ -37,9 +38,11 @@ import {
   Video,
   Shield,
 } from "lucide-react";
+import { PerformanceChart } from "@/components/blocks/insights/performance-chart";
 import { computeHealth, type CreativeHealth } from "@/lib/creative-health";
 import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 function fmtMoney(val: unknown) {
   if (val == null || val === "") return "—";
@@ -299,6 +302,15 @@ export default function DashboardPage() {
     }),
   );
 
+  const dailyPerf = useQuery(
+    trpc.adCreative.getDailyPortfolioPerformance.queryOptions({
+      from: fromValue,
+      to: toValue,
+      accountId: selectedAccountId,
+      ownership: ownership === "all" ? undefined : (ownership as "ours" | "theirs"),
+    }),
+  );
+
   const portfolio = stats.data?.portfolio;
   const topPerformers = stats.data?.topPerformers ?? [];
   const bottomPerformers = stats.data?.bottomPerformers ?? [];
@@ -310,10 +322,12 @@ export default function DashboardPage() {
   const baseHref = `/creatives${baseCreativesParams.toString() ? `?${baseCreativesParams}` : ""}`;
 
   const kpis = [
-    { label: "ROAS", value: fmtRoas(portfolio?.roas), icon: TrendingUp, accent: "text-emerald-500" },
-    { label: "CPA", value: fmtMoney(portfolio?.cpa), icon: Target, accent: "text-blue-500" },
-    { label: "CTR", value: fmtPct(portfolio?.ctr), icon: MousePointerClick, accent: "text-violet-500" },
-    { label: "Conversions", value: fmtNum(portfolio?.conversions), icon: ShoppingCart, accent: "text-amber-500" },
+    { label: "Spend", value: fmtMoney(portfolio?.totalSpend), icon: DollarSign, accent: "text-emerald-500" },
+    { label: "Revenue", value: fmtMoney(portfolio?.totalRevenue), icon: TrendingUp, accent: "text-blue-500" },
+    { label: "ROAS", value: fmtRoas(portfolio?.roas), icon: Target, accent: "text-violet-500" },
+    { label: "CPA", value: fmtMoney(portfolio?.cpa), icon: Target, accent: "text-amber-500" },
+    { label: "CTR", value: fmtPct(portfolio?.ctr), icon: MousePointerClick, accent: "text-rose-500" },
+    { label: "Conversions", value: fmtNum(portfolio?.conversions), icon: ShoppingCart, accent: "text-orange-500" },
   ];
 
   return (
@@ -367,18 +381,18 @@ export default function DashboardPage() {
         account={accountId ? accounts.data?.find((a) => a.id === accountId) : accounts.data?.[0]}
       />
 
-      {/* KPI cards */}
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      {/* KPI cards — always visible */}
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
         {kpis.map((kpi) => (
-          <div key={kpi.label} className="rounded-lg border border-border px-3.5 py-3">
-            <div className="flex items-center gap-1.5 text-[13px] text-muted-foreground/70">
-              <kpi.icon className={`size-3.5 ${kpi.accent}`} />
+          <div key={kpi.label} className="rounded-lg border border-border px-3 py-2.5">
+            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70">
+              <kpi.icon className={`size-3 ${kpi.accent}`} />
               {kpi.label}
             </div>
             {stats.isLoading ? (
-              <Skeleton className="mt-1 h-6 w-20" />
+              <Skeleton className="mt-1 h-5 w-16" />
             ) : (
-              <span className="mt-0.5 block text-lg font-semibold tabular-nums leading-tight">
+              <span className="mt-0.5 block text-base font-semibold tabular-nums leading-tight">
                 {kpi.value}
               </span>
             )}
@@ -386,51 +400,53 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {/* Spend + Revenue bar */}
-      <div className="rounded-lg border border-border px-4 py-3">
-        <div className="flex items-center gap-8">
-          <div>
-            <p className="text-[13px] text-muted-foreground">Spend</p>
-            <p className="mt-0.5 text-lg font-semibold tabular-nums">
-              {stats.isLoading ? "—" : fmtMoney(portfolio?.totalSpend)}
-            </p>
-          </div>
-          <div>
-            <p className="text-[13px] text-muted-foreground">Revenue</p>
-            <p className="mt-0.5 text-lg font-semibold tabular-nums">
-              {stats.isLoading ? "—" : fmtMoney(portfolio?.totalRevenue)}
-            </p>
-          </div>
-        </div>
-      </div>
+      <Tabs defaultValue="overview">
+        <TabsList variant="line">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="charts">Charts</TabsTrigger>
+        </TabsList>
 
-      {/* Creative Leaderboard */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        <LeaderboardTable
-          title="Top Performers"
-          icon={<Trophy className="size-3.5 text-emerald-500" />}
-          rows={topPerformers}
-          isLoading={stats.isLoading}
-          emptyMessage="No creatives with enough spend data yet"
-          viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=healthy`}
-        />
-        <LeaderboardTable
-          title="Needs Attention"
-          icon={<AlertTriangle className="size-3.5 text-red-400" />}
-          rows={bottomPerformers}
-          isLoading={stats.isLoading}
-          emptyMessage="No underperformers detected"
-          viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=critical`}
-        />
-      </div>
-      <LeaderboardTable
-        title="Surviving Creatives"
-        icon={<Shield className="size-3.5 text-blue-500" />}
-        rows={survivingCreatives}
-        isLoading={stats.isLoading}
-        emptyMessage="No long-running creatives with profitable ROAS yet"
-        viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=healthy`}
-      />
+        <TabsContent value="overview" className="flex flex-col gap-6 pt-4">
+          <div className="grid gap-6 lg:grid-cols-2">
+            <LeaderboardTable
+              title="Top Performers"
+              icon={<Trophy className="size-3.5 text-emerald-500" />}
+              rows={topPerformers}
+              isLoading={stats.isLoading}
+              emptyMessage="No creatives with enough spend data yet"
+              viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=healthy`}
+            />
+            <LeaderboardTable
+              title="Needs Attention"
+              icon={<AlertTriangle className="size-3.5 text-red-400" />}
+              rows={bottomPerformers}
+              isLoading={stats.isLoading}
+              emptyMessage="No underperformers detected"
+              viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=critical`}
+            />
+          </div>
+          <LeaderboardTable
+            title="Surviving Creatives"
+            icon={<Shield className="size-3.5 text-blue-500" />}
+            rows={survivingCreatives}
+            isLoading={stats.isLoading}
+            emptyMessage="No long-running creatives with profitable ROAS yet"
+            viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=healthy`}
+          />
+        </TabsContent>
+
+        <TabsContent value="charts" className="pt-4">
+          {dailyPerf.data && dailyPerf.data.length > 1 ? (
+            <div className="rounded-lg border border-border px-4 py-3">
+              <PerformanceChart logs={dailyPerf.data as Array<typeof dailyPerf.data[number] & Record<string, unknown>>} />
+            </div>
+          ) : (
+            <div className="rounded-lg border border-dashed border-border/40 px-4 py-12 text-center">
+              <p className="text-sm text-muted-foreground/50">No daily performance data for this period</p>
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
