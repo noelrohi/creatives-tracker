@@ -31,7 +31,6 @@ export function registerAdCommands(program: Command) {
     .requiredOption("--ad-set-id <adSetId>")
     .option("--name <name>")
     .option("--creative-id <adCreativeId>")
-    .option("--landing-page-version-id <landingPageVersionId>")
     .option("--meta-id <metaId>")
     .action(async (options, command) => {
       await runCommand(command, (client) =>
@@ -40,7 +39,6 @@ export function registerAdCommands(program: Command) {
             adSetId: options.adSetId,
             name: options.name,
             adCreativeId: options.creativeId,
-            landingPageVersionId: options.landingPageVersionId,
             metaId: options.metaId,
           }),
         ),
@@ -52,7 +50,6 @@ export function registerAdCommands(program: Command) {
     .option("--name <name>")
     .option("--ad-set-id <adSetId>")
     .option("--creative-id <adCreativeId>")
-    .option("--landing-page-version-id <landingPageVersionId>")
     .option("--status <status>")
     .option("--meta-id <metaId>")
     .option("--notes <notes>")
@@ -64,7 +61,6 @@ export function registerAdCommands(program: Command) {
             name: options.name,
             adSetId: options.adSetId,
             adCreativeId: options.creativeId,
-            landingPageVersionId: options.landingPageVersionId,
             status: options.status,
             metaId: options.metaId,
             notes: options.notes,

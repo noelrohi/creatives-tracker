@@ -109,8 +109,6 @@ interface Creative {
   hook: string | null;
   tone: string[] | null;
   cta: string | null;
-  landingPageId: string | null;
-  landingPageName: string | null;
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;

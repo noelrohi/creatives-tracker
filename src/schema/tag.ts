@@ -3,7 +3,6 @@ import { pgTable, pgEnum, text, timestamp, index, unique } from "drizzle-orm/pg-
 
 export const entityTypeEnum = pgEnum("entity_type", [
   "ad_creative",
-  "landing_page",
   "campaign",
   "ad_set",
   "ad",

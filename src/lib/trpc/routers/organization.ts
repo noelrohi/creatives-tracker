@@ -10,7 +10,6 @@ import { ads } from "@/schema/ad";
 import { apiKeys } from "@/schema/api-key";
 import { member, organization, session } from "@/schema/auth";
 import { campaigns } from "@/schema/campaign";
-import { landingPageVersions, landingPages } from "@/schema/landing-page";
 import { performanceLogs } from "@/schema/performance-log";
 import { entityTags, tags } from "@/schema/tag";
 import { protectedProcedure, router } from "../init";
@@ -74,12 +73,6 @@ export const organizationRouter = router({
         await tx
           .delete(adCreatives)
           .where(eq(adCreatives.organizationId, input.organizationId));
-        await tx
-          .delete(landingPageVersions)
-          .where(eq(landingPageVersions.organizationId, input.organizationId));
-        await tx
-          .delete(landingPages)
-          .where(eq(landingPages.organizationId, input.organizationId));
         await tx
           .delete(adAccounts)
           .where(eq(adAccounts.organizationId, input.organizationId));

@@ -49,7 +49,7 @@ export const creativeFormSchema = z.object({
   hook: z.string(),
   tone: z.array(z.string()),
   cta: z.string(),
-  landingPageId: z.string().nullable(),
+
   ownership: z.enum(ownershipValues).nullable(),
   notes: z.string(),
 });
@@ -67,7 +67,7 @@ type CreativeFormSource = {
   hook: string | null;
   tone: string[] | null;
   cta: string | null;
-  landingPageId: string | null;
+
   notes: string | null;
 };
 
@@ -109,7 +109,7 @@ export function getCreativeFormValues(
     hook: creative?.hook ?? "",
     tone: creative?.tone ?? [],
     cta: creative?.cta ?? "",
-    landingPageId: creative?.landingPageId ?? null,
+
     ownership: normalizeOwnership(creative?.ownership),
     notes: creative?.notes ?? "",
   };
@@ -131,7 +131,7 @@ export function toCreativeMutationInput(values: CreativeFormValues) {
     hook: emptyToNull(values.hook),
     tone: values.tone.length > 0 ? values.tone : null,
     cta: emptyToNull(values.cta),
-    landingPageId: values.landingPageId,
+
     ownership: values.ownership,
     notes: emptyToNull(values.notes),
   };
@@ -149,7 +149,7 @@ export function hasCreativeExtraValues(
       values.hook ||
       (values.tone && values.tone.length > 0) ||
       values.cta ||
-      values.landingPageId ||
+
       values.notes,
   );
 }

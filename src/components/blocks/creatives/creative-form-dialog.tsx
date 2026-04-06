@@ -2,7 +2,7 @@
 
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTRPC } from "@/lib/trpc/client";
 import { getUserFacingErrorMessage } from "@/lib/errors";
 import { toast } from "sonner";
@@ -56,7 +56,6 @@ export interface CreativeFormDialogProps {
     hook: string | null;
     tone: string[] | null;
     cta: string | null;
-    landingPageId: string | null;
     notes: string | null;
   };
   onSuccess?: (id: string) => void;
@@ -71,8 +70,6 @@ export function CreativeFormDialog({
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const isEdit = !!creative;
-
-  const landingPages = useQuery(trpc.landingPage.list.queryOptions());
 
   const form = useForm<CreativeFormValues>({
     resolver: zodResolver(creativeFormSchema),
@@ -134,11 +131,6 @@ export function CreativeFormDialog({
       // Error already handled by mutation onError.
     }
   };
-
-  const landingPageOptions = (landingPages.data ?? []).map((lp) => ({
-    label: lp.name,
-    value: lp.id,
-  }));
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -279,31 +271,6 @@ export function CreativeFormDialog({
               <Field>
                 <FieldLabel>CTA</FieldLabel>
                 <Input {...form.register("cta")} placeholder="e.g., Shop Now" />
-              </Field>
-
-              <Field className="sm:col-span-2">
-                <FieldLabel>Landing Page</FieldLabel>
-                <Controller
-                  control={form.control}
-                  name="landingPageId"
-                  render={({ field }) => (
-                    <Select
-                      value={field.value ?? ""}
-                      onValueChange={(v) => field.onChange(v || null)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select landing page" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {landingPageOptions.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
               </Field>
 
               <Field className="sm:col-span-2">

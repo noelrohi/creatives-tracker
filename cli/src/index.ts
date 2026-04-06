@@ -6,7 +6,6 @@ import { registerAdCommands } from "./commands/ads.js";
 import { registerAdSetCommands } from "./commands/ad-sets.js";
 import { registerCampaignCommands } from "./commands/campaigns.js";
 import { registerCreativeCommands } from "./commands/creatives.js";
-import { registerLandingPageCommands } from "./commands/landing-pages.js";
 import { registerTagCommands } from "./commands/tags.js";
 
 async function main() {
@@ -25,7 +24,6 @@ async function main() {
   registerAdSetCommands(program);
   registerAdCommands(program);
   registerCreativeCommands(program);
-  registerLandingPageCommands(program);
   registerTagCommands(program);
 
   await program.parseAsync(process.argv);

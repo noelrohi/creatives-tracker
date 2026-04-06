@@ -1,5 +1,6 @@
 "use client";
 
+import { ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 function fmt(
@@ -19,6 +20,7 @@ interface LinkedAd {
   name: string;
   status: string | null;
   campaignName: string | null;
+  destinationUrl: string | null;
   totalSpend: string | null;
   avgRoas: string | null;
   totalConversions: number | null;
@@ -42,6 +44,7 @@ export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
           <tr className="border-b border-border/30 bg-muted/30 text-muted-foreground/60">
             <th className="px-3 py-2 text-left font-medium">Ad</th>
             <th className="px-3 py-2 text-left font-medium">Campaign</th>
+            <th className="px-3 py-2 text-left font-medium">Landing Page</th>
             <th className="px-3 py-2 text-right font-medium">Spend</th>
             <th className="px-3 py-2 text-right font-medium">ROAS</th>
             <th className="px-3 py-2 text-right font-medium">Conv.</th>
@@ -72,6 +75,22 @@ export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
               </td>
               <td className="max-w-[140px] truncate px-3 py-2 text-muted-foreground/60">
                 {ad.campaignName ?? "—"}
+              </td>
+              <td className="max-w-[180px] px-3 py-2">
+                {ad.destinationUrl ? (
+                  <a
+                    href={ad.destinationUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 text-muted-foreground/60 hover:text-foreground transition-colors"
+                    title={ad.destinationUrl}
+                  >
+                    <span className="truncate">{new URL(ad.destinationUrl).hostname.replace(/^www\./, "")}{new URL(ad.destinationUrl).pathname !== "/" ? new URL(ad.destinationUrl).pathname : ""}</span>
+                    <ExternalLink className="size-3 shrink-0" />
+                  </a>
+                ) : (
+                  <span className="text-muted-foreground/30">—</span>
+                )}
               </td>
               <td className="px-3 py-2 text-right tabular-nums">
                 {fmt(ad.totalSpend, { prefix: "$" })}

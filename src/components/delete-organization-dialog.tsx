@@ -84,7 +84,7 @@ export function DeleteOrganizationDialog({
           <DialogTitle>Delete workspace</DialogTitle>
           <DialogDescription>
             This permanently deletes the workspace, its members&apos; access,
-            and all associated campaigns, creatives, landing pages, imports,
+            and all associated campaigns, creatives, imports,
             logs, tags, and API keys.
           </DialogDescription>
         </DialogHeader>

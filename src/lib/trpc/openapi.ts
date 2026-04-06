@@ -5,7 +5,6 @@ import { createSelectSchema } from "drizzle-zod";
 import { createContext } from "./init";
 import type { OpenApiMeta, OpenApiMethod } from "./openapi-meta";
 import { appRouter } from "./routers/_app";
-import { landingPages, landingPageVersions } from "@/schema/landing-page";
 import { adCreatives } from "@/schema/ad-creative";
 import { campaigns } from "@/schema/campaign";
 import { adSets } from "@/schema/ad-set";
@@ -18,10 +17,6 @@ import { apiKeys } from "@/schema/api-key";
 const EXCLUDED_OPENAPI_ROUTERS = new Set(["abTest"]);
 
 const TAG_METADATA: Record<string, { name: string; description: string }> = {
-  landingPage: {
-    name: "Landing Pages",
-    description: "Manage landing pages and their versions",
-  },
   adCreative: {
     name: "Ad Creatives",
     description: "Manage ad creatives and performance analytics",
@@ -87,8 +82,6 @@ function selectSchema(table: any) {
 }
 
 const selectSchemas: Record<string, ZodTypeAny> = {
-  landingPage: selectSchema(landingPages),
-  landingPageVersion: selectSchema(landingPageVersions),
   adCreative: selectSchema(adCreatives),
   campaign: selectSchema(campaigns),
   adSet: selectSchema(adSets),
@@ -112,8 +105,6 @@ const creativeListItemSchema = z.object({
   hook: z.string().nullable(),
   tone: z.array(z.string()).nullable(),
   cta: z.string().nullable(),
-  landingPageId: z.string().nullable(),
-  landingPageName: z.string().nullable(),
   ownership: z.string().nullable(),
   notes: z.string().nullable(),
   createdAt: dateAsString,
@@ -142,8 +133,6 @@ const creativeGetByIdSchema = z.object({
   hook: z.string().nullable(),
   tone: z.array(z.string()).nullable(),
   cta: z.string().nullable(),
-  landingPageId: z.string().nullable(),
-  landingPageName: z.string().nullable(),
   ownership: z.string().nullable(),
   notes: z.string().nullable(),
   createdAt: dateAsString,
@@ -312,19 +301,6 @@ function getResponseSchema(
     procedureName.startsWith("listAll")
   ) {
     return { type: "array", items: itemSchema };
-  }
-
-  if (procedureName === "listVersions") {
-    const versionSchema = selectSchemas["landingPageVersion"];
-    if (versionSchema) {
-      return {
-        type: "array",
-        items: toJSONSchema(versionSchema, {
-          target: "openapi-3.0",
-          reused: "inline",
-        }) as JsonSchema,
-      };
-    }
   }
 
   if (procedureName === "listForEntity") {
@@ -665,7 +641,7 @@ export function generateOpenApiDocument(baseUrl: string) {
       title: "Adsolute API",
       version: "1.0.0",
       description:
-        "REST API for managing ad campaigns, creatives, landing pages, and performance analytics.",
+        "REST API for managing ad campaigns, creatives, and performance analytics.",
     },
     servers: [{ url: baseUrl }],
     components: {

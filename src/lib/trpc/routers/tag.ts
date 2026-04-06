@@ -7,7 +7,6 @@ import { tags, entityTags } from "@/schema/tag";
 
 const entityTypeSchema = z.enum([
   "ad_creative",
-  "landing_page",
   "campaign",
   "ad_set",
   "ad",

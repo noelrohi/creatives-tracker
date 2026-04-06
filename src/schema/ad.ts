@@ -3,7 +3,6 @@ import { pgTable, text, timestamp, index } from "drizzle-orm/pg-core";
 import { statusEnum } from "./enums";
 import { adSets } from "./ad-set";
 import { adCreatives } from "./ad-creative";
-import { landingPageVersions } from "./landing-page";
 import { adAccounts } from "./account";
 
 export const ads = pgTable(
@@ -18,10 +17,6 @@ export const ads = pgTable(
     }),
     adCreativeId: text("ad_creative_id").references(
       () => adCreatives.id,
-      { onDelete: "set null" },
-    ),
-    landingPageVersionId: text("landing_page_version_id").references(
-      () => landingPageVersions.id,
       { onDelete: "set null" },
     ),
     accountId: text("account_id").references(() => adAccounts.id, {
@@ -41,7 +36,6 @@ export const ads = pgTable(
   (table) => [
     index("ad_ad_set_id_idx").on(table.adSetId),
     index("ad_creative_id_idx").on(table.adCreativeId),
-    index("ad_lp_version_id_idx").on(table.landingPageVersionId),
     index("ad_organization_id_idx").on(table.organizationId),
   ],
 );
@@ -58,9 +52,5 @@ export const adRelations = relations(ads, ({ one }) => ({
   adCreative: one(adCreatives, {
     fields: [ads.adCreativeId],
     references: [adCreatives.id],
-  }),
-  landingPageVersion: one(landingPageVersions, {
-    fields: [ads.landingPageVersionId],
-    references: [landingPageVersions.id],
   }),
 }));

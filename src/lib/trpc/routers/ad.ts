@@ -6,7 +6,6 @@ import { db } from "@/db";
 import { ads } from "@/schema/ad";
 import { adSets } from "@/schema/ad-set";
 import { adCreatives } from "@/schema/ad-creative";
-import { landingPageVersions, landingPages } from "@/schema/landing-page";
 import { campaigns } from "@/schema/campaign";
 import { performanceLogs } from "@/schema/performance-log";
 
@@ -22,9 +21,7 @@ export const adRouter = router({
         campaignName: campaigns.name,
         adCreativeId: ads.adCreativeId,
         adCreativeName: adCreatives.name,
-        landingPageVersionId: ads.landingPageVersionId,
-        landingPageName: landingPages.name,
-        landingPageVersion: landingPageVersions.version,
+        destinationUrl: ads.destinationUrl,
         status: ads.status,
         notes: ads.notes,
         createdAt: ads.createdAt,
@@ -34,8 +31,6 @@ export const adRouter = router({
       .leftJoin(adSets, eq(ads.adSetId, adSets.id))
       .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
       .leftJoin(adCreatives, eq(ads.adCreativeId, adCreatives.id))
-      .leftJoin(landingPageVersions, eq(ads.landingPageVersionId, landingPageVersions.id))
-      .leftJoin(landingPages, eq(landingPageVersions.landingPageId, landingPages.id))
       .where(eq(ads.organizationId, ctx.organizationId))
       .orderBy(desc(ads.createdAt));
   }),
@@ -50,17 +45,13 @@ export const adRouter = router({
           name: ads.name,
           adCreativeId: ads.adCreativeId,
           adCreativeName: adCreatives.name,
-          landingPageVersionId: ads.landingPageVersionId,
-          landingPageName: landingPages.name,
-          landingPageVersion: landingPageVersions.version,
+          destinationUrl: ads.destinationUrl,
           status: ads.status,
           notes: ads.notes,
           createdAt: ads.createdAt,
         })
         .from(ads)
         .leftJoin(adCreatives, eq(ads.adCreativeId, adCreatives.id))
-        .leftJoin(landingPageVersions, eq(ads.landingPageVersionId, landingPageVersions.id))
-        .leftJoin(landingPages, eq(landingPageVersions.landingPageId, landingPages.id))
         .where(and(eq(ads.adSetId, input.adSetId), eq(ads.organizationId, ctx.organizationId)))
         .orderBy(desc(ads.createdAt));
     }),
@@ -76,6 +67,7 @@ export const adRouter = router({
           adSetId: ads.adSetId,
           adSetName: adSets.name,
           campaignName: campaigns.name,
+          destinationUrl: ads.destinationUrl,
           status: ads.status,
           notes: ads.notes,
           createdAt: ads.createdAt,
@@ -90,7 +82,7 @@ export const adRouter = router({
         .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
         .leftJoin(performanceLogs, eq(performanceLogs.adId, ads.id))
         .where(and(eq(ads.adCreativeId, input.adCreativeId), eq(ads.organizationId, ctx.organizationId)))
-        .groupBy(ads.id, ads.name, ads.adSetId, adSets.name, campaigns.name, ads.status, ads.notes, ads.createdAt)
+        .groupBy(ads.id, ads.name, ads.adSetId, adSets.name, campaigns.name, ads.destinationUrl, ads.status, ads.notes, ads.createdAt)
         .orderBy(desc(ads.createdAt));
     }),
 
@@ -108,20 +100,16 @@ export const adRouter = router({
           campaignName: campaigns.name,
           adCreativeId: ads.adCreativeId,
           adCreativeName: adCreatives.name,
-          landingPageVersionId: ads.landingPageVersionId,
-          landingPageName: landingPages.name,
-          landingPageVersion: landingPageVersions.version,
+          destinationUrl: ads.destinationUrl,
           status: ads.status,
           notes: ads.notes,
-            createdAt: ads.createdAt,
+          createdAt: ads.createdAt,
           updatedAt: ads.updatedAt,
         })
         .from(ads)
         .leftJoin(adSets, eq(ads.adSetId, adSets.id))
         .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
         .leftJoin(adCreatives, eq(ads.adCreativeId, adCreatives.id))
-        .leftJoin(landingPageVersions, eq(ads.landingPageVersionId, landingPageVersions.id))
-        .leftJoin(landingPages, eq(landingPageVersions.landingPageId, landingPages.id))
         .where(and(eq(ads.id, input.id), eq(ads.organizationId, ctx.organizationId)));
       if (!ad) throw new Error("Ad not found");
       return ad;
@@ -134,7 +122,6 @@ export const adRouter = router({
         name: z.string().optional(),
         adSetId: z.string().optional(),
         adCreativeId: z.string().optional(),
-        landingPageVersionId: z.string().optional(),
         metaId: z.string().optional(),
       }),
     )
@@ -145,7 +132,6 @@ export const adRouter = router({
           name: input.name ?? "Untitled Ad",
           adSetId: input.adSetId,
           adCreativeId: input.adCreativeId,
-          landingPageVersionId: input.landingPageVersionId,
           metaId: input.metaId,
           organizationId: ctx.organizationId,
         })
@@ -161,7 +147,6 @@ export const adRouter = router({
         name: z.string().min(1).optional(),
         adSetId: z.string().optional(),
         adCreativeId: z.string().nullable().optional(),
-        landingPageVersionId: z.string().nullable().optional(),
         status: z.enum(["active", "paused", "archived"]).optional(),
         metaId: z.string().nullable().optional(),
         notes: z.string().nullable().optional(),
@@ -192,7 +177,6 @@ export const adRouter = router({
           name: `Copy of ${source.name}`,
           adSetId: source.adSetId,
           adCreativeId: source.adCreativeId,
-          landingPageVersionId: source.landingPageVersionId,
           status: source.status,
           notes: source.notes,
           organizationId: ctx.organizationId,

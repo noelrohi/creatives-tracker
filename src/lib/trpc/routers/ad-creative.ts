@@ -4,7 +4,6 @@ import { router, orgProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { adCreatives } from "@/schema/ad-creative";
-import { landingPages } from "@/schema/landing-page";
 import { ads } from "@/schema/ad";
 import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
@@ -90,8 +89,6 @@ export const adCreativeRouter = router({
           hook: adCreatives.hook,
           tone: adCreatives.tone,
           cta: adCreatives.cta,
-          landingPageId: adCreatives.landingPageId,
-          landingPageName: landingPages.name,
           ownership: adCreatives.ownership,
           notes: adCreatives.notes,
           createdAt: adCreatives.createdAt,
@@ -155,7 +152,6 @@ export const adCreativeRouter = router({
           )`.as("account_name"),
         })
         .from(adCreatives)
-        .leftJoin(landingPages, eq(adCreatives.landingPageId, landingPages.id))
         .where(conditions.length > 0 ? and(...conditions) : undefined)
         .orderBy(desc(adCreatives.createdAt));
     }),
@@ -421,15 +417,12 @@ export const adCreativeRouter = router({
           hook: adCreatives.hook,
           tone: adCreatives.tone,
           cta: adCreatives.cta,
-          landingPageId: adCreatives.landingPageId,
-          landingPageName: landingPages.name,
           ownership: adCreatives.ownership,
           notes: adCreatives.notes,
           createdAt: adCreatives.createdAt,
           updatedAt: adCreatives.updatedAt,
         })
         .from(adCreatives)
-        .leftJoin(landingPages, eq(adCreatives.landingPageId, landingPages.id))
         .where(and(eq(adCreatives.id, input.id), eq(adCreatives.organizationId, ctx.organizationId)));
       if (!creative) throw new Error("Ad creative not found");
       return creative;
@@ -506,7 +499,6 @@ export const adCreativeRouter = router({
         hook: z.string().nullable().optional(),
         tone: z.array(z.string()).nullable().optional(),
         cta: z.string().nullable().optional(),
-        landingPageId: z.string().nullable().optional(),
         ownership: z.enum(["ours", "theirs"]).nullable().optional(),
         notes: z.string().nullable().optional(),
       }),
@@ -543,7 +535,6 @@ export const adCreativeRouter = router({
           hook: source.hook,
           tone: source.tone,
           cta: source.cta,
-          landingPageId: source.landingPageId,
           ownership: source.ownership,
           notes: source.notes,
           organizationId: ctx.organizationId,

@@ -40,7 +40,6 @@ import {
 import {
   ArrowLeft,
   Copy,
-  ExternalLink,
   MoreHorizontalIcon,
   Trash2,
 } from "lucide-react";
@@ -456,24 +455,6 @@ export default function CreativeDetailPage() {
                 <Input {...form.register("cta")} placeholder="e.g., Shop Now" />
               </Field>
             </div>
-
-            <Field>
-              <FieldLabel>Attributed Landing Page</FieldLabel>
-              <div className="flex gap-2">
-                <Input
-                  value={creative.data.destinationUrl ?? ""}
-                  readOnly
-                  placeholder="No attributed landing page URL found"
-                />
-                {creative.data.destinationUrl && (
-                  <Button type="button" variant="outline" size="icon-sm" asChild>
-                    <a href={creative.data.destinationUrl} target="_blank" rel="noopener noreferrer" aria-label="Open landing page">
-                      <ExternalLink />
-                    </a>
-                  </Button>
-                )}
-              </div>
-            </Field>
 
             <Field>
               <FieldLabel>Notes</FieldLabel>

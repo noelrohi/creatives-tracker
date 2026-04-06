@@ -78,7 +78,6 @@ export function registerCreativeCommands(program: Command) {
     .option("--hook <hook>")
     .option("--tone <tone>")
     .option("--cta <cta>")
-    .option("--landing-page-id <landingPageId>")
     .option("--notes <notes>")
     .action(async (id, options, command) => {
       await runCommand(command, (client) =>
@@ -94,7 +93,6 @@ export function registerCreativeCommands(program: Command) {
             hook: options.hook,
             tone: parseList(options.tone),
             cta: options.cta,
-            landingPageId: options.landingPageId,
             notes: options.notes,
           }),
         }),
