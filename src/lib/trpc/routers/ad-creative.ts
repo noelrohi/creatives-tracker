@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, desc, ilike, and, inArray, sql, type SQL } from "drizzle-orm";
+import { eq, ne, or, isNull, desc, ilike, and, inArray, sql, type SQL } from "drizzle-orm";
 import { router, orgProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
@@ -60,7 +60,11 @@ export const adCreativeRouter = router({
         conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = ${adCreatives.id} AND ad.ad_set_id IN (${inList}))`);
       }
       if (input?.ownership) {
-        conditions.push(eq(adCreatives.ownership, input.ownership));
+        if (input.ownership === "theirs") {
+          conditions.push(or(ne(adCreatives.ownership, "ours"), isNull(adCreatives.ownership))!);
+        } else {
+          conditions.push(eq(adCreatives.ownership, input.ownership));
+        }
       }
       if (input?.untaggedOnly) {
         conditions.push(sql`(${adCreatives.format} IS NULL AND ${adCreatives.angle} IS NULL AND ${adCreatives.awarenessLevel} IS NULL)`);
@@ -175,7 +179,11 @@ export const adCreativeRouter = router({
         conditions.push(eq(ads.accountId, input.accountId));
       }
       if (input?.ownership) {
-        conditions.push(eq(adCreatives.ownership, input.ownership));
+        if (input.ownership === "theirs") {
+          conditions.push(or(ne(adCreatives.ownership, "ours"), isNull(adCreatives.ownership))!);
+        } else {
+          conditions.push(eq(adCreatives.ownership, input.ownership));
+        }
       }
       // Performance rows can be stored as multi-day windows (for example a
       // 7-day imported report), so the tracker should include any row that
@@ -241,7 +249,9 @@ export const adCreativeRouter = router({
         ? sql`AND ad.account_id = ${input.accountId}`
         : sql``;
       const ownershipFilter = input?.ownership
-        ? sql`AND ac.ownership = ${input.ownership}`
+        ? input.ownership === "theirs"
+          ? sql`AND (ac.ownership IS NULL OR ac.ownership != 'ours')`
+          : sql`AND ac.ownership = ${input.ownership}`
         : sql``;
       const campaignFilter = input?.campaignIds?.length
         ? sql`AND ad.ad_set_id IN (SELECT ast.id FROM ad_set ast WHERE ast.campaign_id IN (${sql.join(input.campaignIds.map((id) => sql`${id}`), sql`, `)}))`
