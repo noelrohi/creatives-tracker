@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Figtree } from "next/font/google";
 import { Providers } from "@/components/providers";
 import "./globals.css";
+import Script from "next/script";
 
 const figtree = Figtree({
   variable: "--font-figtree",
@@ -20,6 +21,15 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning className={figtree.variable}>
+      <head>
+        {process.env.NODE_ENV === "development" && (
+          <Script
+            src="//unpkg.com/react-grab/dist/index.global.js"
+            crossOrigin="anonymous"
+            strategy="beforeInteractive"
+          />
+        )}
+      </head>
       <body className="antialiased">
         <Providers>{children}</Providers>
       </body>
