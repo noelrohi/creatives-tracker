@@ -1405,8 +1405,19 @@ export const adCreativeRouter = router({
 
   getPerformance: orgProcedure
     .meta(openApiQueryMeta("adCreative", "getPerformance"))
-    .input(z.object({ id: z.string() }))
+    .input(z.object({ id: z.string(), from: z.string().optional(), to: z.string().optional() }))
     .query(async ({ input, ctx }) => {
+      const dateConditions: SQL[] = [
+        eq(ads.adCreativeId, input.id),
+        eq(ads.organizationId, ctx.organizationId),
+      ];
+      if (input.from) {
+        dateConditions.push(sql`${performanceLogs.dateStart} >= ${input.from}::date`);
+      }
+      if (input.to) {
+        dateConditions.push(sql`${performanceLogs.dateEnd} <= ${input.to}::date`);
+      }
+
       // Creative-level aggregated metrics
       const [creative] = await db
         .select({
@@ -1423,14 +1434,19 @@ export const adCreativeRouter = router({
         })
         .from(performanceLogs)
         .innerJoin(ads, eq(performanceLogs.adId, ads.id))
-        .where(
-          and(
-            eq(ads.adCreativeId, input.id),
-            eq(ads.organizationId, ctx.organizationId),
-          ),
-        );
+        .where(and(...dateConditions));
 
-      // Portfolio averages for comparison
+      // Portfolio averages for comparison (same date range)
+      const portfolioDateConditions: SQL[] = [
+        eq(ads.organizationId, ctx.organizationId),
+      ];
+      if (input.from) {
+        portfolioDateConditions.push(sql`${performanceLogs.dateStart} >= ${input.from}::date`);
+      }
+      if (input.to) {
+        portfolioDateConditions.push(sql`${performanceLogs.dateEnd} <= ${input.to}::date`);
+      }
+
       const [portfolio] = await db
         .select({
           avgRoas: sql<string | null>`coalesce(sum(${performanceLogs.purchaseValue}), 0) / nullif(sum(${performanceLogs.spend}), 0)`,
@@ -1439,7 +1455,7 @@ export const adCreativeRouter = router({
         })
         .from(performanceLogs)
         .innerJoin(ads, eq(performanceLogs.adId, ads.id))
-        .where(eq(ads.organizationId, ctx.organizationId));
+        .where(and(...portfolioDateConditions));
 
       // Derive live status from linked ads
       const adStatuses = await db
@@ -1474,6 +1490,45 @@ export const adCreativeRouter = router({
         portfolioAvgCtr: portfolio?.avgCtr ?? null,
         liveStatus,
       };
+    }),
+
+  getDailyPerformance: orgProcedure
+    .meta(openApiQueryMeta("adCreative", "getDailyPerformance"))
+    .input(z.object({ id: z.string(), from: z.string().optional(), to: z.string().optional() }))
+    .query(async ({ input, ctx }) => {
+      const conditions: SQL[] = [
+        eq(ads.adCreativeId, input.id),
+        eq(ads.organizationId, ctx.organizationId),
+      ];
+      if (input.from) {
+        conditions.push(sql`${performanceLogs.dateStart} >= ${input.from}::date`);
+      }
+      if (input.to) {
+        conditions.push(sql`${performanceLogs.dateEnd} <= ${input.to}::date`);
+      }
+
+      const rows = await db
+        .select({
+          dateStart: performanceLogs.dateStart,
+          dateEnd: performanceLogs.dateEnd,
+          spend: sql<string | null>`sum(${performanceLogs.spend})`,
+          purchaseValue: sql<string | null>`sum(${performanceLogs.purchaseValue})`,
+          roas: sql<string | null>`coalesce(sum(${performanceLogs.purchaseValue}), 0) / nullif(sum(${performanceLogs.spend}), 0)`,
+          cpa: sql<string | null>`coalesce(sum(${performanceLogs.spend}), 0) / nullif(sum(${performanceLogs.conversions}), 0)`,
+          ctr: sql<string | null>`coalesce(sum(${performanceLogs.ctr} * ${performanceLogs.impressions}), 0) / nullif(sum(${performanceLogs.impressions}), 0)`,
+          conversions: sql<number | null>`sum(${performanceLogs.conversions})`,
+          impressions: sql<number | null>`sum(${performanceLogs.impressions})`,
+          reach: sql<number | null>`sum(${performanceLogs.reach})`,
+          cpm: sql<string | null>`case when sum(${performanceLogs.impressions}) > 0 then (sum(${performanceLogs.spend}) / sum(${performanceLogs.impressions})) * 1000 else null end`,
+          linkClicks: sql<number | null>`sum(${performanceLogs.linkClicks})`,
+        })
+        .from(performanceLogs)
+        .innerJoin(ads, eq(performanceLogs.adId, ads.id))
+        .where(and(...conditions))
+        .groupBy(performanceLogs.dateStart, performanceLogs.dateEnd)
+        .orderBy(performanceLogs.dateStart);
+
+      return rows;
     }),
 
   delete: orgProcedure

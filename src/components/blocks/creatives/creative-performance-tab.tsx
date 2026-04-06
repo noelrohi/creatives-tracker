@@ -10,6 +10,8 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { DataFreshnessLabel } from "@/components/blocks/dashboard/data-freshness";
+import { DateRangePicker } from "@/components/blocks/dashboard/date-range-picker";
+import { PerformanceChart } from "@/components/blocks/insights/performance-chart";
 
 function fmt(
   value: string | number | null | undefined,
@@ -83,6 +85,21 @@ interface PerformanceData {
   totalClicks: number | null;
 }
 
+interface DailyPerformanceRow {
+  dateStart: string;
+  dateEnd: string;
+  spend: string | null;
+  purchaseValue: string | null;
+  roas: string | null;
+  cpa: string | null;
+  ctr: string | null;
+  conversions: number | null;
+  impressions: number | null;
+  reach: number | null;
+  cpm: string | null;
+  linkClicks: number | null;
+}
+
 interface AccountData {
   id: string;
   name: string;
@@ -92,83 +109,91 @@ interface AccountData {
 
 export function CreativePerformanceTab({
   perf,
+  dailyPerf,
   account,
+  from,
+  to,
+  onDateRangeChange,
 }: {
   perf: PerformanceData | undefined;
+  dailyPerf: DailyPerformanceRow[] | undefined;
   account: AccountData | undefined;
+  from: Date | undefined;
+  to: Date | undefined;
+  onDateRangeChange: (range: { from: Date; to: Date } | undefined) => void;
 }) {
   const hasPerf = perf && perf.logCount > 0;
   const roasDiff = pctDiff(perf?.avgRoas, perf?.portfolioAvgRoas);
   const cpaDiff = pctDiff(perf?.avgCpa, perf?.portfolioAvgCpa);
   const ctrDiff = pctDiff(perf?.avgCtr, perf?.portfolioAvgCtr);
 
-  if (!hasPerf || !perf) {
-    return (
-      <div className="rounded-lg border border-dashed border-border/40 px-4 py-12 text-center">
-        <p className="text-sm text-muted-foreground/50">No performance data yet</p>
-        <p className="mt-1 text-[11px] text-muted-foreground/30">
-          Import CSV data or link this creative to ads to see metrics
-        </p>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          {perf.minDate && perf.maxDate && (
-            <span className="text-[11px] text-muted-foreground/40">
-              {perf.minDate} — {perf.maxDate}
-            </span>
-          )}
-        </div>
+        <DateRangePicker from={from} to={to} onChange={onDateRangeChange} />
         <DataFreshnessLabel account={account} />
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        <MetricCard
-          label="Spend"
-          value={fmt(perf.totalSpend, { prefix: "$" })}
-          icon={DollarSign}
-        />
-        <MetricCard
-          label="ROAS"
-          value={fmt(perf.avgRoas, { suffix: "x" })}
-          icon={TrendingUp}
-          comparison={roasDiff != null ? { value: roasDiff, label: "vs avg" } : null}
-        />
-        <MetricCard
-          label="CPA"
-          value={fmt(perf.avgCpa, { prefix: "$" })}
-          icon={Target}
-          comparison={cpaDiff != null ? { value: -cpaDiff, label: "vs avg" } : null}
-        />
-        <MetricCard
-          label="CTR"
-          value={fmt(perf.avgCtr, { suffix: "%", decimals: 2 })}
-          icon={MousePointerClick}
-          comparison={ctrDiff != null ? { value: ctrDiff, label: "vs avg" } : null}
-        />
-        <MetricCard
-          label="Conversions"
-          value={fmt(perf.totalConversions, { decimals: 0 })}
-          icon={ShoppingCart}
-        />
-      </div>
+      {!hasPerf || !perf ? (
+        <div className="rounded-lg border border-dashed border-border/40 px-4 py-12 text-center">
+          <p className="text-sm text-muted-foreground/50">No performance data yet</p>
+          <p className="mt-1 text-[11px] text-muted-foreground/30">
+            Import CSV data or link this creative to ads to see metrics
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            <MetricCard
+              label="Spend"
+              value={fmt(perf.totalSpend, { prefix: "$" })}
+              icon={DollarSign}
+            />
+            <MetricCard
+              label="ROAS"
+              value={fmt(perf.avgRoas, { suffix: "x" })}
+              icon={TrendingUp}
+              comparison={roasDiff != null ? { value: roasDiff, label: "vs avg" } : null}
+            />
+            <MetricCard
+              label="CPA"
+              value={fmt(perf.avgCpa, { prefix: "$" })}
+              icon={Target}
+              comparison={cpaDiff != null ? { value: -cpaDiff, label: "vs avg" } : null}
+            />
+            <MetricCard
+              label="CTR"
+              value={fmt(perf.avgCtr, { suffix: "%", decimals: 2 })}
+              icon={MousePointerClick}
+              comparison={ctrDiff != null ? { value: ctrDiff, label: "vs avg" } : null}
+            />
+            <MetricCard
+              label="Conversions"
+              value={fmt(perf.totalConversions, { decimals: 0 })}
+              icon={ShoppingCart}
+            />
+          </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <MetricCard
-          label="Impressions"
-          value={fmt(perf.totalImpressions, { decimals: 0 })}
-          icon={Eye}
-        />
-        <MetricCard
-          label="Link Clicks"
-          value={fmt(perf.totalClicks, { decimals: 0 })}
-          icon={MousePointerClick}
-        />
-      </div>
+          <div className="grid grid-cols-2 gap-3">
+            <MetricCard
+              label="Impressions"
+              value={fmt(perf.totalImpressions, { decimals: 0 })}
+              icon={Eye}
+            />
+            <MetricCard
+              label="Link Clicks"
+              value={fmt(perf.totalClicks, { decimals: 0 })}
+              icon={MousePointerClick}
+            />
+          </div>
+
+          {dailyPerf && dailyPerf.length > 1 && (
+            <div className="rounded-lg border border-border/50 bg-card p-4">
+              <PerformanceChart logs={dailyPerf as Array<typeof dailyPerf[number] & Record<string, unknown>>} compact />
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

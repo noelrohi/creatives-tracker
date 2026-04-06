@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { subDays } from "date-fns";
 import Link from "next/link";
+import { formatDateOnly } from "@/lib/date";
 import { useForm, Controller, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
@@ -70,9 +72,20 @@ export default function CreativeDetailPage() {
 
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [metaPreview, setMetaPreview] = useState<MetaCreativePreview | null>(null);
+  const [dateRange, setDateRange] = useState<{ from: Date; to: Date }>({
+    from: subDays(new Date(), 29),
+    to: new Date(),
+  });
+
+  const dateParams = useMemo(() => ({
+    id,
+    from: formatDateOnly(dateRange.from),
+    to: formatDateOnly(dateRange.to),
+  }), [id, dateRange]);
 
   const creative = useQuery(trpc.adCreative.getById.queryOptions({ id }));
-  const perf = useQuery(trpc.adCreative.getPerformance.queryOptions({ id }));
+  const perf = useQuery(trpc.adCreative.getPerformance.queryOptions(dateParams));
+  const dailyPerf = useQuery(trpc.adCreative.getDailyPerformance.queryOptions(dateParams));
   const linkedAds = useQuery(trpc.ad.listByCreative.queryOptions({ adCreativeId: id }));
   const accountsQuery = useQuery(trpc.adAccount.list.queryOptions());
 
@@ -321,7 +334,13 @@ export default function CreativeDetailPage() {
         <TabsContent value="performance" className="pt-4">
           <CreativePerformanceTab
             perf={perf.data}
+            dailyPerf={dailyPerf.data}
             account={accountsQuery.data?.[0]}
+            from={dateRange.from}
+            to={dateRange.to}
+            onDateRangeChange={(range) => {
+              if (range) setDateRange(range);
+            }}
           />
         </TabsContent>
 
