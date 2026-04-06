@@ -29,15 +29,15 @@ export default function ImportPage() {
         </p>
       </div>
 
-      <Tabs defaultValue="csv">
+      <Tabs defaultValue="meta-api">
         <TabsList>
-          <TabsTrigger value="csv">
-            <FileSpreadsheet className="size-4" />
-            Import Reports
-          </TabsTrigger>
           <TabsTrigger value="meta-api">
             <Cloud className="size-4" />
-            Meta Marketing API
+            From Meta
+          </TabsTrigger>
+          <TabsTrigger value="csv">
+            <FileSpreadsheet className="size-4" />
+            CSV Report
           </TabsTrigger>
         </TabsList>
 
