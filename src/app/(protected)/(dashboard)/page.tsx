@@ -33,6 +33,8 @@ import {
   Trophy,
   AlertTriangle,
   ArrowRight,
+  ImageIcon,
+  Video,
 } from "lucide-react";
 import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
@@ -69,6 +71,8 @@ type LeaderboardRow = {
   id: string;
   name: string;
   format: string | null;
+  assetUrl: string | null;
+  videoUrl: string | null;
   totalSpend: string;
   roas: string;
   cpa: string | null;
@@ -76,6 +80,45 @@ type LeaderboardRow = {
   conversions: string;
   adStatus: string | null;
 };
+
+function MediaPreview({ row }: { row: LeaderboardRow }) {
+  const href = row.videoUrl || row.assetUrl;
+
+  if (!href) {
+    return (
+      <div className="flex size-8 items-center justify-center rounded bg-muted">
+        <ImageIcon className="size-3.5 text-muted-foreground/40" />
+      </div>
+    );
+  }
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(event) => event.stopPropagation()}
+      className="block"
+    >
+      {row.assetUrl ? (
+        <div className="relative size-8 overflow-hidden rounded bg-muted">
+          <img src={row.assetUrl} alt="" className="size-full object-cover" />
+          {row.format === "video" && (
+            <Video className="absolute inset-0 m-auto size-3.5 text-white drop-shadow" />
+          )}
+        </div>
+      ) : (
+        <div className="flex size-8 items-center justify-center rounded bg-muted">
+          {row.format === "video" ? (
+            <Video className="size-3.5 text-muted-foreground/60" />
+          ) : (
+            <ImageIcon className="size-3.5 text-muted-foreground/40" />
+          )}
+        </div>
+      )}
+    </a>
+  );
+}
 
 function LeaderboardTable({
   title,
@@ -169,6 +212,7 @@ function LeaderboardTable({
                 <TableRow key={row.id}>
                   <TableCell>
                     <div className="flex items-center gap-2">
+                      <MediaPreview row={row} />
                       <Link href={`/creatives/${row.id}`} className="text-sm font-medium hover:underline truncate max-w-[200px]">
                         {row.name}
                       </Link>

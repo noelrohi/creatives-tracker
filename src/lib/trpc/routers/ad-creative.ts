@@ -285,6 +285,8 @@ export const adCreativeRouter = router({
         id: string;
         name: string;
         format: string | null;
+        asset_url: string | null;
+        video_url: string | null;
         total_spend: string;
         roas: string;
         cpa: string | null;
@@ -299,6 +301,8 @@ export const adCreativeRouter = router({
           ac.id,
           ac.name,
           ac.format,
+          ac.asset_url,
+          ac.video_url,
           sum(pl.spend)::text as total_spend,
           (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text as roas,
           (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as cpa,
@@ -309,7 +313,7 @@ export const adCreativeRouter = router({
         JOIN ad ON ad.ad_creative_id = ac.id
         JOIN performance_log pl ON pl.ad_id = ad.id
         WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter}
-        GROUP BY ac.id, ac.name, ac.format
+        GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
         HAVING sum(pl.spend) >= 50
         ORDER BY sum(pl.conversions) DESC NULLS LAST, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST
         LIMIT 10
@@ -326,6 +330,8 @@ export const adCreativeRouter = router({
           ac.id,
           ac.name,
           ac.format,
+          ac.asset_url,
+          ac.video_url,
           sum(pl.spend)::text as total_spend,
           (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text as roas,
           (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as cpa,
@@ -336,7 +342,7 @@ export const adCreativeRouter = router({
         JOIN ad ON ad.ad_creative_id = ac.id
         JOIN performance_log pl ON pl.ad_id = ad.id
         WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter} ${topExclude}
-        GROUP BY ac.id, ac.name, ac.format
+        GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
         HAVING sum(pl.spend) >= 50
         ORDER BY sum(pl.conversions) ASC NULLS FIRST, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) ASC NULLS FIRST
         LIMIT 10
@@ -356,6 +362,8 @@ export const adCreativeRouter = router({
           id: r.id,
           name: r.name,
           format: r.format,
+          assetUrl: r.asset_url,
+          videoUrl: r.video_url,
           totalSpend: r.total_spend,
           roas: r.roas,
           cpa: r.cpa,
@@ -367,6 +375,8 @@ export const adCreativeRouter = router({
           id: r.id,
           name: r.name,
           format: r.format,
+          assetUrl: r.asset_url,
+          videoUrl: r.video_url,
           totalSpend: r.total_spend,
           roas: r.roas,
           cpa: r.cpa,
