@@ -35,7 +35,9 @@ import {
   ArrowRight,
   ImageIcon,
   Video,
+  Shield,
 } from "lucide-react";
+import { computeHealth, type CreativeHealth } from "@/lib/creative-health";
 import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
 
@@ -79,7 +81,30 @@ type LeaderboardRow = {
   ctr: string | null;
   conversions: string;
   adStatus: string | null;
+  runningDays?: number;
 };
+
+const HEALTH_STYLES: Record<CreativeHealth, { label: string; className: string }> = {
+  healthy: { label: "Healthy", className: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" },
+  warning: { label: "Warning", className: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
+  critical: { label: "Critical", className: "bg-red-500/15 text-red-500 dark:text-red-400" },
+};
+
+function HealthBadge({ row }: { row: LeaderboardRow }) {
+  const health = computeHealth({
+    roas: row.roas ? parseFloat(row.roas) : null,
+    spend: row.totalSpend ? parseFloat(row.totalSpend) : null,
+    conversions: row.conversions ? parseInt(row.conversions, 10) : null,
+    status: row.adStatus,
+  });
+  if (!health) return null;
+  const style = HEALTH_STYLES[health];
+  return (
+    <span className={`inline-flex rounded px-1.5 py-0.5 text-[9px] font-medium ${style.className}`}>
+      {style.label}
+    </span>
+  );
+}
 
 function MediaPreview({ row }: { row: LeaderboardRow }) {
   const href = row.videoUrl || row.assetUrl;
@@ -126,14 +151,14 @@ function LeaderboardTable({
   rows,
   isLoading,
   emptyMessage,
-  accountId,
+  viewAllHref,
 }: {
   title: string;
   icon: React.ReactNode;
   rows: LeaderboardRow[];
   isLoading: boolean;
   emptyMessage: string;
-  accountId: string;
+  viewAllHref: string;
 }) {
   if (isLoading) {
     return (
@@ -189,7 +214,7 @@ function LeaderboardTable({
           </h2>
         </div>
         <Button variant="ghost" size="sm" asChild className="text-[13px] text-muted-foreground">
-          <Link href={`/creatives${accountId ? `?account=${accountId}` : ""}`}>
+          <Link href={viewAllHref}>
             View All <ArrowRight className="ml-1 size-3" />
           </Link>
         </Button>
@@ -222,6 +247,7 @@ function LeaderboardTable({
                       {row.adStatus && (
                         <Badge variant="outline" className="text-[11px] capitalize shrink-0">{row.adStatus}</Badge>
                       )}
+                      <HealthBadge row={row} />
                     </div>
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-sm font-medium">
@@ -276,6 +302,12 @@ export default function DashboardPage() {
   const portfolio = stats.data?.portfolio;
   const topPerformers = stats.data?.topPerformers ?? [];
   const bottomPerformers = stats.data?.bottomPerformers ?? [];
+  const survivingCreatives = stats.data?.survivingCreatives ?? [];
+
+  const baseCreativesParams = new URLSearchParams();
+  if (accountId) baseCreativesParams.set("account", accountId);
+  if (ownership && ownership !== "all") baseCreativesParams.set("ownership", ownership);
+  const baseHref = `/creatives${baseCreativesParams.toString() ? `?${baseCreativesParams}` : ""}`;
 
   const kpis = [
     { label: "ROAS", value: fmtRoas(portfolio?.roas), icon: TrendingUp, accent: "text-emerald-500" },
@@ -380,7 +412,7 @@ export default function DashboardPage() {
           rows={topPerformers}
           isLoading={stats.isLoading}
           emptyMessage="No creatives with enough spend data yet"
-          accountId={accountId}
+          viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=healthy`}
         />
         <LeaderboardTable
           title="Needs Attention"
@@ -388,9 +420,17 @@ export default function DashboardPage() {
           rows={bottomPerformers}
           isLoading={stats.isLoading}
           emptyMessage="No underperformers detected"
-          accountId={accountId}
+          viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=critical`}
         />
       </div>
+      <LeaderboardTable
+        title="Surviving Creatives"
+        icon={<Shield className="size-3.5 text-blue-500" />}
+        rows={survivingCreatives}
+        isLoading={stats.isLoading}
+        emptyMessage="No long-running creatives with profitable ROAS yet"
+        viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=healthy`}
+      />
     </div>
   );
 }

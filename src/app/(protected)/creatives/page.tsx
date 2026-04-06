@@ -47,6 +47,7 @@ import {
 import { cn } from "@/lib/utils";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
 import { toast } from "sonner";
+import { computeHealth, type CreativeHealth } from "@/lib/creative-health";
 
 const FORMATS = ["static", "video", "ugc", "carousel"] as const;
 const SORT_OPTIONS = [
@@ -65,6 +66,12 @@ const AWARENESS = [
   "product_aware",
   "most_aware",
 ] as const;
+
+const HEALTH_STYLES: Record<CreativeHealth, { label: string; className: string }> = {
+  healthy: { label: "Healthy", className: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" },
+  warning: { label: "Warning", className: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
+  critical: { label: "Critical", className: "bg-red-500/15 text-red-500 dark:text-red-400" },
+};
 
 const AWARENESS_COLORS: Record<string, string> = {
   unaware: "bg-zinc-500/15 text-zinc-500 dark:text-zinc-400",
@@ -126,6 +133,15 @@ interface Creative {
   metaAdSetId: string | null;
   accountName: string | null;
   ownership: string | null;
+  // Trend metrics for health
+  recentCtr: string | null;
+  recentCpc: string | null;
+  avgCpc: string | null;
+  avgFrequency: string | null;
+  recentHookRate: string | null;
+  priorHookRate: string | null;
+  recentCpa: string | null;
+  thumbstopRatio: string | null;
 }
 
 function MediaPreview({ creative }: { creative: Creative }) {
@@ -468,6 +484,37 @@ const columns: ColumnDef<Creative>[] = [
     meta: { className: "text-right" },
   },
   {
+    id: "health",
+    header: "Health",
+    cell: ({ row }) => {
+      const o = row.original;
+      const health = computeHealth({
+        roas: o.avgRoas ? parseFloat(o.avgRoas) : null,
+        spend: o.totalSpend ? parseFloat(o.totalSpend) : null,
+        conversions: o.totalConversions,
+        status: o.adStatus,
+        recentCtr: o.recentCtr ? parseFloat(o.recentCtr) : null,
+        avgCtr: o.avgCtr ? parseFloat(o.avgCtr) : null,
+        recentCpc: o.recentCpc ? parseFloat(o.recentCpc) : null,
+        avgCpc: o.avgCpc ? parseFloat(o.avgCpc) : null,
+        frequency: o.avgFrequency ? parseFloat(o.avgFrequency) : null,
+        recentHookRate: o.recentHookRate ? parseFloat(o.recentHookRate) : null,
+        priorHookRate: o.priorHookRate ? parseFloat(o.priorHookRate) : null,
+        recentCpa: o.recentCpa ? parseFloat(o.recentCpa) : null,
+        avgCpa: o.avgCpa ? parseFloat(o.avgCpa) : null,
+        thumbstopRatio: o.thumbstopRatio ? parseFloat(o.thumbstopRatio) : null,
+      });
+      if (!health) return <span className="text-muted-foreground/30">—</span>;
+      const style = HEALTH_STYLES[health];
+      return (
+        <span className={cn("inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium", style.className)}>
+          {style.label}
+        </span>
+      );
+    },
+    size: 80,
+  },
+  {
     id: "actions",
     header: "",
     cell: ({ row }) => {
@@ -542,6 +589,7 @@ export default function CreativesPage() {
     parseAsStringLiteral(OWNERSHIP).withDefault(undefined as unknown as (typeof OWNERSHIP)[number]),
   );
   const [untagged, setUntagged] = useQueryState("untagged", parseAsBoolean.withDefault(false));
+  const [healthFilter, setHealthFilter] = useQueryState("health", parseAsString.withDefault(""));
   const [sort, setSort] = useQueryState(
     "sort",
     parseAsStringLiteral(SORT_OPTIONS).withDefault("last_synced_desc"),
@@ -586,23 +634,46 @@ export default function CreativesPage() {
     },
   });
 
-  const creativeRows = [...(creatives.data ?? [])].sort((left, right) => {
-    switch (sort) {
-      case "last_synced_asc":
-        return toTimestamp(left.updatedAt) - toTimestamp(right.updatedAt);
-      case "created_desc":
-        return toTimestamp(right.createdAt) - toTimestamp(left.createdAt);
-      case "created_asc":
-        return toTimestamp(left.createdAt) - toTimestamp(right.createdAt);
-      case "name_asc":
-        return left.name.localeCompare(right.name);
-      case "name_desc":
-        return right.name.localeCompare(left.name);
-      case "last_synced_desc":
-      default:
-        return toTimestamp(right.updatedAt) - toTimestamp(left.updatedAt);
-    }
-  });
+  const healthValues = healthFilter ? healthFilter.split(",").filter(Boolean) as CreativeHealth[] : [];
+
+  const creativeRows = [...(creatives.data ?? [])]
+    .filter((c) => {
+      if (healthValues.length === 0) return true;
+      const h = computeHealth({
+        roas: c.avgRoas ? parseFloat(c.avgRoas) : null,
+        spend: c.totalSpend ? parseFloat(c.totalSpend) : null,
+        conversions: c.totalConversions,
+        status: c.adStatus,
+        recentCtr: c.recentCtr ? parseFloat(c.recentCtr) : null,
+        avgCtr: c.avgCtr ? parseFloat(c.avgCtr) : null,
+        recentCpc: c.recentCpc ? parseFloat(c.recentCpc) : null,
+        avgCpc: c.avgCpc ? parseFloat(c.avgCpc) : null,
+        frequency: c.avgFrequency ? parseFloat(c.avgFrequency) : null,
+        recentHookRate: c.recentHookRate ? parseFloat(c.recentHookRate) : null,
+        priorHookRate: c.priorHookRate ? parseFloat(c.priorHookRate) : null,
+        recentCpa: c.recentCpa ? parseFloat(c.recentCpa) : null,
+        avgCpa: c.avgCpa ? parseFloat(c.avgCpa) : null,
+        thumbstopRatio: c.thumbstopRatio ? parseFloat(c.thumbstopRatio) : null,
+      });
+      return h != null && healthValues.includes(h);
+    })
+    .sort((left, right) => {
+      switch (sort) {
+        case "last_synced_asc":
+          return toTimestamp(left.updatedAt) - toTimestamp(right.updatedAt);
+        case "created_desc":
+          return toTimestamp(right.createdAt) - toTimestamp(left.createdAt);
+        case "created_asc":
+          return toTimestamp(left.createdAt) - toTimestamp(right.createdAt);
+        case "name_asc":
+          return left.name.localeCompare(right.name);
+        case "name_desc":
+          return right.name.localeCompare(left.name);
+        case "last_synced_desc":
+        default:
+          return toTimestamp(right.updatedAt) - toTimestamp(left.updatedAt);
+      }
+    });
 
   const selectedIds = Object.keys(rowSelection).filter((k) => rowSelection[k]);
   const selectedCreativeIds = selectedIds;
@@ -618,11 +689,11 @@ export default function CreativesPage() {
     }
   }, [selectedCreativeIds, deleteMutation]);
 
-  const allCreatives = useQuery(trpc.adCreative.list.queryOptions());
-
-  const handleExport = useCallback(() => {
-    const rows = allCreatives.data;
-    if (!rows?.length) return;
+  const exportRows = useCallback((rows: Creative[], suffix: string) => {
+    if (!rows.length) {
+      toast.error("No creatives to export");
+      return;
+    }
     const csvColumns = [
       "name", "ownership", "destination_url", "asset_url", "video_url",
       "format", "angle", "persona", "awareness_level", "hook", "cta",
@@ -647,21 +718,40 @@ export default function CreativesPage() {
     const escape = (v: string) => `"${v.replace(/"/g, '""')}"`;
     const lines = [
       csvColumns.join(","),
-      ...rows.map((row) => csvColumns.map((col) => escape(getValue(row as Creative, col))).join(",")),
+      ...rows.map((row) => csvColumns.map((col) => escape(getValue(row, col))).join(",")),
     ];
     const blob = new Blob([lines.join("\n")], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `creatives-export-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `creatives-${suffix}-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [allCreatives.data]);
+  }, []);
+
+  const handleExportFiltered = useCallback(() => {
+    exportRows(creativeRows as Creative[], "filtered");
+  }, [creativeRows, exportRows]);
+
+  const handleExportOwned = useCallback(() => {
+    const owned = (creatives.data ?? []).filter((r) => r.ownership === "ours") as Creative[];
+    exportRows(owned, "owned");
+  }, [creatives.data, exportRows]);
 
   const handleMarkAsOwn = useCallback(async () => {
     try {
       await ownershipMutation.mutateAsync({ ids: selectedCreativeIds, ownership: "ours" });
       toast.success(`Marked ${selectedCreativeIds.length} creative${selectedCreativeIds.length > 1 ? "s" : ""} as own`);
+      setRowSelection({});
+    } catch {
+      toast.error("Failed to update ownership");
+    }
+  }, [selectedCreativeIds, ownershipMutation]);
+
+  const handleMarkAsTheirs = useCallback(async () => {
+    try {
+      await ownershipMutation.mutateAsync({ ids: selectedCreativeIds, ownership: "theirs" });
+      toast.success(`Marked ${selectedCreativeIds.length} creative${selectedCreativeIds.length > 1 ? "s" : ""} as theirs`);
       setRowSelection({});
     } catch {
       toast.error("Failed to update ownership");
@@ -750,6 +840,17 @@ export default function CreativesPage() {
             { label: "Name Z-A", value: "name_desc" },
           ]}
         />
+        <FilterPill
+          value={healthFilter || "all"}
+          onValueChange={(v) => setHealthFilter(v === "all" ? "" : v)}
+          placeholder="Health"
+          options={[
+            { label: "All Health", value: "all" },
+            { label: "Healthy", value: "healthy" },
+            { label: "Warning", value: "warning" },
+            { label: "Critical", value: "critical" },
+          ]}
+        />
         <button
           type="button"
           onClick={() => setUntagged(!untagged)}
@@ -768,9 +869,21 @@ export default function CreativesPage() {
           visibility={columnVisibility}
           onVisibilityChange={setColumnVisibility}
         />
-        <Button size="sm" variant="outline" className="gap-1.5" onClick={handleExport} disabled={!allCreatives.data?.length}>
-          <Download className="size-3.5" /> Export
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="sm" variant="outline" className="gap-1.5">
+              <Download className="size-3.5" /> Export
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={handleExportFiltered} disabled={!creativeRows.length}>
+              Export Filtered ({creativeRows.length})
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleExportOwned}>
+              Export Owned
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <Button size="sm" variant="outline" asChild className="gap-1.5">
           <Link href="/import"><Upload className="size-3.5" /> Import</Link>
         </Button>
@@ -785,8 +898,8 @@ export default function CreativesPage() {
         <TableLoadingSkeleton />
       ) : total === 0 ? (
         <EmptyState
-          hasFilters={!!format || !!awareness || !!search || !!untagged || !!adSetIds || !!ownership}
-          onClear={() => { setFormat(null); setAwareness(null); setSearch(""); setUntagged(false); setAccountId(""); setAdSetIds(""); setOwnership(null); }}
+          hasFilters={!!format || !!awareness || !!search || !!untagged || !!adSetIds || !!ownership || !!healthFilter}
+          onClear={() => { setFormat(null); setAwareness(null); setSearch(""); setUntagged(false); setAccountId(""); setAdSetIds(""); setOwnership(null); setHealthFilter(""); }}
           onImport={() => router.push("/import")}
         />
       ) : (
@@ -810,6 +923,9 @@ export default function CreativesPage() {
             <span className="text-sm font-medium">{selectedCreativeIds.length} selected</span>
             <Button size="sm" variant="outline" className="gap-1.5" onClick={handleMarkAsOwn} disabled={ownershipMutation.isPending}>
               <UserCheck className="size-3.5" /> Mark as Own
+            </Button>
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={handleMarkAsTheirs} disabled={ownershipMutation.isPending}>
+              Mark as Theirs
             </Button>
             <Button size="sm" variant="destructive" className="gap-1.5" onClick={() => setDeleteOpen(true)}>
               <Trash2 className="size-3.5" /> Delete

@@ -1,0 +1,1 @@
+ALTER TABLE "ad" ADD COLUMN "caption" text;

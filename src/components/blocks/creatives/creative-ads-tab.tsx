@@ -18,6 +18,7 @@ function fmt(
 interface LinkedAd {
   id: string;
   name: string;
+  caption: string | null;
   status: string | null;
   campaignName: string | null;
   destinationUrl: string | null;
@@ -43,6 +44,7 @@ export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
         <thead>
           <tr className="border-b border-border/30 bg-muted/30 text-muted-foreground/60">
             <th className="px-3 py-2 text-left font-medium">Ad</th>
+            <th className="px-3 py-2 text-left font-medium">Caption</th>
             <th className="px-3 py-2 text-left font-medium">Campaign</th>
             <th className="px-3 py-2 text-left font-medium">Landing Page</th>
             <th className="px-3 py-2 text-right font-medium">Spend</th>
@@ -72,6 +74,13 @@ export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
                         : "Archived"}
                   </Badge>
                 </div>
+              </td>
+              <td className="max-w-[200px] px-3 py-2">
+                {ad.caption ? (
+                  <span className="line-clamp-2 text-muted-foreground/70" title={ad.caption}>{ad.caption}</span>
+                ) : (
+                  <span className="text-muted-foreground/30">—</span>
+                )}
               </td>
               <td className="max-w-[140px] truncate px-3 py-2 text-muted-foreground/60">
                 {ad.campaignName ?? "—"}

@@ -22,6 +22,7 @@ export const ads = pgTable(
     accountId: text("account_id").references(() => adAccounts.id, {
       onDelete: "set null",
     }),
+    caption: text("caption"),
     destinationUrl: text("destination_url"),
     metaId: text("meta_id").unique(),
     organizationId: text("organization_id"),

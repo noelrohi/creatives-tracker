@@ -150,6 +150,80 @@ export const adCreativeRouter = router({
             WHERE ad.ad_creative_id = "ad_creative"."id"
             LIMIT 1
           )`.as("account_name"),
+          // Trend metrics for health computation
+          recentCtr: sql<string | null>`(
+            SELECT coalesce(sum(pl.ctr * pl.impressions), 0) / nullif(sum(pl.impressions), 0)
+            FROM performance_log pl
+            JOIN ad ON ad.id = pl.ad_id
+            WHERE ad.ad_creative_id = "ad_creative"."id"
+              AND pl.date_start > (
+                SELECT max(pl2.date_end) - 3
+                FROM performance_log pl2 JOIN ad a2 ON a2.id = pl2.ad_id
+                WHERE a2.ad_creative_id = "ad_creative"."id"
+              )
+          )`.as("recent_ctr"),
+          recentCpc: sql<string | null>`(
+            SELECT avg(pl.cpc)
+            FROM performance_log pl
+            JOIN ad ON ad.id = pl.ad_id
+            WHERE ad.ad_creative_id = "ad_creative"."id"
+              AND pl.date_start > (
+                SELECT max(pl2.date_end) - 3
+                FROM performance_log pl2 JOIN ad a2 ON a2.id = pl2.ad_id
+                WHERE a2.ad_creative_id = "ad_creative"."id"
+              )
+          )`.as("recent_cpc"),
+          avgCpc: sql<string | null>`(
+            SELECT avg(pl.cpc)
+            FROM performance_log pl
+            JOIN ad ON ad.id = pl.ad_id
+            WHERE ad.ad_creative_id = "ad_creative"."id"
+          )`.as("avg_cpc"),
+          avgFrequency: sql<string | null>`(
+            SELECT avg(pl.frequency)
+            FROM performance_log pl
+            JOIN ad ON ad.id = pl.ad_id
+            WHERE ad.ad_creative_id = "ad_creative"."id"
+          )`.as("avg_frequency"),
+          recentHookRate: sql<string | null>`(
+            SELECT sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0)
+            FROM performance_log pl
+            JOIN ad ON ad.id = pl.ad_id
+            WHERE ad.ad_creative_id = "ad_creative"."id"
+              AND pl.date_start > (
+                SELECT max(pl2.date_end) - 3
+                FROM performance_log pl2 JOIN ad a2 ON a2.id = pl2.ad_id
+                WHERE a2.ad_creative_id = "ad_creative"."id"
+              )
+          )`.as("recent_hook_rate"),
+          priorHookRate: sql<string | null>`(
+            SELECT sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0)
+            FROM performance_log pl
+            JOIN ad ON ad.id = pl.ad_id
+            WHERE ad.ad_creative_id = "ad_creative"."id"
+              AND pl.date_end <= (
+                SELECT max(pl2.date_end) - 3
+                FROM performance_log pl2 JOIN ad a2 ON a2.id = pl2.ad_id
+                WHERE a2.ad_creative_id = "ad_creative"."id"
+              )
+          )`.as("prior_hook_rate"),
+          recentCpa: sql<string | null>`(
+            SELECT coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0)
+            FROM performance_log pl
+            JOIN ad ON ad.id = pl.ad_id
+            WHERE ad.ad_creative_id = "ad_creative"."id"
+              AND pl.date_start > (
+                SELECT max(pl2.date_end) - 3
+                FROM performance_log pl2 JOIN ad a2 ON a2.id = pl2.ad_id
+                WHERE a2.ad_creative_id = "ad_creative"."id"
+              )
+          )`.as("recent_cpa"),
+          thumbstopRatio: sql<string | null>`(
+            SELECT sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0)
+            FROM performance_log pl
+            JOIN ad ON ad.id = pl.ad_id
+            WHERE ad.ad_creative_id = "ad_creative"."id"
+          )`.as("thumbstop_ratio"),
         })
         .from(adCreatives)
         .where(conditions.length > 0 ? and(...conditions) : undefined)
@@ -321,6 +395,7 @@ export const adCreativeRouter = router({
         WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter}
         GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
         HAVING sum(pl.spend) >= 50
+          AND coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) >= 1
         ORDER BY sum(pl.conversions) DESC NULLS LAST, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST
         LIMIT 10
       `);
@@ -331,6 +406,36 @@ export const adCreativeRouter = router({
       const topExclude = topIds.length
         ? sql`AND ac.id NOT IN (${sql.join(topIds.map((id) => sql`${id}`), sql`, `)})`
         : sql``;
+      // Surviving creatives: active ads with ROAS >= 1 running for 14+ days
+      const survivingResult = await db.execute(sql`
+        SELECT
+          ac.id,
+          ac.name,
+          ac.format,
+          ac.asset_url,
+          ac.video_url,
+          sum(pl.spend)::text as total_spend,
+          (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text as roas,
+          (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as cpa,
+          avg(pl.ctr)::text as ctr,
+          sum(pl.conversions)::text as total_conversions,
+          (SELECT ad2.status FROM ad ad2 WHERE ad2.ad_creative_id = ac.id LIMIT 1) as ad_status,
+          (max(pl.date_end)::date - min(pl.date_start)::date) as running_days
+        FROM ad_creative ac
+        JOIN ad ON ad.ad_creative_id = ac.id
+        JOIN performance_log pl ON pl.ad_id = ad.id
+        WHERE ad.organization_id = ${ctx.organizationId}
+          AND ad.status = 'active'
+          ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter}
+        GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
+        HAVING sum(pl.spend) >= 50
+          AND coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) >= 1
+          AND (max(pl.date_end)::date - min(pl.date_start)::date) >= 14
+        ORDER BY (max(pl.date_end)::date - min(pl.date_start)::date) DESC, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST
+        LIMIT 10
+      `);
+      const survivingCreatives = survivingResult.rows as (CreativeRow & { running_days: number })[];
+
       const bottomResult = await db.execute(sql`
         SELECT
           ac.id,
@@ -389,6 +494,20 @@ export const adCreativeRouter = router({
           ctr: r.ctr,
           conversions: r.total_conversions,
           adStatus: r.ad_status,
+        })),
+        survivingCreatives: survivingCreatives.map((r) => ({
+          id: r.id,
+          name: r.name,
+          format: r.format,
+          assetUrl: r.asset_url,
+          videoUrl: r.video_url,
+          totalSpend: r.total_spend,
+          roas: r.roas,
+          cpa: r.cpa,
+          ctr: r.ctr,
+          conversions: r.total_conversions,
+          adStatus: r.ad_status,
+          runningDays: r.running_days,
         })),
       };
     }),

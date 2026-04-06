@@ -41,6 +41,7 @@ import {
   ArrowLeft,
   Copy,
   MoreHorizontalIcon,
+  PlayIcon,
   Trash2,
 } from "lucide-react";
 import { TagInput } from "@/components/tag-input";
@@ -183,11 +184,9 @@ export default function CreativeDetailPage() {
             variant="ghost"
             size="icon"
             className="size-7 shrink-0 text-muted-foreground/60 hover:text-foreground"
-            asChild
+            onClick={() => router.back()}
           >
-            <Link href="/creatives">
-              <ArrowLeft className="size-3.5" />
-            </Link>
+            <ArrowLeft className="size-3.5" />
           </Button>
           <h1 className="text-lg font-medium tracking-tight">
             {creative.data.name || "Untitled"}
@@ -254,6 +253,21 @@ export default function CreativeDetailPage() {
               controls
               className="w-full max-h-[400px]"
             />
+          ) : previewFormat === "video" ? (
+            <div className="flex items-center justify-center py-10">
+              <div className="relative">
+                <img
+                  src={displayAssetUrl}
+                  alt={creative.data.name}
+                  className="object-contain max-h-[280px] rounded"
+                />
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="rounded-full bg-black/50 p-3">
+                    <PlayIcon className="size-8 text-white" fill="white" />
+                  </div>
+                </div>
+              </div>
+            </div>
           ) : (
             <img
               src={displayAssetUrl}
