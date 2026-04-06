@@ -51,12 +51,12 @@ export const adCreativeRouter = router({
         conditions.push(ilike(adCreatives.name, `%${input.search}%`));
       }
       if (input?.accountId) {
-        conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = ${adCreatives.id} AND ad.account_id = ${input.accountId})`);
+        conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = "ad_creative"."id" AND ad.account_id = ${input.accountId})`);
       }
       if (input?.adSetIds?.length) {
         const placeholders = input.adSetIds.map((id) => sql`${id}`);
         const inList = sql.join(placeholders, sql`, `);
-        conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = ${adCreatives.id} AND ad.ad_set_id IN (${inList}))`);
+        conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = "ad_creative"."id" AND ad.ad_set_id IN (${inList}))`);
       }
       if (input?.ownership) {
         if (input.ownership === "theirs") {
@@ -77,7 +77,7 @@ export const adCreativeRouter = router({
           videoUrl: adCreatives.videoUrl,
           destinationUrl: sql<string | null>`(
             SELECT ad.destination_url FROM ad
-            WHERE ad.ad_creative_id = ${adCreatives.id}
+            WHERE ad.ad_creative_id = "ad_creative"."id"
               AND ad.destination_url IS NOT NULL
             ORDER BY ad.updated_at DESC NULLS LAST, ad.created_at DESC
             LIMIT 1
@@ -96,58 +96,58 @@ export const adCreativeRouter = router({
           totalSpend: sql<string | null>`(
             SELECT sum(pl.spend) FROM performance_log pl
             JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = ${adCreatives.id}
+            WHERE ad.ad_creative_id = "ad_creative"."id"
           )`.as("total_spend"),
           avgRoas: sql<string | null>`(
             SELECT coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0)
             FROM performance_log pl
             JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = ${adCreatives.id}
+            WHERE ad.ad_creative_id = "ad_creative"."id"
           )`.as("avg_roas"),
           totalConversions: sql<number | null>`(
             SELECT sum(pl.conversions) FROM performance_log pl
             JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = ${adCreatives.id}
+            WHERE ad.ad_creative_id = "ad_creative"."id"
           )`.as("total_conversions"),
           adStatus: sql<string | null>`(
             SELECT ad.status FROM ad
-            WHERE ad.ad_creative_id = ${adCreatives.id}
+            WHERE ad.ad_creative_id = "ad_creative"."id"
             LIMIT 1
           )`.as("ad_status"),
           metaAdId: sql<string | null>`(
             SELECT ad.meta_id FROM ad
-            WHERE ad.ad_creative_id = ${adCreatives.id}
+            WHERE ad.ad_creative_id = "ad_creative"."id"
             LIMIT 1
           )`.as("meta_ad_id"),
           avgCpa: sql<string | null>`(
             SELECT coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0)
             FROM performance_log pl
             JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = ${adCreatives.id}
+            WHERE ad.ad_creative_id = "ad_creative"."id"
           )`.as("avg_cpa"),
           avgCtr: sql<string | null>`(
             SELECT avg(pl.ctr)
             FROM performance_log pl
             JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = ${adCreatives.id}
+            WHERE ad.ad_creative_id = "ad_creative"."id"
           )`.as("avg_ctr"),
           metaCampaignId: sql<string | null>`(
             SELECT c.meta_id FROM ad
             JOIN ad_set ast ON ast.id = ad.ad_set_id
             JOIN campaign c ON c.id = ast.campaign_id
-            WHERE ad.ad_creative_id = ${adCreatives.id}
+            WHERE ad.ad_creative_id = "ad_creative"."id"
             LIMIT 1
           )`.as("meta_campaign_id"),
           metaAdSetId: sql<string | null>`(
             SELECT ast.meta_id FROM ad
             JOIN ad_set ast ON ast.id = ad.ad_set_id
-            WHERE ad.ad_creative_id = ${adCreatives.id}
+            WHERE ad.ad_creative_id = "ad_creative"."id"
             LIMIT 1
           )`.as("meta_ad_set_id"),
           accountName: sql<string | null>`(
             SELECT acc.name FROM ad
             JOIN ad_account acc ON acc.id = ad.account_id
-            WHERE ad.ad_creative_id = ${adCreatives.id}
+            WHERE ad.ad_creative_id = "ad_creative"."id"
             LIMIT 1
           )`.as("account_name"),
         })
@@ -405,7 +405,7 @@ export const adCreativeRouter = router({
           videoUrl: adCreatives.videoUrl,
           destinationUrl: sql<string | null>`(
             SELECT ad.destination_url FROM ad
-            WHERE ad.ad_creative_id = ${adCreatives.id}
+            WHERE ad.ad_creative_id = "ad_creative"."id"
               AND ad.destination_url IS NOT NULL
             ORDER BY ad.updated_at DESC NULLS LAST, ad.created_at DESC
             LIMIT 1

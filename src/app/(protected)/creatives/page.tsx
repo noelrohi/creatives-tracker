@@ -41,6 +41,7 @@ import {
   ImageIcon,
   Video,
   UserCheck,
+  ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
@@ -102,6 +103,7 @@ interface Creative {
   name: string;
   assetUrl: string | null;
   videoUrl: string | null;
+  destinationUrl: string | null;
   format: string | null;
   angle: string | null;
   persona: string | null;
@@ -241,6 +243,34 @@ const columns: ColumnDef<Creative>[] = [
       const name = row.getValue("accountName") as string | null;
       if (!name) return <span className="text-muted-foreground/30">—</span>;
       return <span className="text-sm text-muted-foreground truncate max-w-[120px]">{name}</span>;
+    },
+  },
+  {
+    accessorKey: "destinationUrl",
+    header: "Landing Page",
+    cell: ({ row }) => {
+      const url = row.getValue("destinationUrl") as string | null;
+      if (!url) return <span className="text-muted-foreground/30">—</span>;
+      let display: string;
+      try {
+        const parsed = new URL(url);
+        display = parsed.hostname + (parsed.pathname !== "/" ? parsed.pathname : "");
+      } catch {
+        display = url;
+      }
+      return (
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground truncate max-w-[200px]"
+          title={url}
+        >
+          <span className="truncate">{display}</span>
+          <ExternalLink className="size-3 shrink-0" />
+        </a>
+      );
     },
   },
   {
