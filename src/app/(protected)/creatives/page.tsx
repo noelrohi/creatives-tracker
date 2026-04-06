@@ -42,6 +42,7 @@ import {
   Video,
   UserCheck,
   ExternalLink,
+  Download,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
@@ -617,6 +618,46 @@ export default function CreativesPage() {
     }
   }, [selectedCreativeIds, deleteMutation]);
 
+  const allCreatives = useQuery(trpc.adCreative.list.queryOptions());
+
+  const handleExport = useCallback(() => {
+    const rows = allCreatives.data;
+    if (!rows?.length) return;
+    const csvColumns = [
+      "name", "ownership", "destination_url", "asset_url", "video_url",
+      "format", "angle", "persona", "awareness_level", "hook", "cta",
+      "status", "account", "spend", "roas", "cpa", "ctr", "conversions", "notes",
+    ] as const;
+    const getValue = (row: Creative, col: (typeof csvColumns)[number]): string => {
+      switch (col) {
+        case "destination_url": return row.destinationUrl ?? "";
+        case "asset_url": return row.assetUrl ?? "";
+        case "video_url": return row.videoUrl ?? "";
+        case "awareness_level": return row.awarenessLevel ?? "";
+        case "status": return row.adStatus ?? "";
+        case "account": return row.accountName ?? "";
+        case "spend": return row.totalSpend ?? "";
+        case "roas": return row.avgRoas ?? "";
+        case "cpa": return row.avgCpa ?? "";
+        case "ctr": return row.avgCtr ?? "";
+        case "conversions": return row.totalConversions?.toString() ?? "";
+        default: return (row[col as keyof Creative] as string) ?? "";
+      }
+    };
+    const escape = (v: string) => `"${v.replace(/"/g, '""')}"`;
+    const lines = [
+      csvColumns.join(","),
+      ...rows.map((row) => csvColumns.map((col) => escape(getValue(row as Creative, col))).join(",")),
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `creatives-export-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [allCreatives.data]);
+
   const handleMarkAsOwn = useCallback(async () => {
     try {
       await ownershipMutation.mutateAsync({ ids: selectedCreativeIds, ownership: "ours" });
@@ -727,6 +768,9 @@ export default function CreativesPage() {
           visibility={columnVisibility}
           onVisibilityChange={setColumnVisibility}
         />
+        <Button size="sm" variant="outline" className="gap-1.5" onClick={handleExport} disabled={!allCreatives.data?.length}>
+          <Download className="size-3.5" /> Export
+        </Button>
         <Button size="sm" variant="outline" asChild className="gap-1.5">
           <Link href="/import"><Upload className="size-3.5" /> Import</Link>
         </Button>
