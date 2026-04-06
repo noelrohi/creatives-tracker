@@ -252,7 +252,7 @@ export default function DashboardPage() {
   const trpc = useTRPC();
 
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
-  const [ownership, setOwnership] = useQueryState("ownership", parseAsString.withDefault("all"));
+  const [ownership, setOwnership] = useQueryState("ownership", parseAsString.withDefault("ours"));
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
   const [to, setTo] = useQueryState("to", parseAsString.withDefault(formatDateOnly(new Date())));
 
