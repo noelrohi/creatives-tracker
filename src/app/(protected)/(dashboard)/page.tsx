@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTransition } from "react";
 import { subDays } from "date-fns";
 import { useQueryState, parseAsString } from "nuqs";
 import { useTRPC } from "@/lib/trpc/client";
@@ -27,6 +28,7 @@ import {
 import {
   DollarSign,
   TrendingUp,
+  Download,
   Upload,
   Target,
   MousePointerClick,
@@ -43,6 +45,7 @@ import { computeHealth, type CreativeHealth } from "@/lib/creative-health";
 import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { toast } from "sonner";
 
 function fmtMoney(val: unknown) {
   if (val == null || val === "") return "—";
@@ -277,8 +280,50 @@ function LeaderboardTable({
   );
 }
 
+const EXPORT_COLUMNS = [
+  "date_start", "date_end",
+  "campaign_name",
+  "ad_set_name",
+  "ad_name", "ad_status", "caption", "destination_url",
+  "creative_name", "format", "angle", "persona", "awareness_level", "ownership",
+  "asset_url", "video_url",
+  "spend", "impressions", "reach", "frequency", "cpm", "cpc",
+  "link_clicks", "ctr", "landing_page_views", "cost_per_lpv",
+  "conversions", "purchase_value", "roas", "cpa",
+  "add_to_cart", "initiate_checkout", "cost_per_add_to_cart",
+  "video_views_3s", "video_thruplay", "video_avg_watch_time",
+  "quality_ranking", "engagement_rate_ranking", "conversion_rate_ranking",
+] as const;
+
+function downloadCsv(rows: Record<string, unknown>[], filename: string) {
+  const csv = [EXPORT_COLUMNS.join(",")]
+    .concat(
+      rows.map((row) =>
+        EXPORT_COLUMNS.map((col) => {
+          const val = row[col];
+          if (val == null) return "";
+          const str = Array.isArray(val) ? val.join("; ") : String(val);
+          return str.includes(",") || str.includes('"') || str.includes("\n")
+            ? `"${str.replace(/"/g, '""')}"`
+            : str;
+        }).join(","),
+      ),
+    )
+    .join("\n");
+
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function DashboardPage() {
   const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const [exporting, startExport] = useTransition();
 
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
   const [ownership, setOwnership] = useQueryState("ownership", parseAsString.withDefault("ours"));
@@ -369,6 +414,37 @@ export default function DashboardPage() {
               <SelectItem value="theirs">Theirs</SelectItem>
             </SelectContent>
           </Select>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 gap-1.5 text-[13px]"
+            disabled={exporting}
+            onClick={() => {
+              startExport(async () => {
+                try {
+                  const rows = await queryClient.fetchQuery(
+                    trpc.adCreative.dashboardExport.queryOptions({
+                      from: fromValue,
+                      to: toValue,
+                      accountId: selectedAccountId,
+                      ownership: ownership === "all" ? undefined : (ownership as "ours" | "theirs"),
+                    }),
+                  );
+                  if (!rows.length) {
+                    toast.info("No data to export for this date range");
+                    return;
+                  }
+                  downloadCsv(rows, `dashboard_${fromValue}_${toValue}.csv`);
+                  toast.success(`Exported ${rows.length} rows`);
+                } catch (err) {
+                  console.error("Export failed:", err);
+                  toast.error("Export failed — check the console for details");
+                }
+              });
+            }}
+          >
+            <Download className="size-3.5" /> {exporting ? "Exporting…" : "Export"}
+          </Button>
           <Button asChild size="sm" variant="outline" className="h-7 gap-1.5 text-[13px]">
             <Link href="/import">
               <Upload className="size-3.5" /> Import

@@ -4,7 +4,7 @@ import { useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useQueryState, parseAsStringLiteral, parseAsString, parseAsBoolean } from "nuqs";
+import { useQueryState, parseAsStringLiteral, parseAsString } from "nuqs";
 import { type ColumnDef } from "@tanstack/react-table";
 import { useTRPC } from "@/lib/trpc/client";
 import { Button } from "@/components/ui/button";
@@ -51,14 +51,6 @@ import { toast } from "sonner";
 import { computeHealth, type CreativeHealth } from "@/lib/creative-health";
 
 const FORMATS = ["static", "video", "ugc", "carousel"] as const;
-const SORT_OPTIONS = [
-  "last_synced_desc",
-  "last_synced_asc",
-  "created_desc",
-  "created_asc",
-  "name_asc",
-  "name_desc",
-] as const;
 const OWNERSHIP = ["ours", "theirs"] as const;
 const AWARENESS = [
   "unaware",
@@ -84,12 +76,6 @@ const AWARENESS_COLORS: Record<string, string> = {
 
 function prettify(s: string | null | undefined) {
   return s ? s.replace(/_/g, " ") : null;
-}
-
-function toTimestamp(value: Date | string | null | undefined) {
-  if (!value) return 0;
-  const parsed = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
 }
 
 function formatDateTime(value: Date | string) {
@@ -595,12 +581,7 @@ export default function CreativesPage() {
     "ownership",
     parseAsStringLiteral(OWNERSHIP).withDefault(undefined as unknown as (typeof OWNERSHIP)[number]),
   );
-  const [untagged, setUntagged] = useQueryState("untagged", parseAsBoolean.withDefault(false));
   const [healthFilter, setHealthFilter] = useQueryState("health", parseAsString.withDefault(""));
-  const [sort, setSort] = useQueryState(
-    "sort",
-    parseAsStringLiteral(SORT_OPTIONS).withDefault("last_synced_desc"),
-  );
 
   const accountsQuery = useQuery(trpc.adAccount.list.queryOptions());
   const adSetsQuery = useQuery(trpc.adSet.list.queryOptions());
@@ -615,7 +596,6 @@ export default function CreativesPage() {
       accountId: accountId || undefined,
       adSetIds: adSetIds ? adSetIds.split(",") : undefined,
       ownership: ownership || undefined,
-      untaggedOnly: untagged || undefined,
     }),
   );
 
@@ -666,23 +646,7 @@ export default function CreativesPage() {
       });
       return h != null && healthValues.includes(h);
     })
-    .sort((left, right) => {
-      switch (sort) {
-        case "last_synced_asc":
-          return toTimestamp(left.updatedAt) - toTimestamp(right.updatedAt);
-        case "created_desc":
-          return toTimestamp(right.createdAt) - toTimestamp(left.createdAt);
-        case "created_asc":
-          return toTimestamp(left.createdAt) - toTimestamp(right.createdAt);
-        case "name_asc":
-          return left.name.localeCompare(right.name);
-        case "name_desc":
-          return right.name.localeCompare(left.name);
-        case "last_synced_desc":
-        default:
-          return toTimestamp(right.updatedAt) - toTimestamp(left.updatedAt);
-      }
-    });
+;
 
   const selectedIds = Object.keys(rowSelection).filter((k) => rowSelection[k]);
   const selectedCreativeIds = selectedIds;
@@ -837,19 +801,6 @@ export default function CreativesPage() {
           />
         )}
         <FilterPill
-          value={sort}
-          onValueChange={(value) => setSort(value as (typeof SORT_OPTIONS)[number])}
-          placeholder="Sort"
-          options={[
-            { label: "Last synced ↓", value: "last_synced_desc" },
-            { label: "Last synced ↑", value: "last_synced_asc" },
-            { label: "Newest created", value: "created_desc" },
-            { label: "Oldest created", value: "created_asc" },
-            { label: "Name A-Z", value: "name_asc" },
-            { label: "Name Z-A", value: "name_desc" },
-          ]}
-        />
-        <FilterPill
           value={healthFilter || "all"}
           onValueChange={(v) => setHealthFilter(v === "all" ? "" : v)}
           placeholder="Health"
@@ -860,18 +811,6 @@ export default function CreativesPage() {
             { label: "Critical", value: "critical" },
           ]}
         />
-        <button
-          type="button"
-          onClick={() => setUntagged(!untagged)}
-          className={cn(
-            "h-8 rounded-md px-3 text-[13px] transition-colors",
-            untagged
-              ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
-              : "bg-muted/40 text-muted-foreground hover:bg-muted/60",
-          )}
-        >
-          Untagged
-        </button>
         <div className="flex-1" />
         <DataTableColumnToggle
           columns={columns}
@@ -907,8 +846,8 @@ export default function CreativesPage() {
         <TableLoadingSkeleton />
       ) : total === 0 ? (
         <EmptyState
-          hasFilters={!!format || !!awareness || !!search || !!untagged || !!adSetIds || !!ownership || !!healthFilter}
-          onClear={() => { setFormat(null); setAwareness(null); setSearch(""); setUntagged(false); setAccountId(""); setAdSetIds(""); setOwnership(null); setHealthFilter(""); }}
+          hasFilters={!!format || !!awareness || !!search || !!adSetIds || !!ownership || !!healthFilter}
+          onClear={() => { setFormat(null); setAwareness(null); setSearch(""); setAccountId(""); setAdSetIds(""); setOwnership(null); setHealthFilter(""); }}
           onImport={() => router.push("/import")}
         />
       ) : (

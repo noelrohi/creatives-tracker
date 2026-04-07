@@ -512,6 +512,81 @@ export const adCreativeRouter = router({
       };
     }),
 
+  dashboardExport: orgProcedure
+    .input(
+      z.object({
+        from: z.string(),
+        to: z.string(),
+        accountId: z.string().optional(),
+        ownership: z.enum(["ours", "theirs"]).optional(),
+      }),
+    )
+    .query(async ({ input, ctx }) => {
+      const accountFilter = input.accountId
+        ? sql`AND ad.account_id = ${input.accountId}`
+        : sql``;
+      const ownershipFilter = input.ownership
+        ? input.ownership === "theirs"
+          ? sql`AND (ac.ownership IS NULL OR ac.ownership != 'ours')`
+          : sql`AND ac.ownership = ${input.ownership}`
+        : sql``;
+
+      const rows = await db.execute(sql`
+        SELECT
+          pl.date_start,
+          pl.date_end,
+          c.name   AS campaign_name,
+          ast.name AS ad_set_name,
+          ad.name  AS ad_name,
+          ad.status AS ad_status,
+          ad.caption,
+          ad.destination_url,
+          ac.name  AS creative_name,
+          ac.format,
+          ac.angle,
+          ac.persona,
+          ac.awareness_level,
+          ac.ownership,
+          ac.asset_url,
+          ac.video_url,
+          pl.spend,
+          pl.impressions,
+          pl.reach,
+          pl.frequency,
+          pl.cpm,
+          pl.cpc,
+          pl.link_clicks,
+          pl.ctr,
+          pl.landing_page_views,
+          pl.cost_per_lpv,
+          pl.conversions,
+          pl.purchase_value,
+          pl.roas,
+          pl.cpa,
+          pl.add_to_cart,
+          pl.initiate_checkout,
+          pl.cost_per_add_to_cart,
+          pl.video_views_3s,
+          pl.video_thruplay,
+          pl.video_avg_watch_time,
+          pl.quality_ranking,
+          pl.engagement_rate_ranking,
+          pl.conversion_rate_ranking
+        FROM performance_log pl
+        JOIN ad ON ad.id = pl.ad_id
+        JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+        LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
+        LEFT JOIN campaign c ON c.id = ast.campaign_id
+        WHERE pl.date_start <= ${input.to}::date
+          AND pl.date_end >= ${input.from}::date
+          AND pl.organization_id = ${ctx.organizationId}
+          ${accountFilter} ${ownershipFilter}
+        ORDER BY pl.date_start DESC, ad.name
+      `);
+
+      return rows.rows as Record<string, unknown>[];
+    }),
+
   getDailyPortfolioPerformance: orgProcedure
     .meta(openApiQueryMeta("adCreative", "getDailyPortfolioPerformance"))
     .input(
