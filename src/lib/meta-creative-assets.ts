@@ -52,6 +52,9 @@ type MetaAdCreativeResponse = {
         video_id?: string;
         thumbnail_url?: string;
       }>;
+      link_urls?: Array<{
+        website_url?: string;
+      }>;
     };
   };
 };
@@ -191,6 +194,8 @@ function getDestinationUrl(
       return spec.video_data.call_to_action.value.link;
     }
   }
+  const feedUrl = creative?.asset_feed_spec?.link_urls?.find((u) => u.website_url)?.website_url;
+  if (feedUrl) return feedUrl;
   return undefined;
 }
 

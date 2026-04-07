@@ -44,6 +44,7 @@ import {
   ExternalLink,
   Download,
 } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
 import { toast } from "sonner";
@@ -271,22 +272,28 @@ const columns: ColumnDef<Creative>[] = [
       let display: string;
       try {
         const parsed = new URL(url);
-        display = parsed.hostname + (parsed.pathname !== "/" ? parsed.pathname : "");
+        display = parsed.pathname !== "/" ? parsed.pathname : parsed.hostname.replace(/^www\./, "");
       } catch {
         display = url;
       }
       return (
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(e) => e.stopPropagation()}
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground truncate max-w-[200px]"
-          title={url}
-        >
-          <span className="truncate">{display}</span>
-          <ExternalLink className="size-3 shrink-0" />
-        </a>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground truncate max-w-[120px]"
+            >
+              <span className="truncate">{display}</span>
+              <ExternalLink className="size-3 shrink-0" />
+            </a>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-xs break-all text-xs">
+            {url}
+          </TooltipContent>
+        </Tooltip>
       );
     },
   },
@@ -618,6 +625,8 @@ export default function CreativesPage() {
     angle: false,
     awarenessLevel: false,
     format: false,
+    health: false,
+    avgCpa: false,
   });
 
   const deleteMutation = useMutation({
