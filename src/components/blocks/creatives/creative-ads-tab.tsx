@@ -1,7 +1,21 @@
 "use client";
 
-import { ExternalLink } from "lucide-react";
+import { useState, useMemo } from "react";
+import { ExternalLink, MoreHorizontal, FileText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
 
 function fmt(
   value: string | number | null | undefined,
@@ -30,6 +44,16 @@ interface LinkedAd {
 }
 
 export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
+  const [captionAd, setCaptionAd] = useState<LinkedAd | null>(null);
+
+  const sharedCaption = useMemo(() => {
+    if (!ads || ads.length === 0) return null;
+    const captions = ads.map((a) => a.caption).filter(Boolean);
+    if (captions.length === 0) return null;
+    const allSame = captions.every((c) => c === captions[0]);
+    return allSame ? captions[0] : null;
+  }, [ads]);
+
   if (!ads || ads.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-border/40 px-4 py-12 text-center">
@@ -39,18 +63,32 @@ export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border/50">
+    <>
+    {sharedCaption && (
+      <div className="mb-3 flex items-center gap-2">
+        <span className="text-[12px] text-muted-foreground/50">Same caption across all ads</span>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 text-xs"
+          onClick={() => setCaptionAd(ads![0])}
+        >
+          <FileText className="size-3" /> View Caption
+        </Button>
+      </div>
+    )}
+    <div className="overflow-x-auto rounded-lg border border-border/50">
       <table className="w-full text-[13px]">
         <thead>
           <tr className="border-b border-border/30 bg-muted/30 text-muted-foreground/60">
             <th className="px-3 py-2 text-left font-medium">Ad</th>
-            <th className="px-3 py-2 text-left font-medium">Caption</th>
             <th className="px-3 py-2 text-left font-medium">Campaign</th>
             <th className="px-3 py-2 text-left font-medium">Landing Page</th>
             <th className="px-3 py-2 text-right font-medium">Spend</th>
             <th className="px-3 py-2 text-right font-medium">ROAS</th>
             <th className="px-3 py-2 text-right font-medium">Conv.</th>
-            <th className="px-3 py-2 text-right font-medium">Dates</th>
+            <th className="px-3 py-2 text-right font-medium">Published</th>
+            <th className="w-10 px-2 py-2" />
           </tr>
         </thead>
         <tbody>
@@ -74,13 +112,6 @@ export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
                         : "Archived"}
                   </Badge>
                 </div>
-              </td>
-              <td className="max-w-[200px] px-3 py-2">
-                {ad.caption ? (
-                  <span className="line-clamp-2 text-muted-foreground/70" title={ad.caption}>{ad.caption}</span>
-                ) : (
-                  <span className="text-muted-foreground/30">—</span>
-                )}
               </td>
               <td className="max-w-[140px] truncate px-3 py-2 text-muted-foreground/60">
                 {ad.campaignName ?? "—"}
@@ -111,12 +142,40 @@ export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
                 {fmt(ad.totalConversions, { decimals: 0 })}
               </td>
               <td className="px-3 py-2 text-right text-[11px] text-muted-foreground/50">
-                {ad.minDate && ad.maxDate ? `${ad.minDate} — ${ad.maxDate}` : "—"}
+                {ad.minDate ?? "—"}
+              </td>
+              <td className="px-2 py-2">
+                {ad.caption && !sharedCaption && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon-sm" className="size-7">
+                        <MoreHorizontal className="size-3.5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => setCaptionAd(ad)}>
+                        <FileText className="size-3.5" /> View Caption
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
               </td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
+
+      <Dialog open={!!captionAd} onOpenChange={(open) => !open && setCaptionAd(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-sm font-medium">{captionAd?.name}</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">
+            {captionAd?.caption}
+          </p>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

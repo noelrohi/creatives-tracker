@@ -912,6 +912,8 @@ export const adCreativeRouter = router({
           )]
         : [];
 
+      const captionByMetaAdId = new Map<string, string>();
+
       if (accountRecord?.metaAccessToken && adIdsNeedingPreview.length > 0) {
         const previews = await fetchMetaCreativePreviewsForAds({
           adMetaIds: adIdsNeedingPreview,
@@ -936,6 +938,9 @@ export const adCreativeRouter = router({
           }
           if (!row.destinationUrl && preview.destinationUrl) {
             row.destinationUrl = preview.destinationUrl;
+          }
+          if (preview.caption) {
+            captionByMetaAdId.set(row.adId, preview.caption);
           }
         }
       }
@@ -1148,7 +1153,7 @@ export const adCreativeRouter = router({
       }
 
       // 1. Collect unique ads from import, keyed by metaAdId (primary) or name (fallback)
-      const adInfoMap = new Map<string, { name: string; delivery?: string; metaAdId?: string; adSetDbId?: string; destinationUrl?: string }>();
+      const adInfoMap = new Map<string, { name: string; delivery?: string; metaAdId?: string; adSetDbId?: string; destinationUrl?: string; caption?: string }>();
       for (const row of rows) {
         const key = row.adId || row.name;
         const adSetKey = normalizeName(row.adSetId)
@@ -1166,6 +1171,7 @@ export const adCreativeRouter = router({
             metaAdId: row.adId,
             adSetDbId: adSetKey ? adSetIdByKey.get(adSetKey) : undefined,
             destinationUrl: row.destinationUrl,
+            caption: row.adId ? captionByMetaAdId.get(row.adId) : undefined,
           });
         }
       }
@@ -1312,6 +1318,7 @@ export const adCreativeRouter = router({
             status: normalizeStatus(info.delivery),
             metaId: info.metaAdId,
             destinationUrl: info.destinationUrl,
+            caption: info.caption,
             accountId: input.accountId,
             organizationId: ctx.organizationId,
           };
@@ -1333,6 +1340,7 @@ export const adCreativeRouter = router({
           ...(info.adSetDbId ? { adSetId: info.adSetDbId } : {}),
           ...(info.metaAdId ? { metaId: info.metaAdId } : {}),
           ...(info.destinationUrl ? { destinationUrl: info.destinationUrl } : {}),
+          ...(info.caption ? { caption: info.caption } : {}),
           ...(input.accountId ? { accountId: input.accountId } : {}),
         }).where(
           and(eq(ads.id, existing.id), eq(ads.organizationId, ctx.organizationId)),

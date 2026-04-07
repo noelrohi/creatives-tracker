@@ -8,11 +8,13 @@ export type MetaCreativePreview = {
   format: "static" | "video" | null;
   videoUrl?: string;
   destinationUrl?: string;
+  caption?: string;
 };
 
 type MetaAdCreativeResponse = {
   id?: string;
   creative?: {
+    body?: string;
     image_hash?: string;
     image_url?: string;
     thumbnail_url?: string;
@@ -21,11 +23,13 @@ type MetaAdCreativeResponse = {
     object_type?: string;
     object_story_spec?: {
       link_data?: {
+        message?: string;
         picture?: string;
         image_hash?: string;
         link?: string;
       };
       video_data?: {
+        message?: string;
         image_url?: string;
         image_hash?: string;
         video_id?: string;
@@ -34,10 +38,12 @@ type MetaAdCreativeResponse = {
         };
       };
       photo_data?: {
+        message?: string;
         url?: string;
       };
     };
     asset_feed_spec?: {
+      bodies?: Array<{ text?: string }>;
       images?: Array<{
         hash?: string;
         url?: string;
@@ -188,6 +194,19 @@ function getDestinationUrl(
   return undefined;
 }
 
+function getCaption(
+  creative: MetaAdCreativeResponse["creative"],
+): string | undefined {
+  if (creative?.body) return creative.body;
+  const spec = creative?.object_story_spec;
+  if (spec?.link_data?.message) return spec.link_data.message;
+  if (spec?.video_data?.message) return spec.video_data.message;
+  if (spec?.photo_data?.message) return spec.photo_data.message;
+  const bodies = creative?.asset_feed_spec?.bodies;
+  if (bodies?.[0]?.text) return bodies[0].text;
+  return undefined;
+}
+
 function toPreview(
   creative: MetaAdCreativeResponse["creative"],
   resolvedImageUrls: Map<string, string>,
@@ -199,6 +218,7 @@ function toPreview(
     assetUrl,
     format: format ?? (assetUrl ? "static" : null),
     destinationUrl: getDestinationUrl(creative),
+    caption: getCaption(creative),
   };
 }
 
@@ -412,7 +432,7 @@ export async function fetchMetaCreativePreviewsForAds(input: {
     url.searchParams.set("ids", chunk.join(","));
     url.searchParams.set(
       "fields",
-      "creative{image_hash,image_url,thumbnail_url,link_url,video_id,object_type,object_story_spec,asset_feed_spec}",
+      "creative{body,image_hash,image_url,thumbnail_url,link_url,video_id,object_type,object_story_spec,asset_feed_spec}",
     );
 
     const response = await fetchJson<Record<string, MetaAdCreativeResponse>>(url);
