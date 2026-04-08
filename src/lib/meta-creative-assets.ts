@@ -400,16 +400,24 @@ async function fetchAdImageUrls(input: {
 }) {
   const resolved = new Map<string, string>();
 
+  const chunks: string[][] = [];
   for (let i = 0; i < input.imageHashes.length; i += META_IMAGE_HASH_CHUNK_SIZE) {
-    const chunk = input.imageHashes.slice(i, i + META_IMAGE_HASH_CHUNK_SIZE);
-    const imageUrl = new URL(
-      `${GRAPH_API_BASE}/act_${input.metaAccountId}/adimages`,
-    );
-    imageUrl.searchParams.set("access_token", input.accessToken);
-    imageUrl.searchParams.set("hashes", JSON.stringify(chunk));
-    imageUrl.searchParams.set("fields", "hash,url");
+    chunks.push(input.imageHashes.slice(i, i + META_IMAGE_HASH_CHUNK_SIZE));
+  }
 
-    const images = await fetchJson<MetaAdImagesResponse>(imageUrl);
+  const results = await Promise.all(
+    chunks.map((chunk) => {
+      const imageUrl = new URL(
+        `${GRAPH_API_BASE}/act_${input.metaAccountId}/adimages`,
+      );
+      imageUrl.searchParams.set("access_token", input.accessToken);
+      imageUrl.searchParams.set("hashes", JSON.stringify(chunk));
+      imageUrl.searchParams.set("fields", "hash,url");
+      return fetchJson<MetaAdImagesResponse>(imageUrl);
+    }),
+  );
+
+  for (const images of results) {
     for (const image of images?.data ?? []) {
       if (image.hash && image.url) {
         resolved.set(image.hash, image.url);
@@ -430,22 +438,28 @@ export async function fetchMetaCreativePreviewsForAds(input: {
   const previews = new Map<string, MetaCreativePreview>();
   const creativesByAdId = new Map<string, MetaAdCreativeResponse["creative"]>();
 
+  const adChunks: string[][] = [];
   for (let i = 0; i < input.adMetaIds.length; i += META_IDS_CHUNK_SIZE) {
-    const chunk = input.adMetaIds.slice(i, i + META_IDS_CHUNK_SIZE);
-    const url = new URL(`${GRAPH_API_BASE}/`);
-    url.searchParams.set("access_token", input.accessToken);
-    url.searchParams.set("ids", chunk.join(","));
-    url.searchParams.set(
-      "fields",
-      "creative{body,image_hash,image_url,thumbnail_url,link_url,video_id,object_type,object_story_spec,asset_feed_spec}",
-    );
+    adChunks.push(input.adMetaIds.slice(i, i + META_IDS_CHUNK_SIZE));
+  }
 
-    const response = await fetchJson<Record<string, MetaAdCreativeResponse>>(url);
-    if (!response) {
-      continue;
-    }
+  const creativeResponses = await Promise.all(
+    adChunks.map((chunk) => {
+      const url = new URL(`${GRAPH_API_BASE}/`);
+      url.searchParams.set("access_token", input.accessToken);
+      url.searchParams.set("ids", chunk.join(","));
+      url.searchParams.set(
+        "fields",
+        "creative{body,image_hash,image_url,thumbnail_url,link_url,video_id,object_type,object_story_spec,asset_feed_spec}",
+      );
+      return fetchJson<Record<string, MetaAdCreativeResponse>>(url);
+    }),
+  );
 
-    for (const adMetaId of chunk) {
+  for (let c = 0; c < adChunks.length; c++) {
+    const response = creativeResponses[c];
+    if (!response) continue;
+    for (const adMetaId of adChunks[c]) {
       creativesByAdId.set(adMetaId, response[adMetaId]?.creative);
     }
   }
@@ -477,23 +491,37 @@ export async function fetchMetaCreativePreviewsForAds(input: {
 
   const assetUrlMode = input.assetUrlMode ?? "uploaded";
   if (assetUrlMode === "uploaded") {
-    const uploadedAssetUrls = new Map<string, string | null>();
+    // Deduplicate by original asset URL so we only upload each image once
+    const uniqueAssets = new Map<string, { adMetaId: string }>();
     for (const adMetaId of input.adMetaIds) {
       const preview = previews.get(adMetaId);
-      if (!preview?.assetUrl) {
-        continue;
+      if (preview?.assetUrl && !uniqueAssets.has(preview.assetUrl)) {
+        uniqueAssets.set(preview.assetUrl, { adMetaId });
       }
+    }
 
-      if (!uploadedAssetUrls.has(preview.assetUrl)) {
-        uploadedAssetUrls.set(
-          preview.assetUrl,
-          await fetchAndUploadImage({
-            adMetaId,
-            assetUrl: preview.assetUrl,
-          }),
-        );
+    // Upload all unique images in parallel (bounded by chunk size)
+    const entries = [...uniqueAssets.entries()];
+    const uploadedAssetUrls = new Map<string, string | null>();
+    const UPLOAD_CONCURRENCY = 10;
+    for (let i = 0; i < entries.length; i += UPLOAD_CONCURRENCY) {
+      const chunk = entries.slice(i, i + UPLOAD_CONCURRENCY);
+      const results = await Promise.all(
+        chunk.map(([assetUrl, { adMetaId }]) =>
+          fetchAndUploadImage({ adMetaId, assetUrl }).then(
+            (uploaded) => [assetUrl, uploaded] as const,
+          ),
+        ),
+      );
+      for (const [assetUrl, uploaded] of results) {
+        uploadedAssetUrls.set(assetUrl, uploaded);
       }
+    }
 
+    // Apply uploaded URLs back to previews
+    for (const adMetaId of input.adMetaIds) {
+      const preview = previews.get(adMetaId);
+      if (!preview?.assetUrl) continue;
       const uploadedAssetUrl = uploadedAssetUrls.get(preview.assetUrl);
       if (uploadedAssetUrl) {
         preview.assetUrl = uploadedAssetUrl;
@@ -503,31 +531,42 @@ export async function fetchMetaCreativePreviewsForAds(input: {
 
   const videoUrlMode = input.videoUrlMode ?? "none";
   if (videoUrlMode !== "none") {
-    const videoUrls = new Map<string, string | null>();
+    // Deduplicate by video ID
+    const uniqueVideos = new Map<string, true>();
     for (const adMetaId of input.adMetaIds) {
       const creative = creativesByAdId.get(adMetaId);
       const preview = previews.get(adMetaId);
       const videoId = getCreativeVideoId(creative);
-
-      if (!preview || preview.format !== "video" || !videoId) {
-        continue;
+      if (preview && preview.format === "video" && videoId && !uniqueVideos.has(videoId)) {
+        uniqueVideos.set(videoId, true);
       }
+    }
 
-      if (!videoUrls.has(videoId)) {
-        videoUrls.set(
-          videoId,
-          videoUrlMode === "uploaded"
-            ? await fetchAndUploadVideo({
-                videoId,
-                accessToken: input.accessToken,
-              })
-            : await fetchVideoSourceUrl({
-                videoId,
-                accessToken: input.accessToken,
-              }),
-        );
+    // Fetch/upload all unique videos in parallel (bounded)
+    const videoIds = [...uniqueVideos.keys()];
+    const videoUrls = new Map<string, string | null>();
+    const VIDEO_CONCURRENCY = 5;
+    for (let i = 0; i < videoIds.length; i += VIDEO_CONCURRENCY) {
+      const chunk = videoIds.slice(i, i + VIDEO_CONCURRENCY);
+      const results = await Promise.all(
+        chunk.map((videoId) =>
+          (videoUrlMode === "uploaded"
+            ? fetchAndUploadVideo({ videoId, accessToken: input.accessToken })
+            : fetchVideoSourceUrl({ videoId, accessToken: input.accessToken })
+          ).then((url) => [videoId, url] as const),
+        ),
+      );
+      for (const [videoId, url] of results) {
+        videoUrls.set(videoId, url);
       }
+    }
 
+    // Apply video URLs back to previews
+    for (const adMetaId of input.adMetaIds) {
+      const creative = creativesByAdId.get(adMetaId);
+      const preview = previews.get(adMetaId);
+      const videoId = getCreativeVideoId(creative);
+      if (!preview || !videoId) continue;
       const videoUrl = videoUrls.get(videoId);
       if (videoUrl) {
         preview.videoUrl = videoUrl;
