@@ -46,6 +46,12 @@ import { computeHealth, type CreativeHealth } from "@/lib/creative-health";
 import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 
 function fmtMoney(val: unknown) {
@@ -334,7 +340,6 @@ export default function DashboardPage() {
   const canManageData = !isReadOnly;
 
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
-  const [ownership, setOwnership] = useQueryState("ownership", parseAsString.withDefault("ours"));
   const [teamId, setTeamId] = useQueryState("team", parseAsString.withDefault(""));
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
   const [to, setTo] = useQueryState("to", parseAsString.withDefault(formatDateOnly(new Date())));
@@ -354,7 +359,6 @@ export default function DashboardPage() {
       from: fromValue,
       to: toValue,
       accountId: selectedAccountId,
-      ownership: ownership === "all" ? undefined : (ownership as "ours" | "theirs"),
       teamId: selectedTeamId,
     }),
   );
@@ -364,7 +368,6 @@ export default function DashboardPage() {
       from: fromValue,
       to: toValue,
       accountId: selectedAccountId,
-      ownership: ownership === "all" ? undefined : (ownership as "ours" | "theirs"),
       teamId: selectedTeamId,
     }),
   );
@@ -376,7 +379,6 @@ export default function DashboardPage() {
 
   const baseCreativesParams = new URLSearchParams();
   if (accountId) baseCreativesParams.set("account", accountId);
-  if (ownership && ownership !== "all") baseCreativesParams.set("ownership", ownership);
   if (teamId) baseCreativesParams.set("team", teamId);
   const baseHref = `/creatives${baseCreativesParams.toString() ? `?${baseCreativesParams}` : ""}`;
 
@@ -418,16 +420,6 @@ export default function DashboardPage() {
               </SelectContent>
             </Select>
           )}
-          <Select value={ownership || "all"} onValueChange={setOwnership}>
-            <SelectTrigger className="h-7 w-auto gap-1 text-[13px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All</SelectItem>
-              <SelectItem value="ours">Ours</SelectItem>
-              <SelectItem value="theirs">Theirs</SelectItem>
-            </SelectContent>
-          </Select>
           {teamsQuery.data && teamsQuery.data.length > 0 && (
             <Select value={teamId || "all"} onValueChange={(v) => setTeamId(v === "all" ? "" : v)}>
               <SelectTrigger className="h-7 w-auto gap-1 text-[13px]">
@@ -441,38 +433,76 @@ export default function DashboardPage() {
               </SelectContent>
             </Select>
           )}
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 gap-1.5 text-[13px]"
-            disabled={exporting}
-            onClick={() => {
-              startExport(async () => {
-                try {
-                  const rows = await queryClient.fetchQuery(
-                    trpc.adCreative.dashboardExport.queryOptions({
-                      from: fromValue,
-                      to: toValue,
-                      accountId: selectedAccountId,
-                      ownership: ownership === "all" ? undefined : (ownership as "ours" | "theirs"),
-                      teamId: selectedTeamId,
-                    }),
-                  );
-                  if (!rows.length) {
-                    toast.info("No data to export for this date range");
-                    return;
-                  }
-                  downloadCsv(rows, `dashboard_${fromValue}_${toValue}.csv`);
-                  toast.success(`Exported ${rows.length} rows`);
-                } catch (err) {
-                  console.error("Export failed:", err);
-                  toast.error("Export failed — check the console for details");
-                }
-              });
-            }}
-          >
-            <Download className="size-3.5" /> {exporting ? "Exporting…" : "Export"}
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1.5 text-[13px]"
+                disabled={exporting}
+              >
+                <Download className="size-3.5" /> {exporting ? "Exporting..." : "Export"}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onClick={() => {
+                  startExport(async () => {
+                    try {
+                      const rows = await queryClient.fetchQuery(
+                        trpc.adCreative.dashboardExport.queryOptions({
+                          from: fromValue,
+                          to: toValue,
+                          accountId: selectedAccountId,
+                        }),
+                      );
+                      if (!rows.length) {
+                        toast.info("No data to export for this date range");
+                        return;
+                      }
+                      downloadCsv(rows, `dashboard_all_${fromValue}_${toValue}.csv`);
+                      toast.success(`Exported ${rows.length} rows`);
+                    } catch (err) {
+                      console.error("Export failed:", err);
+                      toast.error("Export failed — check the console for details");
+                    }
+                  });
+                }}
+              >
+                Export All
+              </DropdownMenuItem>
+              {selectedTeamId && (
+                <DropdownMenuItem
+                  onClick={() => {
+                    startExport(async () => {
+                      try {
+                        const rows = await queryClient.fetchQuery(
+                          trpc.adCreative.dashboardExport.queryOptions({
+                            from: fromValue,
+                            to: toValue,
+                            accountId: selectedAccountId,
+                            teamId: selectedTeamId,
+                          }),
+                        );
+                        if (!rows.length) {
+                          toast.info("No data to export for this team");
+                          return;
+                        }
+                        const teamName = teamsQuery.data?.find((t) => t.id === selectedTeamId)?.name ?? "team";
+                        downloadCsv(rows, `dashboard_${teamName.toLowerCase().replace(/\s+/g, "_")}_${fromValue}_${toValue}.csv`);
+                        toast.success(`Exported ${rows.length} rows`);
+                      } catch (err) {
+                        console.error("Export failed:", err);
+                        toast.error("Export failed — check the console for details");
+                      }
+                    });
+                  }}
+                >
+                  Export {teamsQuery.data?.find((t) => t.id === selectedTeamId)?.name ?? "Selected Team"}
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
           {canManageData ? (
             <Button asChild size="sm" variant="outline" className="h-7 gap-1.5 text-[13px]">
               <Link href="/import">

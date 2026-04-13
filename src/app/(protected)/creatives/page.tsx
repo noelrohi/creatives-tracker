@@ -58,7 +58,6 @@ import { toast } from "sonner";
 import { computeHealth, type CreativeHealth } from "@/lib/creative-health";
 
 const FORMATS = ["static", "video", "ugc", "carousel"] as const;
-const OWNERSHIP = ["ours", "theirs"] as const;
 const AWARENESS = [
   "unaware",
   "problem_aware",
@@ -606,10 +605,6 @@ export default function CreativesPage() {
   const [search, setSearch] = useQueryState("q", { defaultValue: "" });
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
   const [adSetIds, setAdSetIds] = useQueryState("adSet", parseAsString.withDefault(""));
-  const [ownership, setOwnership] = useQueryState(
-    "ownership",
-    parseAsStringLiteral(OWNERSHIP).withDefault(undefined as unknown as (typeof OWNERSHIP)[number]),
-  );
   const [healthFilter, setHealthFilter] = useQueryState("health", parseAsString.withDefault(""));
   const [teamId, setTeamId] = useQueryState("team", parseAsString.withDefault(""));
 
@@ -626,7 +621,6 @@ export default function CreativesPage() {
       search: search || undefined,
       accountId: accountId ? accountId : undefined,
       adSetIds: adSetIds ? adSetIds.split(",") : undefined,
-      ownership: ownership || undefined,
       teamId: teamId || undefined,
     }),
   );
@@ -738,10 +732,7 @@ export default function CreativesPage() {
     exportRows(creativeRows as Creative[], "filtered");
   }, [creativeRows, exportRows]);
 
-  const handleExportOwned = useCallback(() => {
-    const owned = (creatives.data ?? []).filter((r) => r.ownership === "ours") as Creative[];
-    exportRows(owned, "owned");
-  }, [creatives.data, exportRows]);
+
 
   const [teamDialogOpen, setTeamDialogOpen] = useState(false);
   const [selectedTeamValue, setSelectedTeamValue] = useState<string>("");
@@ -818,16 +809,6 @@ export default function CreativesPage() {
             ]}
           />
         )}
-        <FilterPill
-          value={ownership ?? "all"}
-          onValueChange={(v) => setOwnership(v === "all" ? null : (v as (typeof OWNERSHIP)[number]))}
-          placeholder="Ownership"
-          options={[
-            { label: "All Ownership", value: "all" },
-            { label: "Ours", value: "ours" },
-            { label: "Theirs", value: "theirs" },
-          ]}
-        />
         {teamsQuery.data && teamsQuery.data.length > 0 && (
           <FilterPill
             value={teamId || "all"}
@@ -870,12 +851,24 @@ export default function CreativesPage() {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => exportRows(creatives.data as Creative[] ?? [], "all")} disabled={!creatives.data?.length}>
+              Export All ({creatives.data?.length ?? 0})
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={handleExportFiltered} disabled={!creativeRows.length}>
               Export Filtered ({creativeRows.length})
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleExportOwned}>
-              Export Owned
-            </DropdownMenuItem>
+            {teamId && teamsQuery.data && (
+              <DropdownMenuItem
+                onClick={() => {
+                  const teamCreatives = (creatives.data ?? []).filter((c) => c.teamId === teamId) as Creative[];
+                  const teamName = teamsQuery.data?.find((t) => t.id === teamId)?.name ?? "team";
+                  exportRows(teamCreatives, teamName.toLowerCase().replace(/\s+/g, "_"));
+                }}
+                disabled={!creatives.data?.some((c) => c.teamId === teamId)}
+              >
+                Export {teamsQuery.data.find((t) => t.id === teamId)?.name ?? "Selected Team"}
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
         {!isReadOnly ? (
@@ -896,8 +889,8 @@ export default function CreativesPage() {
         <TableLoadingSkeleton />
       ) : total === 0 ? (
         <EmptyState
-          hasFilters={!!format || !!awareness || !!search || !!adSetIds || !!ownership || !!healthFilter || !!teamId}
-          onClear={() => { setFormat(null); setAwareness(null); setSearch(""); setAccountId(""); setAdSetIds(""); setOwnership(null); setTeamId(""); setHealthFilter(""); }}
+          hasFilters={!!format || !!awareness || !!search || !!adSetIds || !!healthFilter || !!teamId}
+          onClear={() => { setFormat(null); setAwareness(null); setSearch(""); setAccountId(""); setAdSetIds(""); setTeamId(""); setHealthFilter(""); }}
           onImport={!isReadOnly ? () => router.push("/import") : undefined}
           readOnly={isReadOnly}
         />
