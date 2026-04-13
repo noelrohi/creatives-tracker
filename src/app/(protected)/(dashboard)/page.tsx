@@ -296,7 +296,7 @@ const EXPORT_COLUMNS = [
   "campaign_name",
   "ad_set_name",
   "ad_name", "ad_status", "caption", "destination_url",
-  "creative_name", "format", "angle", "persona", "awareness_level", "ownership",
+  "creative_name", "format", "angle", "persona", "awareness_level",
   "asset_url", "video_url",
   "spend", "impressions", "reach", "frequency", "cpm", "cpc",
   "link_clicks", "ctr", "landing_page_views", "cost_per_lpv",

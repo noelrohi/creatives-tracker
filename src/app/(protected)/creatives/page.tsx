@@ -125,7 +125,6 @@ interface Creative {
   metaCampaignId: string | null;
   metaAdSetId: string | null;
   accountName: string | null;
-  ownership: string | null;
   teamId: string | null;
   // Trend metrics for health
   recentCtr: string | null;
@@ -289,27 +288,6 @@ const columns: ColumnDef<Creative>[] = [
         </Tooltip>
       );
     },
-  },
-  {
-    accessorKey: "ownership",
-    header: "Ownership",
-    cell: ({ row }) => {
-      const val = row.getValue("ownership") as string | null;
-      if (!val) return <span className="text-muted-foreground/30">—</span>;
-      return (
-        <Badge
-          variant="secondary"
-          className={cn(
-            "text-[10px] capitalize",
-            val === "ours" && "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
-            val === "theirs" && "bg-zinc-500/15 text-zinc-500 dark:text-zinc-400",
-          )}
-        >
-          {val}
-        </Badge>
-      );
-    },
-    size: 90,
   },
   {
     accessorKey: "teamId",
@@ -642,12 +620,7 @@ export default function CreativesPage() {
     },
   });
 
-  const ownershipMutation = useMutation({
-    ...trpc.adCreative.bulkUpdateOwnership.mutationOptions(),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: trpc.adCreative.list.queryKey() });
-    },
-  });
+
 
   const healthValues = healthFilter ? healthFilter.split(",").filter(Boolean) as CreativeHealth[] : [];
 
@@ -694,7 +667,7 @@ export default function CreativesPage() {
       return;
     }
     const csvColumns = [
-      "name", "ownership", "destination_url", "asset_url", "video_url",
+      "name", "destination_url", "asset_url", "video_url",
       "format", "angle", "persona", "awareness_level", "hook", "cta",
       "status", "account", "spend", "roas", "cpa", "ctr", "conversions", "notes",
     ] as const;

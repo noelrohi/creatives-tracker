@@ -58,7 +58,6 @@ import {
   AWARENESS_OPTIONS,
   creativeFormSchema,
   FORMAT_OPTIONS,
-  OWNERSHIP_OPTIONS,
   getCreativeFormValues,
   TONE_OPTIONS,
   toCreativeMutationInput,
@@ -422,13 +421,6 @@ export default function CreativeDetailPage() {
                   }
                 />
                 <ReadOnlyField
-                  label="Ownership"
-                  value={
-                    OWNERSHIP_OPTIONS.find((option) => option.value === creative.data.ownership)?.label ??
-                    creative.data.ownership
-                  }
-                />
-                <ReadOnlyField
                   label="Team"
                   value={
                     teamsQuery.data?.find((t) => t.id === creative.data.teamId)?.name ?? null
@@ -553,31 +545,6 @@ export default function CreativeDetailPage() {
                   />
                 </Field>
 
-                <Field>
-                  <FieldLabel>Ownership</FieldLabel>
-                  <Controller
-                    control={form.control}
-                    name="ownership"
-                    render={({ field }) => (
-                      <Select
-                        value={field.value ?? ""}
-                        onValueChange={(v) => field.onChange(v || null)}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {OWNERSHIP_OPTIONS.map((opt) => (
-                            <SelectItem key={opt.value} value={opt.value}>
-                              {opt.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    )}
-                  />
-                </Field>
-
                 {teamsQuery.data && teamsQuery.data.length > 0 && (
                   <Field>
                     <FieldLabel>Team</FieldLabel>
@@ -586,14 +553,14 @@ export default function CreativeDetailPage() {
                       name="teamId"
                       render={({ field }) => (
                         <Select
-                          value={field.value ?? ""}
-                          onValueChange={(v) => field.onChange(v || null)}
+                          value={field.value ?? "none"}
+                          onValueChange={(v) => field.onChange(v === "none" ? null : v)}
                         >
                           <SelectTrigger>
                             <SelectValue placeholder="Select" />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="">None</SelectItem>
+                            <SelectItem value="none">None</SelectItem>
                             {teamsQuery.data.map((t) => (
                               <SelectItem key={t.id} value={t.id}>
                                 {t.name}

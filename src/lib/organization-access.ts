@@ -20,5 +20,5 @@ export function canAccessMemberPath(
     return true;
   }
 
-  return pathname === "/" || pathname.startsWith("/creatives");
+  return pathname === "/" || pathname.startsWith("/creatives") || pathname.startsWith("/teams");
 }
