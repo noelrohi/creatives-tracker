@@ -6,6 +6,12 @@ import { z } from "zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { authClient } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -25,7 +31,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Loader2, Mail, UserPlus } from "lucide-react";
+import { Copy, Loader2, Mail, MoreHorizontal, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 
 const inviteSchema = z.object({
@@ -81,6 +87,20 @@ export default function MembersPage() {
     toast.success(`Invitation sent to ${data.email}`);
     form.reset();
     queryClient.invalidateQueries({ queryKey: ["org-full", orgId] });
+  }
+
+  async function copyInvitationLink(invitationId: string) {
+    try {
+      const invitationUrl = new URL(
+        `/accept-invitation?invitationId=${encodeURIComponent(invitationId)}`,
+        window.location.origin,
+      ).toString();
+
+      await navigator.clipboard.writeText(invitationUrl);
+      toast.success("Invitation link copied");
+    } catch {
+      toast.error("Failed to copy invitation link");
+    }
   }
 
   const currentUserRole = members.find(
@@ -264,6 +284,9 @@ export default function MembersPage() {
                   <TableHead>Email</TableHead>
                   <TableHead className="w-[100px]">Role</TableHead>
                   <TableHead className="w-[100px]">Status</TableHead>
+                  {canInvite ? (
+                    <TableHead className="w-[56px] text-right">Actions</TableHead>
+                  ) : null}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -286,6 +309,31 @@ export default function MembersPage() {
                           {inv.status}
                         </Badge>
                       </TableCell>
+                      {canInvite ? (
+                        <TableCell className="text-right">
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="size-8"
+                                aria-label={`Open actions for ${inv.email}`}
+                              >
+                                <MoreHorizontal className="size-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onClick={() => copyInvitationLink(inv.id)}
+                              >
+                                <Copy className="size-4" />
+                                Copy invitation link
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                      ) : null}
                     </TableRow>
                   ),
                 )}
