@@ -51,6 +51,7 @@ export const creativeFormSchema = z.object({
   cta: z.string(),
 
   ownership: z.enum(ownershipValues).nullable(),
+  teamId: z.string().nullable(),
   notes: z.string(),
 });
 
@@ -64,6 +65,7 @@ type CreativeFormSource = {
   persona: string | null;
   awarenessLevel: string | null;
   ownership: string | null;
+  teamId?: string | null;
   hook: string | null;
   tone: string[] | null;
   cta: string | null;
@@ -111,6 +113,7 @@ export function getCreativeFormValues(
     cta: creative?.cta ?? "",
 
     ownership: normalizeOwnership(creative?.ownership),
+    teamId: creative?.teamId ?? null,
     notes: creative?.notes ?? "",
   };
 }
@@ -133,6 +136,7 @@ export function toCreativeMutationInput(values: CreativeFormValues) {
     cta: emptyToNull(values.cta),
 
     ownership: values.ownership,
+    teamId: values.teamId,
     notes: emptyToNull(values.notes),
   };
 }

@@ -588,9 +588,11 @@ export default function CreativesPage() {
     parseAsStringLiteral(OWNERSHIP).withDefault(undefined as unknown as (typeof OWNERSHIP)[number]),
   );
   const [healthFilter, setHealthFilter] = useQueryState("health", parseAsString.withDefault(""));
+  const [teamId, setTeamId] = useQueryState("team", parseAsString.withDefault(""));
 
   const accountsQuery = useQuery(trpc.adAccount.list.queryOptions());
   const adSetsQuery = useQuery(trpc.adSet.list.queryOptions());
+  const teamsQuery = useQuery(trpc.team.list.queryOptions());
   const metaAccountId = accountsQuery.data?.find((a) => a.id === accountId)?.metaAccountId
     ?? accountsQuery.data?.[0]?.metaAccountId ?? "";
 
@@ -602,6 +604,7 @@ export default function CreativesPage() {
       accountId: accountId ? accountId : undefined,
       adSetIds: adSetIds ? adSetIds.split(",") : undefined,
       ownership: ownership || undefined,
+      teamId: teamId || undefined,
     }),
   );
 
@@ -799,6 +802,17 @@ export default function CreativesPage() {
             { label: "Theirs", value: "theirs" },
           ]}
         />
+        {teamsQuery.data && teamsQuery.data.length > 0 && (
+          <FilterPill
+            value={teamId || "all"}
+            onValueChange={(v) => setTeamId(v === "all" ? "" : v)}
+            placeholder="Team"
+            options={[
+              { label: "All Teams", value: "all" },
+              ...teamsQuery.data.map((t) => ({ label: t.name, value: t.id })),
+            ]}
+          />
+        )}
         {adSetsQuery.data && adSetsQuery.data.length > 0 && (
           <AdSetCombobox
             value={adSetIds ? adSetIds.split(",").filter(Boolean) : []}
@@ -856,8 +870,8 @@ export default function CreativesPage() {
         <TableLoadingSkeleton />
       ) : total === 0 ? (
         <EmptyState
-          hasFilters={!!format || !!awareness || !!search || !!adSetIds || !!ownership || !!healthFilter}
-          onClear={() => { setFormat(null); setAwareness(null); setSearch(""); setAccountId(""); setAdSetIds(""); setOwnership(null); setHealthFilter(""); }}
+          hasFilters={!!format || !!awareness || !!search || !!adSetIds || !!ownership || !!healthFilter || !!teamId}
+          onClear={() => { setFormat(null); setAwareness(null); setSearch(""); setAccountId(""); setAdSetIds(""); setOwnership(null); setTeamId(""); setHealthFilter(""); }}
           onImport={!isReadOnly ? () => router.push("/import") : undefined}
           readOnly={isReadOnly}
         />

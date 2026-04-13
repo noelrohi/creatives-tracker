@@ -101,6 +101,7 @@ export default function CreativeDetailPage() {
     ...trpc.adAccount.list.queryOptions(),
     enabled: !isReadOnly,
   });
+  const teamsQuery = useQuery(trpc.team.list.queryOptions());
   const tagsQuery = useQuery(
     trpc.tag.listForEntity.queryOptions({
       entityType: "ad_creative",
@@ -427,6 +428,12 @@ export default function CreativeDetailPage() {
                     creative.data.ownership
                   }
                 />
+                <ReadOnlyField
+                  label="Team"
+                  value={
+                    teamsQuery.data?.find((t) => t.id === creative.data.teamId)?.name ?? null
+                  }
+                />
                 <ReadOnlyField label="Angle" value={creative.data.angle} />
                 <ReadOnlyField label="Persona" value={creative.data.persona} />
                 <ReadOnlyField label="Hook" value={creative.data.hook} />
@@ -570,6 +577,34 @@ export default function CreativeDetailPage() {
                     )}
                   />
                 </Field>
+
+                {teamsQuery.data && teamsQuery.data.length > 0 && (
+                  <Field>
+                    <FieldLabel>Team</FieldLabel>
+                    <Controller
+                      control={form.control}
+                      name="teamId"
+                      render={({ field }) => (
+                        <Select
+                          value={field.value ?? ""}
+                          onValueChange={(v) => field.onChange(v || null)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="">None</SelectItem>
+                            {teamsQuery.data.map((t) => (
+                              <SelectItem key={t.id} value={t.id}>
+                                {t.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    />
+                  </Field>
+                )}
               </div>
 
               <Field>

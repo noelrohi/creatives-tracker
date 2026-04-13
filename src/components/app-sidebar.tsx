@@ -39,6 +39,7 @@ import {
   Upload,
   Image,
   Settings,
+  Users,
   Pencil,
   Plus,
   UserPlus,
@@ -57,6 +58,7 @@ import { DeleteOrganizationDialog } from "@/components/delete-organization-dialo
 const navItems = [
   { label: "Dashboard", href: "/", icon: LayoutDashboard },
   { label: "Creatives", href: "/creatives", icon: Image },
+  { label: "Teams", href: "/teams", icon: Users },
   { label: "Accounts", href: "/accounts", icon: Settings },
 ];
 

@@ -10,6 +10,7 @@ import { adAccountRouter } from "./account";
 import { metaInsightsRouter } from "./meta-insights";
 import { apiKeyRouter } from "./api-key";
 import { organizationRouter } from "./organization";
+import { teamRouter } from "./team";
 
 export const appRouter = router({
   adCreative: adCreativeRouter,
@@ -23,6 +24,7 @@ export const appRouter = router({
   metaInsights: metaInsightsRouter,
   apiKey: apiKeyRouter,
   organization: organizationRouter,
+  team: teamRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -1,5 +1,6 @@
 import { pgTable, text, timestamp, index } from "drizzle-orm/pg-core";
 import { formatEnum, awarenessLevelEnum, ownershipEnum } from "./enums";
+import { teams } from "./team";
 
 export const adCreatives = pgTable(
   "ad_creative",
@@ -18,6 +19,7 @@ export const adCreatives = pgTable(
     tone: text("tone").array(),
     cta: text("cta"),
     ownership: ownershipEnum("ownership"),
+    teamId: text("team_id").references(() => teams.id, { onDelete: "set null" }),
     notes: text("notes"),
     organizationId: text("organization_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -30,5 +32,6 @@ export const adCreatives = pgTable(
     index("ad_creative_format_idx").on(table.format),
     index("ad_creative_awareness_level_idx").on(table.awarenessLevel),
     index("ad_creative_organization_id_idx").on(table.organizationId),
+    index("ad_creative_team_id_idx").on(table.teamId),
   ],
 );

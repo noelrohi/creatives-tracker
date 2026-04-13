@@ -335,16 +335,19 @@ export default function DashboardPage() {
 
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
   const [ownership, setOwnership] = useQueryState("ownership", parseAsString.withDefault("ours"));
+  const [teamId, setTeamId] = useQueryState("team", parseAsString.withDefault(""));
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
   const [to, setTo] = useQueryState("to", parseAsString.withDefault(formatDateOnly(new Date())));
 
   const selectedAccountId = accountId ? accountId : undefined;
+  const selectedTeamId = teamId || undefined;
   const fromValue = isDateOnlyString(from) ? from : formatDateOnly(subDays(new Date(), 6));
   const toValue = isDateOnlyString(to) ? to : formatDateOnly(new Date());
   const fromDate = parseDateOnly(fromValue);
   const toDate = parseDateOnly(toValue);
 
   const accounts = useQuery(trpc.adAccount.list.queryOptions());
+  const teamsQuery = useQuery(trpc.team.list.queryOptions());
 
   const stats = useQuery(
     trpc.adCreative.dashboardStats.queryOptions({
@@ -352,6 +355,7 @@ export default function DashboardPage() {
       to: toValue,
       accountId: selectedAccountId,
       ownership: ownership === "all" ? undefined : (ownership as "ours" | "theirs"),
+      teamId: selectedTeamId,
     }),
   );
 
@@ -361,6 +365,7 @@ export default function DashboardPage() {
       to: toValue,
       accountId: selectedAccountId,
       ownership: ownership === "all" ? undefined : (ownership as "ours" | "theirs"),
+      teamId: selectedTeamId,
     }),
   );
 
@@ -372,6 +377,7 @@ export default function DashboardPage() {
   const baseCreativesParams = new URLSearchParams();
   if (accountId) baseCreativesParams.set("account", accountId);
   if (ownership && ownership !== "all") baseCreativesParams.set("ownership", ownership);
+  if (teamId) baseCreativesParams.set("team", teamId);
   const baseHref = `/creatives${baseCreativesParams.toString() ? `?${baseCreativesParams}` : ""}`;
 
   const kpis = [
@@ -422,6 +428,19 @@ export default function DashboardPage() {
               <SelectItem value="theirs">Theirs</SelectItem>
             </SelectContent>
           </Select>
+          {teamsQuery.data && teamsQuery.data.length > 0 && (
+            <Select value={teamId || "all"} onValueChange={(v) => setTeamId(v === "all" ? "" : v)}>
+              <SelectTrigger className="h-7 w-auto gap-1 text-[13px]">
+                <SelectValue placeholder="All teams" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All teams</SelectItem>
+                {teamsQuery.data.map((t) => (
+                  <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <Button
             size="sm"
             variant="outline"
@@ -436,6 +455,7 @@ export default function DashboardPage() {
                       to: toValue,
                       accountId: selectedAccountId,
                       ownership: ownership === "all" ? undefined : (ownership as "ours" | "theirs"),
+                      teamId: selectedTeamId,
                     }),
                   );
                   if (!rows.length) {

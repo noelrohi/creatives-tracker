@@ -9,6 +9,7 @@ import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
 import { performanceLogs } from "@/schema/performance-log";
 import { adAccounts } from "@/schema/account";
+import { teams } from "@/schema/team";
 import { fetchMetaCreativePreview, fetchMetaCreativePreviewsForAds, fetchMetaAdPreviewUrl } from "@/lib/meta-creative-assets";
 
 export const adCreativeRouter = router({
@@ -33,6 +34,7 @@ export const adCreativeRouter = router({
           accountId: z.string().optional(),
           adSetIds: z.array(z.string()).optional(),
           ownership: z.enum(["ours", "theirs"]).optional(),
+          teamId: z.string().optional(),
           untaggedOnly: z.boolean().optional(),
         })
         .optional(),
@@ -65,6 +67,9 @@ export const adCreativeRouter = router({
           conditions.push(eq(adCreatives.ownership, input.ownership));
         }
       }
+      if (input?.teamId) {
+        conditions.push(eq(adCreatives.teamId, input.teamId));
+      }
       if (input?.untaggedOnly) {
         conditions.push(sql`(${adCreatives.format} IS NULL AND ${adCreatives.angle} IS NULL AND ${adCreatives.awarenessLevel} IS NULL)`);
       }
@@ -90,6 +95,7 @@ export const adCreativeRouter = router({
           tone: adCreatives.tone,
           cta: adCreatives.cta,
           ownership: adCreatives.ownership,
+          teamId: adCreatives.teamId,
           notes: adCreatives.notes,
           createdAt: adCreatives.createdAt,
           updatedAt: adCreatives.updatedAt,
@@ -238,6 +244,7 @@ export const adCreativeRouter = router({
         to: z.string(),
         accountId: z.string().nullish(),
         ownership: z.enum(["ours", "theirs"]).nullish(),
+        teamId: z.string().nullish(),
       }).optional(),
     )
     .query(async ({ input, ctx }) => {
@@ -254,6 +261,9 @@ export const adCreativeRouter = router({
         } else {
           conditions.push(eq(adCreatives.ownership, input.ownership));
         }
+      }
+      if (input?.teamId) {
+        conditions.push(eq(adCreatives.teamId, input.teamId));
       }
       // Performance rows can be stored as multi-day windows (for example a
       // 7-day imported report), so the tracker should include any row that
@@ -310,6 +320,7 @@ export const adCreativeRouter = router({
           adSetIds: z.array(z.string()).optional(),
           statuses: z.array(z.enum(["active", "paused", "archived"])).optional(),
           ownership: z.enum(["ours", "theirs"]).optional(),
+          teamId: z.string().optional(),
         })
         .optional(),
     )
@@ -322,6 +333,9 @@ export const adCreativeRouter = router({
         ? input.ownership === "theirs"
           ? sql`AND (ac.ownership IS NULL OR ac.ownership != 'ours')`
           : sql`AND ac.ownership = ${input.ownership}`
+        : sql``;
+      const teamFilter = input?.teamId
+        ? sql`AND ac.team_id = ${input.teamId}`
         : sql``;
       const campaignFilter = input?.campaignIds?.length
         ? sql`AND ad.ad_set_id IN (SELECT ast.id FROM ad_set ast WHERE ast.campaign_id IN (${sql.join(input.campaignIds.map((id) => sql`${id}`), sql`, `)}))`
@@ -357,7 +371,7 @@ export const adCreativeRouter = router({
         FROM performance_log pl
         JOIN ad ON ad.id = pl.ad_id
         JOIN ad_creative ac ON ac.id = ad.ad_creative_id
-        WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter}
+        WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter} ${teamFilter}
       `);
       const portfolio = (portfolioResult.rows as PortfolioRow[])[0];
 
@@ -392,7 +406,7 @@ export const adCreativeRouter = router({
         FROM ad_creative ac
         JOIN ad ON ad.ad_creative_id = ac.id
         JOIN performance_log pl ON pl.ad_id = ad.id
-        WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter}
+        WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter} ${teamFilter}
         GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
         HAVING sum(pl.spend) >= 50
           AND coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) >= 1
@@ -426,7 +440,7 @@ export const adCreativeRouter = router({
         JOIN performance_log pl ON pl.ad_id = ad.id
         WHERE ad.organization_id = ${ctx.organizationId}
           AND ad.status = 'active'
-          ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter}
+          ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter}
         GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
         HAVING sum(pl.spend) >= 50
           AND coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) >= 1
@@ -452,7 +466,7 @@ export const adCreativeRouter = router({
         FROM ad_creative ac
         JOIN ad ON ad.ad_creative_id = ac.id
         JOIN performance_log pl ON pl.ad_id = ad.id
-        WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter} ${topExclude}
+        WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter} ${teamFilter} ${topExclude}
         GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
         HAVING sum(pl.spend) >= 50
         ORDER BY sum(pl.conversions) ASC NULLS FIRST, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) ASC NULLS FIRST
@@ -519,6 +533,7 @@ export const adCreativeRouter = router({
         to: z.string(),
         accountId: z.string().optional(),
         ownership: z.enum(["ours", "theirs"]).optional(),
+        teamId: z.string().optional(),
       }),
     )
     .query(async ({ input, ctx }) => {
@@ -529,6 +544,9 @@ export const adCreativeRouter = router({
         ? input.ownership === "theirs"
           ? sql`AND (ac.ownership IS NULL OR ac.ownership != 'ours')`
           : sql`AND ac.ownership = ${input.ownership}`
+        : sql``;
+      const teamFilter = input.teamId
+        ? sql`AND ac.team_id = ${input.teamId}`
         : sql``;
 
       const rows = await db.execute(sql`
@@ -580,7 +598,7 @@ export const adCreativeRouter = router({
         WHERE pl.date_start <= ${input.to}::date
           AND pl.date_end >= ${input.from}::date
           AND pl.organization_id = ${ctx.organizationId}
-          ${accountFilter} ${ownershipFilter}
+          ${accountFilter} ${ownershipFilter} ${teamFilter}
         ORDER BY pl.date_start DESC, ad.name
       `);
 
@@ -595,6 +613,7 @@ export const adCreativeRouter = router({
         to: z.string().optional(),
         accountId: z.string().optional(),
         ownership: z.enum(["ours", "theirs"]).optional(),
+        teamId: z.string().optional(),
       }).optional(),
     )
     .query(async ({ input, ctx }) => {
@@ -605,6 +624,9 @@ export const adCreativeRouter = router({
         ? input.ownership === "theirs"
           ? sql`AND (ac.ownership IS NULL OR ac.ownership != 'ours')`
           : sql`AND ac.ownership = ${input.ownership}`
+        : sql``;
+      const teamFilter = input?.teamId
+        ? sql`AND ac.team_id = ${input.teamId}`
         : sql``;
 
       const dateFilter = input?.from && input?.to
@@ -645,7 +667,7 @@ export const adCreativeRouter = router({
         JOIN ad_creative ac ON ac.id = ad.ad_creative_id
         WHERE ${dateFilter}
           AND ad.organization_id = ${ctx.organizationId}
-          ${accountFilter} ${ownershipFilter}
+          ${accountFilter} ${ownershipFilter} ${teamFilter}
         GROUP BY pl.date_start, pl.date_end
         ORDER BY pl.date_start
       `);
@@ -691,6 +713,7 @@ export const adCreativeRouter = router({
           tone: adCreatives.tone,
           cta: adCreatives.cta,
           ownership: adCreatives.ownership,
+          teamId: adCreatives.teamId,
           notes: adCreatives.notes,
           createdAt: adCreatives.createdAt,
           updatedAt: adCreatives.updatedAt,
@@ -806,6 +829,7 @@ export const adCreativeRouter = router({
         tone: z.array(z.string()).nullable().optional(),
         cta: z.string().nullable().optional(),
         ownership: z.enum(["ours", "theirs"]).nullable().optional(),
+        teamId: z.string().nullable().optional(),
         notes: z.string().nullable().optional(),
       }),
     )
@@ -842,6 +866,7 @@ export const adCreativeRouter = router({
           tone: source.tone,
           cta: source.cta,
           ownership: source.ownership,
+          teamId: source.teamId,
           notes: source.notes,
           organizationId: ctx.organizationId,
         })
