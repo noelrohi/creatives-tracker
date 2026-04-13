@@ -2,7 +2,9 @@
 
 import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { canAccessMemberPath } from "@/lib/organization-access";
 import { authClient } from "@/lib/auth-client";
+import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role";
 
 export function OrgGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -12,9 +14,10 @@ export function OrgGuard({ children }: { children: React.ReactNode }) {
   const { data: orgs, isPending: orgsPending } =
     authClient.useListOrganizations();
   const { data: activeOrg } = authClient.useActiveOrganization();
+  const { role, isPending: rolePending } = useActiveOrganizationRole();
 
   useEffect(() => {
-    if (sessionPending || orgsPending) return;
+    if (sessionPending || orgsPending || rolePending) return;
 
     // Not signed in — middleware handles redirect, but just in case
     if (!session) return;
@@ -34,10 +37,24 @@ export function OrgGuard({ children }: { children: React.ReactNode }) {
         router.refresh();
       })();
     }
-  }, [session, orgs, activeOrg, sessionPending, orgsPending, router, pathname]);
+
+    if (activeOrg && !canAccessMemberPath(role, pathname)) {
+      router.replace("/");
+    }
+  }, [
+    activeOrg,
+    orgs,
+    orgsPending,
+    pathname,
+    role,
+    rolePending,
+    router,
+    session,
+    sessionPending,
+  ]);
 
   // Still loading
-  if (sessionPending || orgsPending) {
+  if (sessionPending || orgsPending || rolePending) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="size-5 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
@@ -51,6 +68,14 @@ export function OrgGuard({ children }: { children: React.ReactNode }) {
 
   // No active org yet (setting it)
   if (!activeOrg && orgs && orgs.length > 0) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="size-5 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+      </div>
+    );
+  }
+
+  if (activeOrg && !canAccessMemberPath(role, pathname)) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="size-5 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />

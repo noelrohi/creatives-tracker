@@ -53,6 +53,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { TagInput } from "@/components/tag-input";
+import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role";
 import {
   AWARENESS_OPTIONS,
   creativeFormSchema,
@@ -75,6 +76,8 @@ export default function CreativeDetailPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const id = params.id as string;
+  const { role } = useActiveOrganizationRole();
+  const isReadOnly = role === "member";
 
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [metaPreview, setMetaPreview] = useState<MetaCreativePreview | null>(null);
@@ -241,27 +244,29 @@ export default function CreativeDetailPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon-sm" aria-label="More options">
-                <MoreHorizontalIcon />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                onClick={() => duplicateMutation.mutate({ id })}
-                disabled={duplicateMutation.isPending}
-              >
-                <Copy /> Duplicate
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                variant="destructive"
-                onClick={() => setDeleteOpen(true)}
-              >
-                <Trash2 /> Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {!isReadOnly ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon-sm" aria-label="More options">
+                  <MoreHorizontalIcon />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  onClick={() => duplicateMutation.mutate({ id })}
+                  disabled={duplicateMutation.isPending}
+                >
+                  <Copy /> Duplicate
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => setDeleteOpen(true)}
+                >
+                  <Trash2 /> Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
         </div>
       </div>
 
@@ -338,7 +343,7 @@ export default function CreativeDetailPage() {
           )}
         </DialogContent>
       </Dialog>
-      {canFetchMetaPreview && !displayAssetUrl && (
+      {!isReadOnly && canFetchMetaPreview && !displayAssetUrl && (
         <div className="mb-5 flex items-center gap-3">
           <Button
             type="button"
@@ -356,7 +361,7 @@ export default function CreativeDetailPage() {
       <Tabs defaultValue="performance">
         <TabsList variant="line">
           <TabsTrigger value="performance">Performance</TabsTrigger>
-          <TabsTrigger value="details">Details</TabsTrigger>
+          {!isReadOnly ? <TabsTrigger value="details">Details</TabsTrigger> : null}
           <TabsTrigger value="ads">
             Ads
             {linkedAds.data && linkedAds.data.length > 0 && (
@@ -382,174 +387,176 @@ export default function CreativeDetailPage() {
         </TabsContent>
 
         {/* Details tab */}
-        <TabsContent value="details" className="pt-4">
-          <form onSubmit={form.handleSubmit(onSubmit)} className="max-w-lg space-y-4">
-            <Field>
-              <FieldLabel>Asset</FieldLabel>
-              <Controller
-                control={form.control}
-                name="assetUrl"
-                render={({ field }) => (
-                  <FileUpload
-                    value={field.value ?? undefined}
-                    onChange={(url) => field.onChange(url ?? null)}
-                    accept="image/*,video/*"
-                  />
-                )}
-              />
-            </Field>
-
-            <Field data-invalid={!!form.formState.errors.name}>
-              <FieldLabel htmlFor="creative-detail-name">Name</FieldLabel>
-              <FieldContent>
-                <Input
-                  id="creative-detail-name"
-                  {...form.register("name")}
-                  placeholder="Creative name"
-                />
-                <FieldError errors={[form.formState.errors.name]} />
-              </FieldContent>
-            </Field>
-
-            <div className="grid gap-3 grid-cols-3">
+        {!isReadOnly ? (
+          <TabsContent value="details" className="pt-4">
+            <form onSubmit={form.handleSubmit(onSubmit)} className="max-w-lg space-y-4">
               <Field>
-                <FieldLabel>Format</FieldLabel>
+                <FieldLabel>Asset</FieldLabel>
                 <Controller
                   control={form.control}
-                  name="format"
+                  name="assetUrl"
                   render={({ field }) => (
-                    <Select
-                      value={field.value ?? ""}
-                      onValueChange={(v) => field.onChange(v || null)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {FORMAT_OPTIONS.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
-              </Field>
-
-              <Field>
-                <FieldLabel>Awareness</FieldLabel>
-                <Controller
-                  control={form.control}
-                  name="awarenessLevel"
-                  render={({ field }) => (
-                    <Select
-                      value={field.value ?? ""}
-                      onValueChange={(v) => field.onChange(v || null)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {AWARENESS_OPTIONS.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
-              </Field>
-
-              <Field>
-                <FieldLabel>Ownership</FieldLabel>
-                <Controller
-                  control={form.control}
-                  name="ownership"
-                  render={({ field }) => (
-                    <Select
-                      value={field.value ?? ""}
-                      onValueChange={(v) => field.onChange(v || null)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {OWNERSHIP_OPTIONS.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
-              </Field>
-            </div>
-
-            <Field>
-              <FieldLabel>Angle</FieldLabel>
-              <Input {...form.register("angle")} placeholder="e.g., sleep quality" />
-            </Field>
-
-            <Field>
-              <FieldLabel>Persona</FieldLabel>
-              <Input {...form.register("persona")} placeholder="e.g., busy professionals" />
-            </Field>
-
-            <Field>
-              <FieldLabel>Hook</FieldLabel>
-              <Input {...form.register("hook")} placeholder="First 3 seconds or headline" />
-            </Field>
-
-            <div className="grid gap-3 grid-cols-2">
-              <Field>
-                <FieldLabel>Tone</FieldLabel>
-                <Controller
-                  control={form.control}
-                  name="tone"
-                  render={({ field }) => (
-                    <MultiSelect
-                      options={TONE_OPTIONS}
-                      value={field.value}
-                      onChange={field.onChange}
-                      placeholder="Select"
+                    <FileUpload
+                      value={field.value ?? undefined}
+                      onChange={(url) => field.onChange(url ?? null)}
+                      accept="image/*,video/*"
                     />
                   )}
                 />
               </Field>
 
-              <Field>
-                <FieldLabel>CTA</FieldLabel>
-                <Input {...form.register("cta")} placeholder="e.g., Shop Now" />
+              <Field data-invalid={!!form.formState.errors.name}>
+                <FieldLabel htmlFor="creative-detail-name">Name</FieldLabel>
+                <FieldContent>
+                  <Input
+                    id="creative-detail-name"
+                    {...form.register("name")}
+                    placeholder="Creative name"
+                  />
+                  <FieldError errors={[form.formState.errors.name]} />
+                </FieldContent>
               </Field>
+
+              <div className="grid gap-3 grid-cols-3">
+                <Field>
+                  <FieldLabel>Format</FieldLabel>
+                  <Controller
+                    control={form.control}
+                    name="format"
+                    render={({ field }) => (
+                      <Select
+                        value={field.value ?? ""}
+                        onValueChange={(v) => field.onChange(v || null)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {FORMAT_OPTIONS.map((opt) => (
+                            <SelectItem key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </Field>
+
+                <Field>
+                  <FieldLabel>Awareness</FieldLabel>
+                  <Controller
+                    control={form.control}
+                    name="awarenessLevel"
+                    render={({ field }) => (
+                      <Select
+                        value={field.value ?? ""}
+                        onValueChange={(v) => field.onChange(v || null)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {AWARENESS_OPTIONS.map((opt) => (
+                            <SelectItem key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </Field>
+
+                <Field>
+                  <FieldLabel>Ownership</FieldLabel>
+                  <Controller
+                    control={form.control}
+                    name="ownership"
+                    render={({ field }) => (
+                      <Select
+                        value={field.value ?? ""}
+                        onValueChange={(v) => field.onChange(v || null)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {OWNERSHIP_OPTIONS.map((opt) => (
+                            <SelectItem key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </Field>
+              </div>
+
+              <Field>
+                <FieldLabel>Angle</FieldLabel>
+                <Input {...form.register("angle")} placeholder="e.g., sleep quality" />
+              </Field>
+
+              <Field>
+                <FieldLabel>Persona</FieldLabel>
+                <Input {...form.register("persona")} placeholder="e.g., busy professionals" />
+              </Field>
+
+              <Field>
+                <FieldLabel>Hook</FieldLabel>
+                <Input {...form.register("hook")} placeholder="First 3 seconds or headline" />
+              </Field>
+
+              <div className="grid gap-3 grid-cols-2">
+                <Field>
+                  <FieldLabel>Tone</FieldLabel>
+                  <Controller
+                    control={form.control}
+                    name="tone"
+                    render={({ field }) => (
+                      <MultiSelect
+                        options={TONE_OPTIONS}
+                        value={field.value}
+                        onChange={field.onChange}
+                        placeholder="Select"
+                      />
+                    )}
+                  />
+                </Field>
+
+                <Field>
+                  <FieldLabel>CTA</FieldLabel>
+                  <Input {...form.register("cta")} placeholder="e.g., Shop Now" />
+                </Field>
+              </div>
+
+              <Field>
+                <FieldLabel>Notes</FieldLabel>
+                <Textarea {...form.register("notes")} placeholder="Add notes..." rows={3} />
+              </Field>
+
+              <div className="flex items-center justify-between pt-1">
+                <p className="text-[11px] text-muted-foreground/40">
+                  Created {new Date(creative.data.createdAt).toLocaleDateString()}
+                </p>
+                <Button
+                  type="submit"
+                  disabled={updateMutation.isPending || !form.formState.isDirty}
+                  size="sm"
+                >
+                  {updateMutation.isPending ? "Saving..." : "Save"}
+                </Button>
+              </div>
+            </form>
+
+            <div className="mt-6 max-w-lg">
+              <h3 className="text-sm font-medium text-muted-foreground mb-2">Tags</h3>
+              <TagInput entityType="ad_creative" entityId={id} />
             </div>
-
-            <Field>
-              <FieldLabel>Notes</FieldLabel>
-              <Textarea {...form.register("notes")} placeholder="Add notes..." rows={3} />
-            </Field>
-
-            <div className="flex items-center justify-between pt-1">
-              <p className="text-[11px] text-muted-foreground/40">
-                Created {new Date(creative.data.createdAt).toLocaleDateString()}
-              </p>
-              <Button
-                type="submit"
-                disabled={updateMutation.isPending || !form.formState.isDirty}
-                size="sm"
-              >
-                {updateMutation.isPending ? "Saving..." : "Save"}
-              </Button>
-            </div>
-          </form>
-
-          <div className="mt-6 max-w-lg">
-            <h3 className="text-sm font-medium text-muted-foreground mb-2">Tags</h3>
-            <TagInput entityType="ad_creative" entityId={id} />
-          </div>
-        </TabsContent>
+          </TabsContent>
+        ) : null}
 
         {/* Ads tab */}
         <TabsContent value="ads" className="pt-4">
@@ -558,15 +565,17 @@ export default function CreativeDetailPage() {
       </Tabs>
 
       {/* Delete dialog */}
-      <ConfirmDialog
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-        title="Delete creative"
-        description="This will permanently delete this creative and all its data."
-        confirmLabel="Delete"
-        onConfirm={() => deleteMutation.mutate({ id })}
-        loading={deleteMutation.isPending}
-      />
+      {!isReadOnly ? (
+        <ConfirmDialog
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+          title="Delete creative"
+          description="This will permanently delete this creative and all its data."
+          confirmLabel="Delete"
+          onConfirm={() => deleteMutation.mutate({ id })}
+          loading={deleteMutation.isPending}
+        />
+      ) : null}
     </div>
   );
 }

@@ -3,6 +3,8 @@ import superjson from "superjson";
 import { headers } from "next/headers";
 import { auth } from "@/lib/auth";
 import { authenticateApiKey, getBearerToken } from "@/lib/api-keys";
+import { isPrivilegedOrgRole } from "@/lib/organization-access";
+import { getOrganizationRole } from "@/lib/server/organization-role";
 import type { OpenApiMeta } from "./openapi-meta";
 
 type ContextOptions = {
@@ -35,6 +37,7 @@ export async function createContext(options?: ContextOptions) {
         principalType: "anonymous" as const,
         userId: null,
         organizationId: null,
+        orgRole: null,
         apiKeyId: null,
         apiKeyScopes: [] as string[],
       };
@@ -45,6 +48,7 @@ export async function createContext(options?: ContextOptions) {
       principalType: "apiKey" as const,
       userId: null,
       organizationId: apiKeyPrincipal.organizationId,
+      orgRole: null,
       apiKeyId: apiKeyPrincipal.apiKeyId,
       apiKeyScopes: apiKeyPrincipal.scopes,
     };
@@ -67,11 +71,17 @@ export async function createContext(options?: ContextOptions) {
     }
   }
 
+  const orgRole =
+    session?.user?.id && organizationId
+      ? await getOrganizationRole(session.user.id, organizationId)
+      : null;
+
   return {
     session,
     principalType: session ? "session" as const : "anonymous" as const,
     userId: session?.user?.id ?? null,
     organizationId,
+    orgRole,
     apiKeyId: null,
     apiKeyScopes: [] as string[],
   };
@@ -93,6 +103,7 @@ const isAuthenticated = t.middleware(async ({ ctx, next }) => {
       apiKeyId: ctx.apiKeyId,
       apiKeyScopes: ctx.apiKeyScopes,
       organizationId: ctx.organizationId!,
+      orgRole: ctx.orgRole,
       principalType: ctx.principalType,
       session: ctx.session,
       userId: ctx.userId,
@@ -116,6 +127,114 @@ const hasOrganization = t.middleware(async ({ ctx, next }) => {
       apiKeyId: ctx.apiKeyId,
       apiKeyScopes: ctx.apiKeyScopes,
       organizationId: ctx.organizationId,
+      orgRole: ctx.orgRole,
+      principalType: ctx.principalType,
+      session: ctx.session,
+      userId: ctx.userId,
+    },
+  });
+});
+
+const hasWriteAccess = t.middleware(async ({ ctx, next }) => {
+  if (!ctx.session && !ctx.apiKeyId) {
+    throw new TRPCError({ code: "UNAUTHORIZED" });
+  }
+  if (!ctx.organizationId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "No active organization selected",
+    });
+  }
+
+  if (ctx.principalType === "apiKey") {
+    return next({
+      ctx: {
+        ...ctx,
+        apiKeyId: ctx.apiKeyId,
+        apiKeyScopes: ctx.apiKeyScopes,
+        organizationId: ctx.organizationId,
+        orgRole: ctx.orgRole,
+        principalType: ctx.principalType,
+        session: ctx.session,
+        userId: ctx.userId,
+      },
+    });
+  }
+
+  if (!isPrivilegedOrgRole(ctx.orgRole)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Only organization admins can modify data",
+    });
+  }
+
+  return next({
+    ctx: {
+      ...ctx,
+      apiKeyId: ctx.apiKeyId,
+      apiKeyScopes: ctx.apiKeyScopes,
+      organizationId: ctx.organizationId,
+      orgRole: ctx.orgRole,
+      principalType: ctx.principalType,
+      session: ctx.session,
+      userId: ctx.userId,
+    },
+  });
+});
+
+const hasOrgAdminSession = t.middleware(async ({ ctx, next }) => {
+  if (ctx.principalType !== "session" || !ctx.userId || !ctx.organizationId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "This action requires an authenticated organization admin session",
+    });
+  }
+
+  if (!isPrivilegedOrgRole(ctx.orgRole)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Only organization admins can access this resource",
+    });
+  }
+
+  return next({
+    ctx: {
+      ...ctx,
+      apiKeyId: ctx.apiKeyId,
+      apiKeyScopes: ctx.apiKeyScopes,
+      organizationId: ctx.organizationId,
+      orgRole: ctx.orgRole,
+      principalType: ctx.principalType,
+      session: ctx.session,
+      userId: ctx.userId,
+    },
+  });
+});
+
+const hasOrgOwnerSession = t.middleware(async ({ ctx, next }) => {
+  if (ctx.principalType !== "session" || !ctx.userId || !ctx.organizationId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "This action requires an authenticated organization owner session",
+    });
+  }
+
+  if (ctx.orgRole !== "owner") {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Only organization owners can access this resource",
+    });
+  }
+
+  return next({
+    ctx: {
+      ...ctx,
+      apiKeyId: ctx.apiKeyId,
+      apiKeyScopes: ctx.apiKeyScopes,
+      organizationId: ctx.organizationId,
+      orgRole: ctx.orgRole,
       principalType: ctx.principalType,
       session: ctx.session,
       userId: ctx.userId,
@@ -127,3 +246,6 @@ export const router = t.router;
 export const baseProcedure = t.procedure;
 export const protectedProcedure = t.procedure.use(isAuthenticated);
 export const orgProcedure = t.procedure.use(hasOrganization);
+export const orgWriteProcedure = t.procedure.use(hasWriteAccess);
+export const orgAdminProcedure = t.procedure.use(hasOrgAdminSession);
+export const orgOwnerProcedure = t.procedure.use(hasOrgOwnerSession);

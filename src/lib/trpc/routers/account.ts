@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { eq, and, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { router, orgProcedure } from "../init";
+import { router, orgProcedure, orgWriteProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { adAccounts } from "@/schema/account";
@@ -65,7 +65,7 @@ export const adAccountRouter = router({
       return sanitizeAccount(account);
     }),
 
-  create: orgProcedure
+  create: orgWriteProcedure
     .meta(openApiMutationMeta("adAccount", "create"))
     .input(
       z.object({
@@ -107,7 +107,7 @@ export const adAccountRouter = router({
       }
     }),
 
-  update: orgProcedure
+  update: orgWriteProcedure
     .meta(openApiMutationMeta("adAccount", "update"))
     .input(
       z.object({
@@ -134,7 +134,7 @@ export const adAccountRouter = router({
       return sanitizeAccount(account);
     }),
 
-  delete: orgProcedure
+  delete: orgWriteProcedure
     .meta(openApiMutationMeta("adAccount", "delete"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {

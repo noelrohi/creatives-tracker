@@ -1,11 +1,10 @@
 import { z } from "zod";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { router, orgProcedure } from "../init";
+import { router, orgAdminProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { apiKeys } from "@/schema/api-key";
-import { member } from "@/schema/auth";
 import { generateApiKey } from "@/lib/api-keys";
 
 const createApiKeyInput = z.object({
@@ -14,48 +13,11 @@ const createApiKeyInput = z.object({
   expiresAt: z.string().datetime().optional(),
 });
 
-async function assertOrgAdmin(userId: string, organizationId: string) {
-  const [membership] = await db
-    .select({ role: member.role })
-    .from(member)
-    .where(
-      and(
-        eq(member.userId, userId),
-        eq(member.organizationId, organizationId),
-      ),
-    )
-    .limit(1);
-
-  if (!membership || !["owner", "admin"].includes(membership.role)) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Only organization admins can manage API keys",
-    });
-  }
-}
-
-async function requireOrgAdminSession(ctx: {
-  principalType: "session" | "apiKey" | "anonymous";
-  userId: string | null;
-  organizationId: string | null;
-}) {
-  if (ctx.principalType !== "session" || !ctx.userId || !ctx.organizationId) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "API key management requires an authenticated organization admin session",
-    });
-  }
-
-  await assertOrgAdmin(ctx.userId, ctx.organizationId);
-}
-
 export const apiKeyRouter = router({
-  list: orgProcedure
+  list: orgAdminProcedure
     .meta(openApiQueryMeta("apiKey", "list"))
-    .query(async ({ ctx }) => {
-      await requireOrgAdminSession(ctx);
-
-      return db
+    .query(async ({ ctx }) =>
+      db
         .select({
           id: apiKeys.id,
           name: apiKeys.name,
@@ -69,15 +31,12 @@ export const apiKeyRouter = router({
         })
         .from(apiKeys)
         .where(eq(apiKeys.organizationId, ctx.organizationId))
-        .orderBy(desc(apiKeys.createdAt));
-    }),
+        .orderBy(desc(apiKeys.createdAt))),
 
-  create: orgProcedure
+  create: orgAdminProcedure
     .meta(openApiMutationMeta("apiKey", "create"))
     .input(createApiKeyInput)
     .mutation(async ({ input, ctx }) => {
-      await requireOrgAdminSession(ctx);
-
       const generated = generateApiKey();
       const [created] = await db
         .insert(apiKeys)
@@ -105,12 +64,10 @@ export const apiKeyRouter = router({
       };
     }),
 
-  revoke: orgProcedure
+  revoke: orgAdminProcedure
     .meta(openApiMutationMeta("apiKey", "revoke"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
-      await requireOrgAdminSession(ctx);
-
       const [revoked] = await db
         .update(apiKeys)
         .set({ revokedAt: new Date() })
@@ -136,12 +93,10 @@ export const apiKeyRouter = router({
       return revoked;
     }),
 
-  delete: orgProcedure
+  delete: orgAdminProcedure
     .meta(openApiMutationMeta("apiKey", "delete"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
-      await requireOrgAdminSession(ctx);
-
       const [deleted] = await db
         .delete(apiKeys)
         .where(

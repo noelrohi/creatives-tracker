@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTransition } from "react";
 import { subDays } from "date-fns";
 import { useQueryState, parseAsString } from "nuqs";
+import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role";
 import { useTRPC } from "@/lib/trpc/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -158,6 +159,7 @@ function LeaderboardTable({
   isLoading,
   emptyMessage,
   viewAllHref,
+  canManageData,
 }: {
   title: string;
   icon: React.ReactNode;
@@ -165,6 +167,7 @@ function LeaderboardTable({
   isLoading: boolean;
   emptyMessage: string;
   viewAllHref: string;
+  canManageData: boolean;
 }) {
   if (isLoading) {
     return (
@@ -200,11 +203,13 @@ function LeaderboardTable({
         </div>
         <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border py-12">
           <p className="text-sm text-muted-foreground">{emptyMessage}</p>
-          <Button asChild size="sm" variant="outline" className="gap-1.5">
-            <Link href="/import">
-              <Upload className="size-3.5" /> Import Ads
-            </Link>
-          </Button>
+          {canManageData ? (
+            <Button asChild size="sm" variant="outline" className="gap-1.5">
+              <Link href="/import">
+                <Upload className="size-3.5" /> Import Ads
+              </Link>
+            </Button>
+          ) : null}
         </div>
       </div>
     );
@@ -324,6 +329,8 @@ export default function DashboardPage() {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const [exporting, startExport] = useTransition();
+  const { role } = useActiveOrganizationRole();
+  const canManageData = role !== "member";
 
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
   const [ownership, setOwnership] = useQueryState("ownership", parseAsString.withDefault("ours"));
@@ -445,11 +452,13 @@ export default function DashboardPage() {
           >
             <Download className="size-3.5" /> {exporting ? "Exporting…" : "Export"}
           </Button>
-          <Button asChild size="sm" variant="outline" className="h-7 gap-1.5 text-[13px]">
-            <Link href="/import">
-              <Upload className="size-3.5" /> Import
-            </Link>
-          </Button>
+          {canManageData ? (
+            <Button asChild size="sm" variant="outline" className="h-7 gap-1.5 text-[13px]">
+              <Link href="/import">
+                <Upload className="size-3.5" /> Import
+              </Link>
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -491,6 +500,7 @@ export default function DashboardPage() {
               isLoading={stats.isLoading}
               emptyMessage="No creatives with enough spend data yet"
               viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=healthy`}
+              canManageData={canManageData}
             />
             <LeaderboardTable
               title="Needs Attention"
@@ -499,6 +509,7 @@ export default function DashboardPage() {
               isLoading={stats.isLoading}
               emptyMessage="No underperformers detected"
               viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=critical`}
+              canManageData={canManageData}
             />
           </div>
           <LeaderboardTable
@@ -508,6 +519,7 @@ export default function DashboardPage() {
             isLoading={stats.isLoading}
             emptyMessage="No long-running creatives with profitable ROAS yet"
             viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=healthy`}
+            canManageData={canManageData}
           />
         </TabsContent>
 

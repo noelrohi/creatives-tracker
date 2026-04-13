@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useQueryState, parseAsStringLiteral, parseAsString } from "nuqs";
 import { type ColumnDef } from "@tanstack/react-table";
+import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role";
 import { useTRPC } from "@/lib/trpc/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -565,6 +566,11 @@ export default function CreativesPage() {
   const trpc = useTRPC();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { role } = useActiveOrganizationRole();
+  const isReadOnly = role === "member";
+  const tableColumns = isReadOnly
+    ? columns.filter((column) => column.id !== "select")
+    : columns;
 
   const [format, setFormat] = useQueryState(
     "format",
@@ -813,7 +819,7 @@ export default function CreativesPage() {
         />
         <div className="flex-1" />
         <DataTableColumnToggle
-          columns={columns}
+          columns={tableColumns}
           visibility={columnVisibility}
           onVisibilityChange={setColumnVisibility}
         />
@@ -832,9 +838,11 @@ export default function CreativesPage() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <Button size="sm" variant="outline" asChild className="gap-1.5">
-          <Link href="/import"><Upload className="size-3.5" /> Import</Link>
-        </Button>
+        {!isReadOnly ? (
+          <Button size="sm" variant="outline" asChild className="gap-1.5">
+            <Link href="/import"><Upload className="size-3.5" /> Import</Link>
+          </Button>
+        ) : null}
       </div>
 
       <StaleDataBanner
@@ -848,11 +856,12 @@ export default function CreativesPage() {
         <EmptyState
           hasFilters={!!format || !!awareness || !!search || !!adSetIds || !!ownership || !!healthFilter}
           onClear={() => { setFormat(null); setAwareness(null); setSearch(""); setAccountId(""); setAdSetIds(""); setOwnership(null); setHealthFilter(""); }}
-          onImport={() => router.push("/import")}
+          onImport={!isReadOnly ? () => router.push("/import") : undefined}
+          readOnly={isReadOnly}
         />
       ) : (
         <DataTable
-          columns={columns}
+          columns={tableColumns}
           data={creativeRows as Creative[]}
           getRowId={(row) => row.id}
           onRowClick={(row) => router.push(`/creatives/${row.id}`)}
@@ -865,7 +874,7 @@ export default function CreativesPage() {
       )}
 
       {/* Floating action bar */}
-      {selectedCreativeIds.length > 0 && (
+      {!isReadOnly && selectedCreativeIds.length > 0 && (
         <div className="fixed inset-x-0 bottom-6 z-50 flex justify-center">
           <div className="flex items-center gap-3 rounded-xl border border-border bg-background px-4 py-2.5 shadow-lg">
             <span className="text-sm font-medium">{selectedCreativeIds.length} selected</span>
@@ -1000,10 +1009,12 @@ function EmptyState({
   hasFilters,
   onClear,
   onImport,
+  readOnly,
 }: {
   hasFilters: boolean;
   onClear: () => void;
-  onImport: () => void;
+  onImport?: () => void;
+  readOnly: boolean;
 }) {
   return (
     <div className="flex flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-border py-20">
@@ -1015,16 +1026,20 @@ function EmptyState({
           {hasFilters ? "No creatives match your filters" : "No creatives yet"}
         </p>
         <p className="text-[13px] text-muted-foreground/40">
-          {hasFilters ? "Try adjusting your search or filters." : "Import your Meta Ads Manager report to get started."}
+          {hasFilters
+            ? "Try adjusting your search or filters."
+            : readOnly
+              ? "No creatives are available to view yet."
+              : "Import your Meta Ads Manager report to get started."}
         </p>
       </div>
       {hasFilters ? (
         <Button size="sm" variant="ghost" onClick={onClear}>Clear filters</Button>
-      ) : (
+      ) : onImport ? (
         <Button size="sm" variant="outline" onClick={onImport} className="gap-1.5">
           <Upload className="size-3.5" /> Import Ads
         </Button>
-      )}
+      ) : null}
     </div>
   );
 }

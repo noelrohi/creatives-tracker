@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { eq, and, desc, gte, lte } from "drizzle-orm";
-import { router, orgProcedure } from "../init";
+import { router, orgProcedure, orgWriteProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { performanceLogs } from "@/schema/performance-log";
@@ -62,7 +62,7 @@ export const performanceLogRouter = router({
         .orderBy(desc(performanceLogs.dateStart));
     }),
 
-  create: orgProcedure
+  create: orgWriteProcedure
     .meta(openApiMutationMeta("performanceLog", "create"))
     .input(
       z.object({
@@ -80,7 +80,7 @@ export const performanceLogRouter = router({
       return log;
     }),
 
-  bulkCreate: orgProcedure
+  bulkCreate: orgWriteProcedure
     .meta(openApiMutationMeta("performanceLog", "bulkCreate"))
     .input(
       z.object({
@@ -104,7 +104,7 @@ export const performanceLogRouter = router({
       return db.insert(performanceLogs).values(values).returning();
     }),
 
-  update: orgProcedure
+  update: orgWriteProcedure
     .meta(openApiMutationMeta("performanceLog", "update"))
     .input(
       z.object({
@@ -124,7 +124,7 @@ export const performanceLogRouter = router({
       return log;
     }),
 
-  delete: orgProcedure
+  delete: orgWriteProcedure
     .meta(openApiMutationMeta("performanceLog", "delete"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
