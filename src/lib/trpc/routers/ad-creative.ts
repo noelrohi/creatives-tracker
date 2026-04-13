@@ -895,6 +895,27 @@ export const adCreativeRouter = router({
       return { updated: input.ids.length };
     }),
 
+  bulkUpdateTeam: orgWriteProcedure
+    .meta(openApiMutationMeta("adCreative", "bulkUpdateTeam"))
+    .input(
+      z.object({
+        ids: z.array(z.string()).min(1),
+        teamId: z.string().nullable(),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      await db
+        .update(adCreatives)
+        .set({ teamId: input.teamId })
+        .where(
+          and(
+            inArray(adCreatives.id, input.ids),
+            eq(adCreatives.organizationId, ctx.organizationId),
+          ),
+        );
+      return { updated: input.ids.length };
+    }),
+
   bulkImport: orgWriteProcedure
     .meta(openApiMutationMeta("adCreative", "bulkImport"))
     .input(

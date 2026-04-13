@@ -30,6 +30,12 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Search,
   Sparkles,
   Trash2,
@@ -121,6 +127,7 @@ interface Creative {
   metaAdSetId: string | null;
   accountName: string | null;
   ownership: string | null;
+  teamId: string | null;
   // Trend metrics for health
   recentCtr: string | null;
   recentCpc: string | null;
@@ -304,6 +311,22 @@ const columns: ColumnDef<Creative>[] = [
       );
     },
     size: 90,
+  },
+  {
+    accessorKey: "teamId",
+    header: "Team",
+    cell: ({ row, table }) => {
+      const teamId = row.getValue("teamId") as string | null;
+      if (!teamId) return <span className="text-muted-foreground/30">&mdash;</span>;
+      const teams = (table.options.meta as Record<string, unknown>)?.teams as Record<string, string> | undefined;
+      const name = teams?.[teamId];
+      return (
+        <Badge variant="secondary" className="text-[10px]">
+          {name ?? teamId}
+        </Badge>
+      );
+    },
+    size: 100,
   },
   {
     accessorKey: "updatedAt",
@@ -720,25 +743,28 @@ export default function CreativesPage() {
     exportRows(owned, "owned");
   }, [creatives.data, exportRows]);
 
-  const handleMarkAsOwn = useCallback(async () => {
-    try {
-      await ownershipMutation.mutateAsync({ ids: selectedCreativeIds, ownership: "ours" });
-      toast.success(`Marked ${selectedCreativeIds.length} creative${selectedCreativeIds.length > 1 ? "s" : ""} as own`);
-      setRowSelection({});
-    } catch {
-      toast.error("Failed to update ownership");
-    }
-  }, [selectedCreativeIds, ownershipMutation]);
+  const [teamDialogOpen, setTeamDialogOpen] = useState(false);
+  const [selectedTeamValue, setSelectedTeamValue] = useState<string>("");
 
-  const handleMarkAsTheirs = useCallback(async () => {
+  const bulkTeamMutation = useMutation({
+    ...trpc.adCreative.bulkUpdateTeam.mutationOptions(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: trpc.adCreative.list.queryKey() });
+    },
+  });
+
+  const handleUpdateTeam = useCallback(async () => {
     try {
-      await ownershipMutation.mutateAsync({ ids: selectedCreativeIds, ownership: "theirs" });
-      toast.success(`Marked ${selectedCreativeIds.length} creative${selectedCreativeIds.length > 1 ? "s" : ""} as theirs`);
+      const teamIdValue = selectedTeamValue === "none" ? null : selectedTeamValue;
+      await bulkTeamMutation.mutateAsync({ ids: selectedCreativeIds, teamId: teamIdValue });
+      toast.success(`Updated team for ${selectedCreativeIds.length} creative${selectedCreativeIds.length > 1 ? "s" : ""}`);
       setRowSelection({});
+      setTeamDialogOpen(false);
+      setSelectedTeamValue("");
     } catch {
-      toast.error("Failed to update ownership");
+      toast.error("Failed to update team");
     }
-  }, [selectedCreativeIds, ownershipMutation]);
+  }, [selectedCreativeIds, selectedTeamValue, bulkTeamMutation]);
 
   const total = creativeRows.length;
 
@@ -885,7 +911,7 @@ export default function CreativesPage() {
           onRowSelectionChange={setRowSelection}
           columnVisibility={columnVisibility}
           onColumnVisibilityChange={setColumnVisibility}
-          meta={{ metaAccountId }}
+          meta={{ metaAccountId, teams: Object.fromEntries((teamsQuery.data ?? []).map((t) => [t.id, t.name])) }}
         />
       )}
 
@@ -894,11 +920,8 @@ export default function CreativesPage() {
         <div className="fixed inset-x-0 bottom-6 z-50 flex justify-center">
           <div className="flex items-center gap-3 rounded-xl border border-border bg-background px-4 py-2.5 shadow-lg">
             <span className="text-sm font-medium">{selectedCreativeIds.length} selected</span>
-            <Button size="sm" variant="outline" className="gap-1.5" onClick={handleMarkAsOwn} disabled={ownershipMutation.isPending}>
-              <UserCheck className="size-3.5" /> Mark as Own
-            </Button>
-            <Button size="sm" variant="outline" className="gap-1.5" onClick={handleMarkAsTheirs} disabled={ownershipMutation.isPending}>
-              Mark as Theirs
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => { setSelectedTeamValue(""); setTeamDialogOpen(true); }}>
+              <UserCheck className="size-3.5" /> Update Team
             </Button>
             <Button size="sm" variant="destructive" className="gap-1.5" onClick={() => setDeleteOpen(true)}>
               <Trash2 className="size-3.5" /> Delete
@@ -918,6 +941,34 @@ export default function CreativesPage() {
         onConfirm={handleBulkDelete}
         loading={deleteMutation.isPending}
       />
+
+      <Dialog open={teamDialogOpen} onOpenChange={setTeamDialogOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Update Team</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Assign {selectedCreativeIds.length} creative{selectedCreativeIds.length > 1 ? "s" : ""} to a team.
+          </p>
+          <Select value={selectedTeamValue} onValueChange={setSelectedTeamValue}>
+            <SelectTrigger>
+              <SelectValue placeholder="Select a team" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">None</SelectItem>
+              {teamsQuery.data?.map((t) => (
+                <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setTeamDialogOpen(false)}>Cancel</Button>
+            <Button onClick={handleUpdateTeam} disabled={!selectedTeamValue || bulkTeamMutation.isPending}>
+              {bulkTeamMutation.isPending ? "Updating..." : "Update"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
