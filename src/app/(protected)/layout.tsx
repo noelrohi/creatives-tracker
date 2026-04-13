@@ -1,5 +1,6 @@
 import Script from "next/script";
 import { AppSidebar } from "@/components/app-sidebar";
+import { ImportStatusBanner } from "@/components/import-status-banner";
 import { OrgGuard } from "@/components/org-guard";
 import {
   SidebarInset,
@@ -17,6 +18,7 @@ export default function DashboardLayout({
       <SidebarProvider>
         <AppSidebar />
         <SidebarInset>
+          <ImportStatusBanner />
           <header className="flex h-12 items-center gap-2 border-b px-4">
             <SidebarTrigger />
           </header>
