@@ -243,6 +243,7 @@ const hasOrgOwnerSession = t.middleware(async ({ ctx, next }) => {
 });
 
 export const router = t.router;
+export const createCallerFactory = t.createCallerFactory;
 export const baseProcedure = t.procedure;
 export const protectedProcedure = t.procedure.use(isAuthenticated);
 export const orgProcedure = t.procedure.use(hasOrganization);
