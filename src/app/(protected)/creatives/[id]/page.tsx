@@ -97,7 +97,16 @@ export default function CreativeDetailPage() {
   const perf = useQuery(trpc.adCreative.getPerformance.queryOptions(dateParams));
   const dailyPerf = useQuery(trpc.adCreative.getDailyPerformance.queryOptions(dateParams));
   const linkedAds = useQuery(trpc.ad.listByCreative.queryOptions({ adCreativeId: id }));
-  const accountsQuery = useQuery(trpc.adAccount.list.queryOptions());
+  const accountsQuery = useQuery({
+    ...trpc.adAccount.list.queryOptions(),
+    enabled: !isReadOnly,
+  });
+  const tagsQuery = useQuery(
+    trpc.tag.listForEntity.queryOptions({
+      entityType: "ad_creative",
+      entityId: id,
+    }),
+  );
 
   // Fetch ad preview iframe URL from Meta on demand (user clicks play)
   const adPreviewQuery = useQuery({
@@ -361,7 +370,7 @@ export default function CreativeDetailPage() {
       <Tabs defaultValue="performance">
         <TabsList variant="line">
           <TabsTrigger value="performance">Performance</TabsTrigger>
-          {!isReadOnly ? <TabsTrigger value="details">Details</TabsTrigger> : null}
+          <TabsTrigger value="details">Details</TabsTrigger>
           <TabsTrigger value="ads">
             Ads
             {linkedAds.data && linkedAds.data.length > 0 && (
@@ -387,9 +396,78 @@ export default function CreativeDetailPage() {
         </TabsContent>
 
         {/* Details tab */}
-        {!isReadOnly ? (
-          <TabsContent value="details" className="pt-4">
-            <form onSubmit={form.handleSubmit(onSubmit)} className="max-w-lg space-y-4">
+        <TabsContent value="details" className="pt-4">
+          {isReadOnly ? (
+            <div className="max-w-2xl space-y-6">
+              <div className="rounded-lg border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
+                Members have read-only access to creative details.
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <ReadOnlyField label="Name" value={creative.data.name} />
+                <ReadOnlyField
+                  label="Format"
+                  value={
+                    FORMAT_OPTIONS.find((option) => option.value === creative.data.format)?.label ??
+                    creative.data.format
+                  }
+                />
+                <ReadOnlyField
+                  label="Awareness"
+                  value={
+                    AWARENESS_OPTIONS.find(
+                      (option) => option.value === creative.data.awarenessLevel,
+                    )?.label ?? creative.data.awarenessLevel
+                  }
+                />
+                <ReadOnlyField
+                  label="Ownership"
+                  value={
+                    OWNERSHIP_OPTIONS.find((option) => option.value === creative.data.ownership)?.label ??
+                    creative.data.ownership
+                  }
+                />
+                <ReadOnlyField label="Angle" value={creative.data.angle} />
+                <ReadOnlyField label="Persona" value={creative.data.persona} />
+                <ReadOnlyField label="Hook" value={creative.data.hook} />
+                <ReadOnlyField label="CTA" value={creative.data.cta} />
+              </div>
+
+              <ReadOnlyField
+                label="Tone"
+                value={creative.data.tone?.length ? creative.data.tone.join(", ") : null}
+              />
+              <ReadOnlyField label="Notes" value={creative.data.notes} multiline />
+
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-muted-foreground">Tags</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {tagsQuery.data?.length ? (
+                    tagsQuery.data.map((tag) => (
+                      <Badge
+                        key={tag.id}
+                        variant="secondary"
+                        style={
+                          tag.color
+                            ? {
+                                backgroundColor: `${tag.color}20`,
+                                borderColor: tag.color,
+                              }
+                            : undefined
+                        }
+                      >
+                        {tag.name}
+                      </Badge>
+                    ))
+                  ) : (
+                    <span className="text-sm text-muted-foreground">No tags</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <form onSubmit={form.handleSubmit(onSubmit)} className="max-w-lg space-y-4">
               <Field>
                 <FieldLabel>Asset</FieldLabel>
                 <Controller
@@ -549,14 +627,15 @@ export default function CreativeDetailPage() {
                   {updateMutation.isPending ? "Saving..." : "Save"}
                 </Button>
               </div>
-            </form>
+              </form>
 
-            <div className="mt-6 max-w-lg">
-              <h3 className="text-sm font-medium text-muted-foreground mb-2">Tags</h3>
-              <TagInput entityType="ad_creative" entityId={id} />
-            </div>
-          </TabsContent>
-        ) : null}
+              <div className="mt-6 max-w-lg">
+                <h3 className="text-sm font-medium text-muted-foreground mb-2">Tags</h3>
+                <TagInput entityType="ad_creative" entityId={id} />
+              </div>
+            </>
+          )}
+        </TabsContent>
 
         {/* Ads tab */}
         <TabsContent value="ads" className="pt-4">
@@ -576,6 +655,31 @@ export default function CreativeDetailPage() {
           loading={deleteMutation.isPending}
         />
       ) : null}
+    </div>
+  );
+}
+
+function ReadOnlyField({
+  label,
+  value,
+  multiline = false,
+}: {
+  label: string;
+  value: string | null | undefined;
+  multiline?: boolean;
+}) {
+  return (
+    <div className="space-y-2">
+      <p className="text-sm font-medium text-muted-foreground">{label}</p>
+      <div
+        className={
+          multiline
+            ? "rounded-lg border bg-muted/20 px-3 py-2 text-sm whitespace-pre-wrap"
+            : "rounded-lg border bg-muted/20 px-3 py-2 text-sm"
+        }
+      >
+        {value || "—"}
+      </div>
     </div>
   );
 }

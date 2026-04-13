@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { eq, and, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { router, orgProcedure, orgWriteProcedure } from "../init";
+import { router, orgAdminProcedure, orgWriteProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { adAccounts } from "@/schema/account";
@@ -35,7 +35,7 @@ function sanitizeAccount(account: typeof adAccounts.$inferSelect) {
 }
 
 export const adAccountRouter = router({
-  list: orgProcedure
+  list: orgAdminProcedure
     .meta(openApiQueryMeta("adAccount", "list"))
     .output(z.array(publicAdAccountSchema))
     .query(async ({ ctx }) => {
@@ -47,7 +47,7 @@ export const adAccountRouter = router({
       return accounts.map(sanitizeAccount);
     }),
 
-  getById: orgProcedure
+  getById: orgAdminProcedure
     .meta(openApiQueryMeta("adAccount", "getById"))
     .input(z.object({ id: z.string() }))
     .output(publicAdAccountSchema)

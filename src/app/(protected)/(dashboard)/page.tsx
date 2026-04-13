@@ -330,20 +330,24 @@ export default function DashboardPage() {
   const queryClient = useQueryClient();
   const [exporting, startExport] = useTransition();
   const { role } = useActiveOrganizationRole();
-  const canManageData = role !== "member";
+  const isReadOnly = role === "member";
+  const canManageData = !isReadOnly;
 
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
   const [ownership, setOwnership] = useQueryState("ownership", parseAsString.withDefault("ours"));
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
   const [to, setTo] = useQueryState("to", parseAsString.withDefault(formatDateOnly(new Date())));
 
-  const selectedAccountId = accountId || undefined;
+  const selectedAccountId = !isReadOnly && accountId ? accountId : undefined;
   const fromValue = isDateOnlyString(from) ? from : formatDateOnly(subDays(new Date(), 6));
   const toValue = isDateOnlyString(to) ? to : formatDateOnly(new Date());
   const fromDate = parseDateOnly(fromValue);
   const toDate = parseDateOnly(toValue);
 
-  const accounts = useQuery(trpc.adAccount.list.queryOptions());
+  const accounts = useQuery({
+    ...trpc.adAccount.list.queryOptions(),
+    enabled: !isReadOnly,
+  });
 
   const stats = useQuery(
     trpc.adCreative.dashboardStats.queryOptions({
@@ -369,7 +373,7 @@ export default function DashboardPage() {
   const survivingCreatives = stats.data?.survivingCreatives ?? [];
 
   const baseCreativesParams = new URLSearchParams();
-  if (accountId) baseCreativesParams.set("account", accountId);
+  if (!isReadOnly && accountId) baseCreativesParams.set("account", accountId);
   if (ownership && ownership !== "all") baseCreativesParams.set("ownership", ownership);
   const baseHref = `/creatives${baseCreativesParams.toString() ? `?${baseCreativesParams}` : ""}`;
 
@@ -398,7 +402,7 @@ export default function DashboardPage() {
               }
             }}
           />
-          {accounts.data && accounts.data.length > 0 && (
+          {!isReadOnly && accounts.data && accounts.data.length > 0 && (
             <Select value={accountId || "all"} onValueChange={(v) => setAccountId(v === "all" ? "" : v)}>
               <SelectTrigger className="h-7 w-auto gap-1 text-[13px]">
                 <SelectValue placeholder="All accounts" />
@@ -462,9 +466,11 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <StaleDataBanner
-        account={accountId ? accounts.data?.find((a) => a.id === accountId) : accounts.data?.[0]}
-      />
+      {!isReadOnly ? (
+        <StaleDataBanner
+          account={accountId ? accounts.data?.find((a) => a.id === accountId) : accounts.data?.[0]}
+        />
+      ) : null}
 
       {/* KPI cards — always visible */}
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">

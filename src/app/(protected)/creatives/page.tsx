@@ -569,7 +569,11 @@ export default function CreativesPage() {
   const { role } = useActiveOrganizationRole();
   const isReadOnly = role === "member";
   const tableColumns = isReadOnly
-    ? columns.filter((column) => column.id !== "select")
+    ? columns.filter(
+        (column) =>
+          column.id !== "select" &&
+          (!("accessorKey" in column) || column.accessorKey !== "accountName"),
+      )
     : columns;
 
   const [format, setFormat] = useQueryState(
@@ -589,7 +593,10 @@ export default function CreativesPage() {
   );
   const [healthFilter, setHealthFilter] = useQueryState("health", parseAsString.withDefault(""));
 
-  const accountsQuery = useQuery(trpc.adAccount.list.queryOptions());
+  const accountsQuery = useQuery({
+    ...trpc.adAccount.list.queryOptions(),
+    enabled: !isReadOnly,
+  });
   const adSetsQuery = useQuery(trpc.adSet.list.queryOptions());
   const metaAccountId = accountsQuery.data?.find((a) => a.id === accountId)?.metaAccountId
     ?? accountsQuery.data?.[0]?.metaAccountId ?? "";
@@ -599,7 +606,7 @@ export default function CreativesPage() {
       format: format || undefined,
       awarenessLevel: awareness || undefined,
       search: search || undefined,
-      accountId: accountId || undefined,
+      accountId: !isReadOnly && accountId ? accountId : undefined,
       adSetIds: adSetIds ? adSetIds.split(",") : undefined,
       ownership: ownership || undefined,
     }),
@@ -778,7 +785,7 @@ export default function CreativesPage() {
             ...AWARENESS.map((a) => ({ label: prettify(a)!, value: a })),
           ]}
         />
-        {accountsQuery.data && accountsQuery.data.length > 0 && (
+        {!isReadOnly && accountsQuery.data && accountsQuery.data.length > 0 && (
           <FilterPill
             value={accountId || "all"}
             onValueChange={(v) => setAccountId(v === "all" ? "" : v)}
@@ -845,9 +852,11 @@ export default function CreativesPage() {
         ) : null}
       </div>
 
-      <StaleDataBanner
-        account={accountsQuery.data?.find((a) => a.id === accountId) ?? accountsQuery.data?.[0]}
-      />
+      {!isReadOnly ? (
+        <StaleDataBanner
+          account={accountsQuery.data?.find((a) => a.id === accountId) ?? accountsQuery.data?.[0]}
+        />
+      ) : null}
 
       {/* Data Table */}
       {creatives.isLoading ? (
