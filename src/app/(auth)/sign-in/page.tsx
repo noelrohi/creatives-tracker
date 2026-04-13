@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { toast } from "sonner";
 import { authClient } from "@/lib/auth-client";
@@ -22,6 +23,7 @@ type SignInValues = z.infer<typeof signInSchema>;
 
 export default function SignInPage() {
   const router = useRouter();
+  const queryClient = useQueryClient();
 
   const form = useForm<SignInValues>({
     resolver: zodResolver(signInSchema),
@@ -38,6 +40,8 @@ export default function SignInPage() {
       toast.error(error.message ?? "Sign in failed");
       return;
     }
+
+    queryClient.clear();
 
     try {
       const { organizations } = await activateFirstOrganization();

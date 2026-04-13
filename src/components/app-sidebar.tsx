@@ -39,6 +39,7 @@ import {
   Upload,
   Image,
   Settings,
+  Pencil,
   Plus,
   UserPlus,
   Trash2,
@@ -67,9 +68,12 @@ export function AppSidebar() {
   const { data: orgs } = authClient.useListOrganizations();
   const { data: activeOrg } = authClient.useActiveOrganization();
   const [showNewOrg, setShowNewOrg] = useState(false);
+  const [showRenameOrg, setShowRenameOrg] = useState(false);
   const [showDeleteOrg, setShowDeleteOrg] = useState(false);
   const [newOrgName, setNewOrgName] = useState("");
+  const [renameOrgName, setRenameOrgName] = useState("");
   const [creating, setCreating] = useState(false);
+  const [renaming, setRenaming] = useState(false);
   const orgId = activeOrg?.id;
 
   const { data: fullOrg } = useQuery({
@@ -157,6 +161,35 @@ export function AppSidebar() {
     router.refresh();
   }
 
+  function openRenameDialog() {
+    setRenameOrgName(activeOrg?.name ?? "");
+    setShowRenameOrg(true);
+  }
+
+  async function handleRenameOrg(e: React.FormEvent) {
+    e.preventDefault();
+    if (!renameOrgName.trim() || !activeOrg) return;
+    setRenaming(true);
+
+    const { error } = await authClient.organization.update({
+      data: { name: renameOrgName.trim() },
+    });
+
+    if (error) {
+      toast.error(
+        getUserFacingErrorMessage(error, "Failed to rename workspace."),
+      );
+      setRenaming(false);
+      return;
+    }
+
+    setShowRenameOrg(false);
+    setRenaming(false);
+    await refetchSession();
+    queryClient.invalidateQueries({ queryKey: ["org-full", orgId] });
+    router.refresh();
+  }
+
   return (
     <>
       <Sidebar variant="inset">
@@ -195,6 +228,12 @@ export function AppSidebar() {
                 <Plus className="mr-2 size-4" />
                 Create organization
               </DropdownMenuItem>
+              {activeOrg && isPrivileged ? (
+                <DropdownMenuItem onSelect={openRenameDialog}>
+                  <Pencil className="mr-2 size-4" />
+                  Rename workspace
+                </DropdownMenuItem>
+              ) : null}
               {activeOrg && isOwner ? (
                 <DropdownMenuItem
                   variant="destructive"
@@ -341,6 +380,30 @@ export function AppSidebar() {
             </div>
             <Button type="submit" disabled={creating} className="w-full">
               {creating ? "Creating..." : "Create"}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showRenameOrg} onOpenChange={setShowRenameOrg}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Rename workspace</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleRenameOrg} className="flex flex-col gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="rename-org-name">Name</Label>
+              <Input
+                id="rename-org-name"
+                value={renameOrgName}
+                onChange={(e) => setRenameOrgName(e.target.value)}
+                placeholder="My Company"
+                required
+                autoFocus
+              />
+            </div>
+            <Button type="submit" disabled={renaming || !renameOrgName.trim()} className="w-full">
+              {renaming ? "Renaming..." : "Rename"}
             </Button>
           </form>
         </DialogContent>
