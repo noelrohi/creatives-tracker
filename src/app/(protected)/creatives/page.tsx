@@ -569,11 +569,7 @@ export default function CreativesPage() {
   const { role } = useActiveOrganizationRole();
   const isReadOnly = role === "member";
   const tableColumns = isReadOnly
-    ? columns.filter(
-        (column) =>
-          column.id !== "select" &&
-          (!("accessorKey" in column) || column.accessorKey !== "accountName"),
-      )
+    ? columns.filter((column) => column.id !== "select")
     : columns;
 
   const [format, setFormat] = useQueryState(
@@ -593,10 +589,7 @@ export default function CreativesPage() {
   );
   const [healthFilter, setHealthFilter] = useQueryState("health", parseAsString.withDefault(""));
 
-  const accountsQuery = useQuery({
-    ...trpc.adAccount.list.queryOptions(),
-    enabled: !isReadOnly,
-  });
+  const accountsQuery = useQuery(trpc.adAccount.list.queryOptions());
   const adSetsQuery = useQuery(trpc.adSet.list.queryOptions());
   const metaAccountId = accountsQuery.data?.find((a) => a.id === accountId)?.metaAccountId
     ?? accountsQuery.data?.[0]?.metaAccountId ?? "";
@@ -606,7 +599,7 @@ export default function CreativesPage() {
       format: format || undefined,
       awarenessLevel: awareness || undefined,
       search: search || undefined,
-      accountId: !isReadOnly && accountId ? accountId : undefined,
+      accountId: accountId ? accountId : undefined,
       adSetIds: adSetIds ? adSetIds.split(",") : undefined,
       ownership: ownership || undefined,
     }),
@@ -785,7 +778,7 @@ export default function CreativesPage() {
             ...AWARENESS.map((a) => ({ label: prettify(a)!, value: a })),
           ]}
         />
-        {!isReadOnly && accountsQuery.data && accountsQuery.data.length > 0 && (
+        {accountsQuery.data && accountsQuery.data.length > 0 && (
           <FilterPill
             value={accountId || "all"}
             onValueChange={(v) => setAccountId(v === "all" ? "" : v)}

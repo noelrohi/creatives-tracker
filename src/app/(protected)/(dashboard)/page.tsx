@@ -338,16 +338,13 @@ export default function DashboardPage() {
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
   const [to, setTo] = useQueryState("to", parseAsString.withDefault(formatDateOnly(new Date())));
 
-  const selectedAccountId = !isReadOnly && accountId ? accountId : undefined;
+  const selectedAccountId = accountId ? accountId : undefined;
   const fromValue = isDateOnlyString(from) ? from : formatDateOnly(subDays(new Date(), 6));
   const toValue = isDateOnlyString(to) ? to : formatDateOnly(new Date());
   const fromDate = parseDateOnly(fromValue);
   const toDate = parseDateOnly(toValue);
 
-  const accounts = useQuery({
-    ...trpc.adAccount.list.queryOptions(),
-    enabled: !isReadOnly,
-  });
+  const accounts = useQuery(trpc.adAccount.list.queryOptions());
 
   const stats = useQuery(
     trpc.adCreative.dashboardStats.queryOptions({
@@ -373,7 +370,7 @@ export default function DashboardPage() {
   const survivingCreatives = stats.data?.survivingCreatives ?? [];
 
   const baseCreativesParams = new URLSearchParams();
-  if (!isReadOnly && accountId) baseCreativesParams.set("account", accountId);
+  if (accountId) baseCreativesParams.set("account", accountId);
   if (ownership && ownership !== "all") baseCreativesParams.set("ownership", ownership);
   const baseHref = `/creatives${baseCreativesParams.toString() ? `?${baseCreativesParams}` : ""}`;
 
@@ -402,7 +399,7 @@ export default function DashboardPage() {
               }
             }}
           />
-          {!isReadOnly && accounts.data && accounts.data.length > 0 && (
+          {accounts.data && accounts.data.length > 0 && (
             <Select value={accountId || "all"} onValueChange={(v) => setAccountId(v === "all" ? "" : v)}>
               <SelectTrigger className="h-7 w-auto gap-1 text-[13px]">
                 <SelectValue placeholder="All accounts" />
