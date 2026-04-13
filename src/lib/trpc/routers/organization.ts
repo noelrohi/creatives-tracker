@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { db } from "@/db";
@@ -8,44 +8,25 @@ import { adCreatives } from "@/schema/ad-creative";
 import { adSets } from "@/schema/ad-set";
 import { ads } from "@/schema/ad";
 import { apiKeys } from "@/schema/api-key";
-import { member, organization, session } from "@/schema/auth";
+import { organization, session } from "@/schema/auth";
 import { campaigns } from "@/schema/campaign";
 import { performanceLogs } from "@/schema/performance-log";
 import { entityTags, tags } from "@/schema/tag";
-import { protectedProcedure, router } from "../init";
+import { orgOwnerProcedure, router } from "../init";
 
 export const organizationRouter = router({
-  delete: protectedProcedure
+  delete: orgOwnerProcedure
     .input(
       z.object({
         organizationId: z.string(),
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      if (ctx.principalType !== "session" || !ctx.userId) {
+      if (input.organizationId !== ctx.organizationId) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "Organization deletion requires an authenticated owner session",
-        });
-      }
-
-      const userId = ctx.userId;
-
-      const [membership] = await db
-        .select({ role: member.role })
-        .from(member)
-        .where(
-          and(
-            eq(member.userId, userId),
-            eq(member.organizationId, input.organizationId),
-          ),
-        )
-        .limit(1);
-
-      if (!membership || membership.role !== "owner") {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Only organization owners can delete a workspace",
+          message:
+            "You can only delete the currently active organization as its owner",
         });
       }
 

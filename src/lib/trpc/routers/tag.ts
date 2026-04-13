@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { eq, and, ilike, desc } from "drizzle-orm";
-import { router, orgProcedure } from "../init";
+import { router, orgProcedure, orgWriteProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { tags, entityTags } from "@/schema/tag";
@@ -56,7 +56,7 @@ export const tagRouter = router({
       return rows.map((r) => r.tag);
     }),
 
-  attach: orgProcedure
+  attach: orgWriteProcedure
     .meta(openApiMutationMeta("tag", "attach"))
     .input(
       z.object({
@@ -109,7 +109,7 @@ export const tagRouter = router({
       return tag;
     }),
 
-  detach: orgProcedure
+  detach: orgWriteProcedure
     .meta(openApiMutationMeta("tag", "detach"))
     .input(
       z.object({

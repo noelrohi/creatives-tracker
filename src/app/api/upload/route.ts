@@ -1,5 +1,7 @@
 import { put } from "@vercel/blob";
 import { auth } from "@/lib/auth";
+import { isPrivilegedOrgRole } from "@/lib/organization-access";
+import { getOrganizationRole } from "@/lib/server/organization-role";
 import { headers } from "next/headers";
 
 export async function POST(request: Request) {
@@ -9,6 +11,24 @@ export async function POST(request: Request) {
 
   if (!session) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const organizationId = session.session.activeOrganizationId;
+
+  if (!organizationId) {
+    return Response.json(
+      { error: "No active organization selected" },
+      { status: 403 },
+    );
+  }
+
+  const role = await getOrganizationRole(session.user.id, organizationId);
+
+  if (!isPrivilegedOrgRole(role)) {
+    return Response.json(
+      { error: "Only organization admins can upload files" },
+      { status: 403 },
+    );
   }
 
   const formData = await request.formData();

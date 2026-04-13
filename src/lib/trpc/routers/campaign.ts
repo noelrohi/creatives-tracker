@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { eq, and, desc } from "drizzle-orm";
-import { router, orgProcedure } from "../init";
+import { router, orgProcedure, orgWriteProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { campaigns } from "@/schema/campaign";
@@ -31,7 +31,7 @@ export const campaignRouter = router({
       return campaign;
     }),
 
-  create: orgProcedure
+  create: orgWriteProcedure
     .meta(openApiMutationMeta("campaign", "create"))
     .input(z.object({ name: z.string().optional(), metaId: z.string().optional() }).optional())
     .mutation(async ({ input, ctx }) => {
@@ -46,7 +46,7 @@ export const campaignRouter = router({
       return campaign;
     }),
 
-  update: orgProcedure
+  update: orgWriteProcedure
     .meta(openApiMutationMeta("campaign", "update"))
     .input(
       z.object({
@@ -76,7 +76,7 @@ export const campaignRouter = router({
       return campaign;
     }),
 
-  duplicate: orgProcedure
+  duplicate: orgWriteProcedure
     .meta(openApiMutationMeta("campaign", "duplicate"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
@@ -103,7 +103,7 @@ export const campaignRouter = router({
       return duplicate;
     }),
 
-  bulkImport: orgProcedure
+  bulkImport: orgWriteProcedure
     .meta(openApiMutationMeta("campaign", "bulkImport"))
     .input(
       z.object({
@@ -142,7 +142,7 @@ export const campaignRouter = router({
       return results;
     }),
 
-  delete: orgProcedure
+  delete: orgWriteProcedure
     .meta(openApiMutationMeta("campaign", "delete"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {

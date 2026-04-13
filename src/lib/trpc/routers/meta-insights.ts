@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { eq, and } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { router, orgProcedure } from "../init";
+import { router, orgProcedure, orgWriteProcedure } from "../init";
 import { db } from "@/db";
 import { adAccounts } from "@/schema/account";
 import { mapMetaInsightsToRows } from "@/lib/meta-api-mapper";
@@ -98,7 +98,7 @@ export const metaInsightsRouter = router({
    * Step 1: Request an async report from Meta.
    * Returns a report_run_id to poll with checkReport.
    */
-  requestReport: orgProcedure
+  requestReport: orgWriteProcedure
     .input(
       z.object({
         accountId: z.string(),
@@ -176,7 +176,7 @@ export const metaInsightsRouter = router({
    * Step 3: Download completed report data.
    * Follows pagination to get all rows, maps to MappedRow[].
    */
-  downloadReport: orgProcedure
+  downloadReport: orgWriteProcedure
     .input(
       z.object({
         reportRunId: z.string(),

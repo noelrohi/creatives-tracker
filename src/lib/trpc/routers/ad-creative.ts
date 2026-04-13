@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { eq, ne, or, isNull, desc, ilike, and, inArray, sql, type SQL } from "drizzle-orm";
-import { router, orgProcedure } from "../init";
+import { router, orgProcedure, orgWriteProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { adCreatives } from "@/schema/ad-creative";
@@ -734,7 +734,7 @@ export const adCreativeRouter = router({
       return { previewUrl };
     }),
 
-  fetchMetaPreview: orgProcedure
+  fetchMetaPreview: orgWriteProcedure
     .meta(openApiMutationMeta("adCreative", "fetchMetaPreview"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
@@ -774,7 +774,7 @@ export const adCreativeRouter = router({
       return preview;
     }),
 
-  create: orgProcedure
+  create: orgWriteProcedure
     .meta(openApiMutationMeta("adCreative", "create"))
     .input(z.object({ name: z.string().optional() }).optional())
     .mutation(async ({ input, ctx }) => {
@@ -788,7 +788,7 @@ export const adCreativeRouter = router({
       return creative;
     }),
 
-  update: orgProcedure
+  update: orgWriteProcedure
     .meta(openApiMutationMeta("adCreative", "update"))
     .input(
       z.object({
@@ -819,7 +819,7 @@ export const adCreativeRouter = router({
       return creative;
     }),
 
-  duplicate: orgProcedure
+  duplicate: orgWriteProcedure
     .meta(openApiMutationMeta("adCreative", "duplicate"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
@@ -849,7 +849,7 @@ export const adCreativeRouter = router({
       return duplicate;
     }),
 
-  bulkUpdateOwnership: orgProcedure
+  bulkUpdateOwnership: orgWriteProcedure
     .meta(openApiMutationMeta("adCreative", "bulkUpdateOwnership"))
     .input(
       z.object({
@@ -870,7 +870,7 @@ export const adCreativeRouter = router({
       return { updated: input.ids.length };
     }),
 
-  bulkImport: orgProcedure
+  bulkImport: orgWriteProcedure
     .meta(openApiMutationMeta("adCreative", "bulkImport"))
     .input(
       z.object({
@@ -1726,7 +1726,7 @@ export const adCreativeRouter = router({
       return rows;
     }),
 
-  delete: orgProcedure
+  delete: orgWriteProcedure
     .meta(openApiMutationMeta("adCreative", "delete"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {

@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { isPrivilegedOrgRole } from "@/lib/organization-access";
 import { authClient } from "@/lib/auth-client";
 import { getUserFacingErrorMessage } from "@/lib/errors";
 import { createOrganizationWithUniqueSlug } from "@/lib/organization-client";
@@ -90,6 +91,14 @@ export function AppSidebar() {
       orgMember.userId === session?.user?.id,
   )?.role;
   const isOwner = currentUserRole === "owner";
+  const isPrivileged = isPrivilegedOrgRole(
+    currentUserRole === "owner" || currentUserRole === "admin"
+      ? currentUserRole
+      : null,
+  );
+  const visibleNavItems = isPrivileged
+    ? navItems
+    : navItems.filter((item) => item.href !== "/accounts");
 
   async function handleSignOut() {
     await authClient.signOut();
@@ -203,31 +212,35 @@ export function AppSidebar() {
             <SidebarGroupContent className="flex flex-col gap-2">
               <SidebarMenu>
                 <SidebarMenuItem className="flex items-center gap-2">
-                  <SidebarMenuButton
-                    asChild
-                    tooltip="Import"
-                    className="min-w-8 bg-primary text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground"
-                  >
-                    <Link href="/import">
-                      <CirclePlus />
-                      <span>Import</span>
-                    </Link>
-                  </SidebarMenuButton>
-                  <Button
-                    size="icon"
-                    className="size-8 group-data-[collapsible=icon]:opacity-0"
-                    variant="outline"
-                    asChild
-                  >
-                    <Link href="/import">
-                      <Upload />
-                      <span className="sr-only">Import</span>
-                    </Link>
-                  </Button>
+                  {isPrivileged ? (
+                    <>
+                      <SidebarMenuButton
+                        asChild
+                        tooltip="Import"
+                        className="min-w-8 bg-primary text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground"
+                      >
+                        <Link href="/import">
+                          <CirclePlus />
+                          <span>Import</span>
+                        </Link>
+                      </SidebarMenuButton>
+                      <Button
+                        size="icon"
+                        className="size-8 group-data-[collapsible=icon]:opacity-0"
+                        variant="outline"
+                        asChild
+                      >
+                        <Link href="/import">
+                          <Upload />
+                          <span className="sr-only">Import</span>
+                        </Link>
+                      </Button>
+                    </>
+                  ) : null}
                 </SidebarMenuItem>
               </SidebarMenu>
               <SidebarMenu>
-                {navItems.map((item) => (
+                {visibleNavItems.map((item) => (
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton
                       asChild
@@ -251,14 +264,16 @@ export function AppSidebar() {
         </SidebarContent>
         <SidebarFooter>
           <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton asChild tooltip="API Docs">
-                <Link href="/reference">
-                  <BookOpen />
-                  <span>API Docs</span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
+            {isPrivileged ? (
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild tooltip="API Docs">
+                  <Link href="/reference">
+                    <BookOpen />
+                    <span>API Docs</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ) : null}
             <SidebarMenuItem>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -279,19 +294,23 @@ export function AppSidebar() {
                     </span>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem asChild>
-                    <Link href="/settings/members">
-                      <UserPlus className="mr-2 size-4" />
-                      Invite members
-                    </Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem asChild>
-                    <Link href="/settings/api-keys">
-                      <Key className="mr-2 size-4" />
-                      API keys
-                    </Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
+                  {isPrivileged ? (
+                    <>
+                      <DropdownMenuItem asChild>
+                        <Link href="/settings/members">
+                          <UserPlus className="mr-2 size-4" />
+                          Invite members
+                        </Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild>
+                        <Link href="/settings/api-keys">
+                          <Key className="mr-2 size-4" />
+                          API keys
+                        </Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                    </>
+                  ) : null}
                   <DropdownMenuItem onClick={handleSignOut}>
                     <LogOut className="mr-2 size-4" />
                     Sign out

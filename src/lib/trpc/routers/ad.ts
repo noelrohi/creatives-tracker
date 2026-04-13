@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { eq, desc, sql, and } from "drizzle-orm";
-import { router, orgProcedure } from "../init";
+import { router, orgProcedure, orgWriteProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { ads } from "@/schema/ad";
@@ -116,7 +116,7 @@ export const adRouter = router({
       return ad;
     }),
 
-  create: orgProcedure
+  create: orgWriteProcedure
     .meta(openApiMutationMeta("ad", "create"))
     .input(
       z.object({
@@ -140,7 +140,7 @@ export const adRouter = router({
       return ad;
     }),
 
-  update: orgProcedure
+  update: orgWriteProcedure
     .meta(openApiMutationMeta("ad", "update"))
     .input(
       z.object({
@@ -163,7 +163,7 @@ export const adRouter = router({
       return ad;
     }),
 
-  duplicate: orgProcedure
+  duplicate: orgWriteProcedure
     .meta(openApiMutationMeta("ad", "duplicate"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
@@ -186,7 +186,7 @@ export const adRouter = router({
       return duplicate;
     }),
 
-  bulkImport: orgProcedure
+  bulkImport: orgWriteProcedure
     .meta(openApiMutationMeta("ad", "bulkImport"))
     .input(
       z.object({
@@ -244,7 +244,7 @@ export const adRouter = router({
       return results;
     }),
 
-  delete: orgProcedure
+  delete: orgWriteProcedure
     .meta(openApiMutationMeta("ad", "delete"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
