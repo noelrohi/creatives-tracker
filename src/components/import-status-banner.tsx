@@ -91,7 +91,7 @@ export function ImportStatusBanner() {
     </>
   );
 
-  const className = `flex items-center gap-3 px-4 py-2 text-[13px] transition-colors ${
+  const className = `flex items-center gap-3 rounded-t-xl px-4 py-2 text-[13px] transition-colors ${
     isOverdue
       ? "bg-amber-500/10"
       : "bg-muted/30"
