@@ -6,17 +6,18 @@ export async function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
   const isAuthPage =
-    pathname.startsWith("/sign-in") ||
-    pathname.startsWith("/sign-up") ||
-    pathname.startsWith("/accept-invitation");
+    pathname.startsWith("/sign-in") || pathname.startsWith("/sign-up");
+  const isInvitationPage = pathname.startsWith("/accept-invitation");
   const isPublicPage = pathname.startsWith("/reference");
 
-  // Unauthenticated users → redirect to sign-in
-  if (!sessionToken && !isAuthPage && !isPublicPage) {
+  // Unauthenticated users → redirect to sign-in (but allow invitation page)
+  if (!sessionToken && !isAuthPage && !isInvitationPage && !isPublicPage) {
     return NextResponse.redirect(new URL("/sign-in", request.url));
   }
 
-  // Authenticated users on auth pages → redirect to dashboard
+  // Authenticated users on sign-in/sign-up → redirect to dashboard
+  // Note: /accept-invitation is intentionally excluded — signed-in users
+  // need to reach it to accept or reject invitations
   if (sessionToken && isAuthPage) {
     return NextResponse.redirect(new URL("/", request.url));
   }

@@ -325,7 +325,10 @@ export default function MembersPage() {
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                               <DropdownMenuItem
-                                onClick={() => copyInvitationLink(inv.id)}
+                                onSelect={(e) => {
+                                  e.preventDefault();
+                                  copyInvitationLink(inv.id);
+                                }}
                               >
                                 <Copy className="size-4" />
                                 Copy invitation link

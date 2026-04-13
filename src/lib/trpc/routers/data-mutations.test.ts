@@ -103,16 +103,16 @@ describe("adCreative mutations", () => {
 describe("tag mutations", () => {
   describeMutation(
     "attach",
-    () => memberCaller.tag.attach({ entityType: "ad", entityId: "x", tagNames: ["t"] }),
-    () => adminCaller.tag.attach({ entityType: "ad", entityId: "x", tagNames: ["t"] }),
-    () => ownerCaller.tag.attach({ entityType: "ad", entityId: "x", tagNames: ["t"] }),
+    () => memberCaller.tag.attach({ entityType: "ad", entityId: "x", tagName: "t" }),
+    () => adminCaller.tag.attach({ entityType: "ad", entityId: "x", tagName: "t" }),
+    () => ownerCaller.tag.attach({ entityType: "ad", entityId: "x", tagName: "t" }),
   );
 
   describeMutation(
     "detach",
-    () => memberCaller.tag.detach({ entityType: "ad", entityId: "x", tagNames: ["t"] }),
-    () => adminCaller.tag.detach({ entityType: "ad", entityId: "x", tagNames: ["t"] }),
-    () => ownerCaller.tag.detach({ entityType: "ad", entityId: "x", tagNames: ["t"] }),
+    () => memberCaller.tag.detach({ entityType: "ad", entityId: "x", tagId: "t" }),
+    () => adminCaller.tag.detach({ entityType: "ad", entityId: "x", tagId: "t" }),
+    () => ownerCaller.tag.detach({ entityType: "ad", entityId: "x", tagId: "t" }),
   );
 });
 
