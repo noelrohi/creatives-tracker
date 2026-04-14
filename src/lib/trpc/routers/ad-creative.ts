@@ -1036,11 +1036,29 @@ export const adCreativeRouter = router({
       const captionByMetaAdId = new Map<string, string>();
 
       if (accountRecord?.metaAccessToken && adIdsNeedingPreview.length > 0) {
+        const knownDestinationUrlByAdId = new Map<string, string>();
+        const existingDestinationRows = await db
+          .select({ metaId: ads.metaId, destinationUrl: ads.destinationUrl })
+          .from(ads)
+          .where(
+            and(
+              sql`${ads.metaId} IN (${sql.join(adIdsNeedingPreview.map((m) => sql`${m}`), sql`, `)})`,
+              eq(ads.organizationId, ctx.organizationId),
+              sql`${ads.destinationUrl} IS NOT NULL`,
+            ),
+          );
+        for (const row of existingDestinationRows) {
+          if (row.metaId && row.destinationUrl) {
+            knownDestinationUrlByAdId.set(row.metaId, row.destinationUrl);
+          }
+        }
+
         const previews = await fetchMetaCreativePreviewsForAds({
           adMetaIds: adIdsNeedingPreview,
           metaAccountId: accountRecord.metaAccountId,
           accessToken: accountRecord.metaAccessToken,
           videoUrlMode: "none",
+          knownDestinationUrlByAdId,
         });
 
         for (const row of rows) {

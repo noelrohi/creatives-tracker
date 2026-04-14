@@ -21,6 +21,7 @@ type MetaAdCreativeResponse = {
     link_url?: string;
     video_id?: string;
     object_type?: string;
+    effective_object_story_id?: string;
     object_story_spec?: {
       link_data?: {
         message?: string;
@@ -428,12 +429,84 @@ async function fetchAdImageUrls(input: {
   return resolved;
 }
 
+/**
+ * For boosted-post (SHARE) creatives, the destination link isn't exposed on the
+ * creative object — only on the underlying post, which needs page-level perms.
+ * Workaround: scrape the rendered ad-preview iframe, which inlines a JSON blob
+ * containing a linkshim `l.facebook.com/l.php?u=<url>`. Brittle — Meta can
+ * change the markup — but daily imports give us a cadence to notice breakage.
+ */
+async function fetchLandingUrlFromPreview(input: {
+  adMetaId: string;
+  accessToken: string;
+}): Promise<string | null> {
+  const iframeSrc = await fetchMetaAdPreviewUrl({
+    adMetaId: input.adMetaId,
+    accessToken: input.accessToken,
+  });
+  if (!iframeSrc) return null;
+
+  try {
+    const response = await fetch(iframeSrc, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+    });
+    if (!response.ok) return null;
+    const html = await response.text();
+
+    const matches = html.matchAll(/"link_url":"(https?:[^"\\]*(?:\\.[^"\\]*)*)"/g);
+    for (const match of matches) {
+      const candidate = extractOutboundUrl(match[1]);
+      if (candidate) return candidate;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+const META_OWNED_HOST_SUFFIXES = [
+  "facebook.com",
+  "fb.com",
+  "fb.me",
+  "m.me",
+  "instagram.com",
+  "whatsapp.com",
+  "messenger.com",
+  "fbcdn.net",
+];
+
+function extractOutboundUrl(rawJsonEncoded: string): string | null {
+  try {
+    const decoded = JSON.parse(`"${rawJsonEncoded}"`) as string;
+    const parsed = new URL(decoded);
+    const isLinkshim = parsed.hostname.endsWith("l.facebook.com")
+      && parsed.pathname === "/l.php";
+    const final = isLinkshim ? parsed.searchParams.get("u") : decoded;
+    if (!final) return null;
+
+    const finalParsed = new URL(final);
+    if (finalParsed.protocol !== "http:" && finalParsed.protocol !== "https:") {
+      return null;
+    }
+    const host = finalParsed.hostname.toLowerCase();
+    if (META_OWNED_HOST_SUFFIXES.some((suffix) =>
+      host === suffix || host.endsWith(`.${suffix}`),
+    )) {
+      return null;
+    }
+    return final;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchMetaCreativePreviewsForAds(input: {
   adMetaIds: string[];
   metaAccountId: string;
   accessToken: string;
   assetUrlMode?: "direct" | "uploaded";
   videoUrlMode?: "none" | "uploaded" | "direct";
+  knownDestinationUrlByAdId?: Map<string, string>;
 }) {
   const previews = new Map<string, MetaCreativePreview>();
   const creativesByAdId = new Map<string, MetaAdCreativeResponse["creative"]>();
@@ -450,7 +523,7 @@ export async function fetchMetaCreativePreviewsForAds(input: {
       url.searchParams.set("ids", chunk.join(","));
       url.searchParams.set(
         "fields",
-        "creative{body,image_hash,image_url,thumbnail_url,link_url,video_id,object_type,object_story_spec,asset_feed_spec}",
+        "creative{body,image_hash,image_url,thumbnail_url,link_url,video_id,object_type,effective_object_story_id,object_story_spec,asset_feed_spec}",
       );
       return fetchJson<Record<string, MetaAdCreativeResponse>>(url);
     }),
@@ -571,6 +644,58 @@ export async function fetchMetaCreativePreviewsForAds(input: {
       if (videoUrl) {
         preview.videoUrl = videoUrl;
       }
+    }
+  }
+
+  // SHARE-post fallback: scrape the ad preview iframe for boosted-post ads
+  // that have no inline link. Dedupe by effective_object_story_id so multiple
+  // ads boosting the same post = one scrape. Skip when we already know the URL.
+  const adIdsNeedingLanding: string[] = [];
+  const scrapeKeyByAdId = new Map<string, string>();
+  const seenScrapeKeys = new Set<string>();
+  for (const adMetaId of input.adMetaIds) {
+    const preview = previews.get(adMetaId);
+    const creative = creativesByAdId.get(adMetaId);
+    if (!preview || !creative) continue;
+    if (preview.destinationUrl) continue;
+    const known = input.knownDestinationUrlByAdId?.get(adMetaId);
+    if (known) {
+      preview.destinationUrl = known;
+      continue;
+    }
+    if (creative.object_type?.toUpperCase() !== "SHARE") continue;
+
+    const scrapeKey = creative.effective_object_story_id ?? adMetaId;
+    scrapeKeyByAdId.set(adMetaId, scrapeKey);
+    if (!seenScrapeKeys.has(scrapeKey)) {
+      seenScrapeKeys.add(scrapeKey);
+      adIdsNeedingLanding.push(adMetaId);
+    }
+  }
+
+  if (adIdsNeedingLanding.length > 0) {
+    const landingByKey = new Map<string, string | null>();
+    const SCRAPE_CONCURRENCY = 5;
+    for (let i = 0; i < adIdsNeedingLanding.length; i += SCRAPE_CONCURRENCY) {
+      const chunk = adIdsNeedingLanding.slice(i, i + SCRAPE_CONCURRENCY);
+      const results = await Promise.all(
+        chunk.map((adMetaId) =>
+          fetchLandingUrlFromPreview({
+            adMetaId,
+            accessToken: input.accessToken,
+          }).then((url) => [scrapeKeyByAdId.get(adMetaId)!, url] as const),
+        ),
+      );
+      for (const [key, url] of results) {
+        landingByKey.set(key, url);
+      }
+    }
+
+    for (const [adMetaId, key] of scrapeKeyByAdId) {
+      const preview = previews.get(adMetaId);
+      if (!preview) continue;
+      const url = landingByKey.get(key);
+      if (url) preview.destinationUrl = url;
     }
   }
 
