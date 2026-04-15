@@ -1,35 +1,26 @@
 export type CreativeHealth = "healthy" | "warning" | "critical";
 
+export type HealthVerdict = {
+  health: CreativeHealth | null;
+  reasons: string[];
+};
+
+function fmtMoney(n: number): string {
+  return n >= 100 ? `$${n.toFixed(0)}` : `$${n.toFixed(2)}`;
+}
+
 /**
- * Compute creative health using combined fatigue detection signals.
- *
- * GREEN (Healthy) — Growth phase, engaging effectively:
- *   - CTR >= 1%, thumbstop ratio >= 30%, frequency < 2.0
- *   - CPA at or below avg, ROAS strong
- *   - No declining trend signals
- *
- * YELLOW (Warning) — Approaching fatigue, trends declining:
- *   Leading indicators:
- *   - CTR dropping 10-20% over 3 days (hook weakening)
- *   - Frequency > 2.5 (cold) or > 4.0 (retargeting)
- *   - CPC rising 15%+ (Meta charging more for worse attention)
- *   - Hook rate / thumbstop ratio declining 15%+
- *
- * RED (Critical) — Burning budget, hurting account health:
- *   - CPA exceeds avg by 15-30%+
- *   - CTR dropped 25%+
- *   - CPC risen 30%+
- *   - Frequency > 4.0
- *   - Multiple warning signals compound to critical
- *
- * Falls back to ROAS-based assessment when trend data is unavailable.
+ * Compute ad/creative health plus the reasons each signal fired. `reasons` are
+ * short human-readable strings (e.g. "CTR dropped 28% vs baseline"), safe to
+ * surface in a tooltip.
  */
 export function computeHealth(opts: {
   roas: number | null;
   spend: number | null;
   conversions: number | null;
   status?: string | null;
-  // Trend signals
+  format?: string | null;
+  recentConversions?: number | null;
   recentCtr?: number | null;
   avgCtr?: number | null;
   recentCpc?: number | null;
@@ -37,101 +28,184 @@ export function computeHealth(opts: {
   frequency?: number | null;
   recentHookRate?: number | null;
   priorHookRate?: number | null;
-  // CPA-based detection
   recentCpa?: number | null;
   avgCpa?: number | null;
-  // Absolute metrics
   thumbstopRatio?: number | null;
-}): CreativeHealth | null {
+}): HealthVerdict {
   const { roas, spend, conversions, status } = opts;
 
-  // Not enough data to evaluate
-  if (spend == null || spend < 50) return null;
+  if (spend == null || spend < 50) return { health: null, reasons: [] };
 
   // Active ad with meaningful spend but zero conversions
-  if (
-    status === "active" &&
-    (conversions == null || conversions === 0) &&
-    spend >= 100
-  ) {
-    return "critical";
+  if (status === "active" && (conversions == null || conversions === 0) && spend >= 100) {
+    return {
+      health: "critical",
+      reasons: [`No conversions on ${fmtMoney(spend)} spent`],
+    };
   }
 
+  const reasons: string[] = [];
   let warningSignals = 0;
   let criticalSignals = 0;
   let hasTrendData = false;
 
-  // --- 1. CTR trajectory ---
-  // 10-20% drop = warning, 25%+ drop = critical
   const { recentCtr, avgCtr } = opts;
   if (recentCtr != null && avgCtr != null && avgCtr > 0) {
     hasTrendData = true;
-    const ctrDrop = (avgCtr - recentCtr) / avgCtr;
-    if (ctrDrop >= 0.25) criticalSignals++;
-    else if (ctrDrop >= 0.1) warningSignals++;
+    const drop = (avgCtr - recentCtr) / avgCtr;
+    if (drop >= 0.25) {
+      criticalSignals++;
+      reasons.push(`CTR dropped ${Math.round(drop * 100)}% vs baseline`);
+    } else if (drop >= 0.1) {
+      warningSignals++;
+      reasons.push(`CTR dropped ${Math.round(drop * 100)}% vs baseline`);
+    }
   }
-
-  // Absolute CTR floor: below 1% is a weak signal
   if (recentCtr != null && recentCtr < 1) {
     warningSignals++;
+    reasons.push(`CTR below 1% (${recentCtr.toFixed(2)}%)`);
   }
 
-  // --- 2. CPC inflation ---
-  // 15%+ rise = warning, 30%+ rise = critical
   const { recentCpc, avgCpc } = opts;
   if (recentCpc != null && avgCpc != null && avgCpc > 0) {
     hasTrendData = true;
-    const cpcRise = (recentCpc - avgCpc) / avgCpc;
-    if (cpcRise >= 0.3) criticalSignals++;
-    else if (cpcRise >= 0.15) warningSignals++;
+    const rise = (recentCpc - avgCpc) / avgCpc;
+    if (rise >= 0.3) {
+      criticalSignals++;
+      reasons.push(`CPC rose ${Math.round(rise * 100)}% vs baseline`);
+    } else if (rise >= 0.15) {
+      warningSignals++;
+      reasons.push(`CPC rose ${Math.round(rise * 100)}% vs baseline`);
+    }
   }
 
-  // --- 3. Frequency ---
-  // >2.5 = warning (cold audiences), >4.0 = critical
   const { frequency } = opts;
   if (frequency != null) {
     hasTrendData = true;
-    if (frequency > 4) criticalSignals++;
-    else if (frequency > 2.5) warningSignals++;
+    if (frequency > 4) {
+      criticalSignals++;
+      reasons.push(`Frequency at ${frequency.toFixed(1)} (audience fatigued)`);
+    } else if (frequency > 2.5) {
+      warningSignals++;
+      reasons.push(`Frequency at ${frequency.toFixed(1)} (approaching fatigue)`);
+    }
   }
 
-  // --- 4. Hook rate / thumbstop ratio decay (video) ---
-  // 15%+ drop = warning, 30%+ drop = critical
+  // UGC is a video-format subcategory in this codebase — treat the same.
+  const isVideo = opts.format === "video" || opts.format === "ugc";
   const { recentHookRate, priorHookRate } = opts;
-  if (recentHookRate != null && priorHookRate != null && priorHookRate > 0) {
+  if (isVideo && recentHookRate != null && priorHookRate != null && priorHookRate > 0) {
     hasTrendData = true;
-    const hookDrop = (priorHookRate - recentHookRate) / priorHookRate;
-    if (hookDrop >= 0.3) criticalSignals++;
-    else if (hookDrop >= 0.15) warningSignals++;
+    const drop = (priorHookRate - recentHookRate) / priorHookRate;
+    if (drop >= 0.3) {
+      criticalSignals++;
+      reasons.push(`Hook rate dropped ${Math.round(drop * 100)}%`);
+    } else if (drop >= 0.15) {
+      warningSignals++;
+      reasons.push(`Hook rate dropped ${Math.round(drop * 100)}%`);
+    }
   }
 
-  // Absolute thumbstop ratio: below 25% is concerning
   const { thumbstopRatio } = opts;
-  if (thumbstopRatio != null && thumbstopRatio < 0.25) {
+  if (isVideo && thumbstopRatio != null && thumbstopRatio > 0 && thumbstopRatio < 0.25) {
     warningSignals++;
+    reasons.push(`Thumbstop ratio below 25% (${Math.round(thumbstopRatio * 100)}%)`);
   }
 
-  // --- 5. CPA exceeding baseline ---
-  // 15%+ above avg = warning, 30%+ = critical
-  const { recentCpa, avgCpa } = opts;
-  if (recentCpa != null && avgCpa != null && avgCpa > 0) {
+  // CPA trend requires a meaningful recent conversion count. A recent CPA
+  // computed from 1-2 conversions is too noisy to trust.
+  const { recentCpa, avgCpa, recentConversions } = opts;
+  const cpaHasEvidence = recentConversions != null && recentConversions >= 3;
+  if (cpaHasEvidence && recentCpa != null && avgCpa != null && avgCpa > 0) {
     hasTrendData = true;
-    const cpaRise = (recentCpa - avgCpa) / avgCpa;
-    if (cpaRise >= 0.3) criticalSignals++;
-    else if (cpaRise >= 0.15) warningSignals++;
+    const rise = (recentCpa - avgCpa) / avgCpa;
+    if (rise >= 0.3) {
+      criticalSignals++;
+      reasons.push(`CPA up ${Math.round(rise * 100)}% vs baseline`);
+    } else if (rise >= 0.15) {
+      warningSignals++;
+      reasons.push(`CPA up ${Math.round(rise * 100)}% vs baseline`);
+    }
   }
 
-  // If we have trend data, use signal-based health
   if (hasTrendData) {
-    // Any critical signal or 2+ warning signals = critical
-    if (criticalSignals > 0 || warningSignals >= 2) return "critical";
-    if (warningSignals > 0) return "warning";
-    return "healthy";
+    // Profitability gate: if the window ROAS is still breakeven or better, a
+    // single critical signal is a heads-up, not a fire. Require 2+ critical
+    // signals (or warning compound) before calling it critical.
+    const profitable = roas != null && roas >= 1;
+    if (profitable) {
+      if (criticalSignals >= 2 || (criticalSignals >= 1 && warningSignals >= 2)) {
+        return { health: "critical", reasons };
+      }
+      if (criticalSignals > 0 || warningSignals > 0) {
+        return { health: "warning", reasons };
+      }
+      return { health: "healthy", reasons: [] };
+    }
+    if (criticalSignals > 0 || warningSignals >= 2) return { health: "critical", reasons };
+    if (warningSignals > 0) return { health: "warning", reasons };
+    return { health: "healthy", reasons: [] };
   }
 
-  // Fallback: ROAS-based when no trend data available
-  if (roas == null) return null;
-  if (roas < 0.5) return "critical";
-  if (roas < 1) return "warning";
-  return "healthy";
+  // Fallback: ROAS-based
+  if (roas == null) return { health: null, reasons: [] };
+  if (roas < 0.5) {
+    return {
+      health: "critical",
+      reasons: [`ROAS ${roas.toFixed(2)}x on ${fmtMoney(spend)} spent`],
+    };
+  }
+  if (roas < 1) {
+    return {
+      health: "warning",
+      reasons: [`ROAS ${roas.toFixed(2)}x on ${fmtMoney(spend)} spent`],
+    };
+  }
+  return { health: "healthy", reasons: [] };
+}
+
+/**
+ * Roll up per-ad health into a creative-level verdict, weighted by spend.
+ *
+ * A creative is only as bad as the majority of its recent spend. The rolled-up
+ * `reasons` explain which ads contributed — e.g. "2 of 3 ads critical (85% of
+ * spend) — No conversions on $320 spent · ROAS 0.3x".
+ */
+export function rollupCreativeHealth(
+  adRows: Array<{ spend: number | null; health: CreativeHealth | null; reasons?: string[] }>,
+): HealthVerdict {
+  const scored = adRows.filter(
+    (r) => r.health != null && r.spend != null && r.spend > 0,
+  ) as Array<{ spend: number; health: CreativeHealth; reasons?: string[] }>;
+  if (scored.length === 0) return { health: null, reasons: [] };
+
+  const total = scored.reduce((acc, r) => acc + r.spend, 0);
+  if (total <= 0) return { health: null, reasons: [] };
+
+  const criticalAds = scored.filter((r) => r.health === "critical");
+  const warningAds = scored.filter((r) => r.health === "warning");
+  const criticalSpend = criticalAds.reduce((acc, r) => acc + r.spend, 0);
+  const warningOrWorseSpend = criticalSpend + warningAds.reduce((acc, r) => acc + r.spend, 0);
+
+  const criticalShare = criticalSpend / total;
+  const warningShare = warningOrWorseSpend / total;
+
+  if (criticalShare >= 0.5) {
+    const adReasons = criticalAds
+      .flatMap((a) => a.reasons ?? [])
+      .filter((r, i, self) => self.indexOf(r) === i)
+      .slice(0, 3);
+    const header = `${criticalAds.length} of ${scored.length} ad${scored.length === 1 ? "" : "s"} critical (${Math.round(criticalShare * 100)}% of spend)`;
+    return { health: "critical", reasons: [header, ...adReasons] };
+  }
+  if (warningShare >= 0.5) {
+    const flagged = [...criticalAds, ...warningAds];
+    const adReasons = flagged
+      .flatMap((a) => a.reasons ?? [])
+      .filter((r, i, self) => self.indexOf(r) === i)
+      .slice(0, 3);
+    const header = `${flagged.length} of ${scored.length} ad${scored.length === 1 ? "" : "s"} flagged (${Math.round(warningShare * 100)}% of spend)`;
+    return { health: "warning", reasons: [header, ...adReasons] };
+  }
+  return { health: "healthy", reasons: [] };
 }

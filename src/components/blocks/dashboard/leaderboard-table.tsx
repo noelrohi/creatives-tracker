@@ -11,7 +11,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { computeHealth, type CreativeHealth } from "@/lib/creative-health";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { CreativeHealth } from "@/lib/creative-health";
 import { fmtMoney, fmtNum, fmtRoas } from "@/lib/fmt";
 
 export type LeaderboardRow = {
@@ -27,6 +28,8 @@ export type LeaderboardRow = {
   conversions: string;
   adStatus: string | null;
   runningDays?: number;
+  health?: CreativeHealth | null;
+  healthReasons?: string[];
 };
 
 const HEALTH_STYLES: Record<CreativeHealth, { label: string; className: string }> = {
@@ -36,18 +39,28 @@ const HEALTH_STYLES: Record<CreativeHealth, { label: string; className: string }
 };
 
 function HealthBadge({ row }: { row: LeaderboardRow }) {
-  const health = computeHealth({
-    roas: row.roas ? parseFloat(row.roas) : null,
-    spend: row.totalSpend ? parseFloat(row.totalSpend) : null,
-    conversions: row.conversions ? parseInt(row.conversions, 10) : null,
-    status: row.adStatus,
-  });
-  if (!health) return null;
-  const style = HEALTH_STYLES[health];
-  return (
+  if (!row.health) return null;
+  const style = HEALTH_STYLES[row.health];
+  const reasons = row.healthReasons ?? [];
+  const badge = (
     <span className={`inline-flex rounded px-1.5 py-0.5 text-[9px] font-medium ${style.className}`}>
       {style.label}
     </span>
+  );
+  if (reasons.length === 0) return badge;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="cursor-help">{badge}</span>
+      </TooltipTrigger>
+      <TooltipContent side="left" className="max-w-xs">
+        <ul className="list-disc pl-4 space-y-0.5">
+          {reasons.map((r, i) => (
+            <li key={i}>{r}</li>
+          ))}
+        </ul>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

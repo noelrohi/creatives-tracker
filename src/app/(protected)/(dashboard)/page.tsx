@@ -42,6 +42,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
+import { ExportPreviewDialog } from "@/components/blocks/export-preview-dialog";
+import { useState } from "react";
 
 const EXPORT_COLUMNS = [
   "date_start", "date_end",
@@ -83,6 +85,7 @@ function downloadCsv(rows: Record<string, unknown>[], filename: string) {
   URL.revokeObjectURL(url);
 }
 
+
 export default function DashboardPage() {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
@@ -91,6 +94,7 @@ export default function DashboardPage() {
   const isReadOnly = role === "member";
   const canManageData = !isReadOnly;
 
+  const [exportOpen, setExportOpen] = useState(false);
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
   const [teamId, setTeamId] = useQueryState("team", parseAsString.withDefault(""));
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
@@ -197,6 +201,9 @@ export default function DashboardPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setExportOpen(true)}>
+                Export…
+              </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => {
                   startExport(async () => {
@@ -206,13 +213,14 @@ export default function DashboardPage() {
                           from: fromValue,
                           to: toValue,
                           accountId: selectedAccountId,
+                          teamId: selectedTeamId,
                         }),
                       );
                       if (!rows.length) {
                         toast.info("No data to export for this date range");
                         return;
                       }
-                      downloadCsv(rows, `dashboard_all_${fromValue}_${toValue}.csv`);
+                      downloadCsv(rows, `dashboard_${fromValue}_${toValue}.csv`);
                       toast.success(`Exported ${rows.length} rows`);
                     } catch (err) {
                       console.error("Export failed:", err);
@@ -221,38 +229,8 @@ export default function DashboardPage() {
                   });
                 }}
               >
-                Export All
+                Raw perf logs
               </DropdownMenuItem>
-              {selectedTeamId && (
-                <DropdownMenuItem
-                  onClick={() => {
-                    startExport(async () => {
-                      try {
-                        const rows = await queryClient.fetchQuery(
-                          trpc.adCreative.dashboardExport.queryOptions({
-                            from: fromValue,
-                            to: toValue,
-                            accountId: selectedAccountId,
-                            teamId: selectedTeamId,
-                          }),
-                        );
-                        if (!rows.length) {
-                          toast.info("No data to export for this team");
-                          return;
-                        }
-                        const teamName = teamsQuery.data?.find((t) => t.id === selectedTeamId)?.name ?? "team";
-                        downloadCsv(rows, `dashboard_${teamName.toLowerCase().replace(/\s+/g, "_")}_${fromValue}_${toValue}.csv`);
-                        toast.success(`Exported ${rows.length} rows`);
-                      } catch (err) {
-                        console.error("Export failed:", err);
-                        toast.error("Export failed — check the console for details");
-                      }
-                    });
-                  }}
-                >
-                  Export {teamsQuery.data?.find((t) => t.id === selectedTeamId)?.name ?? "Selected Team"}
-                </DropdownMenuItem>
-              )}
             </DropdownMenuContent>
           </DropdownMenu>
           {canManageData ? (
@@ -312,7 +290,7 @@ export default function DashboardPage() {
               icon={<AlertTriangle className="size-3.5 text-red-400" />}
               rows={bottomPerformers}
               isLoading={stats.isLoading}
-              emptyMessage="No underperformers detected"
+              emptyMessage="Nothing urgent in this window"
               viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=critical`}
               canManageData={canManageData}
             />
@@ -340,6 +318,31 @@ export default function DashboardPage() {
           )}
         </TabsContent>
       </Tabs>
+
+      <ExportPreviewDialog
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        filters={{
+          from: fromValue,
+          to: toValue,
+          accountId: selectedAccountId,
+          teamId: selectedTeamId,
+        }}
+        filterLabels={[
+          ...(accountId
+            ? [{
+                label: "Account",
+                value: accounts.data?.find((a) => a.id === accountId)?.name ?? accountId,
+              }]
+            : []),
+          ...(teamId
+            ? [{
+                label: "Team",
+                value: teamsQuery.data?.find((t) => t.id === teamId)?.name ?? teamId,
+              }]
+            : []),
+        ]}
+      />
     </div>
   );
 }

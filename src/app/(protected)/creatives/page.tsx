@@ -54,8 +54,12 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
+import { ExportPreviewDialog } from "@/components/blocks/export-preview-dialog";
+import { DateRangePicker } from "@/components/blocks/dashboard/date-range-picker";
+import { subDays } from "date-fns";
+import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
 import { toast } from "sonner";
-import { computeHealth, type CreativeHealth } from "@/lib/creative-health";
+import type { CreativeHealth } from "@/lib/creative-health";
 
 const FORMATS = ["static", "video", "ugc", "carousel"] as const;
 const AWARENESS = [
@@ -135,6 +139,8 @@ interface Creative {
   priorHookRate: string | null;
   recentCpa: string | null;
   thumbstopRatio: string | null;
+  health: CreativeHealth | null;
+  healthReasons: string[];
 }
 
 function MediaPreview({ creative }: { creative: Creative }) {
@@ -481,29 +487,29 @@ const columns: ColumnDef<Creative>[] = [
     id: "health",
     header: "Health",
     cell: ({ row }) => {
-      const o = row.original;
-      const health = computeHealth({
-        roas: o.avgRoas ? parseFloat(o.avgRoas) : null,
-        spend: o.totalSpend ? parseFloat(o.totalSpend) : null,
-        conversions: o.totalConversions,
-        status: o.adStatus,
-        recentCtr: o.recentCtr ? parseFloat(o.recentCtr) : null,
-        avgCtr: o.avgCtr ? parseFloat(o.avgCtr) : null,
-        recentCpc: o.recentCpc ? parseFloat(o.recentCpc) : null,
-        avgCpc: o.avgCpc ? parseFloat(o.avgCpc) : null,
-        frequency: o.avgFrequency ? parseFloat(o.avgFrequency) : null,
-        recentHookRate: o.recentHookRate ? parseFloat(o.recentHookRate) : null,
-        priorHookRate: o.priorHookRate ? parseFloat(o.priorHookRate) : null,
-        recentCpa: o.recentCpa ? parseFloat(o.recentCpa) : null,
-        avgCpa: o.avgCpa ? parseFloat(o.avgCpa) : null,
-        thumbstopRatio: o.thumbstopRatio ? parseFloat(o.thumbstopRatio) : null,
-      });
+      const health = row.original.health;
       if (!health) return <span className="text-muted-foreground/30">—</span>;
       const style = HEALTH_STYLES[health];
-      return (
+      const reasons = row.original.healthReasons ?? [];
+      const badge = (
         <span className={cn("inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium", style.className)}>
           {style.label}
         </span>
+      );
+      if (reasons.length === 0) return badge;
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="cursor-help">{badge}</span>
+          </TooltipTrigger>
+          <TooltipContent side="left" className="max-w-xs">
+            <ul className="list-disc pl-4 space-y-0.5">
+              {reasons.map((r, i) => (
+                <li key={i}>{r}</li>
+              ))}
+            </ul>
+          </TooltipContent>
+        </Tooltip>
       );
     },
     size: 80,
@@ -585,6 +591,12 @@ export default function CreativesPage() {
   const [adSetIds, setAdSetIds] = useQueryState("adSet", parseAsString.withDefault(""));
   const [healthFilter, setHealthFilter] = useQueryState("health", parseAsString.withDefault(""));
   const [teamId, setTeamId] = useQueryState("team", parseAsString.withDefault(""));
+  const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
+  const [to, setTo] = useQueryState("to", parseAsString.withDefault(formatDateOnly(new Date())));
+  const fromValue = isDateOnlyString(from) ? from : formatDateOnly(subDays(new Date(), 6));
+  const toValue = isDateOnlyString(to) ? to : formatDateOnly(new Date());
+  const fromDate = parseDateOnly(fromValue);
+  const toDate = parseDateOnly(toValue);
 
   const accountsQuery = useQuery(trpc.adAccount.list.queryOptions());
   const adSetsQuery = useQuery(trpc.adSet.list.queryOptions());
@@ -600,10 +612,13 @@ export default function CreativesPage() {
       accountId: accountId ? accountId : undefined,
       adSetIds: adSetIds ? adSetIds.split(",") : undefined,
       teamId: teamId || undefined,
+      from: fromValue,
+      to: toValue,
     }),
   );
 
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [rowSelection, setRowSelection] = useState<Record<string, boolean>>({});
   const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>({
     angle: false,
@@ -627,23 +642,7 @@ export default function CreativesPage() {
   const creativeRows = [...(creatives.data ?? [])]
     .filter((c) => {
       if (healthValues.length === 0) return true;
-      const h = computeHealth({
-        roas: c.avgRoas ? parseFloat(c.avgRoas) : null,
-        spend: c.totalSpend ? parseFloat(c.totalSpend) : null,
-        conversions: c.totalConversions,
-        status: c.adStatus,
-        recentCtr: c.recentCtr ? parseFloat(c.recentCtr) : null,
-        avgCtr: c.avgCtr ? parseFloat(c.avgCtr) : null,
-        recentCpc: c.recentCpc ? parseFloat(c.recentCpc) : null,
-        avgCpc: c.avgCpc ? parseFloat(c.avgCpc) : null,
-        frequency: c.avgFrequency ? parseFloat(c.avgFrequency) : null,
-        recentHookRate: c.recentHookRate ? parseFloat(c.recentHookRate) : null,
-        priorHookRate: c.priorHookRate ? parseFloat(c.priorHookRate) : null,
-        recentCpa: c.recentCpa ? parseFloat(c.recentCpa) : null,
-        avgCpa: c.avgCpa ? parseFloat(c.avgCpa) : null,
-        thumbstopRatio: c.thumbstopRatio ? parseFloat(c.thumbstopRatio) : null,
-      });
-      return h != null && healthValues.includes(h);
+      return c.health != null && healthValues.includes(c.health);
     })
 ;
 
@@ -661,49 +660,26 @@ export default function CreativesPage() {
     }
   }, [selectedCreativeIds, deleteMutation]);
 
-  const exportRows = useCallback((rows: Creative[], suffix: string) => {
-    if (!rows.length) {
-      toast.error("No creatives to export");
-      return;
+  const exportFilterLabels = (() => {
+    const labels: { label: string; value: string }[] = [];
+    if (format) labels.push({ label: "Format", value: format });
+    if (awareness) labels.push({ label: "Awareness", value: awareness });
+    if (search) labels.push({ label: "Search", value: search });
+    if (accountId) {
+      const name = accountsQuery.data?.find((a) => a.id === accountId)?.name ?? accountId;
+      labels.push({ label: "Account", value: name });
     }
-    const csvColumns = [
-      "name", "destination_url", "asset_url", "video_url",
-      "format", "angle", "persona", "awareness_level", "hook", "cta",
-      "status", "account", "spend", "roas", "cpa", "ctr", "conversions", "notes",
-    ] as const;
-    const getValue = (row: Creative, col: (typeof csvColumns)[number]): string => {
-      switch (col) {
-        case "destination_url": return row.destinationUrl ?? "";
-        case "asset_url": return row.assetUrl ?? "";
-        case "video_url": return row.videoUrl ?? "";
-        case "awareness_level": return row.awarenessLevel ?? "";
-        case "status": return row.adStatus ?? "";
-        case "account": return row.accountName ?? "";
-        case "spend": return row.totalSpend ?? "";
-        case "roas": return row.avgRoas ?? "";
-        case "cpa": return row.avgCpa ?? "";
-        case "ctr": return row.avgCtr ?? "";
-        case "conversions": return row.totalConversions?.toString() ?? "";
-        default: return (row[col as keyof Creative] as string) ?? "";
-      }
-    };
-    const escape = (v: string) => `"${v.replace(/"/g, '""')}"`;
-    const lines = [
-      csvColumns.join(","),
-      ...rows.map((row) => csvColumns.map((col) => escape(getValue(row, col))).join(",")),
-    ];
-    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `creatives-${suffix}-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, []);
-
-  const handleExportFiltered = useCallback(() => {
-    exportRows(creativeRows as Creative[], "filtered");
-  }, [creativeRows, exportRows]);
+    if (teamId) {
+      const name = teamsQuery.data?.find((t) => t.id === teamId)?.name ?? teamId;
+      labels.push({ label: "Team", value: name });
+    }
+    if (adSetIds) {
+      const count = adSetIds.split(",").filter(Boolean).length;
+      labels.push({ label: "Ad sets", value: `${count} selected` });
+    }
+    if (healthFilter) labels.push({ label: "Health", value: healthFilter });
+    return labels;
+  })();
 
 
 
@@ -753,6 +729,16 @@ export default function CreativesPage() {
             className="h-8 w-full rounded-md bg-muted/40 pl-8 pr-3 text-[13px] outline-none placeholder:text-muted-foreground/30 focus:bg-muted/60 focus:ring-1 focus:ring-border transition-colors"
           />
         </div>
+        <DateRangePicker
+          from={fromDate}
+          to={toDate}
+          onChange={(range) => {
+            if (range) {
+              setFrom(formatDateOnly(range.from));
+              setTo(formatDateOnly(range.to));
+            }
+          }}
+        />
         <FilterPill
           value={format ?? "all"}
           onValueChange={(v) => setFormat(v === "all" ? null : (v as (typeof FORMATS)[number]))}
@@ -824,24 +810,9 @@ export default function CreativesPage() {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={() => exportRows(creatives.data as Creative[] ?? [], "all")} disabled={!creatives.data?.length}>
-              Export All ({creatives.data?.length ?? 0})
+            <DropdownMenuItem onClick={() => setExportOpen(true)}>
+              Export…
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleExportFiltered} disabled={!creativeRows.length}>
-              Export Filtered ({creativeRows.length})
-            </DropdownMenuItem>
-            {teamId && teamsQuery.data && (
-              <DropdownMenuItem
-                onClick={() => {
-                  const teamCreatives = (creatives.data ?? []).filter((c) => c.teamId === teamId) as Creative[];
-                  const teamName = teamsQuery.data?.find((t) => t.id === teamId)?.name ?? "team";
-                  exportRows(teamCreatives, teamName.toLowerCase().replace(/\s+/g, "_"));
-                }}
-                disabled={!creatives.data?.some((c) => c.teamId === teamId)}
-              >
-                Export {teamsQuery.data.find((t) => t.id === teamId)?.name ?? "Selected Team"}
-              </DropdownMenuItem>
-            )}
           </DropdownMenuContent>
         </DropdownMenu>
         {!isReadOnly ? (
@@ -898,6 +869,21 @@ export default function CreativesPage() {
       )}
 
       {/* Dialogs */}
+      <ExportPreviewDialog
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        filters={{
+          from: fromValue,
+          to: toValue,
+          format: format || undefined,
+          awarenessLevel: awareness || undefined,
+          search: search || undefined,
+          accountId: accountId || undefined,
+          adSetIds: adSetIds ? adSetIds.split(",") : undefined,
+          teamId: teamId || undefined,
+        }}
+        filterLabels={exportFilterLabels}
+      />
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}

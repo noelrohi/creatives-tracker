@@ -11,6 +11,8 @@ import { performanceLogs } from "@/schema/performance-log";
 import { adAccounts } from "@/schema/account";
 import { teams } from "@/schema/team";
 import { fetchMetaCreativePreview, fetchMetaCreativePreviewsForAds, fetchMetaAdPreviewUrl } from "@/lib/meta-creative-assets";
+import { computeCreativeHealthByCreativeId } from "@/lib/creative-health-rollup";
+import { fetchAgentExportRows } from "@/lib/ad-export";
 
 export const adCreativeRouter = router({
   list: orgProcedure
@@ -36,6 +38,8 @@ export const adCreativeRouter = router({
           ownership: z.enum(["ours", "theirs"]).optional(),
           teamId: z.string().optional(),
           untaggedOnly: z.boolean().optional(),
+          from: z.string().optional(),
+          to: z.string().optional(),
         })
         .optional(),
     )
@@ -74,7 +78,18 @@ export const adCreativeRouter = router({
         conditions.push(sql`(${adCreatives.format} IS NULL AND ${adCreatives.angle} IS NULL AND ${adCreatives.awarenessLevel} IS NULL)`);
       }
 
-      return db
+      const { from, to } = input ?? {};
+      const win = from && to
+        ? sql`AND pl.date_start <= ${to}::date AND pl.date_end >= ${from}::date`
+        : sql``;
+      const win2 = from && to
+        ? sql`AND pl2.date_start <= ${to}::date AND pl2.date_end >= ${from}::date`
+        : sql``;
+      const dateFilterForRollup = from && to
+        ? sql`pl.date_start <= ${to}::date AND pl.date_end >= ${from}::date`
+        : undefined;
+
+      const rows = await db
         .select({
           id: adCreatives.id,
           name: adCreatives.name,
@@ -102,18 +117,18 @@ export const adCreativeRouter = router({
           totalSpend: sql<string | null>`(
             SELECT sum(pl.spend) FROM performance_log pl
             JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id"
+            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
           )`.as("total_spend"),
           avgRoas: sql<string | null>`(
             SELECT coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0)
             FROM performance_log pl
             JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id"
+            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
           )`.as("avg_roas"),
           totalConversions: sql<number | null>`(
             SELECT sum(pl.conversions) FROM performance_log pl
             JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id"
+            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
           )`.as("total_conversions"),
           adStatus: sql<string | null>`(
             SELECT ad.status FROM ad
@@ -129,13 +144,13 @@ export const adCreativeRouter = router({
             SELECT coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0)
             FROM performance_log pl
             JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id"
+            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
           )`.as("avg_cpa"),
           avgCtr: sql<string | null>`(
             SELECT avg(pl.ctr)
             FROM performance_log pl
             JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id"
+            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
           )`.as("avg_ctr"),
           metaCampaignId: sql<string | null>`(
             SELECT c.meta_id FROM ad
@@ -161,79 +176,127 @@ export const adCreativeRouter = router({
             SELECT coalesce(sum(pl.ctr * pl.impressions), 0) / nullif(sum(pl.impressions), 0)
             FROM performance_log pl
             JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id"
+            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
               AND pl.date_start > (
                 SELECT max(pl2.date_end) - 3
                 FROM performance_log pl2 JOIN ad a2 ON a2.id = pl2.ad_id
-                WHERE a2.ad_creative_id = "ad_creative"."id"
+                WHERE a2.ad_creative_id = "ad_creative"."id" ${win2}
               )
           )`.as("recent_ctr"),
           recentCpc: sql<string | null>`(
             SELECT avg(pl.cpc)
             FROM performance_log pl
             JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id"
+            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
               AND pl.date_start > (
                 SELECT max(pl2.date_end) - 3
                 FROM performance_log pl2 JOIN ad a2 ON a2.id = pl2.ad_id
-                WHERE a2.ad_creative_id = "ad_creative"."id"
+                WHERE a2.ad_creative_id = "ad_creative"."id" ${win2}
               )
           )`.as("recent_cpc"),
           avgCpc: sql<string | null>`(
             SELECT avg(pl.cpc)
             FROM performance_log pl
             JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id"
+            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
           )`.as("avg_cpc"),
           avgFrequency: sql<string | null>`(
             SELECT avg(pl.frequency)
             FROM performance_log pl
             JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id"
+            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
           )`.as("avg_frequency"),
           recentHookRate: sql<string | null>`(
             SELECT sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0)
             FROM performance_log pl
             JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id"
+            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
               AND pl.date_start > (
                 SELECT max(pl2.date_end) - 3
                 FROM performance_log pl2 JOIN ad a2 ON a2.id = pl2.ad_id
-                WHERE a2.ad_creative_id = "ad_creative"."id"
+                WHERE a2.ad_creative_id = "ad_creative"."id" ${win2}
               )
           )`.as("recent_hook_rate"),
           priorHookRate: sql<string | null>`(
             SELECT sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0)
             FROM performance_log pl
             JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id"
+            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
               AND pl.date_end <= (
                 SELECT max(pl2.date_end) - 3
                 FROM performance_log pl2 JOIN ad a2 ON a2.id = pl2.ad_id
-                WHERE a2.ad_creative_id = "ad_creative"."id"
+                WHERE a2.ad_creative_id = "ad_creative"."id" ${win2}
               )
           )`.as("prior_hook_rate"),
           recentCpa: sql<string | null>`(
             SELECT coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0)
             FROM performance_log pl
             JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id"
+            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
               AND pl.date_start > (
                 SELECT max(pl2.date_end) - 3
                 FROM performance_log pl2 JOIN ad a2 ON a2.id = pl2.ad_id
-                WHERE a2.ad_creative_id = "ad_creative"."id"
+                WHERE a2.ad_creative_id = "ad_creative"."id" ${win2}
               )
           )`.as("recent_cpa"),
           thumbstopRatio: sql<string | null>`(
             SELECT sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0)
             FROM performance_log pl
             JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id"
+            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
           )`.as("thumbstop_ratio"),
         })
         .from(adCreatives)
         .where(conditions.length > 0 ? and(...conditions) : undefined)
         .orderBy(desc(adCreatives.createdAt));
+
+      const healthByCreative = await computeCreativeHealthByCreativeId({
+        organizationId: ctx.organizationId,
+        creativeIds: rows.map((r) => r.id),
+        dateFilter: dateFilterForRollup,
+      });
+
+      return rows.map((r) => {
+        const rollup = healthByCreative.get(r.id);
+        return {
+          ...r,
+          health: rollup?.health ?? null,
+          healthReasons: rollup?.reasons ?? [],
+        };
+      });
+    }),
+
+  exportAgentRows: orgProcedure
+    .input(
+      z.object({
+        from: z.string(),
+        to: z.string(),
+        accountId: z.string().optional(),
+        adSetIds: z.array(z.string()).optional(),
+        teamId: z.string().optional(),
+        format: z.string().optional(),
+        awarenessLevel: z.string().optional(),
+        ownership: z.enum(["ours", "theirs"]).optional(),
+        search: z.string().optional(),
+        untaggedOnly: z.boolean().optional(),
+      }),
+    )
+    .query(async ({ input, ctx }) => {
+      return fetchAgentExportRows({
+        organizationId: ctx.organizationId,
+        from: input.from,
+        to: input.to,
+        filter: {
+          accountId: input.accountId ?? null,
+          adSetIds: input.adSetIds ?? null,
+          teamId: input.teamId ?? null,
+          format: input.format ?? null,
+          awarenessLevel: input.awarenessLevel ?? null,
+          ownership: input.ownership ?? null,
+          search: input.search ?? null,
+          untaggedOnly: input.untaggedOnly ?? null,
+        },
+      });
     }),
 
   trackerList: orgProcedure
@@ -474,6 +537,19 @@ export const adCreativeRouter = router({
       `);
       const bottomPerformers = bottomResult.rows as CreativeRow[];
 
+      const leaderboardIds = Array.from(
+        new Set([
+          ...topPerformers.map((r) => r.id),
+          ...bottomPerformers.map((r) => r.id),
+          ...survivingCreatives.map((r) => r.id),
+        ]),
+      );
+      const healthByCreative = await computeCreativeHealthByCreativeId({
+        organizationId: ctx.organizationId,
+        creativeIds: leaderboardIds,
+        dateFilter,
+      });
+
       return {
         portfolio: {
           totalSpend: portfolio?.total_spend ?? null,
@@ -495,20 +571,44 @@ export const adCreativeRouter = router({
           ctr: r.ctr,
           conversions: r.total_conversions,
           adStatus: r.ad_status,
+          health: healthByCreative.get(r.id)?.health ?? null,
+          healthReasons: healthByCreative.get(r.id)?.reasons ?? [],
         })),
-        bottomPerformers: bottomPerformers.map((r) => ({
-          id: r.id,
-          name: r.name,
-          format: r.format,
-          assetUrl: r.asset_url,
-          videoUrl: r.video_url,
-          totalSpend: r.total_spend,
-          roas: r.roas,
-          cpa: r.cpa,
-          ctr: r.ctr,
-          conversions: r.total_conversions,
-          adStatus: r.ad_status,
-        })),
+        bottomPerformers: (() => {
+          const portfolioSpend = portfolio?.total_spend != null ? parseFloat(portfolio.total_spend) : 0;
+          const spendFloor = Math.max(100, portfolioSpend * 0.01);
+          return bottomPerformers
+            .map((r) => {
+              const rollup = healthByCreative.get(r.id);
+              const spend = r.total_spend != null ? parseFloat(r.total_spend) : 0;
+              const roas = r.roas != null ? parseFloat(r.roas) : 0;
+              const dollarsAtRisk = Math.max(0, spend * (1 - roas));
+              return { r, rollup, spend, dollarsAtRisk };
+            })
+            .filter(({ rollup, spend }) => {
+              if (!rollup) return false;
+              if (rollup.health !== "critical" && rollup.health !== "warning") return false;
+              if (!rollup.activeInWindow) return false;
+              if (spend < spendFloor) return false;
+              return true;
+            })
+            .sort((a, b) => b.dollarsAtRisk - a.dollarsAtRisk)
+            .map(({ r, rollup }) => ({
+              id: r.id,
+              name: r.name,
+              format: r.format,
+              assetUrl: r.asset_url,
+              videoUrl: r.video_url,
+              totalSpend: r.total_spend,
+              roas: r.roas,
+              cpa: r.cpa,
+              ctr: r.ctr,
+              conversions: r.total_conversions,
+              adStatus: r.ad_status,
+              health: rollup?.health ?? null,
+              healthReasons: rollup?.reasons ?? [],
+            }));
+        })(),
         survivingCreatives: survivingCreatives.map((r) => ({
           id: r.id,
           name: r.name,
@@ -522,6 +622,8 @@ export const adCreativeRouter = router({
           conversions: r.total_conversions,
           adStatus: r.ad_status,
           runningDays: r.running_days,
+          health: healthByCreative.get(r.id)?.health ?? null,
+          healthReasons: healthByCreative.get(r.id)?.reasons ?? [],
         })),
       };
     }),
