@@ -19,7 +19,15 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -32,6 +40,7 @@ import {
   BookOpen,
   Building2,
   ChevronDown,
+  ChevronRight,
   CirclePlus,
   Key,
   LayoutDashboard,
@@ -39,6 +48,7 @@ import {
   Upload,
   Image,
   Settings,
+  TrendingUp,
   Users,
   Pencil,
   Plus,
@@ -55,8 +65,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DeleteOrganizationDialog } from "@/components/delete-organization-dialog";
 
+const dashboardSubItems = [
+  { label: "Overview", href: "/", icon: LayoutDashboard },
+  { label: "MER", href: "/mer", icon: TrendingUp },
+];
+
 const navItems = [
-  { label: "Dashboard", href: "/", icon: LayoutDashboard },
   { label: "Creatives", href: "/creatives", icon: Image },
   { label: "Teams", href: "/teams", icon: Users },
   { label: "Accounts", href: "/accounts", icon: Settings },
@@ -281,16 +295,51 @@ export function AppSidebar() {
                 </SidebarMenuItem>
               </SidebarMenu>
               <SidebarMenu>
+                <Collapsible
+                  defaultOpen
+                  className="group/collapsible"
+                >
+                  <SidebarMenuItem>
+                    <CollapsibleTrigger asChild>
+                      <SidebarMenuButton
+                        tooltip="Dashboard"
+                        isActive={
+                          pathname === "/" || pathname.startsWith("/mer")
+                        }
+                      >
+                        <LayoutDashboard />
+                        <span>Dashboard</span>
+                        <ChevronRight className="ml-auto size-4 transition-transform group-data-[state=open]/collapsible:rotate-90" />
+                      </SidebarMenuButton>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <SidebarMenuSub>
+                        {dashboardSubItems.map((sub) => {
+                          const isActive =
+                            sub.href === "/"
+                              ? pathname === "/"
+                              : pathname === sub.href || pathname.startsWith(`${sub.href}/`);
+                          return (
+                            <SidebarMenuSubItem key={sub.href}>
+                              <SidebarMenuSubButton asChild isActive={isActive}>
+                                <Link href={sub.href}>
+                                  <sub.icon />
+                                  <span>{sub.label}</span>
+                                </Link>
+                              </SidebarMenuSubButton>
+                            </SidebarMenuSubItem>
+                          );
+                        })}
+                      </SidebarMenuSub>
+                    </CollapsibleContent>
+                  </SidebarMenuItem>
+                </Collapsible>
                 {visibleNavItems.map((item) => (
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton
                       asChild
                       tooltip={item.label}
-                      isActive={
-                        item.href === "/"
-                          ? pathname === "/"
-                          : pathname.startsWith(item.href)
-                      }
+                      isActive={pathname.startsWith(item.href)}
                     >
                       <Link href={item.href}>
                         <item.icon />

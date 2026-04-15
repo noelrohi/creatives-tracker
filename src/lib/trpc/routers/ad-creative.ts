@@ -629,9 +629,11 @@ export const adCreativeRouter = router({
         ? sql`AND ac.team_id = ${input.teamId}`
         : sql``;
 
-      const dateFilter = input?.from && input?.to
-        ? sql`pl.date_start <= ${input.to}::date AND pl.date_end >= ${input.from}::date`
-        : sql`pl.date_start <= current_date AND pl.date_end >= current_date - 7`;
+      const today = new Date();
+      const defaultTo = today.toISOString().slice(0, 10);
+      const defaultFrom = new Date(today.getTime() - 7 * 86400000).toISOString().slice(0, 10);
+      const fromStr = input?.from ?? defaultFrom;
+      const toStr = input?.to ?? defaultTo;
 
       type DailyRow = {
         date_start: string;
@@ -649,30 +651,57 @@ export const adCreativeRouter = router({
       };
 
       const result = await db.execute(sql`
+        WITH days AS (
+          SELECT generate_series(${fromStr}::date, ${toStr}::date, '1 day'::interval)::date AS day
+        ),
+        daily AS (
+          SELECT
+            d.day,
+            sum(pl.spend / GREATEST((pl.date_end - pl.date_start + 1), 1)) AS spend,
+            sum(pl.purchase_value / GREATEST((pl.date_end - pl.date_start + 1), 1)) AS purchase_value,
+            sum(pl.conversions::numeric / GREATEST((pl.date_end - pl.date_start + 1), 1)) AS conversions,
+            sum(pl.impressions::numeric / GREATEST((pl.date_end - pl.date_start + 1), 1)) AS impressions,
+            sum(pl.reach::numeric / GREATEST((pl.date_end - pl.date_start + 1), 1)) AS reach,
+            sum(pl.ctr * pl.impressions / GREATEST((pl.date_end - pl.date_start + 1), 1)) AS ctr_weighted,
+            sum(pl.link_clicks::numeric / GREATEST((pl.date_end - pl.date_start + 1), 1)) AS link_clicks
+          FROM days d
+          JOIN performance_log pl ON d.day BETWEEN pl.date_start AND pl.date_end
+          JOIN ad ON ad.id = pl.ad_id
+          JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+          WHERE ad.organization_id = ${ctx.organizationId}
+            ${accountFilter} ${ownershipFilter} ${teamFilter}
+          GROUP BY d.day
+        )
         SELECT
-          pl.date_start::text as date_start,
-          pl.date_end::text as date_end,
-          sum(pl.spend)::text as spend,
-          sum(pl.purchase_value)::text as purchase_value,
-          (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text as roas,
-          (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as cpa,
-          (coalesce(sum(pl.ctr * pl.impressions), 0) / nullif(sum(pl.impressions), 0))::text as ctr,
-          sum(pl.conversions)::int as conversions,
-          sum(pl.impressions)::int as impressions,
-          sum(pl.reach)::int as reach,
-          (case when sum(pl.impressions) > 0 then (sum(pl.spend) / sum(pl.impressions)) * 1000 else null end)::text as cpm,
-          sum(pl.link_clicks)::int as link_clicks
-        FROM performance_log pl
-        JOIN ad ON ad.id = pl.ad_id
-        JOIN ad_creative ac ON ac.id = ad.ad_creative_id
-        WHERE ${dateFilter}
-          AND ad.organization_id = ${ctx.organizationId}
-          ${accountFilter} ${ownershipFilter} ${teamFilter}
-        GROUP BY pl.date_start, pl.date_end
-        ORDER BY pl.date_start
+          d.day::text as date_start,
+          d.day::text as date_end,
+          COALESCE(daily.spend, 0)::text as spend,
+          COALESCE(daily.purchase_value, 0)::text as purchase_value,
+          (COALESCE(daily.purchase_value, 0) / nullif(daily.spend, 0))::text as roas,
+          (COALESCE(daily.spend, 0) / nullif(daily.conversions, 0))::text as cpa,
+          (COALESCE(daily.ctr_weighted, 0) / nullif(daily.impressions, 0))::text as ctr,
+          COALESCE(daily.conversions, 0)::int as conversions,
+          COALESCE(daily.impressions, 0)::int as impressions,
+          COALESCE(daily.reach, 0)::int as reach,
+          (CASE WHEN daily.impressions > 0 THEN (daily.spend / daily.impressions) * 1000 ELSE NULL END)::text as cpm,
+          COALESCE(daily.link_clicks, 0)::int as link_clicks
+        FROM days d
+        LEFT JOIN daily ON daily.day = d.day
+        ORDER BY d.day
       `);
 
-      return (result.rows as DailyRow[]).map((r) => ({
+      const rows = result.rows as DailyRow[];
+      let lastWithSpend = -1;
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const s = rows[i].spend ? parseFloat(rows[i].spend!) : 0;
+        if (s > 0) {
+          lastWithSpend = i;
+          break;
+        }
+      }
+      const trimmed = lastWithSpend >= 0 ? rows.slice(0, lastWithSpend + 1) : rows;
+
+      return trimmed.map((r) => ({
         dateStart: r.date_start,
         dateEnd: r.date_end,
         spend: r.spend,
@@ -686,6 +715,142 @@ export const adCreativeRouter = router({
         cpm: r.cpm,
         linkClicks: r.link_clicks,
       }));
+    }),
+
+  getMerAccountBreakdown: orgProcedure
+    .meta(openApiQueryMeta("adCreative", "getMerAccountBreakdown"))
+    .input(
+      z.object({
+        from: z.string(),
+        to: z.string(),
+        teamId: z.string().optional(),
+      }),
+    )
+    .query(async ({ input, ctx }) => {
+      const teamFilter = input.teamId
+        ? sql`AND ac.team_id = ${input.teamId}`
+        : sql``;
+
+      type Row = {
+        account_id: string;
+        account_name: string;
+        spend: string | null;
+        revenue: string | null;
+        roas: string | null;
+        prior_spend: string | null;
+        prior_roas: string | null;
+        sparkline: Array<{ date: string; spend: number; revenue: number; roas: number | null }> | null;
+      };
+
+      const result = await db.execute(sql`
+        WITH current_period AS (
+          SELECT
+            ad.account_id,
+            sum(pl.spend) as spend,
+            sum(pl.purchase_value) as revenue,
+            (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0)) as roas
+          FROM performance_log pl
+          JOIN ad ON ad.id = pl.ad_id
+          JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+          WHERE pl.date_start <= ${input.to}::date
+            AND pl.date_end >= ${input.from}::date
+            AND ad.organization_id = ${ctx.organizationId}
+            ${teamFilter}
+          GROUP BY ad.account_id
+        ),
+        prior_period AS (
+          SELECT
+            ad.account_id,
+            sum(pl.spend) as prior_spend,
+            (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0)) as prior_roas
+          FROM performance_log pl
+          JOIN ad ON ad.id = pl.ad_id
+          JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+          WHERE pl.date_start <= (${input.from}::date - 1)
+            AND pl.date_end >= (${input.from}::date - (${input.to}::date - ${input.from}::date + 1))
+            AND ad.organization_id = ${ctx.organizationId}
+            ${teamFilter}
+          GROUP BY ad.account_id
+        ),
+        days AS (
+          SELECT generate_series(${input.from}::date, ${input.to}::date, '1 day'::interval)::date AS day
+        ),
+        daily_per_account AS (
+          SELECT
+            ad.account_id,
+            d.day,
+            sum(pl.spend / GREATEST((pl.date_end - pl.date_start + 1), 1)) AS spend,
+            sum(pl.purchase_value / GREATEST((pl.date_end - pl.date_start + 1), 1)) AS revenue
+          FROM days d
+          JOIN performance_log pl ON d.day BETWEEN pl.date_start AND pl.date_end
+          JOIN ad ON ad.id = pl.ad_id
+          JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+          WHERE ad.organization_id = ${ctx.organizationId}
+            ${teamFilter}
+          GROUP BY ad.account_id, d.day
+        ),
+        sparkline_rows AS (
+          SELECT
+            acc.id AS account_id,
+            json_agg(json_build_object(
+              'date', d.day::text,
+              'spend', COALESCE(dpa.spend, 0)::float,
+              'revenue', COALESCE(dpa.revenue, 0)::float,
+              'roas', (COALESCE(dpa.revenue, 0) / nullif(dpa.spend, 0))::float
+            ) ORDER BY d.day) AS points
+          FROM ad_account acc
+          CROSS JOIN days d
+          LEFT JOIN daily_per_account dpa ON dpa.account_id = acc.id AND dpa.day = d.day
+          WHERE acc.organization_id = ${ctx.organizationId}
+          GROUP BY acc.id
+        )
+        SELECT
+          acc.id as account_id,
+          acc.name as account_name,
+          cp.spend::text as spend,
+          cp.revenue::text as revenue,
+          cp.roas::text as roas,
+          pp.prior_spend::text as prior_spend,
+          pp.prior_roas::text as prior_roas,
+          COALESCE(s.points, '[]'::json) as sparkline
+        FROM ad_account acc
+        JOIN current_period cp ON cp.account_id = acc.id
+        LEFT JOIN prior_period pp ON pp.account_id = acc.id
+        LEFT JOIN sparkline_rows s ON s.account_id = acc.id
+        WHERE acc.organization_id = ${ctx.organizationId}
+        ORDER BY cp.spend DESC NULLS LAST
+      `);
+
+      return (result.rows as Row[]).map((r) => {
+        const spend = r.spend ? parseFloat(r.spend) : null;
+        const roas = r.roas ? parseFloat(r.roas) : null;
+        const priorSpend = r.prior_spend ? parseFloat(r.prior_spend) : null;
+        const priorRoas = r.prior_roas ? parseFloat(r.prior_roas) : null;
+        const spendDelta = spend != null && priorSpend != null ? spend - priorSpend : null;
+        const roasDelta = roas != null && priorRoas != null ? roas - priorRoas : null;
+        return {
+          accountId: r.account_id,
+          accountName: r.account_name,
+          spend: r.spend,
+          revenue: r.revenue,
+          roas: r.roas,
+          priorSpend: r.prior_spend,
+          priorRoas: r.prior_roas,
+          spendDelta: spendDelta != null ? String(spendDelta) : null,
+          roasDelta: roasDelta != null ? String(roasDelta) : null,
+          sparkline: (() => {
+            const points = r.sparkline ?? [];
+            let last = -1;
+            for (let i = points.length - 1; i >= 0; i--) {
+              if ((points[i]?.spend ?? 0) > 0) {
+                last = i;
+                break;
+              }
+            }
+            return last >= 0 ? points.slice(0, last + 1) : points;
+          })(),
+        };
+      });
     }),
 
   getById: orgProcedure

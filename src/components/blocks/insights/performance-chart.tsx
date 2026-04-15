@@ -41,10 +41,12 @@ interface PerformanceLog {
 interface PerformanceChartProps {
   logs: PerformanceLog[];
   compact?: boolean;
+  defaultMetric?: MetricKey;
+  lockMetric?: boolean;
 }
 
-export function PerformanceChart({ logs, compact }: PerformanceChartProps) {
-  const [activeMetric, setActiveMetric] = useState<MetricKey>("spend");
+export function PerformanceChart({ logs, compact, defaultMetric = "spend", lockMetric = false }: PerformanceChartProps) {
+  const [activeMetric, setActiveMetric] = useState<MetricKey>(defaultMetric);
 
   const chartData = useMemo(() => {
     const byDate = new Map<string, {
@@ -113,7 +115,7 @@ export function PerformanceChart({ logs, compact }: PerformanceChartProps) {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap gap-1">
+      <div className={`flex flex-wrap gap-1 ${lockMetric ? "hidden" : ""}`}>
         {availableMetrics.map((m) => (
           <button
             key={m.key}
