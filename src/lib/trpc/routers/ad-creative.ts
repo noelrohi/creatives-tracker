@@ -825,11 +825,18 @@ export const adCreativeRouter = router({
         from: z.string(),
         to: z.string(),
         teamId: z.string().optional(),
+        accountId: z.string().optional(),
       }),
     )
     .query(async ({ input, ctx }) => {
       const teamFilter = input.teamId
         ? sql`AND ac.team_id = ${input.teamId}`
+        : sql``;
+      const accountFilterAd = input.accountId
+        ? sql`AND ad.account_id = ${input.accountId}`
+        : sql``;
+      const accountFilterAcc = input.accountId
+        ? sql`AND acc.id = ${input.accountId}`
         : sql``;
 
       type Row = {
@@ -857,6 +864,7 @@ export const adCreativeRouter = router({
             AND pl.date_end >= ${input.from}::date
             AND ad.organization_id = ${ctx.organizationId}
             ${teamFilter}
+            ${accountFilterAd}
           GROUP BY ad.account_id
         ),
         prior_period AS (
@@ -871,6 +879,7 @@ export const adCreativeRouter = router({
             AND pl.date_end >= (${input.from}::date - (${input.to}::date - ${input.from}::date + 1))
             AND ad.organization_id = ${ctx.organizationId}
             ${teamFilter}
+            ${accountFilterAd}
           GROUP BY ad.account_id
         ),
         days AS (
@@ -888,6 +897,7 @@ export const adCreativeRouter = router({
           JOIN ad_creative ac ON ac.id = ad.ad_creative_id
           WHERE ad.organization_id = ${ctx.organizationId}
             ${teamFilter}
+            ${accountFilterAd}
           GROUP BY ad.account_id, d.day
         ),
         sparkline_rows AS (
@@ -903,6 +913,7 @@ export const adCreativeRouter = router({
           CROSS JOIN days d
           LEFT JOIN daily_per_account dpa ON dpa.account_id = acc.id AND dpa.day = d.day
           WHERE acc.organization_id = ${ctx.organizationId}
+            ${accountFilterAcc}
           GROUP BY acc.id
         )
         SELECT
@@ -919,6 +930,7 @@ export const adCreativeRouter = router({
         LEFT JOIN prior_period pp ON pp.account_id = acc.id
         LEFT JOIN sparkline_rows s ON s.account_id = acc.id
         WHERE acc.organization_id = ${ctx.organizationId}
+          ${accountFilterAcc}
         ORDER BY cp.spend DESC NULLS LAST
       `);
 

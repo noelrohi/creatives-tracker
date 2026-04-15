@@ -54,22 +54,26 @@ export default function MerPage() {
   const canManageData = role !== "member";
 
   const [teamId, setTeamId] = useQueryState("team", parseAsString.withDefault(""));
+  const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
   const [to, setTo] = useQueryState("to", parseAsString.withDefault(formatDateOnly(new Date())));
 
   const selectedTeamId = teamId || undefined;
+  const selectedAccountId = accountId || undefined;
   const fromValue = isDateOnlyString(from) ? from : formatDateOnly(subDays(new Date(), 6));
   const toValue = isDateOnlyString(to) ? to : formatDateOnly(new Date());
   const fromDate = parseDateOnly(fromValue);
   const toDate = parseDateOnly(toValue);
 
   const teamsQuery = useQuery(trpc.team.list.queryOptions());
+  const accountsQuery = useQuery(trpc.adAccount.list.queryOptions());
 
   const stats = useQuery(
     trpc.adCreative.dashboardStats.queryOptions({
       from: fromValue,
       to: toValue,
       teamId: selectedTeamId,
+      accountId: selectedAccountId,
     }),
   );
 
@@ -78,6 +82,7 @@ export default function MerPage() {
       from: fromValue,
       to: toValue,
       teamId: selectedTeamId,
+      accountId: selectedAccountId,
     }),
   );
 
@@ -86,6 +91,7 @@ export default function MerPage() {
       from: fromValue,
       to: toValue,
       teamId: selectedTeamId,
+      accountId: selectedAccountId,
     }),
   );
 
@@ -124,6 +130,19 @@ export default function MerPage() {
               }
             }}
           />
+          {accountsQuery.data && accountsQuery.data.length > 0 && (
+            <Select value={accountId || "all"} onValueChange={(v) => setAccountId(v === "all" ? "" : v)}>
+              <SelectTrigger className="h-7 w-auto gap-1 text-[13px]">
+                <SelectValue placeholder="All accounts" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All accounts</SelectItem>
+                {accountsQuery.data.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           {teamsQuery.data && teamsQuery.data.length > 0 && (
             <Select value={teamId || "all"} onValueChange={(v) => setTeamId(v === "all" ? "" : v)}>
               <SelectTrigger className="h-7 w-auto gap-1 text-[13px]">
