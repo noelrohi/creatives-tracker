@@ -531,9 +531,10 @@ export const adCreativeRouter = router({
         JOIN performance_log pl ON pl.ad_id = ad.id
         WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter} ${teamFilter} ${topExclude}
         GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
-        HAVING sum(pl.spend) >= 50
-        ORDER BY sum(pl.conversions) ASC NULLS FIRST, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) ASC NULLS FIRST
-        LIMIT 10
+        HAVING sum(pl.spend) >= 100
+          AND coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) < 1
+        ORDER BY sum(pl.spend) * (1 - coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0)) DESC NULLS LAST
+        LIMIT 30
       `);
       const bottomPerformers = bottomResult.rows as CreativeRow[];
 
@@ -575,8 +576,6 @@ export const adCreativeRouter = router({
           healthReasons: healthByCreative.get(r.id)?.reasons ?? [],
         })),
         bottomPerformers: (() => {
-          const portfolioSpend = portfolio?.total_spend != null ? parseFloat(portfolio.total_spend) : 0;
-          const spendFloor = Math.max(100, portfolioSpend * 0.01);
           return bottomPerformers
             .map((r) => {
               const rollup = healthByCreative.get(r.id);
@@ -585,14 +584,14 @@ export const adCreativeRouter = router({
               const dollarsAtRisk = Math.max(0, spend * (1 - roas));
               return { r, rollup, spend, dollarsAtRisk };
             })
-            .filter(({ rollup, spend }) => {
+            .filter(({ rollup }) => {
               if (!rollup) return false;
               if (rollup.health !== "critical" && rollup.health !== "warning") return false;
               if (!rollup.activeInWindow) return false;
-              if (spend < spendFloor) return false;
               return true;
             })
             .sort((a, b) => b.dollarsAtRisk - a.dollarsAtRisk)
+            .slice(0, 10)
             .map(({ r, rollup }) => ({
               id: r.id,
               name: r.name,
