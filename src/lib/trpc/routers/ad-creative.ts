@@ -591,7 +591,7 @@ export const adCreativeRouter = router({
               return true;
             })
             .sort((a, b) => b.dollarsAtRisk - a.dollarsAtRisk)
-            .slice(0, 20)
+            .slice(0, 10)
             .map(({ r, rollup }) => ({
               id: r.id,
               name: r.name,
