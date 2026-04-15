@@ -1,14 +1,14 @@
 "use client";
 
 import { useState, use } from "react";
-import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { subDays } from "date-fns";
 import { useQueryState, parseAsString } from "nuqs";
 import { toast } from "sonner";
-import { ArrowLeft, Database, DollarSign, ShieldCheck, Target, Trophy, TrendingUp, Wrench } from "lucide-react";
+import { Database, DollarSign, ShieldCheck, Target, Trophy, TrendingUp, Wrench } from "lucide-react";
 import { useTRPC } from "@/lib/trpc/client";
 import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role";
+import { useBreadcrumbs } from "@/components/breadcrumbs";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -84,6 +84,11 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
   const accounts = useQuery(trpc.adAccount.list.queryOptions());
   const account = accounts.data?.find((a) => a.id === id);
 
+  useBreadcrumbs([
+    { label: "MER", href: `/mer?from=${fromValue}&to=${toValue}` },
+    { label: account?.name ?? "Account" },
+  ]);
+
   const stats = useQuery(
     trpc.adCreative.dashboardStats.queryOptions({
       from: fromValue,
@@ -125,11 +130,6 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
     <div className="flex flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <Button variant="ghost" size="sm" asChild className="mb-2 -ml-2 h-7 gap-1 text-xs text-muted-foreground">
-            <Link href={`/mer?from=${fromValue}&to=${toValue}`}>
-              <ArrowLeft className="size-3" /> Back to MER
-            </Link>
-          </Button>
           {accounts.isLoading ? (
             <Skeleton className="h-6 w-48" />
           ) : (

@@ -110,11 +110,8 @@ export default function MerPage() {
     <div className="flex flex-col gap-4">
       {/* Single-line header */}
       <div className="flex items-center justify-between gap-4">
-        <div className="flex items-baseline gap-2 min-w-0">
-          <h1 className="text-base font-semibold tracking-tight">MER</h1>
-          <span className="text-[11px] text-muted-foreground/50 truncate">
-            Marketing Efficiency · Meta only
-          </span>
+        <div className="min-w-0">
+          <h1 className="text-base font-semibold tracking-tight">Marketing Efficiency Ratio</h1>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <DateRangePicker
