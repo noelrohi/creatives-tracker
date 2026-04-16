@@ -10,10 +10,10 @@ import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
 import { performanceLogs } from "@/schema/performance-log";
 import { adAccounts } from "@/schema/account";
-import { teams } from "@/schema/team";
 import { fetchMetaCreativePreview, fetchMetaCreativePreviewsForAds, fetchMetaAdPreviewUrl } from "@/lib/meta-creative-assets";
 import { computeCreativeHealthByCreativeId } from "@/lib/creative-health-rollup";
 import { fetchAgentExportRows } from "@/lib/ad-export";
+import { normalizeImportedAdStatus } from "@/lib/ad-status";
 
 export const adCreativeRouter = router({
   list: orgProcedure
@@ -1262,12 +1262,6 @@ export const adCreativeRouter = router({
       const normalizeDimension = (value?: string | null) => value?.trim() || "";
       const normalizeDateValue = (value: string | Date) =>
         typeof value === "string" ? value : value.toISOString().slice(0, 10);
-      const normalizeStatus = (delivery?: string) =>
-        delivery === "active"
-          ? "active" as const
-          : delivery === "inactive" || delivery === "not_delivering"
-            ? "paused" as const
-            : "active" as const;
       const buildPerfRowKey = (row: {
         adId: string;
         dateStart: string | Date;
@@ -1738,7 +1732,7 @@ export const adCreativeRouter = router({
             name: info.name,
             adSetId: info.adSetDbId,
             adCreativeId: creativeIdByName.get(info.name),
-            status: normalizeStatus(info.delivery),
+            status: normalizeImportedAdStatus(info.delivery),
             metaId: info.metaAdId,
             destinationUrl: info.destinationUrl,
             caption: info.caption,
@@ -1758,7 +1752,7 @@ export const adCreativeRouter = router({
         const info = adInfoMap.get(key)!;
         await db.update(ads).set({
           name: info.name,
-          status: normalizeStatus(info.delivery),
+          status: normalizeImportedAdStatus(info.delivery),
           ...(creativeIdByName.get(info.name) ? { adCreativeId: creativeIdByName.get(info.name) } : {}),
           ...(info.adSetDbId ? { adSetId: info.adSetDbId } : {}),
           ...(info.metaAdId ? { metaId: info.metaAdId } : {}),

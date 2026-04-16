@@ -7,6 +7,7 @@ import { db } from "@/db";
 import { adAccounts } from "@/schema/account";
 import { mapMetaInsightsToRows } from "@/lib/meta-api-mapper";
 import { fetchMetaCreativePreviewsForAds } from "@/lib/meta-creative-assets";
+import { resolveMetaDeliveryStatus } from "@/lib/ad-status";
 
 const GRAPH_API_VERSION = "v22.0";
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
@@ -35,6 +36,11 @@ const INSIGHT_FIELDS = [
   "video_play_actions",
   "video_thruplay_watched_actions",
   "video_avg_time_watched_actions",
+].join(",");
+
+const META_AD_STATUS_FIELDS = [
+  "effective_status",
+  "configured_status",
 ].join(",");
 
 const breakdownEnum = z.enum([
@@ -92,6 +98,54 @@ function handleMetaError(response: { status: number; statusText: string }, error
     code: "INTERNAL_SERVER_ERROR",
     message: `Meta API error: ${metaError?.message ?? response.statusText}`,
   });
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const batches: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    batches.push(items.slice(i, i + size));
+  }
+  return batches;
+}
+
+async function fetchMetaAdDeliveryById(input: {
+  adMetaIds: string[];
+  accessToken: string;
+}) {
+  const deliveries = new Map<string, string>();
+
+  for (const batch of chunk(input.adMetaIds, 100)) {
+    const params = new URLSearchParams({
+      access_token: input.accessToken,
+      ids: batch.join(","),
+      fields: META_AD_STATUS_FIELDS,
+    });
+
+    const response: Response = await fetch(`${GRAPH_API_BASE}/?${params.toString()}`);
+
+    if (!response.ok) {
+      const errorBody = await response.json().catch(() => null);
+      handleMetaError(response, errorBody);
+    }
+
+    const json = await response.json() as Record<string, {
+      effective_status?: string;
+      configured_status?: string;
+    }>;
+
+    for (const adMetaId of batch) {
+      const status = json[adMetaId];
+      const delivery = resolveMetaDeliveryStatus({
+        effectiveStatus: status?.effective_status,
+        configuredStatus: status?.configured_status,
+      });
+      if (delivery) {
+        deliveries.set(adMetaId, delivery);
+      }
+    }
+  }
+
+  return deliveries;
 }
 
 export const metaInsightsRouter = router({
@@ -211,13 +265,22 @@ export const metaInsightsRouter = router({
       }
 
       const mapperLevel = input.level === "adset" ? "ad_set" : input.level;
+      const adMetaIds = input.level === "ad"
+        ? [...new Set(allData.map((row) => row.ad_id).filter(Boolean) as string[])]
+        : [];
+      const deliveryByAdId = adMetaIds.length > 0
+        ? await fetchMetaAdDeliveryById({
+            adMetaIds,
+            accessToken: account.metaAccessToken,
+          })
+        : undefined;
       const rows = mapMetaInsightsToRows(
         allData,
         mapperLevel as "campaign" | "ad_set" | "ad",
+        { deliveryByAdId },
       );
 
       if (input.level === "ad") {
-        const adMetaIds = [...new Set(rows.map((row) => row.adId).filter(Boolean) as string[])];
         if (adMetaIds.length > 0) {
           const previews = await fetchMetaCreativePreviewsForAds({
             adMetaIds,

@@ -49,6 +49,9 @@ function findAction(actions: MetaAction[] | undefined, type: string): string | u
 export function mapMetaInsightsToRows(
   data: MetaInsightRow[],
   level: "campaign" | "ad_set" | "ad",
+  options?: {
+    deliveryByAdId?: Map<string, string>;
+  },
 ): MappedRow[] {
   return data.map((row) => {
     const spend = row.spend;
@@ -86,7 +89,7 @@ export function mapMetaInsightsToRows(
       adSetName: row.adset_name,
       adSetId: row.adset_id,
       adId: row.ad_id,
-      delivery: "active",
+      delivery: row.ad_id ? options?.deliveryByAdId?.get(row.ad_id) : undefined,
       spend,
       roas,
       cpa,
