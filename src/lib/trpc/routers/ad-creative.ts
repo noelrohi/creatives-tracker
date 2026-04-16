@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { eq, ne, or, isNull, desc, ilike, and, inArray, sql, type SQL } from "drizzle-orm";
 import { router, orgProcedure, orgWriteProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
@@ -71,7 +72,9 @@ export const adCreativeRouter = router({
           conditions.push(eq(adCreatives.ownership, input.ownership));
         }
       }
-      if (input?.teamId) {
+      if (input?.teamId === "none") {
+        conditions.push(isNull(adCreatives.teamId));
+      } else if (input?.teamId) {
         conditions.push(eq(adCreatives.teamId, input.teamId));
       }
       if (input?.untaggedOnly) {
@@ -325,7 +328,9 @@ export const adCreativeRouter = router({
           conditions.push(eq(adCreatives.ownership, input.ownership));
         }
       }
-      if (input?.teamId) {
+      if (input?.teamId === "none") {
+        conditions.push(isNull(adCreatives.teamId));
+      } else if (input?.teamId) {
         conditions.push(eq(adCreatives.teamId, input.teamId));
       }
       // Performance rows can be stored as multi-day windows (for example a
@@ -1118,6 +1123,7 @@ export const adCreativeRouter = router({
         .set(data)
         .where(and(eq(adCreatives.id, id), eq(adCreatives.organizationId, ctx.organizationId)))
         .returning();
+      if (!creative) throw new TRPCError({ code: "NOT_FOUND", message: "Ad creative not found" });
       return creative;
     }),
 

@@ -775,6 +775,7 @@ export default function CreativesPage() {
             placeholder="Team"
             options={[
               { label: "All Teams", value: "all" },
+              { label: "No Team", value: "none" },
               ...teamsQuery.data.map((t) => ({ label: t.name, value: t.id })),
             ]}
           />
