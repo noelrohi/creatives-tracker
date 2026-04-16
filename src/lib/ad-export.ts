@@ -295,7 +295,7 @@ export async function fetchAgentExportRows(opts: {
         ac.awareness_level::text AS awareness_level,
         ac.hook AS hook,
         ac.cta AS cta,
-        ac.destination_url AS creative_destination_url,
+        NULL::text AS creative_destination_url,
         ac.asset_url AS asset_url,
         ac.video_url AS video_url,
 
