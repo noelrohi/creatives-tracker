@@ -16,6 +16,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 function fmt(
   value: string | number | null | undefined,
@@ -113,21 +118,36 @@ export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
                   </Badge>
                 </div>
               </td>
-              <td className="max-w-[140px] truncate px-3 py-2 text-muted-foreground/60">
-                {ad.campaignName ?? "—"}
+              <td className="max-w-[140px] px-3 py-2 text-muted-foreground/60">
+                {ad.campaignName ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="block truncate">{ad.campaignName}</span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs">
+                      {ad.campaignName}
+                    </TooltipContent>
+                  </Tooltip>
+                ) : "—"}
               </td>
               <td className="max-w-[180px] px-3 py-2">
                 {ad.destinationUrl ? (
-                  <a
-                    href={ad.destinationUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-1 text-muted-foreground/60 hover:text-foreground transition-colors"
-                    title={ad.destinationUrl}
-                  >
-                    <span className="truncate">{new URL(ad.destinationUrl).hostname.replace(/^www\./, "")}{new URL(ad.destinationUrl).pathname !== "/" ? new URL(ad.destinationUrl).pathname : ""}</span>
-                    <ExternalLink className="size-3 shrink-0" />
-                  </a>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <a
+                        href={ad.destinationUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1 text-muted-foreground/60 hover:text-foreground transition-colors"
+                      >
+                        <span className="truncate">{new URL(ad.destinationUrl).pathname !== "/" ? new URL(ad.destinationUrl).pathname : "/"}</span>
+                        <ExternalLink className="size-3 shrink-0" />
+                      </a>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs">
+                      {ad.destinationUrl}
+                    </TooltipContent>
+                  </Tooltip>
                 ) : (
                   <span className="text-muted-foreground/30">—</span>
                 )}
