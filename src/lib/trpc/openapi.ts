@@ -732,7 +732,7 @@ export async function callOpenApiProcedure(
         ? await (procedureCaller as () => Promise<unknown>)()
         : await (procedureCaller as (value: unknown) => Promise<unknown>)(input);
 
-    return Response.json(result);
+    return Response.json(result ?? null);
   } catch (error) {
     if (error instanceof TRPCError) {
       return Response.json(

@@ -1359,7 +1359,7 @@ export const adCreativeRouter = router({
           if (!row.format && preview.format) {
             row.format = preview.format;
           }
-          if (!row.destinationUrl && preview.destinationUrl) {
+          if (preview.destinationUrl) {
             row.destinationUrl = preview.destinationUrl;
           }
           if (preview.caption) {
