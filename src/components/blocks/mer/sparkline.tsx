@@ -5,8 +5,8 @@ import { Line, LineChart, ResponsiveContainer, YAxis } from "recharts";
 interface SparklineProps {
   data: Array<{ date: string; value: number | null }>;
   color?: string;
-  width?: number;
-  height?: number;
+  width?: number | string;
+  height?: number | string;
 }
 
 export function Sparkline({ data, color = "hsl(160, 84%, 39%)", width = 80, height = 24 }: SparklineProps) {

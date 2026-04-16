@@ -98,10 +98,55 @@ export default function MerPage() {
   const portfolio = stats.data?.portfolio;
   const bottomPerformers = stats.data?.bottomPerformers ?? [];
 
+  const sparks = (() => {
+    const rows = dailyPerf.data ?? [];
+    const revenue: Array<{ date: string; value: number | null }> = [];
+    const spend: Array<{ date: string; value: number | null }> = [];
+    const mer: Array<{ date: string; value: number | null }> = [];
+    for (const r of rows) {
+      const rev = r.purchaseValue != null ? parseFloat(r.purchaseValue) : null;
+      const sp = r.spend != null ? parseFloat(r.spend) : null;
+      revenue.push({ date: r.dateStart, value: rev });
+      spend.push({ date: r.dateStart, value: sp });
+      mer.push({ date: r.dateStart, value: sp && sp > 0 && rev != null ? rev / sp : null });
+    }
+    return { revenue, spend, mer };
+  })();
+
+  const deltaPct = (series: Array<{ value: number | null }>): number | null => {
+    const vals = series.map((s) => s.value).filter((v): v is number => v != null);
+    if (vals.length < 2) return null;
+    const mid = Math.floor(vals.length / 2);
+    const a = vals.slice(0, mid);
+    const b = vals.slice(mid);
+    const avgA = a.reduce((s, v) => s + v, 0) / a.length;
+    const avgB = b.reduce((s, v) => s + v, 0) / b.length;
+    if (avgA === 0) return null;
+    return ((avgB - avgA) / avgA) * 100;
+  };
+
   const kpis = [
-    { label: "MER", value: fmtRoas(portfolio?.roas), tone: "violet" },
-    { label: "Revenue", value: fmtMoney(portfolio?.totalRevenue), tone: "emerald" },
-    { label: "Spend", value: fmtMoney(portfolio?.totalSpend), tone: "blue" },
+    {
+      label: "MER",
+      value: fmtRoas(portfolio?.roas),
+      color: "hsl(38, 92%, 50%)",
+      data: sparks.mer,
+      delta: deltaPct(sparks.mer),
+    },
+    {
+      label: "Revenue",
+      value: fmtMoney(portfolio?.totalRevenue),
+      color: "hsl(160, 84%, 39%)",
+      data: sparks.revenue,
+      delta: deltaPct(sparks.revenue),
+    },
+    {
+      label: "Spend",
+      value: fmtMoney(portfolio?.totalSpend),
+      color: "hsl(262, 83%, 58%)",
+      data: sparks.spend,
+      delta: deltaPct(sparks.spend),
+    },
   ];
 
   const accountLinkParams = (accountId: string) => {
@@ -162,21 +207,50 @@ export default function MerPage() {
       {/* KPI rail + chart, side-by-side */}
       <div className="grid gap-3 lg:grid-cols-[240px_1fr]">
         <div className="flex flex-col gap-1.5">
-          {kpis.map((kpi) => (
-            <div
-              key={kpi.label}
-              className="flex items-center justify-between rounded-md border border-border bg-card px-3 py-2"
-            >
-              <span className="text-[11px] uppercase tracking-wider text-muted-foreground/50">
-                {kpi.label}
-              </span>
-              {stats.isLoading ? (
-                <Skeleton className="h-4 w-14" />
-              ) : (
-                <span className="text-sm font-semibold tabular-nums">{kpi.value}</span>
-              )}
-            </div>
-          ))}
+          {kpis.map((kpi) => {
+            const isGood = kpi.delta != null && (kpi.label === "Spend" ? kpi.delta < 0 : kpi.delta > 0);
+            return (
+              <div
+                key={kpi.label}
+                className="group relative flex flex-1 flex-col overflow-hidden rounded-md border border-border bg-card"
+              >
+                <div className="flex flex-1 flex-col justify-between px-3 pt-2.5 pb-1.5">
+                  <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/55">
+                    {kpi.label}
+                  </span>
+                  <div className="flex items-baseline gap-2">
+                    {stats.isLoading ? (
+                      <Skeleton className="h-6 w-20" />
+                    ) : (
+                      <span className="text-[22px] font-semibold tabular-nums leading-none tracking-tight">
+                        {kpi.value}
+                      </span>
+                    )}
+                    {kpi.delta != null && !stats.isLoading && (
+                      <span
+                        className={`text-[11px] tabular-nums leading-none ${
+                          isGood ? "text-emerald-500" : "text-red-400"
+                        }`}
+                      >
+                        {kpi.delta > 0 ? "+" : "−"}
+                        {Math.abs(kpi.delta).toFixed(1)}%
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="h-7 w-full opacity-70 transition-opacity group-hover:opacity-100">
+                  {!dailyPerf.isLoading && (
+                    <Sparkline
+                      data={kpi.data}
+                      color={kpi.color}
+                      width="100%"
+                      height="100%"
+                    />
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
         <div className="rounded-md border border-border bg-card px-3 py-2">
           <div className="mb-1.5 flex items-center justify-between">
@@ -193,11 +267,11 @@ export default function MerPage() {
             </div>
           </div>
           {dailyPerf.isLoading ? (
-            <Skeleton className="h-[160px] w-full" />
+            <Skeleton className="h-[320px] w-full" />
           ) : dailyPerf.data && dailyPerf.data.length > 1 ? (
             <RevenueSpendChart
               logs={dailyPerf.data as Array<typeof dailyPerf.data[number] & { [k: string]: unknown }>}
-              className="h-[160px] w-full"
+              className="h-[320px] w-full"
             />
           ) : (
             <p className="py-12 text-center text-xs text-muted-foreground/40">No performance data</p>
