@@ -552,7 +552,18 @@ export const adCreativeRouter = router({
         tier: "pause_now" | "watch";
       };
       const bottomResult = await db.execute(sql`
-        WITH ad_window AS (
+        WITH ad_lifetime_days AS (
+          -- Lifetime running_days, NOT window-bounded. A buyer judges an ad on
+          -- its absolute age ("if I gave this 3 weeks, it's done"), not on
+          -- how many days it happened to deliver inside the dashboard window.
+          -- Also matches what the CSV export uses for disable_tier.
+          SELECT
+            pl.ad_id,
+            (max(pl.date_end)::date - min(pl.date_start)::date) AS running_days
+          FROM performance_log pl
+          GROUP BY pl.ad_id
+        ),
+        ad_window AS (
           SELECT
             ad.id AS ad_id,
             ad.meta_id AS meta_ad_id,
@@ -562,14 +573,15 @@ export const adCreativeRouter = router({
             sum(pl.purchase_value) AS revenue,
             sum(pl.conversions) AS conversions,
             coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) AS roas,
-            (max(pl.date_end)::date - min(pl.date_start)::date) AS running_days
+            coalesce(ald.running_days, 0) AS running_days
           FROM ad
           JOIN performance_log pl ON pl.ad_id = ad.id
           JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+          LEFT JOIN ad_lifetime_days ald ON ald.ad_id = ad.id
           WHERE ${dateFilter}
             AND ad.organization_id = ${ctx.organizationId}
             ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter}
-          GROUP BY ad.id, ad.meta_id, ad.ad_creative_id, ad.status
+          GROUP BY ad.id, ad.meta_id, ad.ad_creative_id, ad.status, ald.running_days
         ),
         bleeder AS (
           SELECT
