@@ -627,7 +627,7 @@ export const adCreativeRouter = router({
             SELECT 1 FROM ad_window aw
             WHERE aw.ad_creative_id = ac.id
               AND aw.status = 'active'
-              AND aw.spend >= 25
+              AND coalesce(aw.conversions, 0) >= 1
               AND aw.roas >= 1
           ) AS has_winner
         FROM actionable b

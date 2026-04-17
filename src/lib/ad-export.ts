@@ -536,8 +536,14 @@ export async function fetchAgentExportRows(opts: {
         status: a.status,
       })),
     );
+    // Winner = active sibling with at least one conversion at break-even+ ROAS.
+    // Conversion-gated rather than spend-gated: a $24.79 ad with 1 conv at 6x
+    // is unambiguously a winner; an arbitrary spend floor would miss it.
     const hasWinners = g.ads.some(
-      (a) => a.status === "active" && (a.windowSpend ?? 0) >= 25 && (a.windowRoas ?? 0) >= 1,
+      (a) =>
+        a.status === "active"
+        && (a.windowConversions ?? 0) >= 1
+        && (a.windowRoas ?? 0) >= 1,
     );
     for (const a of g.ads) {
       a.creativeRollupHealth = rollup.health;
