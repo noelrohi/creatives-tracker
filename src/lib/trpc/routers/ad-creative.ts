@@ -10,6 +10,7 @@ import { performanceLogs } from "@/schema/performance-log";
 import { adAccounts } from "@/schema/account";
 import { fetchMetaCreativePreview, fetchMetaAdPreviewUrl } from "@/lib/meta-creative-assets";
 import { importMetaRows } from "@/lib/meta-import";
+import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 import { computeCreativeHealthByCreativeId } from "@/lib/creative-health-rollup";
 import { fetchAgentExportRows } from "@/lib/ad-export";
 
@@ -403,6 +404,7 @@ export const adCreativeRouter = router({
       const teamFilter = input?.teamId
         ? sql`AND ac.team_id = ${input.teamId}`
         : sql``;
+      const basePl = basePerformanceLogFilter("pl");
       const campaignFilter = input?.campaignIds?.length
         ? sql`AND ad.ad_set_id IN (SELECT ast.id FROM ad_set ast WHERE ast.campaign_id IN (${sql.join(input.campaignIds.map((id) => sql`${id}`), sql`, `)}))`
         : sql``;
@@ -437,7 +439,7 @@ export const adCreativeRouter = router({
         FROM performance_log pl
         JOIN ad ON ad.id = pl.ad_id
         JOIN ad_creative ac ON ac.id = ad.ad_creative_id
-        WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter} ${teamFilter}
+        WHERE ${dateFilter} AND ${basePl} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter} ${teamFilter}
       `);
       const portfolio = (portfolioResult.rows as PortfolioRow[])[0];
 
@@ -484,7 +486,7 @@ export const adCreativeRouter = router({
         FROM ad_creative ac
         JOIN ad ON ad.ad_creative_id = ac.id
         JOIN performance_log pl ON pl.ad_id = ad.id
-        WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter} ${teamFilter}
+        WHERE ${dateFilter} AND ${basePl} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter} ${teamFilter}
         GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
         HAVING sum(pl.spend) >= 50
           AND coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) >= 1
@@ -520,6 +522,7 @@ export const adCreativeRouter = router({
         JOIN ad ON ad.ad_creative_id = ac.id
         JOIN performance_log pl ON pl.ad_id = ad.id
         WHERE ad.organization_id = ${ctx.organizationId}
+          AND ${basePl}
           ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter}
           ${survivingExclude}
         GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
@@ -561,6 +564,7 @@ export const adCreativeRouter = router({
             pl.ad_id,
             (max(pl.date_end)::date - min(pl.date_start)::date) AS running_days
           FROM performance_log pl
+          WHERE ${basePl}
           GROUP BY pl.ad_id
         ),
         ad_window AS (
@@ -579,6 +583,7 @@ export const adCreativeRouter = router({
           JOIN ad_creative ac ON ac.id = ad.ad_creative_id
           LEFT JOIN ad_lifetime_days ald ON ald.ad_id = ad.id
           WHERE ${dateFilter}
+            AND ${basePl}
             AND ad.organization_id = ${ctx.organizationId}
             ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter}
           GROUP BY ad.id, ad.meta_id, ad.ad_creative_id, ad.status, ald.running_days
@@ -828,6 +833,7 @@ export const adCreativeRouter = router({
       const teamFilter = input?.teamId
         ? sql`AND ac.team_id = ${input.teamId}`
         : sql``;
+      const basePl = basePerformanceLogFilter("pl");
 
       const today = new Date();
       const defaultTo = today.toISOString().slice(0, 10);
@@ -869,6 +875,7 @@ export const adCreativeRouter = router({
           JOIN ad ON ad.id = pl.ad_id
           JOIN ad_creative ac ON ac.id = ad.ad_creative_id
           WHERE ad.organization_id = ${ctx.organizationId}
+            AND ${basePl}
             ${accountFilter} ${ownershipFilter} ${teamFilter}
           GROUP BY d.day
         )
@@ -937,6 +944,7 @@ export const adCreativeRouter = router({
       const accountFilterAcc = input.accountId
         ? sql`AND acc.id = ${input.accountId}`
         : sql``;
+      const basePl = basePerformanceLogFilter("pl");
 
       type Row = {
         account_id: string;
@@ -961,6 +969,7 @@ export const adCreativeRouter = router({
           JOIN ad_creative ac ON ac.id = ad.ad_creative_id
           WHERE pl.date_start <= ${input.to}::date
             AND pl.date_end >= ${input.from}::date
+            AND ${basePl}
             AND ad.organization_id = ${ctx.organizationId}
             ${teamFilter}
             ${accountFilterAd}
@@ -976,6 +985,7 @@ export const adCreativeRouter = router({
           JOIN ad_creative ac ON ac.id = ad.ad_creative_id
           WHERE pl.date_start <= (${input.from}::date - 1)
             AND pl.date_end >= (${input.from}::date - (${input.to}::date - ${input.from}::date + 1))
+            AND ${basePl}
             AND ad.organization_id = ${ctx.organizationId}
             ${teamFilter}
             ${accountFilterAd}
@@ -995,6 +1005,7 @@ export const adCreativeRouter = router({
           JOIN ad ON ad.id = pl.ad_id
           JOIN ad_creative ac ON ac.id = ad.ad_creative_id
           WHERE ad.organization_id = ${ctx.organizationId}
+            AND ${basePl}
             ${teamFilter}
             ${accountFilterAd}
           GROUP BY ad.account_id, d.day

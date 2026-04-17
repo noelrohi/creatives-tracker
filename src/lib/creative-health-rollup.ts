@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { computeHealth, rollupCreativeHealth, type CreativeHealth } from "./creative-health";
+import { basePerformanceLogFilter } from "./performance-log-sql";
 
 type AdHealthRow = {
   ad_id: string;
@@ -45,6 +46,9 @@ export async function computeCreativeHealthByCreativeId(opts: {
   if (creativeIds.length === 0) return result;
 
   const plDateFilter = dateFilter ? sql`AND ${dateFilter}` : sql``;
+  const basePl = basePerformanceLogFilter("pl");
+  const basePl2 = basePerformanceLogFilter("pl2");
+  const basePl3 = basePerformanceLogFilter("pl3");
 
   const rows = (
     await db.execute(sql`
@@ -59,7 +63,13 @@ export async function computeCreativeHealthByCreativeId(opts: {
           SELECT sum(pl2.conversions)
           FROM performance_log pl2
           WHERE pl2.ad_id = ad.id
-            AND pl2.date_start > (SELECT max(pl3.date_end) - 3 FROM performance_log pl3 WHERE pl3.ad_id = ad.id)
+            AND ${basePl2}
+            AND pl2.date_start > (
+              SELECT max(pl3.date_end) - 3
+              FROM performance_log pl3
+              WHERE pl3.ad_id = ad.id
+                AND ${basePl3}
+            )
         )::text as recent_conversions,
         (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text as roas,
         (coalesce(sum(pl.ctr * pl.impressions), 0) / nullif(sum(pl.impressions), 0))::text as avg_ctr,
@@ -71,35 +81,65 @@ export async function computeCreativeHealthByCreativeId(opts: {
           SELECT (coalesce(sum(pl2.ctr * pl2.impressions), 0) / nullif(sum(pl2.impressions), 0))::text
           FROM performance_log pl2
           WHERE pl2.ad_id = ad.id
-            AND pl2.date_start > (SELECT max(pl3.date_end) - 3 FROM performance_log pl3 WHERE pl3.ad_id = ad.id)
+            AND ${basePl2}
+            AND pl2.date_start > (
+              SELECT max(pl3.date_end) - 3
+              FROM performance_log pl3
+              WHERE pl3.ad_id = ad.id
+                AND ${basePl3}
+            )
         ) as recent_ctr,
         (
           SELECT avg(pl2.cpc)::text
           FROM performance_log pl2
           WHERE pl2.ad_id = ad.id
-            AND pl2.date_start > (SELECT max(pl3.date_end) - 3 FROM performance_log pl3 WHERE pl3.ad_id = ad.id)
+            AND ${basePl2}
+            AND pl2.date_start > (
+              SELECT max(pl3.date_end) - 3
+              FROM performance_log pl3
+              WHERE pl3.ad_id = ad.id
+                AND ${basePl3}
+            )
         ) as recent_cpc,
         (
           SELECT (coalesce(sum(pl2.spend), 0) / nullif(sum(pl2.conversions), 0))::text
           FROM performance_log pl2
           WHERE pl2.ad_id = ad.id
-            AND pl2.date_start > (SELECT max(pl3.date_end) - 3 FROM performance_log pl3 WHERE pl3.ad_id = ad.id)
+            AND ${basePl2}
+            AND pl2.date_start > (
+              SELECT max(pl3.date_end) - 3
+              FROM performance_log pl3
+              WHERE pl3.ad_id = ad.id
+                AND ${basePl3}
+            )
         ) as recent_cpa,
         (
           SELECT (sum(pl2.video_views_3s)::float / nullif(sum(pl2.impressions), 0))::text
           FROM performance_log pl2
           WHERE pl2.ad_id = ad.id
-            AND pl2.date_start > (SELECT max(pl3.date_end) - 3 FROM performance_log pl3 WHERE pl3.ad_id = ad.id)
+            AND ${basePl2}
+            AND pl2.date_start > (
+              SELECT max(pl3.date_end) - 3
+              FROM performance_log pl3
+              WHERE pl3.ad_id = ad.id
+                AND ${basePl3}
+            )
         ) as recent_hook_rate,
         (
           SELECT (sum(pl2.video_views_3s)::float / nullif(sum(pl2.impressions), 0))::text
           FROM performance_log pl2
           WHERE pl2.ad_id = ad.id
-            AND pl2.date_end <= (SELECT max(pl3.date_end) - 3 FROM performance_log pl3 WHERE pl3.ad_id = ad.id)
+            AND ${basePl2}
+            AND pl2.date_end <= (
+              SELECT max(pl3.date_end) - 3
+              FROM performance_log pl3
+              WHERE pl3.ad_id = ad.id
+                AND ${basePl3}
+            )
         ) as prior_hook_rate
       FROM ad
       JOIN ad_creative ac ON ac.id = ad.ad_creative_id
-      LEFT JOIN performance_log pl ON pl.ad_id = ad.id ${plDateFilter}
+      LEFT JOIN performance_log pl ON pl.ad_id = ad.id AND ${basePl} ${plDateFilter}
       WHERE ad.organization_id = ${organizationId}
         AND ad.ad_creative_id IN (${sql.join(creativeIds.map((id) => sql`${id}`), sql`, `)})
       GROUP BY ad.id, ac.format

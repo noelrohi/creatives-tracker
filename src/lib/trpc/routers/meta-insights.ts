@@ -12,6 +12,7 @@ import {
   metaInsightsLevelSchema,
   requestMetaInsightsReport,
 } from "@/lib/meta-insights-sync";
+import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 
 export const metaInsightsRouter = router({
   /**
@@ -247,6 +248,7 @@ export const metaInsightsRouter = router({
 
       // DB: daily aggregate for this account in the same range
       type DbRow = { day: string; spend: string | null; revenue: string | null };
+      const basePl = basePerformanceLogFilter("pl");
       const dbResult = await db.execute(sql`
         SELECT
           pl.date_start::text as day,
@@ -256,6 +258,7 @@ export const metaInsightsRouter = router({
         JOIN ad ON ad.id = pl.ad_id
         WHERE pl.date_start >= ${input.from}::date
           AND pl.date_start <= ${input.to}::date
+          AND ${basePl}
           AND ad.account_id = ${input.accountId}
           AND ad.organization_id = ${ctx.organizationId}
         GROUP BY pl.date_start
