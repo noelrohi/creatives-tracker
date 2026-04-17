@@ -34,10 +34,12 @@ export function computeHealth(opts: {
 }): HealthVerdict {
   const { roas, spend, conversions, status } = opts;
 
-  if (spend == null || spend < 50) return { health: null, reasons: [] };
+  if (spend == null || spend < 25) return { health: null, reasons: [] };
 
-  // Active ad with meaningful spend but zero conversions
-  if (status === "active" && (conversions == null || conversions === 0) && spend >= 100) {
+  // Active ad with meaningful spend but zero conversions. Threshold matches the
+  // per-ad bleeder rule used by the dashboard's Needs Attention panel and the
+  // CSV's flag_disable_candidate so all three agree on what's actionable.
+  if (status === "active" && (conversions == null || conversions === 0) && spend >= 25) {
     return {
       health: "critical",
       reasons: [`No conversions on ${fmtMoney(spend)} spent`],
@@ -144,10 +146,13 @@ export function computeHealth(opts: {
     }
     if (criticalSignals > 0 || warningSignals >= 2) return { health: "critical", reasons };
     if (warningSignals > 0) return { health: "warning", reasons };
-    return { health: "healthy", reasons: [] };
+    // No trend signals fired, but the ad is unprofitable — never call this
+    // "healthy". Fall through to the ROAS-based verdict below so a 0-conv or
+    // sub-1x ROAS ad gets labeled the way a media buyer would label it.
   }
 
-  // Fallback: ROAS-based
+  // Fallback: ROAS-based. Also catches the no-trend-signal-but-unprofitable
+  // case from the trend branch above.
   if (roas == null) return { health: null, reasons: [] };
   if (roas < 0.5) {
     return {
