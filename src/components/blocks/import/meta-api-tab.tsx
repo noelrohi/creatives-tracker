@@ -1,15 +1,10 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
-import { Controller, useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTRPC, useTRPCClient } from "@/lib/trpc/client";
 import { getUserFacingErrorMessage } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
-import { Field, FieldLabel, FieldError } from "@/components/ui/field";
 import {
   Select,
   SelectContent,
@@ -17,20 +12,34 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { DateRangePicker } from "@/components/blocks/dashboard/date-range-picker";
-import { Loader2, CloudDownload, Key, CirclePlus, Check, Download } from "lucide-react";
+import { AccountFreshnessPanel } from "./account-freshness-panel";
+import { SyncRunsTable } from "./sync-runs-table";
+import {
+  Loader2,
+  Key,
+  CirclePlus,
+  Download,
+  CloudDownload,
+  ChevronRight,
+} from "lucide-react";
 import { toast } from "sonner";
 import { mapRowsForImport, splitBulkImportRows } from "@/lib/import-utils";
 import { formatDateOnly, parseDateOnly } from "@/lib/date";
-import type { MappedRow } from "@/lib/csv-parser";
-
-const fetchSchema = z.object({
-  accountId: z.string().min(1, "Select an account."),
-});
-
-type FetchValues = z.infer<typeof fetchSchema>;
+import { cn } from "@/lib/utils";
 
 type SyncPhase = "idle" | "requesting" | "processing" | "downloading" | "importing" | "done";
+
+type SyncTarget = {
+  accountId: string;
+  dateFrom: string;
+  dateTo: string;
+};
 
 interface MetaApiTabProps {
   accounts: {
@@ -39,6 +48,12 @@ interface MetaApiTabProps {
     metaAccountId: string;
     hasMetaAccessToken: boolean;
   }[];
+  accountId: string;
+  onAccountIdChange: (id: string) => void;
+  dateFrom: string;
+  onDateFromChange: (value: string) => void;
+  dateTo: string;
+  onDateToChange: (value: string) => void;
   onRequestCreateAccount: () => void;
 }
 
@@ -69,65 +84,75 @@ function downloadCsv(rows: Record<string, unknown>[], filename: string) {
 
 export function MetaApiTab({
   accounts,
+  accountId,
+  onAccountIdChange,
+  dateFrom,
+  onDateFromChange,
+  dateTo,
+  onDateToChange,
   onRequestCreateAccount,
 }: MetaApiTabProps) {
-  const router = useRouter();
   const trpc = useTRPC();
   const trpcClient = useTRPCClient();
   const queryClient = useQueryClient();
 
   const apiAccounts = accounts.filter((a) => a.hasMetaAccessToken);
 
-  const [dateFrom, setDateFrom] = useState<string>(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 7);
-    return formatDateOnly(d);
-  });
-  const [dateTo, setDateTo] = useState<string>(
-    () => formatDateOnly(new Date()),
-  );
-  // Breakdowns removed — Meta restricts combining them with action fields.
-  // Use CSV import for breakdown-level data.
+  const [syncTarget, setSyncTarget] = useState<SyncTarget | null>(null);
   const [phase, setPhase] = useState<SyncPhase>("idle");
   const [progress, setProgress] = useState(0);
-  const [fetchedRows, setFetchedRows] = useState<MappedRow[] | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const form = useForm<FetchValues>({
-    resolver: zodResolver(fetchSchema),
-    defaultValues: { accountId: "" },
+  const syncableAccounts = useQuery({
+    ...trpc.metaSync.listSyncableAccounts.queryOptions(),
+    enabled: apiAccounts.length > 0,
   });
 
-  // Cleanup polling on unmount
+  const runsQuery = useQuery({
+    queryKey: ["metaSync", "listRecentRuns", { limit: 100 }],
+    queryFn: () => trpcClient.metaSync.listRecentRuns.query({ limit: 100 }),
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const hasActive = data?.runs.some(
+        (run) => run.status === "queued" || run.status === "running",
+      ) ?? false;
+      return hasActive ? 15000 : false;
+    },
+  });
+
+  const runs = runsQuery.data?.runs ?? [];
+  const hasActiveBackgroundRun = runs.some(
+    (run) => run.status === "queued" || run.status === "running",
+  );
+
   useEffect(() => {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, []);
 
-  async function handleSync(data: FetchValues) {
-    setFetchedRows(null);
+  async function runSync(target: SyncTarget) {
+    setSyncTarget(target);
     setProgress(0);
 
     try {
-      // Step 1: Request async report
       setPhase("requesting");
       const { reportRunId } = await trpcClient.metaInsights.requestReport.mutate({
-        accountId: data.accountId,
-        dateFrom,
-        dateTo,
+        accountId: target.accountId,
+        dateFrom: target.dateFrom,
+        dateTo: target.dateTo,
         level: "ad",
       });
 
-      // Step 2: Poll for completion
       setPhase("processing");
       await new Promise<void>((resolve, reject) => {
         pollRef.current = setInterval(async () => {
           try {
             const status = await trpcClient.metaInsights.checkReport.query({
               reportRunId,
-              accountId: data.accountId,
+              accountId: target.accountId,
             });
 
             setProgress(status.percentComplete);
@@ -148,32 +173,29 @@ export function MetaApiTab({
         }, 3000);
       });
 
-      // Step 3: Download report data
       setPhase("downloading");
       const { rows, totalRows } = await trpcClient.metaInsights.downloadReport.mutate({
         reportRunId,
-        accountId: data.accountId,
+        accountId: target.accountId,
         level: "ad",
       });
 
       if (totalRows === 0) {
         toast.info("No data found for the selected date range.");
         setPhase("idle");
+        setSyncTarget(null);
         return;
       }
 
-      setFetchedRows(rows);
-
-      // Step 4: Auto-import
       setPhase("importing");
       const mapped = mapRowsForImport(rows);
-      const chunks = splitBulkImportRows(mapped, data.accountId);
+      const chunks = splitBulkImportRows(mapped, target.accountId);
       let totalPerfLogs = 0;
       const createdById = new Map<string, { id: string; name: string }>();
 
       for (const chunk of chunks) {
         const result = await trpcClient.adCreative.bulkImport.mutate({
-          accountId: data.accountId,
+          accountId: target.accountId,
           rows: chunk,
         });
         for (const c of result.created) {
@@ -182,10 +204,10 @@ export function MetaApiTab({
         totalPerfLogs += result.perfLogs;
       }
 
-      // Done
       setPhase("done");
       queryClient.invalidateQueries({ queryKey: trpc.adCreative.list.queryKey() });
       queryClient.invalidateQueries({ queryKey: trpc.ad.list.queryKey() });
+      queryClient.invalidateQueries({ queryKey: trpc.metaSync.listSyncableAccounts.queryKey() });
 
       const uniqueAds = new Set(rows.map((r) => r.adId || r.name)).size;
       const newCount = createdById.size;
@@ -196,14 +218,19 @@ export function MetaApiTab({
       toast.success(
         `${parts.join(", ")} ad${uniqueAds > 1 ? "s" : ""} · ${totalPerfLogs.toLocaleString()} perf rows`,
       );
+
+      setTimeout(() => {
+        setPhase("idle");
+        setSyncTarget(null);
+      }, 1200);
     } catch (err) {
       toast.error(getUserFacingErrorMessage(err, "Sync failed."));
       setPhase("idle");
+      setSyncTarget(null);
     }
   }
 
   async function handleExport() {
-    const accountId = form.getValues("accountId");
     if (!accountId) {
       toast.error("Select an account first.");
       return;
@@ -232,8 +259,10 @@ export function MetaApiTab({
   }
 
   const isSyncing = phase !== "idle" && phase !== "done";
+  const activeSync = syncTarget && phase !== "idle"
+    ? { accountId: syncTarget.accountId, phase, progress }
+    : null;
 
-  // No accounts with tokens
   if (apiAccounts.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center rounded-lg border border-dashed py-16 text-center">
@@ -255,165 +284,143 @@ export function MetaApiTab({
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      {/* Config */}
-      <div className="flex flex-col gap-4 rounded-lg border p-5">
-        <Controller
-          name="accountId"
-          control={form.control}
-          render={({ field, fieldState }) => (
-            <Field data-invalid={fieldState.invalid}>
-              <FieldLabel htmlFor={field.name}>Account</FieldLabel>
+    <div className="flex flex-col gap-3">
+      <AccountFreshnessPanel
+        accounts={syncableAccounts.data ?? []}
+        recentRuns={runs}
+        activeSync={activeSync}
+        isLoading={syncableAccounts.isLoading}
+        onSync={(account) => {
+          void runSync({
+            accountId: account.accountId,
+            dateFrom: account.suggestedDateFrom,
+            dateTo: account.suggestedDateTo,
+          });
+        }}
+      />
+
+      <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-muted/40"
+          >
+            <ChevronRight
+              className={cn(
+                "size-3.5 transition-transform",
+                advancedOpen && "rotate-90",
+              )}
+            />
+            <span className="font-medium text-foreground/80">Advanced</span>
+            <span className="text-muted-foreground/70">·</span>
+            <span>custom range &amp; export</span>
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="mt-2">
+          <div className="flex flex-wrap items-end gap-2 rounded-lg border border-border/60 bg-muted/10 px-3 py-2.5">
+            <div className="flex min-w-[180px] flex-1 flex-col gap-1">
+              <label className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+                Account
+              </label>
               <Select
-                value={field.value}
-                onValueChange={field.onChange}
+                value={accountId}
+                onValueChange={onAccountIdChange}
                 disabled={isSyncing}
               >
-                <SelectTrigger aria-invalid={fieldState.invalid}>
-                  <SelectValue placeholder="Select account..." />
+                <SelectTrigger className="h-7 text-[13px]">
+                  <SelectValue placeholder="Select account…" />
                 </SelectTrigger>
                 <SelectContent>
                   {apiAccounts.map((a) => (
                     <SelectItem key={a.id} value={a.id}>
-                      {a.name}
-                      <span className="ml-2 text-xs text-muted-foreground">
-                        ({a.metaAccountId})
+                      <span className="text-[13px]">{a.name}</span>
+                      <span className="ml-2 text-[11px] text-muted-foreground">
+                        {a.metaAccountId}
                       </span>
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              {fieldState.invalid && (
-                <FieldError errors={[fieldState.error]} />
-              )}
-            </Field>
-          )}
-        />
+            </div>
 
-        <Field>
-          <FieldLabel>Date range</FieldLabel>
-          <DateRangePicker
-            from={parseDateOnly(dateFrom)}
-            to={parseDateOnly(dateTo)}
-            onChange={(range) => {
-              if (range?.from) setDateFrom(formatDateOnly(range.from));
-              if (range?.to) setDateTo(formatDateOnly(range.to));
-            }}
-          />
-        </Field>
-
-{/* Breakdowns omitted — Meta restricts combining them with action metrics.
-   Use the CSV import tab for breakdown-level data. */}
-
-        <div className="flex gap-2">
-          <Button
-            onClick={() => void form.handleSubmit(handleSync)()}
-            disabled={isSyncing || exporting}
-          >
-            {isSyncing ? (
-              <Loader2 className="animate-spin" />
-            ) : (
-              <CloudDownload className="size-4" />
-            )}
-            {isSyncing ? "Syncing..." : "Sync data"}
-          </Button>
-          <Button
-            variant="outline"
-            onClick={handleExport}
-            disabled={isSyncing || exporting}
-          >
-            {exporting ? (
-              <Loader2 className="animate-spin" />
-            ) : (
-              <Download className="size-4" />
-            )}
-            {exporting ? "Exporting..." : "Export CSV"}
-          </Button>
-        </div>
-      </div>
-
-      {/* Progress */}
-      {isSyncing && (
-        <div className="rounded-lg border p-5">
-          <div className="flex flex-col gap-3">
-            <SyncStep
-              label="Requesting report from Meta"
-              active={phase === "requesting"}
-              done={phase !== "requesting"}
-            />
-            <SyncStep
-              label={`Meta is generating report${progress > 0 ? ` (${progress}%)` : ""}`}
-              active={phase === "processing"}
-              done={["downloading", "importing", "done"].includes(phase)}
-            />
-            <SyncStep
-              label="Downloading data"
-              active={phase === "downloading"}
-              done={["importing", "done"].includes(phase)}
-            />
-            <SyncStep
-              label="Importing to database"
-              active={phase === "importing"}
-              done={false}
-            />
-          </div>
-          {phase === "processing" && progress > 0 && (
-            <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-muted">
-              <div
-                className="h-full rounded-full bg-primary transition-all duration-500"
-                style={{ width: `${progress}%` }}
+            <div className="flex min-w-[220px] flex-1 flex-col gap-1">
+              <label className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+                Date range
+              </label>
+              <DateRangePicker
+                from={parseDateOnly(dateFrom)}
+                to={parseDateOnly(dateTo)}
+                onChange={(range) => {
+                  if (range?.from) onDateFromChange(formatDateOnly(range.from));
+                  if (range?.to) onDateToChange(formatDateOnly(range.to));
+                }}
               />
             </div>
-          )}
-        </div>
-      )}
 
-      {/* Done */}
-      {phase === "done" && fetchedRows && (
-        <div className="flex items-center justify-between rounded-lg border border-green-500/20 bg-green-500/5 px-5 py-4">
-          <div className="flex items-center gap-2">
-            <Check className="size-4 text-green-600" />
-            <span className="text-sm font-medium">
-              Synced {fetchedRows.length.toLocaleString()} rows
-            </span>
-            <span className="text-xs text-muted-foreground">
-              {dateFrom} — {dateTo}
+            <div className="flex items-end gap-1.5">
+              <Button
+                size="sm"
+                className="h-7 gap-1.5 text-[13px]"
+                onClick={() => {
+                  if (!accountId) {
+                    toast.error("Select an account first.");
+                    return;
+                  }
+                  void runSync({ accountId, dateFrom, dateTo });
+                }}
+                disabled={isSyncing || exporting || !accountId}
+              >
+                {isSyncing ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <CloudDownload className="size-3.5" />
+                )}
+                {isSyncing ? "Syncing" : "Sync window"}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1.5 text-[13px]"
+                onClick={handleExport}
+                disabled={isSyncing || exporting || !accountId}
+              >
+                {exporting ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Download className="size-3.5" />
+                )}
+                {exporting ? "Exporting" : "Export CSV"}
+              </Button>
+            </div>
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-baseline gap-2">
+            <h2 className="text-sm font-medium">Sync runs</h2>
+            <span className="text-[11px] text-muted-foreground/70">
+              Background &amp; scheduled · manual syncs not shown
             </span>
           </div>
-          <Button variant="outline" size="sm" onClick={() => router.push("/creatives")}>
-            View creatives
-          </Button>
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70">
+            <span
+              className={cn(
+                "size-1.5 rounded-full",
+                hasActiveBackgroundRun
+                  ? "bg-emerald-500 animate-pulse"
+                  : "bg-muted-foreground/30",
+              )}
+              aria-hidden
+            />
+            <span>
+              {hasActiveBackgroundRun ? "Live · refreshing" : "Idle"}
+            </span>
+          </div>
         </div>
-      )}
-    </div>
-  );
-}
-
-function SyncStep({
-  label,
-  active,
-  done,
-}: {
-  label: string;
-  active: boolean;
-  done: boolean;
-}) {
-  return (
-    <div className="flex items-center gap-3">
-      {done && !active ? (
-        <div className="flex size-5 items-center justify-center rounded-full bg-primary">
-          <Check className="size-3 text-primary-foreground" />
-        </div>
-      ) : active ? (
-        <Loader2 className="size-5 animate-spin text-primary" />
-      ) : (
-        <div className="size-5 rounded-full border-2 border-muted" />
-      )}
-      <span
-        className={`text-sm ${active ? "font-medium" : done ? "text-muted-foreground" : "text-muted-foreground/50"}`}
-      >
-        {label}
-      </span>
+        <SyncRunsTable runs={runs} />
+      </div>
     </div>
   );
 }

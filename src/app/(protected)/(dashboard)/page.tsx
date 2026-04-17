@@ -30,6 +30,7 @@ import {
   Shield,
 } from "lucide-react";
 import { PerformanceChart } from "@/components/blocks/insights/performance-chart";
+import { DemographicBreakdownChart } from "@/components/blocks/dashboard/demographic-chart";
 import { LeaderboardTable } from "@/components/blocks/dashboard/leaderboard-table";
 import { fmtMoney, fmtNum, fmtPct, fmtRoas } from "@/lib/fmt";
 import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
@@ -99,6 +100,8 @@ export default function DashboardPage() {
   const [teamId, setTeamId] = useQueryState("team", parseAsString.withDefault(""));
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
   const [to, setTo] = useQueryState("to", parseAsString.withDefault(formatDateOnly(new Date())));
+  const [tab, setTab] = useQueryState("tab", parseAsString.withDefault("overview"));
+  const [dimension, setDimension] = useQueryState("dim", parseAsString.withDefault("gender"));
 
   const selectedAccountId = accountId ? accountId : undefined;
   const selectedTeamId = teamId || undefined;
@@ -121,6 +124,16 @@ export default function DashboardPage() {
 
   const dailyPerf = useQuery(
     trpc.adCreative.getDailyPortfolioPerformance.queryOptions({
+      from: fromValue,
+      to: toValue,
+      accountId: selectedAccountId,
+      teamId: selectedTeamId,
+    }),
+  );
+
+  const demographic = useQuery(
+    trpc.performanceLog.demographicBreakdown.queryOptions({
+      dimension: dimension as "age" | "gender" | "country" | "device",
       from: fromValue,
       to: toValue,
       accountId: selectedAccountId,
@@ -268,10 +281,11 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      <Tabs defaultValue="overview">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList variant="line">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="charts">Charts</TabsTrigger>
+          <TabsTrigger value="demographics">Demographics</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="flex flex-col gap-6 pt-4">
@@ -316,6 +330,15 @@ export default function DashboardPage() {
               <p className="text-sm text-muted-foreground/50">No daily performance data for this period</p>
             </div>
           )}
+        </TabsContent>
+
+        <TabsContent value="demographics" className="pt-4">
+          <DemographicBreakdownChart
+            data={demographic.data}
+            dimension={dimension as "age" | "gender" | "country" | "device"}
+            onDimensionChange={setDimension}
+            isLoading={demographic.isLoading}
+          />
         </TabsContent>
       </Tabs>
 
