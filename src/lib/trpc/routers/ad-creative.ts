@@ -481,11 +481,7 @@ export const adCreativeRouter = router({
       `);
       const topPerformers = topResult.rows as CreativeRow[];
 
-      // Bottom performers by ROAS (min $50 spend, excluding top performers)
       const topIds = topPerformers.map((r) => r.id);
-      const topExclude = topIds.length
-        ? sql`AND ac.id NOT IN (${sql.join(topIds.map((id) => sql`${id}`), sql`, `)})`
-        : sql``;
       // Surviving creatives: active ads with ROAS >= 1 running for 14+ days
       const survivingResult = await db.execute(sql`
         SELECT
@@ -516,30 +512,81 @@ export const adCreativeRouter = router({
       `);
       const survivingCreatives = survivingResult.rows as (CreativeRow & { running_days: number })[];
 
+      // Bleeders: per-ad rule. A creative surfaces here if any active ad in the window
+      // matches: (conversions == 0 AND spend >= $25) OR (ROAS < 0.5 AND spend >= $25).
+      // Aggregated to creative so the dashboard stays creative-first while exposing
+      // the per-ad damage that a strict creative-rollup would average away.
+      type BleederRow = CreativeRow & {
+        bleeder_count: number;
+        active_ad_count: number;
+        bleeder_spend: string;
+        bleeder_at_risk: string;
+        has_winner: boolean;
+        bleeder_meta_ids: (string | null)[] | null;
+      };
       const bottomResult = await db.execute(sql`
+        WITH ad_window AS (
+          SELECT
+            ad.id AS ad_id,
+            ad.meta_id AS meta_ad_id,
+            ad.ad_creative_id,
+            ad.status::text AS status,
+            sum(pl.spend) AS spend,
+            sum(pl.purchase_value) AS revenue,
+            sum(pl.conversions) AS conversions,
+            coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) AS roas
+          FROM ad
+          JOIN performance_log pl ON pl.ad_id = ad.id
+          JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+          WHERE ${dateFilter}
+            AND ad.organization_id = ${ctx.organizationId}
+            ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter}
+          GROUP BY ad.id, ad.meta_id, ad.ad_creative_id, ad.status
+        ),
+        bleeder AS (
+          SELECT *
+          FROM ad_window
+          WHERE status = 'active'
+            AND (
+              (coalesce(conversions, 0) = 0 AND spend >= 25)
+              OR (roas < 0.5 AND spend >= 25)
+            )
+        )
         SELECT
           ac.id,
           ac.name,
-          ac.format,
+          ac.format::text AS format,
           ac.asset_url,
           ac.video_url,
-          sum(pl.spend)::text as total_spend,
-          (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text as roas,
-          (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as cpa,
-          avg(pl.ctr)::text as ctr,
-          sum(pl.conversions)::text as total_conversions,
-          (SELECT ad2.status FROM ad ad2 WHERE ad2.ad_creative_id = ac.id LIMIT 1) as ad_status
-        FROM ad_creative ac
-        JOIN ad ON ad.ad_creative_id = ac.id
-        JOIN performance_log pl ON pl.ad_id = ad.id
-        WHERE ${dateFilter} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter} ${teamFilter} ${topExclude}
+          sum(b.spend)::text AS total_spend,
+          (sum(b.revenue) / nullif(sum(b.spend), 0))::text AS roas,
+          (sum(b.spend) / nullif(sum(b.conversions), 0))::text AS cpa,
+          NULL::text AS ctr,
+          sum(b.conversions)::text AS total_conversions,
+          'active'::text AS ad_status,
+          count(*)::int AS bleeder_count,
+          (
+            SELECT count(*)::int FROM ad_window aw
+            WHERE aw.ad_creative_id = ac.id AND aw.status = 'active'
+          ) AS active_ad_count,
+          sum(b.spend)::text AS bleeder_spend,
+          sum(coalesce(b.spend, 0) * (1 - coalesce(b.roas, 0)))::text AS bleeder_at_risk,
+          array_agg(b.meta_ad_id ORDER BY b.spend DESC NULLS LAST) AS bleeder_meta_ids,
+          EXISTS (
+            SELECT 1 FROM ad_window aw
+            WHERE aw.ad_creative_id = ac.id
+              AND aw.status = 'active'
+              AND aw.spend >= 25
+              AND aw.roas >= 1
+          ) AS has_winner
+        FROM bleeder b
+        JOIN ad_creative ac ON ac.id = b.ad_creative_id
+        ${topIds.length ? sql`WHERE ac.id NOT IN (${sql.join(topIds.map((id) => sql`${id}`), sql`, `)})` : sql``}
         GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
-        HAVING sum(pl.spend) >= 100
-          AND coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) < 1
-        ORDER BY sum(pl.spend) * (1 - coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0)) DESC NULLS LAST
-        LIMIT 30
+        ORDER BY sum(coalesce(b.spend, 0) * (1 - coalesce(b.roas, 0))) DESC NULLS LAST
+        LIMIT 10
       `);
-      const bottomPerformers = bottomResult.rows as CreativeRow[];
+      const bottomPerformers = bottomResult.rows as BleederRow[];
 
       const leaderboardIds = Array.from(
         new Set([
@@ -578,39 +625,30 @@ export const adCreativeRouter = router({
           health: healthByCreative.get(r.id)?.health ?? null,
           healthReasons: healthByCreative.get(r.id)?.reasons ?? [],
         })),
-        bottomPerformers: (() => {
-          return bottomPerformers
-            .map((r) => {
-              const rollup = healthByCreative.get(r.id);
-              const spend = r.total_spend != null ? parseFloat(r.total_spend) : 0;
-              const roas = r.roas != null ? parseFloat(r.roas) : 0;
-              const dollarsAtRisk = Math.max(0, spend * (1 - roas));
-              return { r, rollup, spend, dollarsAtRisk };
-            })
-            .filter(({ rollup }) => {
-              if (!rollup) return false;
-              if (rollup.health !== "critical" && rollup.health !== "warning") return false;
-              if (!rollup.activeInWindow) return false;
-              return true;
-            })
-            .sort((a, b) => b.dollarsAtRisk - a.dollarsAtRisk)
-            .slice(0, 10)
-            .map(({ r, rollup }) => ({
-              id: r.id,
-              name: r.name,
-              format: r.format,
-              assetUrl: r.asset_url,
-              videoUrl: r.video_url,
-              totalSpend: r.total_spend,
-              roas: r.roas,
-              cpa: r.cpa,
-              ctr: r.ctr,
-              conversions: r.total_conversions,
-              adStatus: r.ad_status,
-              health: rollup?.health ?? null,
-              healthReasons: rollup?.reasons ?? [],
-            }));
-        })(),
+        bottomPerformers: bottomPerformers.map((r) => {
+          const rollup = healthByCreative.get(r.id);
+          return {
+            id: r.id,
+            name: r.name,
+            format: r.format,
+            assetUrl: r.asset_url,
+            videoUrl: r.video_url,
+            totalSpend: r.total_spend,
+            roas: r.roas,
+            cpa: r.cpa,
+            ctr: r.ctr,
+            conversions: r.total_conversions,
+            adStatus: r.ad_status,
+            health: rollup?.health ?? null,
+            healthReasons: rollup?.reasons ?? [],
+            bleederAdCount: r.bleeder_count,
+            activeAdCount: r.active_ad_count,
+            bleederSpend: r.bleeder_spend,
+            bleederDollarsAtRisk: r.bleeder_at_risk,
+            hasWinnerAd: r.has_winner,
+            bleederMetaIds: (r.bleeder_meta_ids ?? []).filter((id): id is string => Boolean(id)),
+          };
+        }),
         survivingCreatives: survivingCreatives.map((r) => ({
           id: r.id,
           name: r.name,

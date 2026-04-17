@@ -1,7 +1,16 @@
 import Link from "next/link";
-import { ArrowRight, ImageIcon, Upload, Video } from "lucide-react";
+import { ArrowRight, Copy, ExternalLink, ImageIcon, MoreHorizontal, Sparkles, Upload, Video } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -30,6 +39,12 @@ export type LeaderboardRow = {
   runningDays?: number;
   health?: CreativeHealth | null;
   healthReasons?: string[];
+  bleederAdCount?: number;
+  activeAdCount?: number;
+  bleederSpend?: string | null;
+  bleederDollarsAtRisk?: string | null;
+  hasWinnerAd?: boolean;
+  bleederMetaIds?: string[];
 };
 
 const HEALTH_STYLES: Record<CreativeHealth, { label: string; className: string }> = {
@@ -37,6 +52,92 @@ const HEALTH_STYLES: Record<CreativeHealth, { label: string; className: string }
   warning: { label: "Warning", className: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
   critical: { label: "Critical", className: "bg-red-500/15 text-red-500 dark:text-red-400" },
 };
+
+function BleederBadge({ row }: { row: LeaderboardRow }) {
+  if (!row.bleederAdCount || row.bleederAdCount <= 0) return null;
+  const total = row.activeAdCount ?? row.bleederAdCount;
+  const atRisk = row.bleederDollarsAtRisk ? parseFloat(row.bleederDollarsAtRisk) : 0;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex cursor-help items-center gap-1 rounded bg-red-500/15 px-1.5 py-0.5 text-[9px] font-medium text-red-500 dark:text-red-400">
+          {row.bleederAdCount}/{total} · {fmtMoney(atRisk)} risk
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="left" className="max-w-xs">
+        <p>
+          {row.bleederAdCount} of {total} active ad{total === 1 ? "" : "s"} on this creative
+          spent ≥ $25 with 0 conversions or ROAS &lt; 0.5.
+        </p>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function WinnerSiblingBadge({ row }: { row: LeaderboardRow }) {
+  if (!row.hasWinnerAd) return null;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex cursor-help items-center gap-0.5 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600 dark:text-emerald-400">
+          <Sparkles className="size-2.5" /> winner sibling
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="left" className="max-w-xs">
+        <p>
+          A different ad on this creative is profitable (ROAS ≥ 1, spend ≥ $25). The
+          creative concept works — likely an audience/placement issue on the bleeders.
+        </p>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function BleederRowMenu({ row }: { row: LeaderboardRow }) {
+  const ids = row.bleederMetaIds ?? [];
+  if (ids.length === 0) return null;
+  const handleCopy = async () => {
+    const payload = ids.join(", ");
+    try {
+      await navigator.clipboard.writeText(payload);
+      toast.success(`Copied ${ids.length} Meta ID${ids.length === 1 ? "" : "s"}`, {
+        description: "Paste into Meta Ads Manager search to pause.",
+      });
+    } catch {
+      toast.error("Couldn't copy to clipboard");
+    }
+  };
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-6 shrink-0 text-muted-foreground"
+          aria-label="Bleeder ad actions"
+        >
+          <MoreHorizontal className="size-3.5" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
+          {ids.length} bleeding ad{ids.length === 1 ? "" : "s"}
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={handleCopy} className="gap-2">
+          <Copy className="size-3.5" />
+          Copy Meta IDs
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild className="gap-2">
+          <Link href={`/creatives/${row.id}`}>
+            <ExternalLink className="size-3.5" />
+            Open creative
+          </Link>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 function HealthBadge({ row }: { row: LeaderboardRow }) {
   if (!row.health) return null;
@@ -203,13 +304,23 @@ export function LeaderboardTable({
                       <Link href={`/creatives/${row.id}`} className="text-sm font-medium hover:underline truncate max-w-[200px]">
                         {row.name}
                       </Link>
-                      {row.format && (
-                        <Badge variant="secondary" className="text-[11px] capitalize shrink-0">{row.format}</Badge>
+                      {row.bleederAdCount && row.bleederAdCount > 0 ? (
+                        <>
+                          <BleederBadge row={row} />
+                          <WinnerSiblingBadge row={row} />
+                          <BleederRowMenu row={row} />
+                        </>
+                      ) : (
+                        <>
+                          {row.format && (
+                            <Badge variant="secondary" className="text-[11px] capitalize shrink-0">{row.format}</Badge>
+                          )}
+                          {row.adStatus && (
+                            <Badge variant="outline" className="text-[11px] capitalize shrink-0">{row.adStatus}</Badge>
+                          )}
+                          <HealthBadge row={row} />
+                        </>
                       )}
-                      {row.adStatus && (
-                        <Badge variant="outline" className="text-[11px] capitalize shrink-0">{row.adStatus}</Badge>
-                      )}
-                      <HealthBadge row={row} />
                     </div>
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-sm font-medium">

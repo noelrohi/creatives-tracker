@@ -71,6 +71,7 @@ function buildAdsCsv(ads: AgentExport["ads"]): string {
     "creative_rollup_health", "creative_rollup_reasons",
     "dollars_at_risk_usd",
     "flag_disable_candidate", "flag_scale_candidate", "flag_review_candidate",
+    "creative_has_winners",
   ] as const;
   const rows = ads.map((a) => [
     a.adId, fmtS(a.metaAdId), a.adName, fmtS(a.status),
@@ -91,6 +92,7 @@ function buildAdsCsv(ads: AgentExport["ads"]): string {
     fmtS(a.creativeRollupHealth), a.creativeRollupReasons.join(" | "),
     fmtN(a.dollarsAtRisk),
     fmtB(a.flagDisableCandidate), fmtB(a.flagScaleCandidate), fmtB(a.flagReviewCandidate),
+    fmtB(a.creativeHasWinners),
   ]);
   return toCsv(headers, rows);
 }

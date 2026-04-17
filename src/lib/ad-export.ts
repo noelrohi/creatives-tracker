@@ -132,6 +132,10 @@ export type AdExportRow = {
   flagDisableCandidate: boolean;
   flagScaleCandidate: boolean;
   flagReviewCandidate: boolean;
+  // True when a *different* ad on the same creative is profitable (ROAS >= 1, spend >= $25).
+  // Lets the agent (and CSV reader) tell "this creative is dead" from
+  // "this creative works elsewhere — pause this placement, keep the concept".
+  creativeHasWinners: boolean;
 };
 
 export type CreativeExportRow = {
@@ -402,9 +406,14 @@ export async function fetchAgentExportRows(opts: {
 
     const activeInWindow = r.ad_status === "active" && windowSpend != null && windowSpend > 0;
 
-    // Flags (ad-level)
-    const flagDisable = (r.ad_status === "active" && (windowConv ?? 0) === 0 && (windowSpend ?? 0) >= 100)
-      || (windowRoas != null && windowRoas < 0.5 && (windowSpend ?? 0) >= 50);
+    // Flags (ad-level). Same rule the dashboard's "Needs Attention" panel uses,
+    // so the CSV and the UI never disagree on what should be paused.
+    const flagDisable = r.ad_status === "active"
+      && (windowSpend ?? 0) >= 25
+      && (
+        (windowConv ?? 0) === 0
+        || (windowRoas != null && windowRoas < 0.5)
+      );
     const flagScale = r.ad_status === "active"
       && windowRoas != null && windowRoas >= 2
       && (n(r.running_days) ?? 0) >= 7
@@ -470,6 +479,7 @@ export async function fetchAgentExportRows(opts: {
       flagDisableCandidate: flagDisable,
       flagScaleCandidate: flagScale,
       flagReviewCandidate: flagReview,
+      creativeHasWinners: false, // filled after rollup pass
     };
   });
 
@@ -490,9 +500,15 @@ export async function fetchAgentExportRows(opts: {
     const rollup = rollupCreativeHealth(
       g.ads.map((a) => ({ spend: a.windowSpend, health: a.adHealth, reasons: a.adHealthReasons })),
     );
+    const hasWinners = g.ads.some(
+      (a) => a.status === "active" && (a.windowSpend ?? 0) >= 25 && (a.windowRoas ?? 0) >= 1,
+    );
     for (const a of g.ads) {
       a.creativeRollupHealth = rollup.health;
       a.creativeRollupReasons = rollup.reasons;
+      // Only meaningful for the bleeders themselves — a winner ad on a creative with
+      // other winners isn't a useful signal. Keep false for non-bleeder rows.
+      if (a.flagDisableCandidate) a.creativeHasWinners = hasWinners;
     }
 
     const sumWindow = <K extends keyof AdExportRow>(k: K): number | null => {
