@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { format, subDays, startOfDay, endOfDay } from "date-fns";
+import { format, subDays, startOfDay, endOfDay, startOfMonth } from "date-fns";
 import type { DateRange } from "react-day-picker";
 import { CalendarIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -19,6 +19,7 @@ const PRESETS = [
   { label: "Last 7 days", range: () => ({ from: startOfDay(subDays(new Date(), 6)), to: endOfDay(new Date()) }) },
   { label: "Last 14 days", range: () => ({ from: startOfDay(subDays(new Date(), 13)), to: endOfDay(new Date()) }) },
   { label: "Last 30 days", range: () => ({ from: startOfDay(subDays(new Date(), 29)), to: endOfDay(new Date()) }) },
+  { label: "This month", range: () => ({ from: startOfMonth(new Date()), to: endOfDay(new Date()) }) },
 ] as const;
 
 function getActivePreset(from: Date | undefined, to: Date | undefined): string | null {
