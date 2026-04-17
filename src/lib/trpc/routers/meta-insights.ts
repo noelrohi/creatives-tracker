@@ -114,7 +114,7 @@ async function fetchMetaAdDeliveryById(input: {
 }) {
   const deliveries = new Map<string, string>();
 
-  for (const batch of chunk(input.adMetaIds, 100)) {
+  for (const batch of chunk(input.adMetaIds, 50)) {
     const params = new URLSearchParams({
       access_token: input.accessToken,
       ids: batch.join(","),
