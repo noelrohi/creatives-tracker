@@ -69,6 +69,12 @@ export const performanceLogs = pgTable(
   (table) => [
     index("performance_log_ad_id_idx").on(table.adId),
     index("performance_log_organization_id_idx").on(table.organizationId),
+    index("performance_log_org_ad_date_idx").on(
+      table.organizationId,
+      table.adId,
+      table.dateStart,
+      table.dateEnd,
+    ),
   ],
 );
 

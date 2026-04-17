@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, and, desc, gte, lte } from "drizzle-orm";
+import { eq, and, desc, gte, lte, sql } from "drizzle-orm";
 import { router, orgProcedure, orgWriteProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
@@ -7,6 +7,16 @@ import { performanceLogs } from "@/schema/performance-log";
 import { ads } from "@/schema/ad";
 import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
+
+const dimensionColumn = (dim: "age" | "gender" | "country" | "device") => {
+  const map = {
+    age: sql.raw("pl.age"),
+    gender: sql.raw("pl.gender"),
+    country: sql.raw("pl.country"),
+    device: sql.raw("pl.device"),
+  } as const;
+  return map[dim];
+};
 
 const perfFields = {
   roas: z.string().optional(),
@@ -131,6 +141,106 @@ export const performanceLogRouter = router({
       await db
         .delete(performanceLogs)
         .where(and(eq(performanceLogs.id, input.id), eq(performanceLogs.organizationId, ctx.organizationId)));
+    }),
+
+  demographicBreakdown: orgProcedure
+    .input(
+      z.object({
+        dimension: z.enum(["age", "gender", "country", "device"]),
+        from: z.string(),
+        to: z.string(),
+        accountId: z.string().optional(),
+        teamId: z.string().optional(),
+      }),
+    )
+    .query(async ({ input, ctx }) => {
+      const dim = dimensionColumn(input.dimension);
+      const accountFilter = input.accountId
+        ? sql`AND ad.account_id = ${input.accountId}`
+        : sql``;
+      const teamFilter = input.teamId
+        ? sql`AND ac.team_id = ${input.teamId}`
+        : sql``;
+      const joinCreative = input.teamId
+        ? sql`JOIN ad_creative ac ON ac.id = ad.ad_creative_id`
+        : sql``;
+
+      type Row = {
+        label: string;
+        spend: string | null;
+        conversions: string | null;
+        roas: string | null;
+        impressions: string | null;
+      };
+
+      const result = await db.execute(sql`
+        SELECT
+          ${dim} as label,
+          sum(pl.spend)::text as spend,
+          sum(pl.conversions)::text as conversions,
+          (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text as roas,
+          sum(pl.impressions)::text as impressions
+        FROM performance_log pl
+        JOIN ad ON ad.id = pl.ad_id
+        ${joinCreative}
+        WHERE pl.date_start <= ${input.to}::date
+          AND pl.date_end >= ${input.from}::date
+          AND ad.organization_id = ${ctx.organizationId}
+          AND ${dim} IS NOT NULL
+          AND ${dim} != ''
+          ${accountFilter}
+          ${teamFilter}
+        GROUP BY ${dim}
+        ORDER BY sum(pl.spend) DESC NULLS LAST
+        LIMIT 15
+      `);
+
+      return result.rows as Row[];
+    }),
+
+  creativeDemographicBreakdown: orgProcedure
+    .input(
+      z.object({
+        creativeId: z.string(),
+        dimension: z.enum(["age", "gender", "country", "device"]),
+        from: z.string().optional(),
+        to: z.string().optional(),
+      }),
+    )
+    .query(async ({ input, ctx }) => {
+      const dim = dimensionColumn(input.dimension);
+      const dateFilter = input.from && input.to
+        ? sql`AND pl.date_start <= ${input.to}::date AND pl.date_end >= ${input.from}::date`
+        : sql``;
+
+      type Row = {
+        label: string;
+        spend: string | null;
+        conversions: string | null;
+        roas: string | null;
+        impressions: string | null;
+      };
+
+      const result = await db.execute(sql`
+        SELECT
+          ${dim} as label,
+          sum(pl.spend)::text as spend,
+          sum(pl.conversions)::text as conversions,
+          (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text as roas,
+          sum(pl.impressions)::text as impressions
+        FROM performance_log pl
+        JOIN ad ON ad.id = pl.ad_id
+        WHERE ad.ad_creative_id = ${input.creativeId}
+          AND ad.organization_id = ${ctx.organizationId}
+          AND ${dim} IS NOT NULL
+          AND ${dim} != ''
+          ${dateFilter}
+        GROUP BY ${dim}
+        ORDER BY sum(pl.spend) DESC NULLS LAST
+        LIMIT 15
+      `);
+
+      return result.rows as Row[];
     }),
 
   exportByAccount: orgProcedure

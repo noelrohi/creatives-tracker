@@ -1,0 +1,1 @@
+CREATE INDEX "performance_log_org_ad_date_idx" ON "performance_log" USING btree ("organization_id","ad_id","date_start","date_end");
