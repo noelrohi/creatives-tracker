@@ -529,7 +529,12 @@ export async function fetchAgentExportRows(opts: {
   const creatives: CreativeExportRow[] = [];
   for (const [creativeId, g] of byCreative) {
     const rollup = rollupCreativeHealth(
-      g.ads.map((a) => ({ spend: a.windowSpend, health: a.adHealth, reasons: a.adHealthReasons })),
+      g.ads.map((a) => ({
+        spend: a.windowSpend,
+        health: a.adHealth,
+        reasons: a.adHealthReasons,
+        status: a.status,
+      })),
     );
     const hasWinners = g.ads.some(
       (a) => a.status === "active" && (a.windowSpend ?? 0) >= 25 && (a.windowRoas ?? 0) >= 1,

@@ -172,15 +172,27 @@ export function computeHealth(opts: {
 /**
  * Roll up per-ad health into a creative-level verdict, weighted by spend.
  *
- * A creative is only as bad as the majority of its recent spend. The rolled-up
- * `reasons` explain which ads contributed — e.g. "2 of 3 ads critical (85% of
- * spend) — No conversions on $320 spent · ROAS 0.3x".
+ * Only active ads contribute. A paused ad's bad performance is historical —
+ * the action (pause) already happened, so surfacing it on the rollup would
+ * push the creative to "Critical" with nothing left to act on.
+ *
+ * The rolled-up `reasons` explain which ads contributed — e.g. "2 of 3 ads
+ * critical (85% of spend) — No conversions on $320 spent · ROAS 0.3x".
  */
 export function rollupCreativeHealth(
-  adRows: Array<{ spend: number | null; health: CreativeHealth | null; reasons?: string[] }>,
+  adRows: Array<{
+    spend: number | null;
+    health: CreativeHealth | null;
+    reasons?: string[];
+    status?: string | null;
+  }>,
 ): HealthVerdict {
   const scored = adRows.filter(
-    (r) => r.health != null && r.spend != null && r.spend > 0,
+    (r) =>
+      r.health != null
+      && r.spend != null
+      && r.spend > 0
+      && (r.status == null || r.status === "active"),
   ) as Array<{ spend: number; health: CreativeHealth; reasons?: string[] }>;
   if (scored.length === 0) return { health: null, reasons: [] };
 
