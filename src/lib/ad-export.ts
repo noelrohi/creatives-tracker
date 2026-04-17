@@ -542,9 +542,11 @@ export async function fetchAgentExportRows(opts: {
     for (const a of g.ads) {
       a.creativeRollupHealth = rollup.health;
       a.creativeRollupReasons = rollup.reasons;
-      // Only meaningful for the bleeders themselves — a winner ad on a creative with
-      // other winners isn't a useful signal. Keep false for non-bleeder rows.
-      if (a.flagDisableCandidate) a.creativeHasWinners = hasWinners;
+      // Propagate to ANY bleeder (any disableTier, including "cooking"), not
+      // just pause_now/watch. The "concept works elsewhere" signal is the most
+      // valuable on cooking ads — it tells the buyer "this isn't dead yet, and
+      // a sibling is at 3x — likely audience pairing, not creative."
+      if (a.disableTier) a.creativeHasWinners = hasWinners;
     }
 
     const sumWindow = <K extends keyof AdExportRow>(k: K): number | null => {
