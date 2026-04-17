@@ -461,9 +461,12 @@ export const adCreativeRouter = router({
         ad_status: string | null;
       };
 
-      // Top performers by ROAS (min $50 spend). Tracks running_days so we can
-      // tag the long-runners as "evergreen" — they're top performers AND would
-      // otherwise show up in the Surviving Creatives panel.
+      // Top performers by ROAS (min $50 spend). Displayed metrics aggregate
+      // ALL ads in the window (matches Meta's report — paused-ad late
+      // attribution counts because revenue is real). But the creative only
+      // qualifies if at least one active ad has window spend, so the panel
+      // never recommends "scale this" on a creative with nothing to scale.
+      // Tracks running_days for the "evergreen" tag.
       const topResult = await db.execute(sql`
         SELECT
           ac.id,
@@ -476,7 +479,7 @@ export const adCreativeRouter = router({
           (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as cpa,
           avg(pl.ctr)::text as ctr,
           sum(pl.conversions)::text as total_conversions,
-          (SELECT ad2.status FROM ad ad2 WHERE ad2.ad_creative_id = ac.id LIMIT 1) as ad_status,
+          CASE WHEN bool_or(ad.status = 'active') THEN 'active' ELSE 'paused' END AS ad_status,
           (max(pl.date_end)::date - min(pl.date_start)::date) as running_days
         FROM ad_creative ac
         JOIN ad ON ad.ad_creative_id = ac.id
@@ -485,16 +488,17 @@ export const adCreativeRouter = router({
         GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
         HAVING sum(pl.spend) >= 50
           AND coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) >= 1
+          AND bool_or(ad.status = 'active' AND pl.spend > 0)
         ORDER BY sum(pl.conversions) DESC NULLS LAST, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST
         LIMIT 10
       `);
       const topPerformers = topResult.rows as (CreativeRow & { running_days: number })[];
 
       const topIds = topPerformers.map((r) => r.id);
-      // Surviving creatives: active ads with ROAS >= 1 running for 14+ days,
-      // excluding any creative that's already in Top Performers (it'll carry an
-      // "evergreen" badge there instead). Surfaces the workhorses you'd
-      // otherwise miss because they're not flashy enough for the top 10.
+      // Surviving creatives: long-running profitable concepts that didn't crack
+      // the Top Performers top-10. Same display-vs-qualify split — metrics
+      // aggregate all ads (matches Meta) but the creative only qualifies if at
+      // least one active ad has spend (something is currently runnable).
       const survivingExclude = topIds.length
         ? sql`AND ac.id NOT IN (${sql.join(topIds.map((id) => sql`${id}`), sql`, `)})`
         : sql``;
@@ -510,19 +514,19 @@ export const adCreativeRouter = router({
           (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as cpa,
           avg(pl.ctr)::text as ctr,
           sum(pl.conversions)::text as total_conversions,
-          (SELECT ad2.status FROM ad ad2 WHERE ad2.ad_creative_id = ac.id LIMIT 1) as ad_status,
+          CASE WHEN bool_or(ad.status = 'active') THEN 'active' ELSE 'paused' END AS ad_status,
           (max(pl.date_end)::date - min(pl.date_start)::date) as running_days
         FROM ad_creative ac
         JOIN ad ON ad.ad_creative_id = ac.id
         JOIN performance_log pl ON pl.ad_id = ad.id
         WHERE ad.organization_id = ${ctx.organizationId}
-          AND ad.status = 'active'
           ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter}
           ${survivingExclude}
         GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
         HAVING sum(pl.spend) >= 50
           AND coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) >= 1
           AND (max(pl.date_end)::date - min(pl.date_start)::date) >= 14
+          AND bool_or(ad.status = 'active' AND pl.spend > 0)
         ORDER BY (max(pl.date_end)::date - min(pl.date_start)::date) DESC, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST
         LIMIT 10
       `);
