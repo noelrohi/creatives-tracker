@@ -439,9 +439,11 @@ export async function fetchAgentExportRows(opts: {
       else if (fairShot || days >= 7) disableTier = "watch";
       else disableTier = "cooking";
     }
-    // flagDisable stays true for any bleeder so existing consumers don't break;
-    // disableTier is the new actionable signal.
-    const flagDisable = isBleeding;
+    // flagDisable means "act on this today" — same semantics as the dashboard's
+    // Needs Attention panel. Cooking ads are bleeding but haven't had a fair
+    // shot yet; they show up in disableTier for tracking but should not be
+    // recommended for pausing.
+    const flagDisable = disableTier === "pause_now" || disableTier === "watch";
     const flagScale = r.ad_status === "active"
       && windowRoas != null && windowRoas >= 2
       && (n(r.running_days) ?? 0) >= 7
