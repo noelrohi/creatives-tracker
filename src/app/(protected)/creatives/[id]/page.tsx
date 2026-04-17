@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { useQueryState, parseAsString } from "nuqs";
 import { subDays } from "date-fns";
 import Link from "next/link";
 import { formatDateOnly } from "@/lib/date";
@@ -20,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CreativeAdsTab } from "@/components/blocks/creatives/creative-ads-tab";
 import { CreativePerformanceTab } from "@/components/blocks/creatives/creative-performance-tab";
+import { DemographicBreakdownChart } from "@/components/blocks/dashboard/demographic-chart";
 import { Field, FieldContent, FieldError, FieldLabel } from "@/components/ui/field";
 import {
   Select,
@@ -78,6 +80,7 @@ export default function CreativeDetailPage() {
   const { role } = useActiveOrganizationRole();
   const isReadOnly = role === "member";
 
+  const [creativeTab, setCreativeTab] = useQueryState("tab", parseAsString.withDefault("performance"));
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [metaPreview, setMetaPreview] = useState<MetaCreativePreview | null>(null);
   const [wantsVideo, setWantsVideo] = useState(false);
@@ -105,6 +108,16 @@ export default function CreativeDetailPage() {
     trpc.tag.listForEntity.queryOptions({
       entityType: "ad_creative",
       entityId: id,
+    }),
+  );
+
+  const [demoDimension, setDemoDimension] = useState<"age" | "gender" | "country" | "device">("gender");
+  const creativeDemographic = useQuery(
+    trpc.performanceLog.creativeDemographicBreakdown.queryOptions({
+      creativeId: id,
+      dimension: demoDimension,
+      from: formatDateOnly(dateRange.from),
+      to: formatDateOnly(dateRange.to),
     }),
   );
 
@@ -367,7 +380,7 @@ export default function CreativeDetailPage() {
       )}
 
       {/* Tabs */}
-      <Tabs defaultValue="performance">
+      <Tabs value={creativeTab} onValueChange={setCreativeTab}>
         <TabsList variant="line">
           <TabsTrigger value="performance">Performance</TabsTrigger>
           <TabsTrigger value="details">Details</TabsTrigger>
@@ -379,6 +392,7 @@ export default function CreativeDetailPage() {
               </span>
             )}
           </TabsTrigger>
+          <TabsTrigger value="demographics">Demographics</TabsTrigger>
         </TabsList>
 
         {/* Performance tab */}
@@ -642,6 +656,16 @@ export default function CreativeDetailPage() {
         {/* Ads tab */}
         <TabsContent value="ads" className="pt-4">
           <CreativeAdsTab ads={linkedAds.data} />
+        </TabsContent>
+
+        {/* Demographics tab */}
+        <TabsContent value="demographics" className="pt-4">
+          <DemographicBreakdownChart
+            data={creativeDemographic.data}
+            dimension={demoDimension}
+            onDimensionChange={setDemoDimension}
+            isLoading={creativeDemographic.isLoading}
+          />
         </TabsContent>
       </Tabs>
 
