@@ -441,6 +441,12 @@ export const adCreativeRouter = router({
       `);
       const portfolio = (portfolioResult.rows as PortfolioRow[])[0];
 
+      // "Fair shot" floor: an ad needs to have spent ~one portfolio CPA before
+      // we can confidently call it dead. Floor at $50 in case portfolio CPA is
+      // unusually low (e.g. low-priced product or sparse data).
+      const portfolioCpaNum = portfolio?.portfolio_cpa != null ? parseFloat(portfolio.portfolio_cpa) : null;
+      const fairShotSpend = Math.max(50, portfolioCpaNum && Number.isFinite(portfolioCpaNum) ? portfolioCpaNum : 50);
+
       type CreativeRow = {
         id: string;
         name: string;
@@ -455,7 +461,9 @@ export const adCreativeRouter = router({
         ad_status: string | null;
       };
 
-      // Top performers by ROAS (min $50 spend)
+      // Top performers by ROAS (min $50 spend). Tracks running_days so we can
+      // tag the long-runners as "evergreen" — they're top performers AND would
+      // otherwise show up in the Surviving Creatives panel.
       const topResult = await db.execute(sql`
         SELECT
           ac.id,
@@ -468,7 +476,8 @@ export const adCreativeRouter = router({
           (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as cpa,
           avg(pl.ctr)::text as ctr,
           sum(pl.conversions)::text as total_conversions,
-          (SELECT ad2.status FROM ad ad2 WHERE ad2.ad_creative_id = ac.id LIMIT 1) as ad_status
+          (SELECT ad2.status FROM ad ad2 WHERE ad2.ad_creative_id = ac.id LIMIT 1) as ad_status,
+          (max(pl.date_end)::date - min(pl.date_start)::date) as running_days
         FROM ad_creative ac
         JOIN ad ON ad.ad_creative_id = ac.id
         JOIN performance_log pl ON pl.ad_id = ad.id
@@ -479,10 +488,16 @@ export const adCreativeRouter = router({
         ORDER BY sum(pl.conversions) DESC NULLS LAST, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST
         LIMIT 10
       `);
-      const topPerformers = topResult.rows as CreativeRow[];
+      const topPerformers = topResult.rows as (CreativeRow & { running_days: number })[];
 
       const topIds = topPerformers.map((r) => r.id);
-      // Surviving creatives: active ads with ROAS >= 1 running for 14+ days
+      // Surviving creatives: active ads with ROAS >= 1 running for 14+ days,
+      // excluding any creative that's already in Top Performers (it'll carry an
+      // "evergreen" badge there instead). Surfaces the workhorses you'd
+      // otherwise miss because they're not flashy enough for the top 10.
+      const survivingExclude = topIds.length
+        ? sql`AND ac.id NOT IN (${sql.join(topIds.map((id) => sql`${id}`), sql`, `)})`
+        : sql``;
       const survivingResult = await db.execute(sql`
         SELECT
           ac.id,
@@ -503,6 +518,7 @@ export const adCreativeRouter = router({
         WHERE ad.organization_id = ${ctx.organizationId}
           AND ad.status = 'active'
           ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter}
+          ${survivingExclude}
         GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
         HAVING sum(pl.spend) >= 50
           AND coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) >= 1
@@ -512,10 +528,16 @@ export const adCreativeRouter = router({
       `);
       const survivingCreatives = survivingResult.rows as (CreativeRow & { running_days: number })[];
 
-      // Bleeders: per-ad rule. A creative surfaces here if any active ad in the window
-      // matches: (conversions == 0 AND spend >= $25) OR (ROAS < 0.5 AND spend >= $25).
-      // Aggregated to creative so the dashboard stays creative-first while exposing
-      // the per-ad damage that a strict creative-rollup would average away.
+      // Bleeders: per-ad rule, tiered by whether the ad has had a "fair shot."
+      // An ad needs both age (running_days >= 5) and spend (>= ~1× portfolio CPA)
+      // before we'll call it confidently dead — pausing it earlier means we'd
+      // strangle ads that haven't had time for delivery to learn.
+      //
+      //   tier = pause_now  if spend >= fair-shot AND days >= 5 AND (0 conv OR ROAS < 0.5)
+      //   tier = watch      if one threshold met AND (0 conv OR ROAS < 0.5)
+      //   tier = cooking    otherwise — hidden from Needs Attention
+      //
+      // A creative inherits the most urgent tier of its bleeder ads.
       type BleederRow = CreativeRow & {
         bleeder_count: number;
         active_ad_count: number;
@@ -523,6 +545,7 @@ export const adCreativeRouter = router({
         bleeder_at_risk: string;
         has_winner: boolean;
         bleeder_meta_ids: (string | null)[] | null;
+        tier: "pause_now" | "watch";
       };
       const bottomResult = await db.execute(sql`
         WITH ad_window AS (
@@ -534,7 +557,8 @@ export const adCreativeRouter = router({
             sum(pl.spend) AS spend,
             sum(pl.purchase_value) AS revenue,
             sum(pl.conversions) AS conversions,
-            coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) AS roas
+            coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) AS roas,
+            (max(pl.date_end)::date - min(pl.date_start)::date) AS running_days
           FROM ad
           JOIN performance_log pl ON pl.ad_id = ad.id
           JOIN ad_creative ac ON ac.id = ad.ad_creative_id
@@ -544,13 +568,23 @@ export const adCreativeRouter = router({
           GROUP BY ad.id, ad.meta_id, ad.ad_creative_id, ad.status
         ),
         bleeder AS (
-          SELECT *
+          SELECT
+            *,
+            CASE
+              WHEN spend >= ${fairShotSpend} AND running_days >= 5 THEN 'pause_now'
+              WHEN spend >= ${fairShotSpend} OR running_days >= 7 THEN 'watch'
+              ELSE 'cooking'
+            END AS tier
           FROM ad_window
           WHERE status = 'active'
             AND (
-              (coalesce(conversions, 0) = 0 AND spend >= 25)
-              OR (roas < 0.5 AND spend >= 25)
+              coalesce(conversions, 0) = 0
+              OR (roas IS NOT NULL AND roas < 0.5)
             )
+            AND spend >= 25
+        ),
+        actionable AS (
+          SELECT * FROM bleeder WHERE tier IN ('pause_now', 'watch')
         )
         SELECT
           ac.id,
@@ -572,6 +606,7 @@ export const adCreativeRouter = router({
           sum(b.spend)::text AS bleeder_spend,
           sum(coalesce(b.spend, 0) * (1 - coalesce(b.roas, 0)))::text AS bleeder_at_risk,
           array_agg(b.meta_ad_id ORDER BY b.spend DESC NULLS LAST) AS bleeder_meta_ids,
+          (CASE WHEN bool_or(b.tier = 'pause_now') THEN 'pause_now' ELSE 'watch' END)::text AS tier,
           EXISTS (
             SELECT 1 FROM ad_window aw
             WHERE aw.ad_creative_id = ac.id
@@ -579,11 +614,13 @@ export const adCreativeRouter = router({
               AND aw.spend >= 25
               AND aw.roas >= 1
           ) AS has_winner
-        FROM bleeder b
+        FROM actionable b
         JOIN ad_creative ac ON ac.id = b.ad_creative_id
         ${topIds.length ? sql`WHERE ac.id NOT IN (${sql.join(topIds.map((id) => sql`${id}`), sql`, `)})` : sql``}
         GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
-        ORDER BY sum(coalesce(b.spend, 0) * (1 - coalesce(b.roas, 0))) DESC NULLS LAST
+        ORDER BY
+          (CASE WHEN bool_or(b.tier = 'pause_now') THEN 0 ELSE 1 END),
+          sum(coalesce(b.spend, 0) * (1 - coalesce(b.roas, 0))) DESC NULLS LAST
         LIMIT 10
       `);
       const bottomPerformers = bottomResult.rows as BleederRow[];
@@ -622,6 +659,10 @@ export const adCreativeRouter = router({
           ctr: r.ctr,
           conversions: r.total_conversions,
           adStatus: r.ad_status,
+          runningDays: r.running_days,
+          // A top performer also qualifies for Surviving Creatives if it's been
+          // running 14+ days. Mark it so the UI shows an "evergreen" badge.
+          isEvergreen: r.ad_status === "active" && (r.running_days ?? 0) >= 14,
           health: healthByCreative.get(r.id)?.health ?? null,
           healthReasons: healthByCreative.get(r.id)?.reasons ?? [],
         })),
@@ -647,6 +688,7 @@ export const adCreativeRouter = router({
             bleederDollarsAtRisk: r.bleeder_at_risk,
             hasWinnerAd: r.has_winner,
             bleederMetaIds: (r.bleeder_meta_ids ?? []).filter((id): id is string => Boolean(id)),
+            tier: r.tier,
           };
         }),
         survivingCreatives: survivingCreatives.map((r) => ({

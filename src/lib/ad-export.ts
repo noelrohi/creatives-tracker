@@ -132,6 +132,11 @@ export type AdExportRow = {
   flagDisableCandidate: boolean;
   flagScaleCandidate: boolean;
   flagReviewCandidate: boolean;
+  // pause_now → confident-dead, paste the meta_ad_id and pause today.
+  // watch     → leaning bad but didn't get a fair shot on both spend and time.
+  // cooking   → too early to call (under-spent and under-aged).
+  // null      → not bleeding.
+  disableTier: "pause_now" | "watch" | "cooking" | null;
   // True when a *different* ad on the same creative is profitable (ROAS >= 1, spend >= $25).
   // Lets the agent (and CSV reader) tell "this creative is dead" from
   // "this creative works elsewhere — pause this placement, keep the concept".
@@ -354,6 +359,14 @@ export async function fetchAgentExportRows(opts: {
     `)
   ).rows as RawAdRow[];
 
+  // Portfolio CPA = sum(spend) / sum(conv) across the export window. Used as the
+  // "fair shot" floor for the bleeder tier — under-spending an ad's CPA means
+  // it can't statistically have converted yet. Floor at $50 in case the
+  // portfolio CPA is unusually low or undefined.
+  const totalSpend = rawRows.reduce((acc, r) => acc + (n(r.window_spend) ?? 0), 0);
+  const totalConv = rawRows.reduce((acc, r) => acc + (n(r.window_conversions) ?? 0), 0);
+  const portfolioCpaFloor = Math.max(50, totalConv > 0 ? totalSpend / totalConv : 50);
+
   const ads: AdExportRow[] = rawRows.map((r) => {
     const windowSpend = n(r.window_spend);
     const windowConv = n(r.window_conversions);
@@ -406,14 +419,29 @@ export async function fetchAgentExportRows(opts: {
 
     const activeInWindow = r.ad_status === "active" && windowSpend != null && windowSpend > 0;
 
-    // Flags (ad-level). Same rule the dashboard's "Needs Attention" panel uses,
-    // so the CSV and the UI never disagree on what should be paused.
-    const flagDisable = r.ad_status === "active"
+    // Tiered disable flag — same rule as the dashboard's Needs Attention panel
+    // so CSV and UI never disagree. Tier reflects whether the ad has had a
+    // "fair shot" (~one portfolio CPA worth of spend AND time to deliver).
+    //   pause_now → spend >= fair-shot AND days >= 5
+    //   watch     → one threshold met, the other not
+    //   cooking   → too early to call (under-spent and under-aged)
+    const isBleeding = r.ad_status === "active"
       && (windowSpend ?? 0) >= 25
       && (
         (windowConv ?? 0) === 0
         || (windowRoas != null && windowRoas < 0.5)
       );
+    const days = n(r.running_days) ?? 0;
+    const fairShot = (windowSpend ?? 0) >= portfolioCpaFloor;
+    let disableTier: "pause_now" | "watch" | "cooking" | null = null;
+    if (isBleeding) {
+      if (fairShot && days >= 5) disableTier = "pause_now";
+      else if (fairShot || days >= 7) disableTier = "watch";
+      else disableTier = "cooking";
+    }
+    // flagDisable stays true for any bleeder so existing consumers don't break;
+    // disableTier is the new actionable signal.
+    const flagDisable = isBleeding;
     const flagScale = r.ad_status === "active"
       && windowRoas != null && windowRoas >= 2
       && (n(r.running_days) ?? 0) >= 7
@@ -479,6 +507,7 @@ export async function fetchAgentExportRows(opts: {
       flagDisableCandidate: flagDisable,
       flagScaleCandidate: flagScale,
       flagReviewCandidate: flagReview,
+      disableTier,
       creativeHasWinners: false, // filled after rollup pass
     };
   });

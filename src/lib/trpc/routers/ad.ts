@@ -63,6 +63,7 @@ export const adRouter = router({
       return db
         .select({
           id: ads.id,
+          metaId: ads.metaId,
           name: ads.name,
           caption: ads.caption,
           adSetId: ads.adSetId,
@@ -83,7 +84,7 @@ export const adRouter = router({
         .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
         .leftJoin(performanceLogs, eq(performanceLogs.adId, ads.id))
         .where(and(eq(ads.adCreativeId, input.adCreativeId), eq(ads.organizationId, ctx.organizationId)))
-        .groupBy(ads.id, ads.name, ads.caption, ads.adSetId, adSets.name, campaigns.name, ads.destinationUrl, ads.status, ads.notes, ads.createdAt)
+        .groupBy(ads.id, ads.metaId, ads.name, ads.caption, ads.adSetId, adSets.name, campaigns.name, ads.destinationUrl, ads.status, ads.notes, ads.createdAt)
         .orderBy(desc(ads.createdAt));
     }),
 

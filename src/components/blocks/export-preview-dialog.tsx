@@ -70,7 +70,7 @@ function buildAdsCsv(ads: AgentExport["ads"]): string {
     "ad_health", "ad_health_reasons",
     "creative_rollup_health", "creative_rollup_reasons",
     "dollars_at_risk_usd",
-    "flag_disable_candidate", "flag_scale_candidate", "flag_review_candidate",
+    "flag_disable_candidate", "disable_tier", "flag_scale_candidate", "flag_review_candidate",
     "creative_has_winners",
   ] as const;
   const rows = ads.map((a) => [
@@ -91,7 +91,7 @@ function buildAdsCsv(ads: AgentExport["ads"]): string {
     fmtS(a.adHealth), a.adHealthReasons.join(" | "),
     fmtS(a.creativeRollupHealth), a.creativeRollupReasons.join(" | "),
     fmtN(a.dollarsAtRisk),
-    fmtB(a.flagDisableCandidate), fmtB(a.flagScaleCandidate), fmtB(a.flagReviewCandidate),
+    fmtB(a.flagDisableCandidate), fmtS(a.disableTier), fmtB(a.flagScaleCandidate), fmtB(a.flagReviewCandidate),
     fmtB(a.creativeHasWinners),
   ]);
   return toCsv(headers, rows);
@@ -168,9 +168,11 @@ export function ExportPreviewDialog({
         spend: data.ads.reduce((acc, a) => acc + (a.windowSpend ?? 0), 0),
         revenue: data.ads.reduce((acc, a) => acc + (a.windowRevenue ?? 0), 0),
         dollarsAtRisk: data.ads.reduce((acc, a) => acc + a.dollarsAtRisk, 0),
-        disable: data.ads.filter((a) => a.flagDisableCandidate).length,
+        pauseNow: data.ads.filter((a) => a.disableTier === "pause_now").length,
+        watch: data.ads.filter((a) => a.disableTier === "watch").length,
+        cooking: data.ads.filter((a) => a.disableTier === "cooking").length,
         scale: data.ads.filter((a) => a.flagScaleCandidate).length,
-        review: data.ads.filter((a) => a.flagReviewCandidate).length,
+        winnerSiblings: data.ads.filter((a) => a.creativeHasWinners).length,
       }
     : null;
   const roas = summary && summary.spend > 0 ? summary.revenue / summary.spend : null;
@@ -244,9 +246,11 @@ export function ExportPreviewDialog({
                 <Cell label="Window spend" value={fmtMoney(summary.spend)} />
                 <Cell label="Window ROAS" value={fmtRoas(roas)} />
                 <Cell label="$ at risk" value={fmtMoney(summary.dollarsAtRisk)} accent="red" />
-                <Cell label="Disable candidates" value={fmtNum(summary.disable)} accent="red" />
+                <Cell label="Pause now" value={fmtNum(summary.pauseNow)} accent="red" />
+                <Cell label="Watch" value={fmtNum(summary.watch)} accent="amber" />
+                <Cell label="Cooking" value={fmtNum(summary.cooking)} />
                 <Cell label="Scale candidates" value={fmtNum(summary.scale)} accent="emerald" />
-                <Cell label="Review candidates" value={fmtNum(summary.review)} accent="amber" />
+                <Cell label="Winner siblings" value={fmtNum(summary.winnerSiblings)} accent="emerald" />
               </div>
             )}
           </section>

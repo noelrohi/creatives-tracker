@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { ExternalLink, MoreHorizontal, FileText } from "lucide-react";
+import { Copy, ExternalLink, MoreHorizontal, FileText } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -36,6 +37,7 @@ function fmt(
 
 interface LinkedAd {
   id: string;
+  metaId: string | null;
   name: string;
   caption: string | null;
   status: string | null;
@@ -165,7 +167,7 @@ export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
                 {ad.minDate ?? "—"}
               </td>
               <td className="px-2 py-2">
-                {ad.caption && !sharedCaption && (
+                {(ad.metaId || (ad.caption && !sharedCaption)) && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button variant="ghost" size="icon-sm" className="size-7">
@@ -173,9 +175,27 @@ export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => setCaptionAd(ad)}>
-                        <FileText className="size-3.5" /> View Caption
-                      </DropdownMenuItem>
+                      {ad.metaId && (
+                        <DropdownMenuItem
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(ad.metaId!);
+                              toast.success("Copied Meta ID", {
+                                description: "Paste into Meta Ads Manager search to find this ad.",
+                              });
+                            } catch {
+                              toast.error("Couldn't copy to clipboard");
+                            }
+                          }}
+                        >
+                          <Copy className="size-3.5" /> Copy Meta ID
+                        </DropdownMenuItem>
+                      )}
+                      {ad.caption && !sharedCaption && (
+                        <DropdownMenuItem onClick={() => setCaptionAd(ad)}>
+                          <FileText className="size-3.5" /> View Caption
+                        </DropdownMenuItem>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 )}

@@ -1,16 +1,7 @@
 import Link from "next/link";
-import { ArrowRight, Copy, ExternalLink, ImageIcon, MoreHorizontal, Sparkles, Upload, Video } from "lucide-react";
-import { toast } from "sonner";
+import { ArrowRight, ImageIcon, Leaf, Sparkles, Upload, Video } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -45,6 +36,8 @@ export type LeaderboardRow = {
   bleederDollarsAtRisk?: string | null;
   hasWinnerAd?: boolean;
   bleederMetaIds?: string[];
+  tier?: "pause_now" | "watch" | null;
+  isEvergreen?: boolean;
 };
 
 const HEALTH_STYLES: Record<CreativeHealth, { label: string; className: string }> = {
@@ -57,18 +50,23 @@ function BleederBadge({ row }: { row: LeaderboardRow }) {
   if (!row.bleederAdCount || row.bleederAdCount <= 0) return null;
   const total = row.activeAdCount ?? row.bleederAdCount;
   const atRisk = row.bleederDollarsAtRisk ? parseFloat(row.bleederDollarsAtRisk) : 0;
+  const isPauseNow = row.tier === "pause_now";
+  const className = isPauseNow
+    ? "bg-red-500/15 text-red-500 dark:text-red-400"
+    : "bg-amber-500/15 text-amber-600 dark:text-amber-400";
+  const label = isPauseNow ? "Pause" : "Watch";
+  const tooltipBody = isPauseNow
+    ? `${row.bleederAdCount} of ${total} active ad${total === 1 ? "" : "s"} have spent ≥ 1× portfolio CPA over 5+ days with no conversions (or ROAS < 0.5). Confident dead — pause.`
+    : `${row.bleederAdCount} of ${total} active ad${total === 1 ? "" : "s"} are bleeding but haven't had a fair shot on both spend and time. Watch — confirm before pausing.`;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex cursor-help items-center gap-1 rounded bg-red-500/15 px-1.5 py-0.5 text-[9px] font-medium text-red-500 dark:text-red-400">
-          {row.bleederAdCount}/{total} · {fmtMoney(atRisk)} risk
+        <span className={`inline-flex cursor-help items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-medium ${className}`}>
+          {label} · {row.bleederAdCount}/{total} · {fmtMoney(atRisk)}
         </span>
       </TooltipTrigger>
-      <TooltipContent side="left" className="max-w-xs">
-        <p>
-          {row.bleederAdCount} of {total} active ad{total === 1 ? "" : "s"} on this creative
-          spent ≥ $25 with 0 conversions or ROAS &lt; 0.5.
-        </p>
+      <TooltipContent side="top" className="max-w-xs">
+        <p>{tooltipBody}</p>
       </TooltipContent>
     </Tooltip>
   );
@@ -83,7 +81,7 @@ function WinnerSiblingBadge({ row }: { row: LeaderboardRow }) {
           <Sparkles className="size-2.5" /> winner sibling
         </span>
       </TooltipTrigger>
-      <TooltipContent side="left" className="max-w-xs">
+      <TooltipContent side="top" className="max-w-xs">
         <p>
           A different ad on this creative is profitable (ROAS ≥ 1, spend ≥ $25). The
           creative concept works — likely an audience/placement issue on the bleeders.
@@ -93,49 +91,24 @@ function WinnerSiblingBadge({ row }: { row: LeaderboardRow }) {
   );
 }
 
-function BleederRowMenu({ row }: { row: LeaderboardRow }) {
-  const ids = row.bleederMetaIds ?? [];
-  if (ids.length === 0) return null;
-  const handleCopy = async () => {
-    const payload = ids.join(", ");
-    try {
-      await navigator.clipboard.writeText(payload);
-      toast.success(`Copied ${ids.length} Meta ID${ids.length === 1 ? "" : "s"}`, {
-        description: "Paste into Meta Ads Manager search to pause.",
-      });
-    } catch {
-      toast.error("Couldn't copy to clipboard");
-    }
-  };
+function EvergreenBadge({ row }: { row: LeaderboardRow }) {
+  if (!row.isEvergreen) return null;
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-6 shrink-0 text-muted-foreground"
-          aria-label="Bleeder ad actions"
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          aria-label="Evergreen"
+          className="inline-flex size-4 shrink-0 cursor-help items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
         >
-          <MoreHorizontal className="size-3.5" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
-          {ids.length} bleeding ad{ids.length === 1 ? "" : "s"}
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={handleCopy} className="gap-2">
-          <Copy className="size-3.5" />
-          Copy Meta IDs
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild className="gap-2">
-          <Link href={`/creatives/${row.id}`}>
-            <ExternalLink className="size-3.5" />
-            Open creative
-          </Link>
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+          <Leaf className="size-2.5" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs">
+        <p>
+          <strong>Evergreen.</strong> Top performer that&apos;s also been running 14+ days — long-term workhorse, protect this one.
+        </p>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -154,7 +127,7 @@ function HealthBadge({ row }: { row: LeaderboardRow }) {
       <TooltipTrigger asChild>
         <span className="cursor-help">{badge}</span>
       </TooltipTrigger>
-      <TooltipContent side="left" className="max-w-xs">
+      <TooltipContent side="top" className="max-w-xs">
         <ul className="list-disc pl-4 space-y-0.5">
           {reasons.map((r, i) => (
             <li key={i}>{r}</li>
@@ -304,21 +277,21 @@ export function LeaderboardTable({
                       <Link href={`/creatives/${row.id}`} className="text-sm font-medium hover:underline truncate max-w-[200px]">
                         {row.name}
                       </Link>
+                      {row.format && (
+                        <Badge variant="secondary" className="text-[11px] capitalize shrink-0">{row.format}</Badge>
+                      )}
+                      {row.adStatus && (
+                        <Badge variant="outline" className="text-[11px] capitalize shrink-0">{row.adStatus}</Badge>
+                      )}
                       {row.bleederAdCount && row.bleederAdCount > 0 ? (
                         <>
                           <BleederBadge row={row} />
                           <WinnerSiblingBadge row={row} />
-                          <BleederRowMenu row={row} />
                         </>
                       ) : (
                         <>
-                          {row.format && (
-                            <Badge variant="secondary" className="text-[11px] capitalize shrink-0">{row.format}</Badge>
-                          )}
-                          {row.adStatus && (
-                            <Badge variant="outline" className="text-[11px] capitalize shrink-0">{row.adStatus}</Badge>
-                          )}
                           <HealthBadge row={row} />
+                          <EvergreenBadge row={row} />
                         </>
                       )}
                     </div>
