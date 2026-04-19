@@ -28,6 +28,7 @@ export const ads = pgTable(
     organizationId: text("organization_id"),
     status: statusEnum("status").notNull().default("active"),
     notes: text("notes"),
+    enrichmentAttemptedAt: timestamp("enrichment_attempted_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()

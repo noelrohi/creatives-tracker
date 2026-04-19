@@ -1,7 +1,7 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { normalizeImportedAdStatus } from "@/lib/ad-status";
-import { fetchMetaCreativePreviewsForAds } from "@/lib/meta-creative-assets";
+import { fetchMetaCreativePreviewsBatch } from "@/lib/meta-creative-assets";
 import type { BulkImportRow } from "@/lib/import-utils";
 import { getMetaAccountWithToken } from "@/lib/meta-insights-sync";
 import { adAccounts } from "@/schema/account";
@@ -520,7 +520,7 @@ export async function enrichMetaCreativePreviews(input: {
     }
   }
 
-  const previews = await fetchMetaCreativePreviewsForAds({
+  const { previews, successfulAdMetaIds } = await fetchMetaCreativePreviewsBatch({
     adMetaIds: uniqueAdMetaIds,
     metaAccountId: account.metaAccountId,
     accessToken: account.metaAccessToken,
@@ -543,21 +543,26 @@ export async function enrichMetaCreativePreviews(input: {
     );
 
   let updatedAds = 0;
+  const now = new Date();
   const creativeUpdates = new Map<string, {
     assetUrl?: string;
     videoUrl?: string;
     format?: "static" | "video";
   }>();
+  const touchedCreativeIds = new Set<string>();
 
   for (const adRow of adRows) {
     if (!adRow.metaId) continue;
+    if (!successfulAdMetaIds.has(adRow.metaId)) continue;
     const preview = previews.get(adRow.metaId);
-    if (!preview) continue;
 
-    await db.update(ads).set({
-      ...(preview.destinationUrl ? { destinationUrl: preview.destinationUrl } : {}),
-      ...(preview.caption ? { caption: preview.caption } : {}),
-    }).where(
+    const adSet: Partial<typeof ads.$inferInsert> = {
+      enrichmentAttemptedAt: now,
+    };
+    if (preview?.destinationUrl) adSet.destinationUrl = preview.destinationUrl;
+    if (preview?.caption) adSet.caption = preview.caption;
+
+    await db.update(ads).set(adSet).where(
       and(
         eq(ads.id, adRow.id),
         eq(ads.organizationId, input.organizationId),
@@ -566,6 +571,8 @@ export async function enrichMetaCreativePreviews(input: {
     updatedAds += 1;
 
     if (!adRow.adCreativeId) continue;
+    touchedCreativeIds.add(adRow.adCreativeId);
+    if (!preview) continue;
     const current = creativeUpdates.get(adRow.adCreativeId) ?? {};
     creativeUpdates.set(adRow.adCreativeId, {
       assetUrl: current.assetUrl ?? preview.assetUrl ?? undefined,
@@ -575,12 +582,16 @@ export async function enrichMetaCreativePreviews(input: {
   }
 
   let updatedCreatives = 0;
-  for (const [creativeId, preview] of creativeUpdates) {
-    await db.update(adCreatives).set({
-      ...(preview.assetUrl ? { assetUrl: preview.assetUrl } : {}),
-      ...(preview.videoUrl ? { videoUrl: preview.videoUrl } : {}),
-      ...(preview.format ? { format: preview.format } : {}),
-    }).where(
+  for (const creativeId of touchedCreativeIds) {
+    const preview = creativeUpdates.get(creativeId);
+    const creativeSet: Partial<typeof adCreatives.$inferInsert> = {
+      enrichmentAttemptedAt: now,
+    };
+    if (preview?.assetUrl) creativeSet.assetUrl = preview.assetUrl;
+    if (preview?.videoUrl) creativeSet.videoUrl = preview.videoUrl;
+    if (preview?.format) creativeSet.format = preview.format;
+
+    await db.update(adCreatives).set(creativeSet).where(
       and(
         eq(adCreatives.id, creativeId),
         eq(adCreatives.organizationId, input.organizationId),

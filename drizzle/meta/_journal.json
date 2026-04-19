@@ -169,6 +169,13 @@
       "when": 1776398858082,
       "tag": "0023_parallel_lady_ursula",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1776612145124,
+      "tag": "0024_friendly_rocket_racer",
+      "breakpoints": true
     }
   ]
 }

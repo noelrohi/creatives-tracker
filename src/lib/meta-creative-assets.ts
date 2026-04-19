@@ -11,6 +11,11 @@ export type MetaCreativePreview = {
   caption?: string;
 };
 
+export type MetaCreativePreviewBatch = {
+  previews: Map<string, MetaCreativePreview>;
+  successfulAdMetaIds: Set<string>;
+};
+
 type MetaAdCreativeResponse = {
   id?: string;
   creative?: {
@@ -500,15 +505,16 @@ function extractOutboundUrl(rawJsonEncoded: string): string | null {
   }
 }
 
-export async function fetchMetaCreativePreviewsForAds(input: {
+export async function fetchMetaCreativePreviewsBatch(input: {
   adMetaIds: string[];
   metaAccountId: string;
   accessToken: string;
   assetUrlMode?: "direct" | "uploaded";
   videoUrlMode?: "none" | "uploaded" | "direct";
   knownDestinationUrlByAdId?: Map<string, string>;
-}) {
+}): Promise<MetaCreativePreviewBatch> {
   const previews = new Map<string, MetaCreativePreview>();
+  const successfulAdMetaIds = new Set<string>();
   const creativesByAdId = new Map<string, MetaAdCreativeResponse["creative"]>();
 
   const adChunks: string[][] = [];
@@ -532,6 +538,9 @@ export async function fetchMetaCreativePreviewsForAds(input: {
   for (let c = 0; c < adChunks.length; c++) {
     const response = creativeResponses[c];
     if (!response) continue;
+    for (const adMetaId of adChunks[c]) {
+      successfulAdMetaIds.add(adMetaId);
+    }
     for (const adMetaId of adChunks[c]) {
       creativesByAdId.set(adMetaId, response[adMetaId]?.creative);
     }
@@ -699,6 +708,21 @@ export async function fetchMetaCreativePreviewsForAds(input: {
     }
   }
 
+  return {
+    previews,
+    successfulAdMetaIds,
+  };
+}
+
+export async function fetchMetaCreativePreviewsForAds(input: {
+  adMetaIds: string[];
+  metaAccountId: string;
+  accessToken: string;
+  assetUrlMode?: "direct" | "uploaded";
+  videoUrlMode?: "none" | "uploaded" | "direct";
+  knownDestinationUrlByAdId?: Map<string, string>;
+}) {
+  const { previews } = await fetchMetaCreativePreviewsBatch(input);
   return previews;
 }
 

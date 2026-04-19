@@ -490,23 +490,31 @@ export const metaSyncRouter = router({
         organizationId: ctx.organizationId,
       });
 
+      const linkedCreativeNeedsEnrichment = sql`exists (
+        select 1 from ${adCreatives}
+        where ${adCreatives.id} = ${ads.adCreativeId}
+          and ${adCreatives.enrichmentAttemptedAt} is null
+          and (
+            ${adCreatives.assetUrl} is null
+            or ${adCreatives.videoUrl} is null
+            or ${adCreatives.format} is null
+          )
+      )`;
+
       const needsEnrichment = and(
         eq(ads.accountId, input.accountId),
         eq(ads.organizationId, ctx.organizationId),
         isNotNull(ads.metaId),
         or(
-          isNull(ads.destinationUrl),
-          isNull(ads.caption),
-          isNull(ads.adCreativeId),
-          sql`exists (
-            select 1 from ${adCreatives}
-            where ${adCreatives.id} = ${ads.adCreativeId}
-              and (
-                ${adCreatives.assetUrl} is null
-                or ${adCreatives.videoUrl} is null
-                or ${adCreatives.format} is null
-              )
-          )`,
+          and(
+            isNull(ads.enrichmentAttemptedAt),
+            or(
+              isNull(ads.destinationUrl),
+              isNull(ads.caption),
+              isNull(ads.adCreativeId),
+            ),
+          ),
+          linkedCreativeNeedsEnrichment,
         ),
       );
 

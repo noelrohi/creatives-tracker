@@ -22,6 +22,7 @@ export const adCreatives = pgTable(
     teamId: text("team_id").references(() => teams.id, { onDelete: "set null" }),
     notes: text("notes"),
     organizationId: text("organization_id"),
+    enrichmentAttemptedAt: timestamp("enrichment_attempted_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
