@@ -10,6 +10,9 @@ The key constraint is that Google support must match the current pipeline's assu
 - imported revenue must remain purchase-only before it is written into `purchaseValue`
 - Google identifiers must be stored in a cross-account-safe form
 - creative upserts cannot reuse the current name-based canonicalization for Google imports
+- Google v1 import must stay **ad-level only** to fit the existing write path
+- Google must not be routed through the current Meta-specific importer without an isolation layer
+- source-platform filtering must not reuse `performance_log.platform`, which already means publisher-platform breakdown
 
 ---
 
@@ -76,9 +79,16 @@ The key constraint is that Google support must match the current pipeline's assu
 
 - Add `platform: text("platform").notNull().default("meta")` — `"meta" | "google"`
 - Add `googleCustomerId: text("google_customer_id")`
-- Add `googleRefreshToken: text("google_refresh_token")`
+- Add `googleRefreshToken: text("google_refresh_token")` only if it is encrypted before persistence; raw refresh tokens must never be returned from the API or logged
 - Add `googlePurchaseConversionActionIds: text("google_purchase_conversion_action_ids").array()`
 - Make `metaAccountId` nullable because Google accounts will not have one
+
+**Credential handling for Google refresh tokens**:
+
+- Add app-layer encryption-at-rest before writing `googleRefreshToken` to the DB; if no reusable helper exists yet, add one (for example `src/lib/secrets.ts`) plus an env-backed encryption key
+- Add account-level UX to replace / rotate the refresh token without deleting the whole account
+- On Google auth failures, mark the account as needing re-auth and surface that state in the UI instead of failing silently
+- Continue returning only `hasGoogleRefreshToken: boolean` from tRPC/OpenAPI
 
 **`src/schema/campaign.ts`**, **`src/schema/ad-set.ts`**, **`src/schema/ad.ts`**:
 
@@ -106,6 +116,16 @@ The key constraint is that Google support must match the current pipeline's assu
   - Meta accounts require `metaAccountId`
   - if the org wants Google revenue/ROAS in shared reports, Google accounts must also have `googlePurchaseConversionActionIds`
 
+**Meta-only caller audit required in the same phase**:
+
+- Update `src/app/(protected)/accounts/page.tsx`
+- Update `src/components/blocks/import/csv-import-tab.tsx`
+- Update `src/components/blocks/import/meta-api-tab.tsx`
+- Update `src/components/blocks/import/import-csv-dialog.tsx` and related import account selectors
+- Update `src/lib/trpc/openapi.ts`
+- Update account mutation tests and any Meta-only account fixtures
+- Do not treat Phase 2 as complete until these callers handle `platform`, nullable `metaAccountId`, and Google account variants correctly
+
 **`src/components/blocks/import/inline-account-dialog.tsx`**:
 
 - Add platform selector (Meta / Google)
@@ -124,11 +144,11 @@ The key constraint is that Google support must match the current pipeline's assu
 
 ## Phase 3: Google Insights Router & Mapper
 
-**Goal**: Fetch Google Ads data and normalize to daily `MappedRow[]`.
+**Goal**: Fetch **ad-level** Google Ads data and normalize to daily `MappedRow[]`.
 
 ### `src/lib/google-api-mapper.ts` (new)
 
-`mapGoogleAdsToRows(rows, level, options?) -> MappedRow[]`
+`mapGoogleAdsToRows(rows, options?) -> MappedRow[]`
 
 Key transforms:
 
@@ -162,12 +182,18 @@ Add `resolveGoogleAdStatus()`:
 
 ### `src/lib/trpc/routers/google-insights.ts` (new)
 
-Single `fetchReport` mutation; no polling is required because the Google API query is synchronous:
+Single `fetchReport` mutation; no polling is required because the Google API query is synchronous.
+
+**Scope for v1**:
+
+- `fetchReport` is **ad-level only**
+- Do not expose a generic `level` parameter yet
+- Campaign-level or ad-group-level Google reporting can be added later as a separate read-only reporting path, not as part of the import pipeline
 
 ```ts
-googleInsights.fetchReport({ accountId, dateFrom, dateTo, level })
+googleInsights.fetchReport({ accountId, dateFrom, dateTo })
   -> load account
-  -> build daily GAQL with segments.date and resource_name fields
+  -> build daily ad-level GAQL with segments.date and resource_name fields
   -> optionally fetch purchase-only conversion rows using configured conversion-action filters
   -> customer.queryStream()
   -> mapGoogleAdsToRows()
@@ -217,7 +243,7 @@ Register `googleInsightsRouter`
 
 ## Phase 4: Import UI & Bulk Import Adaptation
 
-**Goal**: Add a "From Google" import tab and adapt the shared bulk import path safely.
+**Goal**: Add a "From Google" import tab and adapt the shared bulk import path safely without routing Google rows through Meta-specific import logic.
 
 ### `src/components/blocks/import/google-api-tab.tsx` (new)
 
@@ -233,6 +259,17 @@ Reuse:
 ### `src/lib/trpc/routers/ad-creative.ts` (modify)
 
 Extend `bulkImport` input to accept `platform: "meta" | "google"`.
+
+Important: `bulkImport` should become a thin dispatcher only.
+
+- `platform === "meta"` continues to call `importMetaRows()`
+- `platform === "google"` must call a **separate** `importGoogleRows()` implementation or a new platform-agnostic shared core with platform-specific adapters
+- Do **not** add deep Google conditionals inside `importMetaRows()`; the current file is already Meta-shaped
+
+Recommended structure:
+
+- **New**: `src/lib/google-import.ts` for Google upsert + perf-log mapping
+- Optional refactor later: extract a shared core after both platform paths are working and covered by tests
 
 When `platform === "google"`:
 
@@ -252,6 +289,7 @@ Add a third tab: "From Google" with `<GoogleApiTab />`.
 - No Google-only duplicate ID fields are required
 - Reuse existing `campaignId` / `adSetId` / `adId` fields, but for Google populate them with `resource_name` values instead of raw numeric IDs
 - Pass `platform` through to `bulkImport` so the import router knows which external ID column to match against
+- Google import rows remain ad-level in v1; do not feed campaign-only or ad-group-only rows into `bulkImport`
 
 ---
 
@@ -262,28 +300,34 @@ Add a third tab: "From Google" with `<GoogleApiTab />`.
 ### Changes
 
 - Add platform filter (All / Meta / Google) to dashboard queries in `src/lib/trpc/routers/performance-log.ts`
+  - source platform must come from `ad.platform` or `ad_account.platform`
+  - do **not** reuse `performance_log.platform`, which already stores publisher-platform breakdown values
 - Show platform badge (Meta / Google) on ad and campaign lists
 - Add `compareDailyGoogleVsDb` to `googleInsightsRouter`
-- Update `orgDataHealth` to break down by platform
+- Update `orgDataHealth` to break down by source platform via joins to `ad` / `ad_account`
 
 ---
 
 ## Verification Checklist
 
 1. **Phase 1**: run the test script and print campaign data from the Google test account
-2. **Phase 2**: create a Google-type account in the UI and confirm its fields render correctly
-3. **Phase 3**: call `googleInsights.fetchReport` and confirm it returns valid daily `MappedRow[]`
-4. **Phase 4**: run the full Google import flow and confirm data lands in the DB without cross-platform creative collisions
-5. **Phase 5**: confirm the dashboard shows combined spend and the platform filter works
+2. **Phase 2**: create a Google-type account in the UI and confirm its fields render correctly across the account page, import flows, OpenAPI shapes, and tests
+3. **Phase 2**: verify refresh tokens are encrypted at rest, hidden in API responses, and recoverable through a replace-token flow
+4. **Phase 3**: call ad-level `googleInsights.fetchReport` and confirm it returns valid daily `MappedRow[]`
+5. **Phase 4**: confirm `bulkImport(platform="google")` dispatches to a Google-specific import path, not `importMetaRows()`
+6. **Phase 4**: run the full Google import flow and confirm data lands in the DB without cross-platform creative collisions
+7. **Phase 5**: confirm the dashboard platform filter uses source-platform fields and does not affect publisher-platform breakdown queries
 
 ---
 
 ## Key Design Decisions
 
 - **Separate accounts**: Google and Meta accounts stay as separate `adAccounts` rows
-- **Shared import shape**: both platforms still converge at `MappedRow`, but Google must emit daily rows and canonical IDs to fit the current pipeline
+- **Shared import shape**: both platforms still converge at `MappedRow`, but Google must emit daily ad-level rows and canonical IDs to fit the current pipeline
 - **Canonical Google IDs**: store Google `resource_name` as the lookup key because raw numeric IDs are only customer-scoped
 - **Platform-aware creatives**: Google imports cannot reuse the current name-based creative canonicalization
 - **Revenue safety over convenience**: only populate shared `purchaseValue` / `roas` fields from purchase-only Google conversion actions
 - **Synchronous fetch**: no async polling for Google because `queryStream()` returns data directly
 - **Global + per-account creds**: `client_id`, `client_secret`, and `developer_token` stay in env vars; `customer_id`, `refresh_token`, and purchase conversion configuration live per account
+- **Importer isolation first**: Google gets its own import implementation before any attempt to unify the Meta and Google import internals
+- **Source platform != publisher platform**: source-platform filters belong on ad/account entities, not the existing `performance_log.platform` breakdown column
