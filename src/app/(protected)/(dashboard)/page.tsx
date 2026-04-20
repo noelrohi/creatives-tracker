@@ -58,6 +58,7 @@ const EXPORT_COLUMNS = [
   "conversions", "purchase_value", "roas", "cpa",
   "add_to_cart", "initiate_checkout", "cost_per_add_to_cart",
   "video_views_3s", "video_thruplay", "video_avg_watch_time",
+  "country", "platform", "placement", "device", "age", "gender",
   "quality_ranking", "engagement_rate_ranking", "conversion_rate_ranking",
 ] as const;
 

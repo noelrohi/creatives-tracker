@@ -792,6 +792,12 @@ export const adCreativeRouter = router({
           pl.video_views_3s,
           pl.video_thruplay,
           pl.video_avg_watch_time,
+          pl.country,
+          pl.platform,
+          pl.placement,
+          pl.device,
+          pl.age,
+          pl.gender,
           pl.quality_ranking,
           pl.engagement_rate_ranking,
           pl.conversion_rate_ranking

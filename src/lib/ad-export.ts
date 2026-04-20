@@ -59,6 +59,16 @@ type RawAdRow = {
   prior_hook_rate: string | null;
 };
 
+type DemographicDimension = "gender" | "age" | "country" | "device";
+
+type RawDemographicRow = {
+  ad_id: string;
+  label: string | null;
+  spend: string | null;
+  conversions: string | null;
+  roas: string | null;
+};
+
 export type AdExportRow = {
   // IDs
   adId: string;
@@ -109,6 +119,10 @@ export type AdExportRow = {
   windowClicks: number | null;
   windowHookRate: number | null;
   windowThumbstop: number | null;
+  genderBreakdown: string | null;
+  ageBreakdown: string | null;
+  countryBreakdown: string | null;
+  deviceBreakdown: string | null;
 
   // Lifetime
   lifetimeSpend: number | null;
@@ -198,6 +212,117 @@ function n(v: string | null): number | null {
 function pct(recent: number | null, baseline: number | null): number | null {
   if (recent == null || baseline == null || baseline === 0) return null;
   return ((recent - baseline) / baseline) * 100;
+}
+
+function fmtCompactNumber(value: number | null): string | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  if (Number.isInteger(value)) return String(value);
+  return value.toFixed(1).replace(/\.0$/, "");
+}
+
+function formatDemographicSummary(
+  rows: RawDemographicRow[],
+  totalSpend: number | null,
+): string | null {
+  if (rows.length === 0) return null;
+
+  const topRows = rows.slice(0, 5);
+  const overflow = rows.length - topRows.length;
+  const parts = topRows.map((row) => {
+    const label = row.label?.trim() || "Unknown";
+    const spend = n(row.spend);
+    const conversions = n(row.conversions);
+    const roas = n(row.roas);
+    const details = [];
+
+    if (spend != null && totalSpend != null && totalSpend > 0) {
+      details.push(`${((spend / totalSpend) * 100).toFixed(0)}% spend`);
+    }
+    const convText = fmtCompactNumber(conversions);
+    if (convText) details.push(`${convText} conv`);
+    if (roas != null) details.push(`${roas.toFixed(1).replace(/\.0$/, "")}x ROAS`);
+
+    return details.length > 0 ? `${label} (${details.join(", ")})` : label;
+  });
+
+  if (overflow > 0) {
+    parts.push(`+${overflow} more`);
+  }
+
+  return parts.join(" | ");
+}
+
+async function fetchAdDemographicSummaries(opts: {
+  organizationId: string;
+  from: string;
+  to: string;
+  adIds: string[];
+}): Promise<Record<DemographicDimension, Map<string, string>>> {
+  const { organizationId, from, to, adIds } = opts;
+
+  const summaries: Record<DemographicDimension, Map<string, string>> = {
+    gender: new Map(),
+    age: new Map(),
+    country: new Map(),
+    device: new Map(),
+  };
+
+  if (adIds.length === 0) return summaries;
+
+  const adIdList = sql.join(adIds.map((id) => sql`${id}`), sql`, `);
+  const dimensionColumns: Record<DemographicDimension, string> = {
+    gender: "pl.gender",
+    age: "pl.age",
+    country: "pl.country",
+    device: "pl.device",
+  };
+
+  const results = await Promise.all(
+    (Object.entries(dimensionColumns) as [DemographicDimension, string][])
+      .map(async ([dimension, column]) => {
+        const rows = (
+          await db.execute(sql`
+            SELECT
+              pl.ad_id,
+              ${sql.raw(column)}::text AS label,
+              sum(pl.spend)::text AS spend,
+              sum(pl.conversions)::text AS conversions,
+              (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text AS roas
+            FROM performance_log pl
+            JOIN ad ON ad.id = pl.ad_id
+            WHERE pl.organization_id = ${organizationId}
+              AND pl.ad_id IN (${adIdList})
+              AND pl.date_start <= ${to}::date
+              AND pl.date_end >= ${from}::date
+              AND ${sql.raw(column)} IS NOT NULL
+              AND ${sql.raw(column)} != ''
+            GROUP BY pl.ad_id, ${sql.raw(column)}
+            ORDER BY pl.ad_id, sum(pl.spend) DESC NULLS LAST
+          `)
+        ).rows as RawDemographicRow[];
+
+        return { dimension, rows };
+      }),
+  );
+
+  for (const { dimension, rows } of results) {
+    const rowsByAd = new Map<string, RawDemographicRow[]>();
+    for (const row of rows) {
+      const adRows = rowsByAd.get(row.ad_id) ?? [];
+      adRows.push(row);
+      rowsByAd.set(row.ad_id, adRows);
+    }
+
+    for (const [adId, adRows] of rowsByAd) {
+      const totalSpend = adRows.reduce((acc, current) => acc + (n(current.spend) ?? 0), 0);
+      summaries[dimension].set(
+        adId,
+        formatDemographicSummary(adRows, totalSpend) ?? "",
+      );
+    }
+  }
+
+  return summaries;
 }
 
 export async function fetchAgentExportRows(opts: {
@@ -359,6 +484,13 @@ export async function fetchAgentExportRows(opts: {
     `)
   ).rows as RawAdRow[];
 
+  const demographicSummaries = await fetchAdDemographicSummaries({
+    organizationId,
+    from,
+    to,
+    adIds: rawRows.map((row) => row.ad_id),
+  });
+
   // Portfolio CPA = sum(spend) / sum(conv) across the export window. Used as the
   // "fair shot" floor for the bleeder tier — under-spending an ad's CPA means
   // it can't statistically have converted yet. Floor at $50 in case the
@@ -494,6 +626,10 @@ export async function fetchAgentExportRows(opts: {
       windowClicks: n(r.window_clicks),
       windowHookRate: r.format === "video" || r.format === "ugc" ? windowHookRate : null,
       windowThumbstop: r.format === "video" || r.format === "ugc" ? windowThumbstop : null,
+      genderBreakdown: demographicSummaries.gender.get(r.ad_id) ?? null,
+      ageBreakdown: demographicSummaries.age.get(r.ad_id) ?? null,
+      countryBreakdown: demographicSummaries.country.get(r.ad_id) ?? null,
+      deviceBreakdown: demographicSummaries.device.get(r.ad_id) ?? null,
       lifetimeSpend: n(r.lifetime_spend),
       lifetimeConversions: n(r.lifetime_conversions),
       lifetimeRoas: n(r.lifetime_roas),
