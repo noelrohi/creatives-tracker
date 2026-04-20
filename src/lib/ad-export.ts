@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { computeHealth, rollupCreativeHealth, type CreativeHealth } from "./creative-health";
+import { basePerformanceLogFilter } from "./performance-log-sql";
 
 type RawAdRow = {
   ad_id: string;
@@ -357,6 +358,9 @@ export async function fetchAgentExportRows(opts: {
     whereParts.push(sql`(ac.format IS NULL AND ac.angle IS NULL AND ac.awareness_level IS NULL)`);
   }
 
+  const basePl = basePerformanceLogFilter("pl");
+  const basePl2 = basePerformanceLogFilter("pl2");
+
   const rawRows = (
     await db.execute(sql`
       WITH window_m AS (
@@ -373,6 +377,7 @@ export async function fetchAgentExportRows(opts: {
           sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0) AS hook_rate
         FROM performance_log pl
         WHERE pl.date_start <= ${to}::date AND pl.date_end >= ${from}::date
+          AND ${basePl}
         GROUP BY pl.ad_id
       ),
       lifetime_m AS (
@@ -388,6 +393,7 @@ export async function fetchAgentExportRows(opts: {
           max(pl.date_end)::date - min(pl.date_start)::date AS running_days,
           max(pl.date_end) AS last_log_at
         FROM performance_log pl
+        WHERE ${basePl}
         GROUP BY pl.ad_id
       ),
       recent_m AS (
@@ -399,9 +405,10 @@ export async function fetchAgentExportRows(opts: {
           coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0) AS cpa,
           sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0) AS hook_rate
         FROM performance_log pl
-        WHERE pl.date_start > (
-          SELECT max(pl2.date_end) - 3 FROM performance_log pl2 WHERE pl2.ad_id = pl.ad_id
-        )
+        WHERE ${basePl}
+          AND pl.date_start > (
+            SELECT max(pl2.date_end) - 3 FROM performance_log pl2 WHERE pl2.ad_id = pl.ad_id AND ${basePl2}
+          )
         GROUP BY pl.ad_id
       ),
       prior_m AS (
@@ -409,9 +416,10 @@ export async function fetchAgentExportRows(opts: {
           pl.ad_id,
           sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0) AS hook_rate
         FROM performance_log pl
-        WHERE pl.date_end <= (
-          SELECT max(pl2.date_end) - 3 FROM performance_log pl2 WHERE pl2.ad_id = pl.ad_id
-        )
+        WHERE ${basePl}
+          AND pl.date_end <= (
+            SELECT max(pl2.date_end) - 3 FROM performance_log pl2 WHERE pl2.ad_id = pl.ad_id AND ${basePl2}
+          )
         GROUP BY pl.ad_id
       )
       SELECT
@@ -561,7 +569,7 @@ export async function fetchAgentExportRows(opts: {
       && (windowSpend ?? 0) >= 25
       && (
         (windowConv ?? 0) === 0
-        || (windowRoas != null && windowRoas < 0.5)
+        || (windowRoas != null && windowRoas < 1.0)
       );
     const days = n(r.running_days) ?? 0;
     const fairShot = (windowSpend ?? 0) >= portfolioCpaFloor;

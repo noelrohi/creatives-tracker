@@ -56,7 +56,7 @@ function BleederBadge({ row }: { row: LeaderboardRow }) {
     : "bg-amber-500/15 text-amber-600 dark:text-amber-400";
   const label = isPauseNow ? "Pause" : "Watch";
   const tooltipBody = isPauseNow
-    ? `${row.bleederAdCount} of ${total} active ad${total === 1 ? "" : "s"} have spent ≥ 1× portfolio CPA over 5+ days with no conversions (or ROAS < 0.5). Confident dead — pause.`
+    ? `${row.bleederAdCount} of ${total} active ad${total === 1 ? "" : "s"} have spent ≥ 1× portfolio CPA over 5+ days with no conversions (or ROAS < 1.0). Confident dead — pause.`
     : `${row.bleederAdCount} of ${total} active ad${total === 1 ? "" : "s"} are bleeding but haven't had a fair shot on both spend and time. Watch — confirm before pausing.`;
   return (
     <Tooltip>

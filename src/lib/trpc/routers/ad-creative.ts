@@ -540,8 +540,8 @@ export const adCreativeRouter = router({
       // before we'll call it confidently dead — pausing it earlier means we'd
       // strangle ads that haven't had time for delivery to learn.
       //
-      //   tier = pause_now  if spend >= fair-shot AND days >= 5 AND (0 conv OR ROAS < 0.5)
-      //   tier = watch      if one threshold met AND (0 conv OR ROAS < 0.5)
+      //   tier = pause_now  if spend >= fair-shot AND days >= 5 AND (0 conv OR ROAS < 1.0)
+      //   tier = watch      if one threshold met AND (0 conv OR ROAS < 1.0)
       //   tier = cooking    otherwise — hidden from Needs Attention
       //
       // A creative inherits the most urgent tier of its bleeder ads.
@@ -600,7 +600,7 @@ export const adCreativeRouter = router({
           WHERE status = 'active'
             AND (
               coalesce(conversions, 0) = 0
-              OR (roas IS NOT NULL AND roas < 0.5)
+              OR (roas IS NOT NULL AND roas < 1.0)
             )
             AND spend >= 25
         ),
