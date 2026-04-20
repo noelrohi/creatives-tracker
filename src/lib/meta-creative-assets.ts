@@ -188,6 +188,17 @@ function getBestImageUrl(
   return null;
 }
 
+/*
+ * Known limitation: some ads return no URL from any field below and we cannot
+ * recover one. These are typically VIDEO/SHARE creatives that only carry an
+ * `object_story_id` pointing to the underlying Page post — the landing URL
+ * lives on the post, not the creative. Verified 2026-04-20 on a Reviv 3 ad:
+ * `GET /{object_story_id}` returns `(#100) Missing permissions` with the ad
+ * account token, and anonymous fetches of the preview iframe return a Facebook
+ * error page. Recovering these would require a Page access token with read
+ * perms on the owning Page. Catalog/DPA ads are a separate bucket — the URL
+ * is generated per-product from the product set and is not on the creative.
+ */
 function getDestinationUrl(
   creative: MetaAdCreativeResponse["creative"],
 ): string | undefined {
