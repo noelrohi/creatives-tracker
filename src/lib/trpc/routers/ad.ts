@@ -8,6 +8,7 @@ import { adSets } from "@/schema/ad-set";
 import { adCreatives } from "@/schema/ad-creative";
 import { campaigns } from "@/schema/campaign";
 import { performanceLogs } from "@/schema/performance-log";
+import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 
 export const adRouter = router({
   list: orgProcedure.meta(openApiQueryMeta("ad", "list")).query(async ({ ctx }) => {
@@ -60,6 +61,7 @@ export const adRouter = router({
     .meta(openApiQueryMeta("ad", "listByCreative"))
     .input(z.object({ adCreativeId: z.string() }))
     .query(async ({ input, ctx }) => {
+      const basePl = basePerformanceLogFilter("performance_log");
       return db
         .select({
           id: ads.id,
@@ -82,7 +84,7 @@ export const adRouter = router({
         .from(ads)
         .leftJoin(adSets, eq(ads.adSetId, adSets.id))
         .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
-        .leftJoin(performanceLogs, eq(performanceLogs.adId, ads.id))
+        .leftJoin(performanceLogs, and(eq(performanceLogs.adId, ads.id), basePl))
         .where(and(eq(ads.adCreativeId, input.adCreativeId), eq(ads.organizationId, ctx.organizationId)))
         .groupBy(ads.id, ads.metaId, ads.name, ads.caption, ads.adSetId, adSets.name, campaigns.name, ads.destinationUrl, ads.status, ads.notes, ads.createdAt)
         .orderBy(desc(ads.createdAt));
