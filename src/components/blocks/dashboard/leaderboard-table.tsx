@@ -55,9 +55,10 @@ function BleederBadge({ row }: { row: LeaderboardRow }) {
     ? "bg-red-500/15 text-red-500 dark:text-red-400"
     : "bg-amber-500/15 text-amber-600 dark:text-amber-400";
   const label = isPauseNow ? "Pause" : "Watch";
+  const singular = row.bleederAdCount === 1;
   const tooltipBody = isPauseNow
-    ? `${row.bleederAdCount} of ${total} active ad${total === 1 ? "" : "s"} have spent ≥ 1× portfolio CPA over 5+ days with no conversions (or ROAS < 1.0). Confident dead — pause.`
-    : `${row.bleederAdCount} of ${total} active ad${total === 1 ? "" : "s"} are bleeding but haven't had a fair shot on both spend and time. Watch — confirm before pausing.`;
+    ? `${row.bleederAdCount} of ${total} ${singular ? "ad is" : "ads are"} losing money after 5+ days. ${fmtMoney(atRisk)} lost so far — pause to stop the bleed.`
+    : `${row.bleederAdCount} of ${total} ${singular ? "ad is" : "ads are"} underperforming but ${singular ? "needs" : "need"} more time to confirm. ${fmtMoney(atRisk)} at risk if ${singular ? "it doesn't" : "they don't"} improve.`;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -83,8 +84,7 @@ function WinnerSiblingBadge({ row }: { row: LeaderboardRow }) {
       </TooltipTrigger>
       <TooltipContent side="top" className="max-w-xs">
         <p>
-          A different ad on this creative is profitable (ROAS ≥ 1, spend ≥ $25). The
-          creative concept works — likely an audience/placement issue on the bleeders.
+          Another ad using this creative is profitable. The creative works — try different targeting.
         </p>
       </TooltipContent>
     </Tooltip>
@@ -105,7 +105,7 @@ function EvergreenBadge({ row }: { row: LeaderboardRow }) {
       </TooltipTrigger>
       <TooltipContent side="top" className="max-w-xs">
         <p>
-          <strong>Evergreen.</strong> Top performer that&apos;s also been running 14+ days — long-term workhorse, protect this one.
+          Profitable for 14+ days. Keep this one running.
         </p>
       </TooltipContent>
     </Tooltip>

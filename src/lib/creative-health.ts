@@ -57,10 +57,10 @@ export function computeHealth(opts: {
     const drop = (avgCtr - recentCtr) / avgCtr;
     if (drop >= 0.25) {
       criticalSignals++;
-      reasons.push(`CTR dropped ${Math.round(drop * 100)}% vs baseline`);
+      reasons.push(`CTR dropped ${Math.round(drop * 100)}% vs your average`);
     } else if (drop >= 0.1) {
       warningSignals++;
-      reasons.push(`CTR dropped ${Math.round(drop * 100)}% vs baseline`);
+      reasons.push(`CTR dropped ${Math.round(drop * 100)}% vs your average`);
     }
   }
   if (recentCtr != null && recentCtr < 1) {
@@ -74,10 +74,10 @@ export function computeHealth(opts: {
     const rise = (recentCpc - avgCpc) / avgCpc;
     if (rise >= 0.3) {
       criticalSignals++;
-      reasons.push(`CPC rose ${Math.round(rise * 100)}% vs baseline`);
+      reasons.push(`CPC up ${Math.round(rise * 100)}% vs your average`);
     } else if (rise >= 0.15) {
       warningSignals++;
-      reasons.push(`CPC rose ${Math.round(rise * 100)}% vs baseline`);
+      reasons.push(`CPC up ${Math.round(rise * 100)}% vs your average`);
     }
   }
 
@@ -101,17 +101,17 @@ export function computeHealth(opts: {
     const drop = (priorHookRate - recentHookRate) / priorHookRate;
     if (drop >= 0.3) {
       criticalSignals++;
-      reasons.push(`Hook rate dropped ${Math.round(drop * 100)}%`);
+      reasons.push(`3-sec view rate dropped ${Math.round(drop * 100)}%`);
     } else if (drop >= 0.15) {
       warningSignals++;
-      reasons.push(`Hook rate dropped ${Math.round(drop * 100)}%`);
+      reasons.push(`3-sec view rate dropped ${Math.round(drop * 100)}%`);
     }
   }
 
   const { thumbstopRatio } = opts;
   if (isVideo && thumbstopRatio != null && thumbstopRatio > 0 && thumbstopRatio < 0.25) {
     warningSignals++;
-    reasons.push(`Thumbstop ratio below 25% (${Math.round(thumbstopRatio * 100)}%)`);
+    reasons.push(`Only ${Math.round(thumbstopRatio * 100)}% stopped to watch (below 25%)`);
   }
 
   // CPA trend requires a meaningful recent conversion count. A recent CPA
@@ -123,10 +123,10 @@ export function computeHealth(opts: {
     const rise = (recentCpa - avgCpa) / avgCpa;
     if (rise >= 0.3) {
       criticalSignals++;
-      reasons.push(`CPA up ${Math.round(rise * 100)}% vs baseline`);
+      reasons.push(`CPA up ${Math.round(rise * 100)}% vs your average`);
     } else if (rise >= 0.15) {
       warningSignals++;
-      reasons.push(`CPA up ${Math.round(rise * 100)}% vs baseline`);
+      reasons.push(`CPA up ${Math.round(rise * 100)}% vs your average`);
     }
   }
 
