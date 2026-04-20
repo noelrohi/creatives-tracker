@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  CircleHelp,
   DollarSign,
   Eye,
   MousePointerClick,
@@ -12,6 +13,7 @@ import {
 import { DataFreshnessLabel } from "@/components/blocks/dashboard/data-freshness";
 import { DateRangePicker } from "@/components/blocks/dashboard/date-range-picker";
 import { PerformanceChart } from "@/components/blocks/insights/performance-chart";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 function fmt(
   value: string | number | null | undefined,
@@ -38,17 +40,35 @@ function MetricCard({
   value,
   icon: Icon,
   comparison,
+  tooltip,
 }: {
   label: string;
   value: string;
   icon: React.ComponentType<{ className?: string }>;
   comparison?: { value: number; label: string } | null;
+  tooltip?: string;
 }) {
   return (
     <div className="flex flex-col gap-1 rounded-lg border border-border/50 bg-card px-3 py-2.5">
       <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/60">
         <Icon className="size-3" />
         {label}
+        {tooltip ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex items-center text-muted-foreground/50 transition-colors hover:text-foreground/70"
+                aria-label={`${label} calculation details`}
+              >
+                <CircleHelp className="size-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-xs">
+              <p>{tooltip}</p>
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
       </div>
       <div className="text-lg font-semibold tracking-tight">{value}</div>
       {comparison && comparison.value !== 0 && (
@@ -148,6 +168,7 @@ export function CreativePerformanceTab({
               label="Spend"
               value={fmt(perf.totalSpend, { prefix: "$" })}
               icon={DollarSign}
+              tooltip="Spend is calculated from base delivery rows only. Demographic, device, country, and placement breakdown rows are excluded to avoid double counting."
             />
             <MetricCard
               label="ROAS"

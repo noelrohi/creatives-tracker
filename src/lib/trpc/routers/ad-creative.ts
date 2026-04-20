@@ -1400,9 +1400,11 @@ export const adCreativeRouter = router({
     .meta(openApiQueryMeta("adCreative", "getPerformance"))
     .input(z.object({ id: z.string(), from: z.string().optional(), to: z.string().optional() }))
     .query(async ({ input, ctx }) => {
+      const basePl = basePerformanceLogFilter("performance_log");
       const dateConditions: SQL[] = [
         eq(ads.adCreativeId, input.id),
         eq(ads.organizationId, ctx.organizationId),
+        basePl,
       ];
       if (input.from) {
         dateConditions.push(sql`${performanceLogs.dateEnd} >= ${input.from}::date`);
@@ -1432,6 +1434,7 @@ export const adCreativeRouter = router({
       // Portfolio averages for comparison (same date range)
       const portfolioDateConditions: SQL[] = [
         eq(ads.organizationId, ctx.organizationId),
+        basePl,
       ];
       if (input.from) {
         portfolioDateConditions.push(sql`${performanceLogs.dateEnd} >= ${input.from}::date`);
@@ -1489,9 +1492,11 @@ export const adCreativeRouter = router({
     .meta(openApiQueryMeta("adCreative", "getDailyPerformance"))
     .input(z.object({ id: z.string(), from: z.string().optional(), to: z.string().optional() }))
     .query(async ({ input, ctx }) => {
+      const basePl = basePerformanceLogFilter("performance_log");
       const conditions: SQL[] = [
         eq(ads.adCreativeId, input.id),
         eq(ads.organizationId, ctx.organizationId),
+        basePl,
       ];
       if (input.from) {
         conditions.push(sql`${performanceLogs.dateEnd} >= ${input.from}::date`);
