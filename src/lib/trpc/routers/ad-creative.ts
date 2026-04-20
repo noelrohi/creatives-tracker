@@ -606,6 +606,19 @@ export const adCreativeRouter = router({
         ),
         actionable AS (
           SELECT * FROM bleeder WHERE tier IN ('pause_now', 'watch')
+        ),
+        creative_window AS (
+          -- Per-creative window totals across ALL ads on the creative (active
+          -- + paused). Drives the displayed Spend/Conv/ROAS/CPA columns so a
+          -- buyer sees the creative's true window performance — not just the
+          -- bleeder slice, which is already surfaced in the action badge.
+          SELECT
+            aw.ad_creative_id,
+            sum(aw.spend) AS spend,
+            sum(aw.revenue) AS revenue,
+            sum(aw.conversions) AS conversions
+          FROM ad_window aw
+          GROUP BY aw.ad_creative_id
         )
         SELECT
           ac.id,
@@ -613,11 +626,11 @@ export const adCreativeRouter = router({
           ac.format::text AS format,
           ac.asset_url,
           ac.video_url,
-          sum(b.spend)::text AS total_spend,
-          (sum(b.revenue) / nullif(sum(b.spend), 0))::text AS roas,
-          (sum(b.spend) / nullif(sum(b.conversions), 0))::text AS cpa,
+          coalesce(cw.spend, 0)::text AS total_spend,
+          (coalesce(cw.revenue, 0) / nullif(cw.spend, 0))::text AS roas,
+          (coalesce(cw.spend, 0) / nullif(cw.conversions, 0))::text AS cpa,
           NULL::text AS ctr,
-          sum(b.conversions)::text AS total_conversions,
+          coalesce(cw.conversions, 0)::text AS total_conversions,
           'active'::text AS ad_status,
           count(*)::int AS bleeder_count,
           (
@@ -637,8 +650,9 @@ export const adCreativeRouter = router({
           ) AS has_winner
         FROM actionable b
         JOIN ad_creative ac ON ac.id = b.ad_creative_id
+        JOIN creative_window cw ON cw.ad_creative_id = ac.id
         ${topIds.length ? sql`WHERE ac.id NOT IN (${sql.join(topIds.map((id) => sql`${id}`), sql`, `)})` : sql``}
-        GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
+        GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url, cw.spend, cw.revenue, cw.conversions
         ORDER BY
           (CASE WHEN bool_or(b.tier = 'pause_now') THEN 0 ELSE 1 END),
           sum(coalesce(b.spend, 0) * (1 - coalesce(b.roas, 0))) DESC NULLS LAST
