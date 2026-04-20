@@ -20,10 +20,10 @@ export default function DashboardLayout({
     <OrgGuard>
       <SidebarProvider>
         <AppSidebar />
-        <SidebarInset>
-          <ImportStatusBanner />
+        <SidebarInset className="h-svh md:peer-data-[variant=inset]:h-[calc(100svh-1rem)]">
           <BreadcrumbsProvider>
-            <header className="flex h-12 items-center gap-2 border-b px-4">
+            <ImportStatusBanner />
+            <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
               <SidebarTrigger />
               <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4 data-[orientation=vertical]:self-center" />
               <HeaderBreadcrumbs />
@@ -31,7 +31,7 @@ export default function DashboardLayout({
                 <ThemeToggle />
               </div>
             </header>
-            <main className="min-w-0 flex-1 p-6">{children}</main>
+            <main className="min-w-0 flex-1 overflow-y-auto p-6">{children}</main>
           </BreadcrumbsProvider>
         </SidebarInset>
         {process.env.NODE_ENV === "development" && (
