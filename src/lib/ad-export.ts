@@ -293,8 +293,9 @@ async function fetchAdDemographicSummaries(opts: {
             JOIN ad ON ad.id = pl.ad_id
             WHERE pl.organization_id = ${organizationId}
               AND pl.ad_id IN (${adIdList})
+              AND pl.date_start = pl.date_end
+              AND pl.date_start >= ${from}::date
               AND pl.date_start <= ${to}::date
-              AND pl.date_end >= ${from}::date
               AND ${sql.raw(column)} IS NOT NULL
               AND ${sql.raw(column)} != ''
             GROUP BY pl.ad_id, ${sql.raw(column)}
@@ -376,7 +377,9 @@ export async function fetchAgentExportRows(opts: {
           avg(pl.frequency) AS frequency,
           sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0) AS hook_rate
         FROM performance_log pl
-        WHERE pl.date_start <= ${to}::date AND pl.date_end >= ${from}::date
+        WHERE pl.date_start = pl.date_end
+          AND pl.date_start >= ${from}::date
+          AND pl.date_start <= ${to}::date
           AND ${basePl}
         GROUP BY pl.ad_id
       ),
@@ -393,7 +396,8 @@ export async function fetchAgentExportRows(opts: {
           max(pl.date_end)::date - min(pl.date_start)::date AS running_days,
           max(pl.date_end) AS last_log_at
         FROM performance_log pl
-        WHERE ${basePl}
+        WHERE pl.date_start = pl.date_end
+          AND ${basePl}
         GROUP BY pl.ad_id
       ),
       recent_m AS (
@@ -405,9 +409,14 @@ export async function fetchAgentExportRows(opts: {
           coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0) AS cpa,
           sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0) AS hook_rate
         FROM performance_log pl
-        WHERE ${basePl}
+        WHERE pl.date_start = pl.date_end
+          AND ${basePl}
           AND pl.date_start > (
-            SELECT max(pl2.date_end) - 3 FROM performance_log pl2 WHERE pl2.ad_id = pl.ad_id AND ${basePl2}
+            SELECT max(pl2.date_end) - 3
+            FROM performance_log pl2
+            WHERE pl2.ad_id = pl.ad_id
+              AND pl2.date_start = pl2.date_end
+              AND ${basePl2}
           )
         GROUP BY pl.ad_id
       ),
@@ -416,9 +425,14 @@ export async function fetchAgentExportRows(opts: {
           pl.ad_id,
           sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0) AS hook_rate
         FROM performance_log pl
-        WHERE ${basePl}
+        WHERE pl.date_start = pl.date_end
+          AND ${basePl}
           AND pl.date_end <= (
-            SELECT max(pl2.date_end) - 3 FROM performance_log pl2 WHERE pl2.ad_id = pl.ad_id AND ${basePl2}
+            SELECT max(pl2.date_end) - 3
+            FROM performance_log pl2
+            WHERE pl2.ad_id = pl.ad_id
+              AND pl2.date_start = pl2.date_end
+              AND ${basePl2}
           )
         GROUP BY pl.ad_id
       )

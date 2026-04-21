@@ -18,6 +18,49 @@ const dimensionColumn = (dim: "age" | "gender" | "country" | "device") => {
   return map[dim];
 };
 
+const PERF_CONFLICT_TARGET = [
+  performanceLogs.adId,
+  performanceLogs.dateStart,
+  performanceLogs.dateEnd,
+  performanceLogs.country,
+  performanceLogs.platform,
+  performanceLogs.placement,
+  performanceLogs.device,
+  performanceLogs.age,
+  performanceLogs.gender,
+] as const;
+
+// On conflict with the breakdown tuple, overwrite all mutable metric fields
+// with the incoming row's values (via PostgreSQL's `excluded`).
+const PERF_CONFLICT_SET = {
+  roas: sql`excluded.roas`,
+  cpa: sql`excluded.cpa`,
+  ctr: sql`excluded.ctr`,
+  conversionRate: sql`excluded.conversion_rate`,
+  spend: sql`excluded.spend`,
+  conversions: sql`excluded.conversions`,
+  impressions: sql`excluded.impressions`,
+  reach: sql`excluded.reach`,
+  frequency: sql`excluded.frequency`,
+  cpm: sql`excluded.cpm`,
+  linkClicks: sql`excluded.link_clicks`,
+  clicksAll: sql`excluded.clicks_all`,
+  cpc: sql`excluded.cpc`,
+  ctrLinkClick: sql`excluded.ctr_link_click`,
+  landingPageViews: sql`excluded.landing_page_views`,
+  costPerLpv: sql`excluded.cost_per_lpv`,
+  purchaseValue: sql`excluded.purchase_value`,
+  addToCart: sql`excluded.add_to_cart`,
+  initiateCheckout: sql`excluded.initiate_checkout`,
+  costPerAddToCart: sql`excluded.cost_per_add_to_cart`,
+  videoViews3s: sql`excluded.video_views_3s`,
+  videoThruplay: sql`excluded.video_thruplay`,
+  videoAvgWatchTime: sql`excluded.video_avg_watch_time`,
+  qualityRanking: sql`excluded.quality_ranking`,
+  engagementRateRanking: sql`excluded.engagement_rate_ranking`,
+  conversionRateRanking: sql`excluded.conversion_rate_ranking`,
+} as const;
+
 const perfFields = {
   roas: z.string().optional(),
   cpa: z.string().optional(),
@@ -86,6 +129,10 @@ export const performanceLogRouter = router({
       const [log] = await db
         .insert(performanceLogs)
         .values({ ...input, organizationId: ctx.organizationId })
+        .onConflictDoUpdate({
+          target: [...PERF_CONFLICT_TARGET],
+          set: PERF_CONFLICT_SET,
+        })
         .returning();
       return log;
     }),
@@ -111,7 +158,14 @@ export const performanceLogRouter = router({
         adId: input.adId,
         organizationId: ctx.organizationId,
       }));
-      return db.insert(performanceLogs).values(values).returning();
+      return db
+        .insert(performanceLogs)
+        .values(values)
+        .onConflictDoUpdate({
+          target: [...PERF_CONFLICT_TARGET],
+          set: PERF_CONFLICT_SET,
+        })
+        .returning();
     }),
 
   update: orgWriteProcedure

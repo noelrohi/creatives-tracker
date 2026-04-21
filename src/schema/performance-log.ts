@@ -7,6 +7,7 @@ import {
   integer,
   date,
   index,
+  unique,
 } from "drizzle-orm/pg-core";
 import { ads } from "./ad";
 
@@ -75,6 +76,19 @@ export const performanceLogs = pgTable(
       table.dateStart,
       table.dateEnd,
     ),
+    unique("performance_log_ad_date_breakdown_uniq")
+      .on(
+        table.adId,
+        table.dateStart,
+        table.dateEnd,
+        table.country,
+        table.platform,
+        table.placement,
+        table.device,
+        table.age,
+        table.gender,
+      )
+      .nullsNotDistinct(),
   ],
 );
 

@@ -176,6 +176,13 @@
       "when": 1776612145124,
       "tag": "0024_friendly_rocket_racer",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1776746053333,
+      "tag": "0025_tidy_husk",
+      "breakpoints": true
     }
   ]
 }

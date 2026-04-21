@@ -232,13 +232,28 @@ export const adRouter = router({
         const { name: _, ...perfData } = row;
         const hasPerf = perfData.spend || perfData.roas || perfData.conversions;
         if (hasPerf && perfData.dateStart && perfData.dateEnd) {
-          await db.insert(performanceLogs).values({
-            ...perfData,
-            dateStart: perfData.dateStart,
-            dateEnd: perfData.dateEnd,
-            adId: ad.id,
-            organizationId: ctx.organizationId,
-          });
+          await db
+            .insert(performanceLogs)
+            .values({
+              ...perfData,
+              dateStart: perfData.dateStart,
+              dateEnd: perfData.dateEnd,
+              adId: ad.id,
+              organizationId: ctx.organizationId,
+            })
+            .onConflictDoNothing({
+              target: [
+                performanceLogs.adId,
+                performanceLogs.dateStart,
+                performanceLogs.dateEnd,
+                performanceLogs.country,
+                performanceLogs.platform,
+                performanceLogs.placement,
+                performanceLogs.device,
+                performanceLogs.age,
+                performanceLogs.gender,
+              ],
+            });
         }
 
         results.push({ adId: ad.id, name: ad.name });
