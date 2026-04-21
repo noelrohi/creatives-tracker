@@ -81,14 +81,16 @@ export const adCreativeRouter = router({
       }
 
       const { from, to } = input ?? {};
+      const plBase = basePerformanceLogFilter("pl");
+      const pl2Base = basePerformanceLogFilter("pl2");
       const win = from && to
-        ? sql`AND pl.date_start <= ${to}::date AND pl.date_end >= ${from}::date`
-        : sql``;
+        ? sql`AND pl.date_start >= ${from}::date AND pl.date_start <= ${to}::date AND ${plBase}`
+        : sql`AND ${plBase}`;
       const win2 = from && to
-        ? sql`AND pl2.date_start <= ${to}::date AND pl2.date_end >= ${from}::date`
-        : sql``;
+        ? sql`AND pl2.date_start >= ${from}::date AND pl2.date_start <= ${to}::date AND ${pl2Base}`
+        : sql`AND ${pl2Base}`;
       const dateFilterForRollup = from && to
-        ? sql`pl.date_start <= ${to}::date AND pl.date_end >= ${from}::date`
+        ? sql`pl.date_start >= ${from}::date AND pl.date_start <= ${to}::date`
         : undefined;
 
       const rows = await db

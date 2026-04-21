@@ -41,6 +41,7 @@ interface LinkedAd {
   name: string;
   caption: string | null;
   status: string | null;
+  adSetName: string | null;
   campaignName: string | null;
   destinationUrl: string | null;
   totalSpend: string | null;
@@ -119,6 +120,11 @@ export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
                         : "Archived"}
                   </Badge>
                 </div>
+                {ad.adSetName && (
+                  <div className="mt-0.5 max-w-[240px] truncate text-[11px] text-muted-foreground/50">
+                    {ad.adSetName}
+                  </div>
+                )}
               </td>
               <td className="max-w-[140px] px-3 py-2 text-muted-foreground/60">
                 {ad.campaignName ? (
