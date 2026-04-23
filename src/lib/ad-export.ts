@@ -18,7 +18,6 @@ type RawAdRow = {
   awareness_level: string | null;
   hook: string | null;
   cta: string | null;
-  creative_destination_url: string | null;
   asset_url: string | null;
   video_url: string | null;
 
@@ -44,7 +43,7 @@ type RawAdRow = {
   window_impressions: string | null;
   window_clicks: string | null;
   window_hook_rate: string | null;
-  window_thumbstop: string | null;
+  window_days_with_logs: string | null;
 
   lifetime_spend: string | null;
   lifetime_conversions: string | null;
@@ -103,7 +102,11 @@ export type AdExportRow = {
   status: string | null;
   windowFrom: string | null;
   windowTo: string | null;
+  // Spread of the ad's lifetime log history (max date_end - min date_start).
+  // CSV exposes this as `days_with_logs` — it is NOT "days since launch".
   runningDays: number | null;
+  // Count of distinct log dates inside the selected export window.
+  daysInWindow: number | null;
   lastLogAt: string | null;
   activeInWindow: boolean;
 
@@ -119,7 +122,6 @@ export type AdExportRow = {
   windowImpressions: number | null;
   windowClicks: number | null;
   windowHookRate: number | null;
-  windowThumbstop: number | null;
   genderBreakdown: string | null;
   ageBreakdown: string | null;
   countryBreakdown: string | null;
@@ -130,7 +132,10 @@ export type AdExportRow = {
   lifetimeConversions: number | null;
   lifetimeRoas: number | null;
 
-  // Trend deltas (pct, positive = worse)
+  // Trend deltas: recent vs baseline, expressed as a percent change.
+  // Direction of "good" is metric-dependent:
+  //   ctrDeltaPct, hookRateDeltaPct → positive = better (rate went up)
+  //   cpcDeltaPct, cpaDeltaPct      → positive = worse  (cost went up)
   ctrDeltaPct: number | null;
   cpcDeltaPct: number | null;
   cpaDeltaPct: number | null;
@@ -373,9 +378,10 @@ export async function fetchAgentExportRows(opts: {
           sum(pl.impressions) AS impressions,
           sum(pl.link_clicks) AS clicks,
           coalesce(sum(pl.ctr * pl.impressions), 0) / nullif(sum(pl.impressions), 0) AS ctr,
-          avg(pl.cpc) AS cpc,
-          avg(pl.frequency) AS frequency,
-          sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0) AS hook_rate
+          sum(pl.spend) / nullif(sum(pl.link_clicks), 0) AS cpc,
+          sum(pl.frequency * pl.impressions) / nullif(sum(pl.impressions), 0) AS frequency,
+          sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0) AS hook_rate,
+          count(DISTINCT pl.date_start)::int AS days_in_window
         FROM performance_log pl
         WHERE pl.date_start = pl.date_end
           AND pl.date_start >= ${from}::date
@@ -405,7 +411,7 @@ export async function fetchAgentExportRows(opts: {
           pl.ad_id,
           sum(pl.conversions) AS conversions,
           coalesce(sum(pl.ctr * pl.impressions), 0) / nullif(sum(pl.impressions), 0) AS ctr,
-          avg(pl.cpc) AS cpc,
+          sum(pl.spend) / nullif(sum(pl.link_clicks), 0) AS cpc,
           coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0) AS cpa,
           sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0) AS hook_rate
         FROM performance_log pl
@@ -451,7 +457,6 @@ export async function fetchAgentExportRows(opts: {
         ac.awareness_level::text AS awareness_level,
         ac.hook AS hook,
         ac.cta AS cta,
-        NULL::text AS creative_destination_url,
         ac.asset_url AS asset_url,
         ac.video_url AS video_url,
 
@@ -477,7 +482,7 @@ export async function fetchAgentExportRows(opts: {
         w.impressions::text AS window_impressions,
         w.clicks::text AS window_clicks,
         w.hook_rate::text AS window_hook_rate,
-        w.hook_rate::text AS window_thumbstop,
+        w.days_in_window::text AS window_days_with_logs,
 
         lm.spend::text AS lifetime_spend,
         lm.conversions::text AS lifetime_conversions,
@@ -529,7 +534,6 @@ export async function fetchAgentExportRows(opts: {
     const windowCpc = n(r.window_cpc);
     const windowFreq = n(r.window_frequency);
     const windowHookRate = n(r.window_hook_rate);
-    const windowThumbstop = n(r.window_thumbstop);
     const lifetimeCtr = n(r.lifetime_roas); // reserved
     void lifetimeCtr;
 
@@ -549,7 +553,7 @@ export async function fetchAgentExportRows(opts: {
       priorHookRate: n(r.prior_hook_rate),
       recentCpa: n(r.recent_cpa),
       avgCpa: n(r.window_cpa),
-      thumbstopRatio: windowThumbstop,
+      thumbstopRatio: windowHookRate,
     });
 
     const dollarsAtRisk = windowSpend != null && windowRoas != null
@@ -627,13 +631,14 @@ export async function fetchAgentExportRows(opts: {
       awarenessLevel: r.awareness_level,
       hook: r.hook,
       cta: r.cta,
-      destinationUrl: r.ad_destination_url ?? r.creative_destination_url,
+      destinationUrl: r.ad_destination_url,
       assetUrl: r.asset_url,
       videoUrl: r.video_url,
       status: r.ad_status,
       windowFrom: from,
       windowTo: to,
       runningDays: n(r.running_days),
+      daysInWindow: n(r.window_days_with_logs),
       lastLogAt: r.last_log_at,
       activeInWindow,
       windowSpend,
@@ -647,7 +652,6 @@ export async function fetchAgentExportRows(opts: {
       windowImpressions: n(r.window_impressions),
       windowClicks: n(r.window_clicks),
       windowHookRate: r.format === "video" || r.format === "ugc" ? windowHookRate : null,
-      windowThumbstop: r.format === "video" || r.format === "ugc" ? windowThumbstop : null,
       genderBreakdown: demographicSummaries.gender.get(r.ad_id) ?? null,
       ageBreakdown: demographicSummaries.age.get(r.ad_id) ?? null,
       countryBreakdown: demographicSummaries.country.get(r.ad_id) ?? null,

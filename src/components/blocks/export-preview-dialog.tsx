@@ -48,6 +48,9 @@ function toCsv(headers: readonly string[], rows: string[][]): string {
 }
 
 const fmtN = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? "" : String(v));
+// hook_rate is stored as a 0-1 ratio; the CSV column is `..._pct`, so emit as a percent.
+const fmtPct = (v: number | null | undefined) =>
+  v == null || !Number.isFinite(v) ? "" : String(v * 100);
 const fmtB = (v: boolean | null | undefined) => (v ? "true" : "false");
 const fmtS = (v: string | null | undefined) => v ?? "";
 
@@ -60,11 +63,11 @@ function buildAdsCsv(ads: AgentExport["ads"]): string {
     "account_id", "account_name", "team_id", "team_name",
     "format", "angle", "persona", "awareness_level", "hook", "cta",
     "destination_url", "asset_url", "video_url",
-    "window_from", "window_to", "running_days", "last_log_at", "active_in_window",
+    "window_from", "window_to", "days_with_logs", "days_in_window", "last_log_at", "active_in_window",
     "window_spend_usd", "window_revenue_usd", "window_conversions",
     "window_roas", "window_cpa_usd", "window_ctr_pct", "window_cpc_usd",
     "window_frequency", "window_impressions", "window_clicks",
-    "window_hook_rate_pct", "window_thumbstop_pct",
+    "window_hook_rate_pct",
     "gender_breakdown", "age_breakdown", "country_breakdown", "device_breakdown",
     "lifetime_spend_usd", "lifetime_conversions", "lifetime_roas",
     "ctr_delta_pct", "cpc_delta_pct", "cpa_delta_pct", "hook_rate_delta_pct",
@@ -75,18 +78,18 @@ function buildAdsCsv(ads: AgentExport["ads"]): string {
     "creative_has_winners",
   ] as const;
   const rows = ads.map((a) => [
-    a.adId, fmtS(a.metaAdId), a.adName, fmtS(a.status),
+    a.adId, fmtS(a.metaAdId), a.metaAdId ? `${a.adName} (${a.metaAdId})` : a.adName, fmtS(a.status),
     a.creativeId, a.creativeName,
     fmtS(a.adSetId), fmtS(a.metaAdSetId), fmtS(a.adSetName),
     fmtS(a.campaignId), fmtS(a.metaCampaignId), fmtS(a.campaignName),
     fmtS(a.accountId), fmtS(a.accountName), fmtS(a.teamId), fmtS(a.teamName),
     fmtS(a.format), fmtS(a.angle), fmtS(a.persona), fmtS(a.awarenessLevel), fmtS(a.hook), fmtS(a.cta),
     fmtS(a.destinationUrl), fmtS(a.assetUrl), fmtS(a.videoUrl),
-    fmtS(a.windowFrom), fmtS(a.windowTo), fmtN(a.runningDays), fmtS(a.lastLogAt), fmtB(a.activeInWindow),
+    fmtS(a.windowFrom), fmtS(a.windowTo), fmtN(a.runningDays), fmtN(a.daysInWindow), fmtS(a.lastLogAt), fmtB(a.activeInWindow),
     fmtN(a.windowSpend), fmtN(a.windowRevenue), fmtN(a.windowConversions),
     fmtN(a.windowRoas), fmtN(a.windowCpa), fmtN(a.windowCtr), fmtN(a.windowCpc),
     fmtN(a.windowFrequency), fmtN(a.windowImpressions), fmtN(a.windowClicks),
-    fmtN(a.windowHookRate), fmtN(a.windowThumbstop),
+    fmtPct(a.windowHookRate),
     fmtS(a.genderBreakdown), fmtS(a.ageBreakdown), fmtS(a.countryBreakdown), fmtS(a.deviceBreakdown),
     fmtN(a.lifetimeSpend), fmtN(a.lifetimeConversions), fmtN(a.lifetimeRoas),
     fmtN(a.ctrDeltaPct), fmtN(a.cpcDeltaPct), fmtN(a.cpaDeltaPct), fmtN(a.hookRateDeltaPct),
@@ -110,7 +113,7 @@ function buildCreativesCsv(creatives: AgentExport["creatives"]): string {
     "window_spend_usd", "window_revenue_usd", "window_conversions",
     "window_roas", "window_cpa_usd", "window_ctr_pct",
     "lifetime_spend_usd", "lifetime_conversions", "lifetime_roas",
-    "running_days", "last_log_at",
+    "days_with_logs", "last_log_at",
     "rollup_health", "rollup_reasons",
     "dollars_at_risk_usd",
     "flag_disable_candidate", "flag_scale_candidate", "flag_review_candidate",
