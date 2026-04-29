@@ -96,10 +96,6 @@ export function EditableText({
     if (editing) ref.current?.focus();
   }, [editing]);
 
-  useEffect(() => {
-    setDraft(value ?? "");
-  }, [value]);
-
   const commit = () => {
     setEditing(false);
     if (draft !== (value ?? "")) onSave(draft);
@@ -156,7 +152,10 @@ export function EditableText({
               ? "text-foreground"
               : "text-muted-foreground/40 italic",
           )}
-          onClick={() => setEditing(true)}
+          onClick={() => {
+            setDraft(value ?? "");
+            setEditing(true);
+          }}
         >
           {value || placeholder}
         </button>

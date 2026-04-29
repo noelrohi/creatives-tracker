@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTRPC, useTRPCClient } from "@/lib/trpc/client";
 import { getUserFacingErrorMessage } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
@@ -29,17 +29,8 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { toast } from "sonner";
-import { mapRowsForImport, splitBulkImportRows } from "@/lib/import-utils";
 import { formatDateOnly, parseDateOnly } from "@/lib/date";
 import { cn } from "@/lib/utils";
-
-type SyncPhase = "idle" | "requesting" | "processing" | "downloading" | "importing" | "done";
-
-type SyncTarget = {
-  accountId: string;
-  dateFrom: string;
-  dateTo: string;
-};
 
 interface MetaApiTabProps {
   accounts: {
@@ -98,12 +89,8 @@ export function MetaApiTab({
 
   const apiAccounts = accounts.filter((a) => a.hasMetaAccessToken);
 
-  const [syncTarget, setSyncTarget] = useState<SyncTarget | null>(null);
-  const [phase, setPhase] = useState<SyncPhase>("idle");
-  const [progress, setProgress] = useState(0);
   const [exporting, setExporting] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const syncableAccounts = useQuery({
     ...trpc.metaSync.listSyncableAccounts.queryOptions(),
@@ -127,107 +114,31 @@ export function MetaApiTab({
     (run) => run.status === "queued" || run.status === "running",
   );
 
-  useEffect(() => {
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, []);
-
-  async function runSync(target: SyncTarget) {
-    setSyncTarget(target);
-    setProgress(0);
-
-    try {
-      setPhase("requesting");
-      const { reportRunId } = await trpcClient.metaInsights.requestReport.mutate({
-        accountId: target.accountId,
-        dateFrom: target.dateFrom,
-        dateTo: target.dateTo,
-        level: "ad",
-      });
-
-      setPhase("processing");
-      await new Promise<void>((resolve, reject) => {
-        pollRef.current = setInterval(async () => {
-          try {
-            const status = await trpcClient.metaInsights.checkReport.query({
-              reportRunId,
-              accountId: target.accountId,
-            });
-
-            setProgress(status.percentComplete);
-
-            if (status.isFailed) {
-              if (pollRef.current) clearInterval(pollRef.current);
-              reject(new Error("Report generation failed on Meta's side."));
-            }
-
-            if (status.isComplete) {
-              if (pollRef.current) clearInterval(pollRef.current);
-              resolve();
-            }
-          } catch (err) {
-            if (pollRef.current) clearInterval(pollRef.current);
-            reject(err);
-          }
-        }, 3000);
-      });
-
-      setPhase("downloading");
-      const { rows, totalRows } = await trpcClient.metaInsights.downloadReport.mutate({
-        reportRunId,
-        accountId: target.accountId,
-        level: "ad",
-      });
-
-      if (totalRows === 0) {
-        toast.info("No data found for the selected date range.");
-        setPhase("idle");
-        setSyncTarget(null);
-        return;
-      }
-
-      setPhase("importing");
-      const mapped = mapRowsForImport(rows);
-      const chunks = splitBulkImportRows(mapped, target.accountId);
-      let totalPerfLogs = 0;
-      const createdById = new Map<string, { id: string; name: string }>();
-
-      for (const chunk of chunks) {
-        const result = await trpcClient.adCreative.bulkImport.mutate({
-          accountId: target.accountId,
-          rows: chunk,
+  const triggerSync = useMutation(
+    trpc.trigger.triggerMetaSync.mutationOptions({
+      onSuccess: () => {
+        toast.success("Meta sync queued in Trigger.dev.");
+        void runsQuery.refetch();
+        void queryClient.invalidateQueries({
+          queryKey: trpc.metaSync.listSyncableAccounts.queryKey(),
         });
-        for (const c of result.created) {
-          createdById.set(c.id, c);
-        }
-        totalPerfLogs += result.perfLogs;
-      }
+      },
+      onError: (err) => {
+        toast.error(getUserFacingErrorMessage(err, "Failed to queue sync."));
+      },
+    }),
+  );
 
-      setPhase("done");
-      queryClient.invalidateQueries({ queryKey: trpc.adCreative.list.queryKey() });
-      queryClient.invalidateQueries({ queryKey: trpc.ad.list.queryKey() });
-      queryClient.invalidateQueries({ queryKey: trpc.metaSync.listSyncableAccounts.queryKey() });
-
-      const uniqueAds = new Set(rows.map((r) => r.adId || r.name)).size;
-      const newCount = createdById.size;
-      const updatedCount = uniqueAds - newCount;
-      const parts = [];
-      if (newCount > 0) parts.push(`${newCount} new`);
-      if (updatedCount > 0) parts.push(`${updatedCount} updated`);
-      toast.success(
-        `${parts.join(", ")} ad${uniqueAds > 1 ? "s" : ""} · ${totalPerfLogs.toLocaleString()} perf rows`,
-      );
-
-      setTimeout(() => {
-        setPhase("idle");
-        setSyncTarget(null);
-      }, 1200);
-    } catch (err) {
-      toast.error(getUserFacingErrorMessage(err, "Sync failed."));
-      setPhase("idle");
-      setSyncTarget(null);
-    }
+  function runSync(input: {
+    accountId: string;
+    dateFrom: string;
+    dateTo: string;
+    force?: boolean;
+  }) {
+    triggerSync.mutate({
+      ...input,
+      triggerType: "manual_backfill",
+    });
   }
 
   async function handleExport() {
@@ -258,10 +169,7 @@ export function MetaApiTab({
     }
   }
 
-  const isSyncing = phase !== "idle" && phase !== "done";
-  const activeSync = syncTarget && phase !== "idle"
-    ? { accountId: syncTarget.accountId, phase, progress }
-    : null;
+  const isSyncing = triggerSync.isPending || hasActiveBackgroundRun;
 
   if (apiAccounts.length === 0) {
     return (
@@ -288,7 +196,8 @@ export function MetaApiTab({
       <AccountFreshnessPanel
         accounts={syncableAccounts.data ?? []}
         recentRuns={runs}
-        activeSync={activeSync}
+        activeSync={null}
+        isSyncDisabled={isSyncing}
         isLoading={syncableAccounts.isLoading}
         onSync={(account) => {
           void runSync({
@@ -366,7 +275,7 @@ export function MetaApiTab({
                     toast.error("Select an account first.");
                     return;
                   }
-                  void runSync({ accountId, dateFrom, dateTo });
+                  void runSync({ accountId, dateFrom, dateTo, force: true });
                 }}
                 disabled={isSyncing || exporting || !accountId}
               >

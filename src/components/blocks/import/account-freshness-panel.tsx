@@ -11,6 +11,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { MetaSyncCard } from "@/components/meta-sync-status";
 
 const BREAKDOWN_ORDER = ["age", "gender", "country", "device_platform"] as const;
 const BREAKDOWN_LABEL: Record<(typeof BREAKDOWN_ORDER)[number], string> = {
@@ -44,6 +45,7 @@ type RecentRun = {
   id: string;
   accountId: string;
   breakdownsRequested: string[];
+  currentPhase?: string | null;
   result: string | null;
   finishedAt: Date | null;
   status: string;
@@ -62,6 +64,7 @@ interface AccountFreshnessPanelProps {
   recentRuns: RecentRun[];
   activeSync: ActiveSync;
   onSync: (account: SyncableAccount) => void;
+  isSyncDisabled?: boolean;
   isLoading: boolean;
 }
 
@@ -92,6 +95,37 @@ function phaseLabel(phase: SyncPhase, progress: number) {
       return "Importing…";
     default:
       return "Syncing…";
+  }
+}
+
+function runPhaseLabel(run: RecentRun) {
+  if (run.status === "queued") return "Queued in background";
+  if (!run.currentPhase) return "Running in background";
+  return run.currentPhase.replaceAll("_", " ");
+}
+
+function latestActiveRun(accountId: string, runs: RecentRun[]) {
+  return runs.find(
+    (run) =>
+      run.accountId === accountId &&
+      (run.status === "queued" || run.status === "running"),
+  ) ?? null;
+}
+
+function activeProgressWidth(activeSync: NonNullable<ActiveSync>) {
+  switch (activeSync.phase) {
+    case "processing":
+      return activeSync.progress > 0 ? `${activeSync.progress}%` : undefined;
+    case "requesting":
+      return "8%";
+    case "downloading":
+      return "75%";
+    case "importing":
+      return "90%";
+    case "done":
+      return "100%";
+    default:
+      return "4%";
   }
 }
 
@@ -131,6 +165,7 @@ export function AccountFreshnessPanel({
   recentRuns,
   activeSync,
   onSync,
+  isSyncDisabled = false,
   isLoading,
 }: AccountFreshnessPanelProps) {
   const nowMs = useCurrentTime(60_000);
@@ -147,38 +182,41 @@ export function AccountFreshnessPanel({
     return null;
   }
 
-  const someSyncing = activeSync !== null;
+  const someSyncing = activeSync !== null || isSyncDisabled;
 
   return (
     <TooltipProvider delayDuration={150}>
-      <div className="overflow-hidden rounded-lg border border-border/60">
-        <div className="flex items-center justify-between border-b border-border/60 bg-muted/20 px-3 py-2">
-          <div className="flex items-baseline gap-2">
-            <h2 className="text-sm font-medium">Accounts</h2>
-            <span className="text-[11px] text-muted-foreground/70">
-              {accounts.length} · click sync for base data
-            </span>
+      <div className="flex gap-4">
+        <div className="min-w-0 flex-1 overflow-hidden rounded-lg border border-border/60">
+          <div className="flex items-center justify-between border-b border-border/60 bg-muted/20 px-3 py-2">
+            <div className="flex items-baseline gap-2">
+              <h2 className="text-sm font-medium">Accounts</h2>
+              <span className="text-[11px] text-muted-foreground/70">
+                {accounts.length} · click sync for background import
+              </span>
+            </div>
+            <div className="flex items-center gap-2.5 text-[10px] text-muted-foreground/60">
+              <span className="flex items-center gap-1">
+                <span className="size-1.5 rounded-full bg-emerald-500" />
+                fresh
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="size-1.5 rounded-full bg-amber-400" />
+                aging
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="size-1.5 rounded-full bg-rose-500" />
+                stale
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-2.5 text-[10px] text-muted-foreground/60">
-            <span className="flex items-center gap-1">
-              <span className="size-1.5 rounded-full bg-emerald-500" />
-              fresh
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="size-1.5 rounded-full bg-amber-400" />
-              aging
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="size-1.5 rounded-full bg-rose-500" />
-              stale
-            </span>
-          </div>
-        </div>
 
         <ul className="divide-y divide-border/40">
           {accounts.map((account) => {
             const fresh = freshBreakdowns(account.accountId, recentRuns);
-            const isActive = activeSync?.accountId === account.accountId;
+            const activeRun = latestActiveRun(account.accountId, recentRuns);
+            const isClientActive = activeSync?.accountId === account.accountId;
+            const isActive = isClientActive || activeRun !== null;
             const dotClass = isActive
               ? "bg-primary animate-pulse"
               : freshnessDotClass(account, nowMs);
@@ -221,9 +259,13 @@ export function AccountFreshnessPanel({
                   )}
 
                   <span className="text-[11px] text-muted-foreground/70">
-                    {isActive ? (
+                    {isClientActive ? (
                       <span className="font-medium text-foreground/80">
                         {phaseLabel(activeSync.phase, activeSync.progress)}
+                      </span>
+                    ) : activeRun ? (
+                      <span className="font-medium capitalize text-foreground/80">
+                        {runPhaseLabel(activeRun)}
                       </span>
                     ) : (
                       <>
@@ -304,23 +346,16 @@ export function AccountFreshnessPanel({
                     <div
                       className={cn(
                         "h-full bg-primary transition-all duration-500",
-                        activeSync.phase === "processing" && activeSync.progress === 0 && "w-1/12 animate-pulse",
+                        isClientActive &&
+                          activeSync.phase === "processing" &&
+                          activeSync.progress === 0 &&
+                          "w-1/12 animate-pulse",
+                        !isClientActive && "w-1/3 animate-pulse",
                       )}
                       style={{
-                        width:
-                          activeSync.phase === "processing"
-                            ? activeSync.progress > 0
-                              ? `${activeSync.progress}%`
-                              : undefined
-                            : activeSync.phase === "requesting"
-                              ? "8%"
-                              : activeSync.phase === "downloading"
-                                ? "75%"
-                                : activeSync.phase === "importing"
-                                  ? "90%"
-                                  : activeSync.phase === "done"
-                                    ? "100%"
-                                    : "4%",
+                        width: isClientActive
+                          ? activeProgressWidth(activeSync)
+                          : undefined,
                       }}
                     />
                   </div>
@@ -329,6 +364,9 @@ export function AccountFreshnessPanel({
             );
           })}
         </ul>
+        </div>
+
+        <MetaSyncCard />
       </div>
     </TooltipProvider>
   );

@@ -387,6 +387,12 @@ export function AppSidebar() {
                   {isPrivileged ? (
                     <>
                       <DropdownMenuItem asChild>
+                        <Link href="/settings/org">
+                          <Building2 className="mr-2 size-4" />
+                          Organization
+                        </Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild>
                         <Link href="/settings/members">
                           <UserPlus className="mr-2 size-4" />
                           Invite members

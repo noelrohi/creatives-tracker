@@ -1,69 +1,15 @@
 import { z } from "zod";
-import { router, orgProcedure, orgWriteProcedure, orgAdminProcedure } from "../init";
+import { router, orgProcedure, orgAdminProcedure } from "../init";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
-  checkMetaInsightsReport,
-  downloadMetaInsightsReport,
   getMetaAccountWithToken,
   handleMetaApiError,
   META_GRAPH_API_BASE,
-  metaInsightsBreakdownSchema,
-  metaInsightsLevelSchema,
-  requestMetaInsightsReport,
 } from "@/lib/meta-insights-sync";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 
 export const metaInsightsRouter = router({
-  /**
-   * Step 1: Request an async report from Meta.
-   * Returns a report_run_id to poll with checkReport.
-   */
-  requestReport: orgWriteProcedure
-    .input(
-        z.object({
-          accountId: z.string(),
-          dateFrom: z.string(),
-          dateTo: z.string(),
-          level: metaInsightsLevelSchema,
-          breakdowns: z.array(metaInsightsBreakdownSchema).optional(),
-        }),
-      )
-      .mutation(async ({ input, ctx }) => {
-        return requestMetaInsightsReport({
-          organizationId: ctx.organizationId,
-          ...input,
-        });
-      }),
-
-  /**
-   * Step 2: Poll report status.
-   * Returns async_status and async_percent_completion.
-    */
-  checkReport: orgProcedure
-    .input(z.object({ reportRunId: z.string(), accountId: z.string() }))
-    .query(async ({ input, ctx }) => checkMetaInsightsReport({
-      organizationId: ctx.organizationId,
-      ...input,
-    })),
-
-  /**
-   * Step 3: Download completed report data.
-   * Follows pagination to get all rows, maps to MappedRow[].
-   */
-  downloadReport: orgWriteProcedure
-    .input(
-        z.object({
-          reportRunId: z.string(),
-          accountId: z.string(),
-          level: metaInsightsLevelSchema,
-        }),
-      )
-    .mutation(async ({ input, ctx }) => downloadMetaInsightsReport({
-      organizationId: ctx.organizationId,
-      ...input,
-    })),
-
   /**
    * Admin-only: delete multi-day performance_log rows for this account whose
    * entire [date_start, date_end] falls inside [from, to].

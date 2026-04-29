@@ -27,7 +27,7 @@ import {
   listRecentAccountSyncRuns,
   updateAccountSyncRun,
 } from "@/lib/meta-sync-runs";
-import { router, orgProcedure, orgWriteProcedure } from "../init";
+import { internalWorkerProcedure, router, orgProcedure, orgWriteProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 
 const breakdownSchema = z.enum([
@@ -104,6 +104,24 @@ function subDaysYmd(ymd: string, days: number) {
 }
 
 export const metaSyncRouter = router({
+  listOrganizations: internalWorkerProcedure
+    .output(z.array(z.object({ organizationId: z.string() })))
+    .query(async () => {
+      const rows = await db
+        .selectDistinct({ organizationId: adAccounts.organizationId })
+        .from(adAccounts)
+        .where(
+          and(
+            isNotNull(adAccounts.organizationId),
+            isNotNull(adAccounts.metaAccessToken),
+          ),
+        );
+
+      return rows.flatMap((row) =>
+        row.organizationId ? [{ organizationId: row.organizationId }] : [],
+      );
+    }),
+
   listSyncableAccounts: orgProcedure
     .meta(openApiQueryMeta("metaSync", "listSyncableAccounts", "List Meta-enabled accounts with suggested sync windows"))
     .input(

@@ -27,8 +27,21 @@ async function resolveHeaders(options?: ContextOptions) {
 export async function createContext(options?: ContextOptions) {
   const requestHeaders = await resolveHeaders(options);
   const bearerToken = getBearerToken(requestHeaders.get("authorization"));
+  const workerSecret = process.env.ADSOLUTE_WORKER_SECRET;
 
   if (bearerToken) {
+    if (workerSecret && bearerToken === workerSecret) {
+      return {
+        session: null,
+        principalType: "worker" as const,
+        userId: null,
+        organizationId: requestHeaders.get("x-adsolute-organization-id"),
+        orgRole: null,
+        apiKeyId: null,
+        apiKeyScopes: [] as string[],
+      };
+    }
+
     const apiKeyPrincipal = await authenticateApiKey(bearerToken);
 
     if (!apiKeyPrincipal) {
@@ -94,7 +107,7 @@ const t = initTRPC.context<Context>().meta<OpenApiMeta>().create({
 });
 
 const isAuthenticated = t.middleware(async ({ ctx, next }) => {
-  if (!ctx.session && !ctx.apiKeyId) {
+  if (!ctx.session && !ctx.apiKeyId && ctx.principalType !== "worker") {
     throw new TRPCError({ code: "UNAUTHORIZED" });
   }
   return next({
@@ -112,7 +125,7 @@ const isAuthenticated = t.middleware(async ({ ctx, next }) => {
 });
 
 const hasOrganization = t.middleware(async ({ ctx, next }) => {
-  if (!ctx.session && !ctx.apiKeyId) {
+  if (!ctx.session && !ctx.apiKeyId && ctx.principalType !== "worker") {
     throw new TRPCError({ code: "UNAUTHORIZED" });
   }
   if (!ctx.organizationId) {
@@ -136,7 +149,7 @@ const hasOrganization = t.middleware(async ({ ctx, next }) => {
 });
 
 const hasWriteAccess = t.middleware(async ({ ctx, next }) => {
-  if (!ctx.session && !ctx.apiKeyId) {
+  if (!ctx.session && !ctx.apiKeyId && ctx.principalType !== "worker") {
     throw new TRPCError({ code: "UNAUTHORIZED" });
   }
   if (!ctx.organizationId) {
@@ -146,7 +159,7 @@ const hasWriteAccess = t.middleware(async ({ ctx, next }) => {
     });
   }
 
-  if (ctx.principalType === "apiKey") {
+  if (ctx.principalType === "apiKey" || ctx.principalType === "worker") {
     return next({
       ctx: {
         ...ctx,
@@ -165,6 +178,28 @@ const hasWriteAccess = t.middleware(async ({ ctx, next }) => {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "Only organization admins can modify data",
+    });
+  }
+
+  return next({
+    ctx: {
+      ...ctx,
+      apiKeyId: ctx.apiKeyId,
+      apiKeyScopes: ctx.apiKeyScopes,
+      organizationId: ctx.organizationId,
+      orgRole: ctx.orgRole,
+      principalType: ctx.principalType,
+      session: ctx.session,
+      userId: ctx.userId,
+    },
+  });
+});
+
+const hasWorkerAccess = t.middleware(async ({ ctx, next }) => {
+  if (ctx.principalType !== "worker") {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "This action requires internal worker authentication",
     });
   }
 
@@ -250,3 +285,4 @@ export const orgProcedure = t.procedure.use(hasOrganization);
 export const orgWriteProcedure = t.procedure.use(hasWriteAccess);
 export const orgAdminProcedure = t.procedure.use(hasOrgAdminSession);
 export const orgOwnerProcedure = t.procedure.use(hasOrgOwnerSession);
+export const internalWorkerProcedure = t.procedure.use(hasWorkerAccess);

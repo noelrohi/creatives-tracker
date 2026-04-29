@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -71,25 +71,7 @@ function AcceptInvitationContent() {
   const [state, setState] = useState<PageState>({ type: "loading" });
   const fetchedRef = useRef(false);
 
-  useEffect(() => {
-    if (sessionPending) return;
-    if (!invitationId) {
-      setState({ type: "missing-id" });
-      return;
-    }
-    if (fetchedRef.current) return;
-    fetchedRef.current = true;
-
-    if (!session) {
-      setState({ type: "needs-account", invitationId });
-      return;
-    }
-
-    fetchInvitation(invitationId, session.user.email);
-  }, [invitationId, session, sessionPending]);
-
-  async function fetchInvitation(id: string, currentEmail: string) {
-    setState({ type: "loading" });
+  const fetchInvitation = useCallback(async (id: string, currentEmail: string) => {
     const { data, error } = await authClient.organization.getInvitation({
       query: { id },
     });
@@ -115,7 +97,23 @@ function AcceptInvitationContent() {
       type: "valid",
       invitation: data as unknown as InvitationDetails,
     });
-  }
+  }, [session]);
+
+  useEffect(() => {
+    if (sessionPending) return;
+    if (!invitationId) {
+      return;
+    }
+    if (fetchedRef.current) return;
+    fetchedRef.current = true;
+
+    if (!session) {
+      return;
+    }
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Async invitation lookup must update page state after the request resolves.
+    void fetchInvitation(invitationId, session.user.email);
+  }, [fetchInvitation, invitationId, session, sessionPending]);
 
   async function handleAccept() {
     if (!invitationId) return;
@@ -145,6 +143,21 @@ function AcceptInvitationContent() {
     const orgName =
       state.type === "valid" ? state.invitation.organizationName : "";
     setState({ type: "rejected", orgName });
+  }
+
+  if (!invitationId) {
+    return <MissingIdState />;
+  }
+
+  if (!sessionPending && !session) {
+    return (
+      <SignUpAndAccept
+        invitationId={invitationId}
+        onCreated={() => {
+          fetchedRef.current = false;
+        }}
+      />
+    );
   }
 
   switch (state.type) {

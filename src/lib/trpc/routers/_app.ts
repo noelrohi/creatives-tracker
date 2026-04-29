@@ -12,6 +12,7 @@ import { apiKeyRouter } from "./api-key";
 import { organizationRouter } from "./organization";
 import { teamRouter } from "./team";
 import { metaSyncRouter } from "./meta-sync";
+import { triggerRouter } from "./trigger";
 
 export const appRouter = router({
   adCreative: adCreativeRouter,
@@ -27,6 +28,7 @@ export const appRouter = router({
   organization: organizationRouter,
   team: teamRouter,
   metaSync: metaSyncRouter,
+  trigger: triggerRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -380,6 +380,34 @@ async function runSync(
   );
 }
 
+async function triggerSync(
+  client: ReturnType<typeof createApiClient>,
+  options: {
+    accountId?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    force?: boolean;
+  },
+) {
+  const result = await withRetry("triggerMetaSync", () =>
+    client.trigger.triggerMetaSync.mutate(
+      compactObject({
+        accountId: options.accountId,
+        dateFrom: options.dateFrom,
+        dateTo: options.dateTo,
+        force: options.force,
+        triggerType:
+          options.accountId || options.dateFrom || options.dateTo
+            ? "manual_backfill"
+            : "scheduled",
+      }),
+    ),
+  );
+
+  console.log(`Queued Trigger.dev Meta sync run: ${result.runId}`);
+  console.log("Use `meta-sync history` or the /import page to inspect imported account runs.");
+}
+
 async function runHistory(
   client: ReturnType<typeof createApiClient>,
   options: {
@@ -425,8 +453,35 @@ export function registerMetaSyncCommands(program: Command) {
   const metaSync = program.command("meta-sync").description("Run or inspect Meta sync workflows");
 
   metaSync
+    .command("trigger")
+    .description("Queue the Trigger.dev Meta sync task")
+    .option("--account-id <accountId>", "Sync only one account")
+    .option("--date-from <date>", "Override dateFrom (YYYY-MM-DD)")
+    .option("--date-to <date>", "Override dateTo (YYYY-MM-DD)")
+    .option("--force", "Ignore the 4-hour freshness skip window")
+    .action(async (options, command) => {
+      try {
+        const apiKey = resolveApiKey(command);
+        if (!apiKey) {
+          throw new Error("ADSOLUTE_API_KEY is required. Pass --api-key or set it in the environment.");
+        }
+
+        const client = createApiClient(resolveApiUrl(command), apiKey);
+        await triggerSync(client, {
+          accountId: options.accountId,
+          dateFrom: parseIsoDate(options.dateFrom, "--date-from"),
+          dateTo: parseIsoDate(options.dateTo, "--date-to"),
+          force: options.force,
+        });
+      } catch (error) {
+        console.error(formatError(error));
+        process.exitCode = 1;
+      }
+    });
+
+  metaSync
     .command("sync")
-    .description("Sync base and demographic Meta insights across Meta-enabled accounts")
+    .description("Legacy local sync loop for base and demographic Meta insights")
     .option("--account-id <accountId>", "Sync only one account")
     .option("--date-from <date>", "Override dateFrom (YYYY-MM-DD)")
     .option("--date-to <date>", "Override dateTo (YYYY-MM-DD)")
