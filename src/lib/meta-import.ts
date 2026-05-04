@@ -3,7 +3,10 @@ import { db } from "@/db";
 import { normalizeImportedAdStatus } from "@/lib/ad-status";
 import { fetchMetaCreativePreviewsBatch } from "@/lib/meta-creative-assets";
 import type { BulkImportRow } from "@/lib/import-utils";
-import { getMetaAccountWithToken } from "@/lib/meta-insights-sync";
+import {
+  fetchMetaAdDelivery,
+  getMetaAccountWithToken,
+} from "@/lib/meta-insights-sync";
 import { adAccounts } from "@/schema/account";
 import { adCreatives } from "@/schema/ad-creative";
 import { ads } from "@/schema/ad";
@@ -485,6 +488,60 @@ async function resolveAdsForRows(input: {
     adIdByMetaId,
     adIdByName: new Map(adsByName.map((row) => [row.name, row.id])),
   };
+}
+
+export async function refreshMetaAdStatusesForAccount(input: {
+  organizationId: string;
+  accountId: string;
+}) {
+  const account = await getMetaAccountWithToken({
+    accountId: input.accountId,
+    organizationId: input.organizationId,
+  });
+
+  const adRows = await db
+    .select({ id: ads.id, metaId: ads.metaId })
+    .from(ads)
+    .where(
+      and(
+        eq(ads.accountId, input.accountId),
+        eq(ads.organizationId, input.organizationId),
+        sql`${ads.metaId} IS NOT NULL`,
+      ),
+    );
+
+  const adMetaIds = adRows
+    .map((row) => row.metaId)
+    .filter((metaId): metaId is string => Boolean(metaId));
+
+  if (adMetaIds.length === 0) {
+    return { checked: 0, updated: 0 };
+  }
+
+  const deliveryByAdId = await fetchMetaAdDelivery({
+    adMetaIds,
+    accessToken: account.metaAccessToken,
+  });
+
+  let updated = 0;
+  for (const adRow of adRows) {
+    if (!adRow.metaId) continue;
+    const delivery = deliveryByAdId.get(adRow.metaId);
+    if (!delivery) continue;
+
+    await db
+      .update(ads)
+      .set({ status: normalizeImportedAdStatus(delivery) })
+      .where(
+        and(
+          eq(ads.id, adRow.id),
+          eq(ads.organizationId, input.organizationId),
+        ),
+      );
+    updated += 1;
+  }
+
+  return { checked: adMetaIds.length, updated };
 }
 
 export async function enrichMetaCreativePreviews(input: {

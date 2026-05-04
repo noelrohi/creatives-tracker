@@ -13,6 +13,7 @@ import {
   enrichMetaCreativePreviews,
   importMetaBreakdownRows,
   importMetaRows,
+  refreshMetaAdStatusesForAccount,
 } from "@/lib/meta-import";
 import {
   fetchMetaAdDelivery,
@@ -464,6 +465,13 @@ export const metaSyncRouter = router({
         lastCursorApplied: incomingCursor,
         lastNextCursor: page.nextCursor,
       };
+
+      if (done && !breakdown) {
+        await refreshMetaAdStatusesForAccount({
+          organizationId: ctx.organizationId,
+          accountId: run.accountId,
+        });
+      }
 
       await updateAccountSyncRun({
         id: run.id,
