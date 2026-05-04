@@ -29,6 +29,15 @@ export function normalizeImportedAdStatus(
   return "paused";
 }
 
+export function normalizeImportedAdStatusForUpdate(
+  delivery?: string | null,
+): "active" | "paused" | "archived" | undefined {
+  const normalized = canonicalizeImportedDeliveryStatus(delivery);
+  if (!normalized) return undefined;
+
+  return normalizeImportedAdStatus(normalized);
+}
+
 export function resolveMetaDeliveryStatus(statuses: {
   effectiveStatus?: string | null;
   configuredStatus?: string | null;

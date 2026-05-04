@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalizeImportedDeliveryStatus,
   normalizeImportedAdStatus,
+  normalizeImportedAdStatusForUpdate,
   resolveMetaDeliveryStatus,
 } from "./ad-status";
 import { mapMetaInsightsToRows } from "./meta-api-mapper";
@@ -21,6 +22,13 @@ describe("ad status normalization", () => {
   it("canonicalizes Meta status values", () => {
     expect(canonicalizeImportedDeliveryStatus("NOT DELIVERING")).toBe("not_delivering");
     expect(resolveMetaDeliveryStatus({ effectiveStatus: "ADSET_PAUSED" })).toBe("adset_paused");
+  });
+
+  it("does not produce an update status when delivery is missing", () => {
+    expect(normalizeImportedAdStatus()).toBe("active");
+    expect(normalizeImportedAdStatusForUpdate()).toBeUndefined();
+    expect(normalizeImportedAdStatusForUpdate("")).toBeUndefined();
+    expect(normalizeImportedAdStatusForUpdate("CAMPAIGN_PAUSED")).toBe("paused");
   });
 });
 

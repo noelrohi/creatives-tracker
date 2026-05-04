@@ -1,6 +1,9 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { normalizeImportedAdStatus } from "@/lib/ad-status";
+import {
+  normalizeImportedAdStatus,
+  normalizeImportedAdStatusForUpdate,
+} from "@/lib/ad-status";
 import { fetchMetaCreativePreviewsBatch } from "@/lib/meta-creative-assets";
 import type { BulkImportRow } from "@/lib/import-utils";
 import {
@@ -1111,9 +1114,10 @@ export async function importMetaRows(input: {
 
   for (const [key, existing] of existingMap) {
     const info = adInfoMap.get(key)!;
+    const status = normalizeImportedAdStatusForUpdate(info.delivery);
     await db.update(ads).set({
       name: info.name,
-      status: normalizeImportedAdStatus(info.delivery),
+      ...(status ? { status } : {}),
       ...(creativeIdByName.get(info.name) ? { adCreativeId: creativeIdByName.get(info.name) } : {}),
       ...(info.adSetDbId ? { adSetId: info.adSetDbId } : {}),
       ...(info.metaAdId ? { metaId: info.metaAdId } : {}),
