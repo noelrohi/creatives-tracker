@@ -148,9 +148,14 @@ export default function DashboardPage() {
   const survivingCreatives = stats.data?.survivingCreatives ?? [];
 
   const baseCreativesParams = new URLSearchParams();
+  baseCreativesParams.set("from", fromValue);
+  baseCreativesParams.set("to", toValue);
   if (accountId) baseCreativesParams.set("account", accountId);
   if (teamId) baseCreativesParams.set("team", teamId);
   const baseHref = `/creatives${baseCreativesParams.toString() ? `?${baseCreativesParams}` : ""}`;
+  const creativeDetailParams = new URLSearchParams();
+  creativeDetailParams.set("from", fromValue);
+  creativeDetailParams.set("to", toValue);
 
   const kpis = [
     { label: "Spend", value: fmtMoney(portfolio?.totalSpend), icon: DollarSign, accent: "text-emerald-500" },
@@ -298,6 +303,7 @@ export default function DashboardPage() {
               isLoading={stats.isLoading}
               emptyMessage="No creatives with enough spend data yet"
               viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=healthy`}
+              detailQueryString={creativeDetailParams.toString()}
               canManageData={canManageData}
             />
             <LeaderboardTable
@@ -307,6 +313,7 @@ export default function DashboardPage() {
               isLoading={stats.isLoading}
               emptyMessage="Nothing urgent in this window"
               viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=critical`}
+              detailQueryString={creativeDetailParams.toString()}
               canManageData={canManageData}
             />
           </div>
@@ -317,6 +324,7 @@ export default function DashboardPage() {
             isLoading={stats.isLoading}
             emptyMessage="No long-running creatives with profitable ROAS yet"
             viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=healthy`}
+            detailQueryString={creativeDetailParams.toString()}
             canManageData={canManageData}
           />
         </TabsContent>

@@ -59,9 +59,18 @@ export const adRouter = router({
 
   listByCreative: orgProcedure
     .meta(openApiQueryMeta("ad", "listByCreative"))
-    .input(z.object({ adCreativeId: z.string() }))
+    .input(z.object({
+      adCreativeId: z.string(),
+      from: z.string().optional(),
+      to: z.string().optional(),
+    }))
     .query(async ({ input, ctx }) => {
       const basePl = basePerformanceLogFilter("performance_log");
+      const dateFilter = and(
+        basePl,
+        input.from ? sql`${performanceLogs.dateStart} >= ${input.from}` : undefined,
+        input.to ? sql`${performanceLogs.dateEnd} <= ${input.to}` : undefined,
+      );
       return db
         .select({
           id: ads.id,
@@ -84,7 +93,7 @@ export const adRouter = router({
         .from(ads)
         .leftJoin(adSets, eq(ads.adSetId, adSets.id))
         .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
-        .leftJoin(performanceLogs, and(eq(performanceLogs.adId, ads.id), basePl))
+        .leftJoin(performanceLogs, and(eq(performanceLogs.adId, ads.id), dateFilter))
         .where(and(eq(ads.adCreativeId, input.adCreativeId), eq(ads.organizationId, ctx.organizationId)))
         .groupBy(ads.id, ads.metaId, ads.name, ads.caption, ads.adSetId, adSets.name, campaigns.name, ads.destinationUrl, ads.status, ads.notes, ads.createdAt)
         .orderBy(desc(ads.createdAt));

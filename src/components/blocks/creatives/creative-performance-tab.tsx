@@ -134,6 +134,7 @@ export function CreativePerformanceTab({
   from,
   to,
   onDateRangeChange,
+  showDateRange = true,
 }: {
   perf: PerformanceData | undefined;
   dailyPerf: DailyPerformanceRow[] | undefined;
@@ -141,6 +142,7 @@ export function CreativePerformanceTab({
   from: Date | undefined;
   to: Date | undefined;
   onDateRangeChange: (range: { from: Date; to: Date } | undefined) => void;
+  showDateRange?: boolean;
 }) {
   const hasPerf = perf && perf.logCount > 0;
   const roasDiff = pctDiff(perf?.avgRoas, perf?.portfolioAvgRoas);
@@ -150,7 +152,7 @@ export function CreativePerformanceTab({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <DateRangePicker from={from} to={to} onChange={onDateRangeChange} />
+        {showDateRange ? <DateRangePicker from={from} to={to} onChange={onDateRangeChange} /> : <div />}
         <DataFreshnessLabel account={account} />
       </div>
 

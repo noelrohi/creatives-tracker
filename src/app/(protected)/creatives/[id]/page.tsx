@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useQueryState, parseAsString } from "nuqs";
 import { subDays } from "date-fns";
 import Link from "next/link";
-import { formatDateOnly } from "@/lib/date";
+import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
 import { useForm, Controller, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CreativeAdsTab } from "@/components/blocks/creatives/creative-ads-tab";
 import { CreativePerformanceTab } from "@/components/blocks/creatives/creative-performance-tab";
+import { DateRangePicker } from "@/components/blocks/dashboard/date-range-picker";
 import { DemographicBreakdownChart } from "@/components/blocks/dashboard/demographic-chart";
 import { Field, FieldContent, FieldError, FieldLabel } from "@/components/ui/field";
 import {
@@ -81,24 +82,37 @@ export default function CreativeDetailPage() {
   const isReadOnly = role === "member";
 
   const [creativeTab, setCreativeTab] = useQueryState("tab", parseAsString.withDefault("performance"));
+  const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 29))));
+  const [to, setTo] = useQueryState("to", parseAsString.withDefault(formatDateOnly(new Date())));
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [metaPreview, setMetaPreview] = useState<MetaCreativePreview | null>(null);
   const [wantsVideo, setWantsVideo] = useState(false);
-  const [dateRange, setDateRange] = useState<{ from: Date; to: Date }>({
-    from: subDays(new Date(), 29),
-    to: new Date(),
-  });
+  const fromValue = isDateOnlyString(from) ? from : formatDateOnly(subDays(new Date(), 29));
+  const toValue = isDateOnlyString(to) ? to : formatDateOnly(new Date());
+  const fromDate = parseDateOnly(fromValue);
+  const toDate = parseDateOnly(toValue);
 
   const dateParams = useMemo(() => ({
     id,
-    from: formatDateOnly(dateRange.from),
-    to: formatDateOnly(dateRange.to),
-  }), [id, dateRange]);
+    from: fromValue,
+    to: toValue,
+  }), [id, fromValue, toValue]);
+
+  const detailSearchParams = useMemo(() => {
+    const params = new URLSearchParams();
+    params.set("from", fromValue);
+    params.set("to", toValue);
+    return params.toString();
+  }, [fromValue, toValue]);
 
   const creative = useQuery(trpc.adCreative.getById.queryOptions({ id }));
   const perf = useQuery(trpc.adCreative.getPerformance.queryOptions(dateParams));
   const dailyPerf = useQuery(trpc.adCreative.getDailyPerformance.queryOptions(dateParams));
-  const linkedAds = useQuery(trpc.ad.listByCreative.queryOptions({ adCreativeId: id }));
+  const linkedAds = useQuery(trpc.ad.listByCreative.queryOptions({
+    adCreativeId: id,
+    from: fromValue,
+    to: toValue,
+  }));
   const accountsQuery = useQuery({
     ...trpc.adAccount.list.queryOptions(),
     enabled: !isReadOnly,
@@ -116,8 +130,8 @@ export default function CreativeDetailPage() {
     trpc.performanceLog.creativeDemographicBreakdown.queryOptions({
       creativeId: id,
       dimension: demoDimension,
-      from: formatDateOnly(dateRange.from),
-      to: formatDateOnly(dateRange.to),
+      from: fromValue,
+      to: toValue,
     }),
   );
 
@@ -148,7 +162,7 @@ export default function CreativeDetailPage() {
     ...trpc.adCreative.duplicate.mutationOptions(),
     onSuccess: (data) => {
       toast.success("Creative duplicated");
-      router.push(`/creatives/${data.id}`);
+      router.push(`/creatives/${data.id}?${detailSearchParams}`);
     },
     onError: (error) => toast.error(error.message || "Failed to duplicate"),
   });
@@ -158,7 +172,7 @@ export default function CreativeDetailPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: trpc.adCreative.list.queryKey() });
       toast.success("Creative deleted");
-      router.push("/creatives");
+      router.push(`/creatives?${detailSearchParams}`);
     },
     onError: (error) => toast.error(error.message || "Failed to delete"),
   });
@@ -380,6 +394,19 @@ export default function CreativeDetailPage() {
       )}
 
       {/* Tabs */}
+      <div className="mb-4 flex justify-end">
+        <DateRangePicker
+          from={fromDate}
+          to={toDate}
+          onChange={(range) => {
+            if (range) {
+              setFrom(formatDateOnly(range.from));
+              setTo(formatDateOnly(range.to));
+            }
+          }}
+        />
+      </div>
+
       <Tabs value={creativeTab} onValueChange={setCreativeTab}>
         <TabsList variant="line">
           <TabsTrigger value="performance">Performance</TabsTrigger>
@@ -401,11 +428,15 @@ export default function CreativeDetailPage() {
             perf={perf.data}
             dailyPerf={dailyPerf.data}
             account={accountsQuery.data?.[0]}
-            from={dateRange.from}
-            to={dateRange.to}
+            from={fromDate}
+            to={toDate}
             onDateRangeChange={(range) => {
-              if (range) setDateRange(range);
+              if (range) {
+                setFrom(formatDateOnly(range.from));
+                setTo(formatDateOnly(range.to));
+              }
             }}
+            showDateRange={false}
           />
         </TabsContent>
 

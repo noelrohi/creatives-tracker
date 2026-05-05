@@ -184,6 +184,7 @@ export function LeaderboardTable({
   isLoading,
   emptyMessage,
   viewAllHref,
+  detailQueryString,
   canManageData,
 }: {
   title: string;
@@ -192,6 +193,7 @@ export function LeaderboardTable({
   isLoading: boolean;
   emptyMessage: string;
   viewAllHref: string;
+  detailQueryString?: string;
   canManageData: boolean;
 }) {
   if (isLoading) {
@@ -274,7 +276,10 @@ export function LeaderboardTable({
                   <TableCell>
                     <div className="flex items-center gap-2">
                       <MediaPreview row={row} />
-                      <Link href={`/creatives/${row.id}`} className="text-sm font-medium hover:underline truncate max-w-[200px]">
+                      <Link
+                        href={`/creatives/${row.id}${detailQueryString ? `?${detailQueryString}` : ""}`}
+                        className="text-sm font-medium hover:underline truncate max-w-[200px]"
+                      >
                         {row.name}
                       </Link>
                       {row.format && (

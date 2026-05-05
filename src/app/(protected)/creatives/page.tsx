@@ -597,6 +597,12 @@ export default function CreativesPage() {
   const toValue = isDateOnlyString(to) ? to : formatDateOnly(new Date());
   const fromDate = parseDateOnly(fromValue);
   const toDate = parseDateOnly(toValue);
+  const getCreativeHref = useCallback((creativeId: string) => {
+    const params = new URLSearchParams();
+    params.set("from", fromValue);
+    params.set("to", toValue);
+    return `/creatives/${creativeId}?${params.toString()}`;
+  }, [fromValue, toValue]);
 
   const accountsQuery = useQuery(trpc.adAccount.list.queryOptions());
   const adSetsQuery = useQuery(trpc.adSet.list.queryOptions());
@@ -844,7 +850,7 @@ export default function CreativesPage() {
           columns={tableColumns}
           data={creativeRows as Creative[]}
           getRowId={(row) => row.id}
-          onRowClick={(row) => router.push(`/creatives/${row.id}`)}
+          onRowClick={(row) => router.push(getCreativeHref(row.id))}
           rowSelection={rowSelection}
           onRowSelectionChange={setRowSelection}
           columnVisibility={columnVisibility}
