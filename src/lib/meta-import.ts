@@ -8,6 +8,7 @@ import { fetchMetaCreativePreviewsBatch } from "@/lib/meta-creative-assets";
 import type { BulkImportRow } from "@/lib/import-utils";
 import {
   fetchMetaAdDelivery,
+  fetchMetaAdSetDelivery,
   getMetaAccountWithToken,
 } from "@/lib/meta-insights-sync";
 import { adAccounts } from "@/schema/account";
@@ -545,6 +546,65 @@ export async function refreshMetaAdStatusesForAccount(input: {
   }
 
   return { checked: adMetaIds.length, updated };
+}
+
+export async function refreshMetaAdSetStatusesForAccount(input: {
+  organizationId: string;
+  accountId: string;
+}) {
+  const account = await getMetaAccountWithToken({
+    accountId: input.accountId,
+    organizationId: input.organizationId,
+  });
+
+  const adSetRows = await db
+    .select({ id: adSets.id, metaId: adSets.metaId })
+    .from(adSets)
+    .where(
+      and(
+        eq(adSets.organizationId, input.organizationId),
+        sql`${adSets.metaId} IS NOT NULL`,
+        sql`exists (
+          select 1 from ${ads}
+          where ${ads.adSetId} = ${adSets.id}
+            and ${ads.accountId} = ${input.accountId}
+            and ${ads.organizationId} = ${input.organizationId}
+        )`,
+      ),
+    );
+
+  const adSetMetaIds = adSetRows
+    .map((row) => row.metaId)
+    .filter((metaId): metaId is string => Boolean(metaId));
+
+  if (adSetMetaIds.length === 0) {
+    return { checked: 0, updated: 0 };
+  }
+
+  const deliveryByAdSetId = await fetchMetaAdSetDelivery({
+    adSetMetaIds,
+    accessToken: account.metaAccessToken,
+  });
+
+  let updated = 0;
+  for (const adSetRow of adSetRows) {
+    if (!adSetRow.metaId) continue;
+    const delivery = deliveryByAdSetId.get(adSetRow.metaId);
+    if (!delivery) continue;
+
+    await db
+      .update(adSets)
+      .set({ status: normalizeImportedAdStatus(delivery) })
+      .where(
+        and(
+          eq(adSets.id, adSetRow.id),
+          eq(adSets.organizationId, input.organizationId),
+        ),
+      );
+    updated += 1;
+  }
+
+  return { checked: adSetMetaIds.length, updated };
 }
 
 export async function enrichMetaCreativePreviews(input: {

@@ -37,7 +37,7 @@ const INSIGHT_FIELDS = [
   "video_avg_time_watched_actions",
 ].join(",");
 
-const META_AD_STATUS_FIELDS = [
+const META_DELIVERY_STATUS_FIELDS = [
   "effective_status",
   "configured_status",
 ].join(",");
@@ -136,20 +136,33 @@ export async function fetchMetaAdDelivery(input: {
   adMetaIds: string[];
   accessToken: string;
 }) {
-  return fetchMetaAdDeliveryById(input);
+  return fetchMetaDeliveryById({
+    metaIds: input.adMetaIds,
+    accessToken: input.accessToken,
+  });
 }
 
-async function fetchMetaAdDeliveryById(input: {
-  adMetaIds: string[];
+export async function fetchMetaAdSetDelivery(input: {
+  adSetMetaIds: string[];
+  accessToken: string;
+}) {
+  return fetchMetaDeliveryById({
+    metaIds: input.adSetMetaIds,
+    accessToken: input.accessToken,
+  });
+}
+
+async function fetchMetaDeliveryById(input: {
+  metaIds: string[];
   accessToken: string;
 }) {
   const deliveries = new Map<string, string>();
 
-  for (const batch of chunk(input.adMetaIds, 50)) {
+  for (const batch of chunk(input.metaIds, 50)) {
     const params = new URLSearchParams({
       access_token: input.accessToken,
       ids: batch.join(","),
-      fields: META_AD_STATUS_FIELDS,
+      fields: META_DELIVERY_STATUS_FIELDS,
     });
 
     const response: Response = await fetch(`${META_GRAPH_API_BASE}/?${params.toString()}`);
@@ -164,14 +177,14 @@ async function fetchMetaAdDeliveryById(input: {
       configured_status?: string;
     }>;
 
-    for (const adMetaId of batch) {
-      const status = json[adMetaId];
+    for (const metaId of batch) {
+      const status = json[metaId];
       const delivery = resolveMetaDeliveryStatus({
         effectiveStatus: status?.effective_status,
         configuredStatus: status?.configured_status,
       });
       if (delivery) {
-        deliveries.set(adMetaId, delivery);
+        deliveries.set(metaId, delivery);
       }
     }
   }
@@ -373,7 +386,7 @@ export async function downloadMetaInsightsReport(input: {
     ? [...new Set(allData.map((row) => row.ad_id).filter(Boolean) as string[])]
     : [];
   const deliveryByAdId = adMetaIds.length > 0
-    ? await fetchMetaAdDeliveryById({
+    ? await fetchMetaAdDelivery({
         adMetaIds,
         accessToken: account.metaAccessToken,
       })

@@ -256,6 +256,28 @@ async function importUntilDone(
   }
 }
 
+async function refreshAccountStatuses(
+  client: ReturnType<typeof createApiClient>,
+  account: { accountId: string; name: string },
+) {
+  metadata.set("step", `Refreshing Meta statuses for ${account.name}`);
+  metadata.set("currentBreakdown", "statuses");
+
+  const result = await retry.onThrow(
+    () => client.metaSync.refreshStatuses.mutate({ accountId: account.accountId }),
+    { maxAttempts: 3 },
+  );
+
+  logger.info("Refreshed Meta statuses", {
+    accountName: account.name,
+    accountId: account.accountId,
+    adsChecked: result.ads.checked,
+    adsUpdated: result.ads.updated,
+    adSetsChecked: result.adSets.checked,
+    adSetsUpdated: result.adSets.updated,
+  });
+}
+
 async function enrichAccount(
   client: ReturnType<typeof createApiClient>,
   account: { accountId: string; name: string },
@@ -499,6 +521,20 @@ export const metaSyncTask = task({
             `${label}: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
+      }
+
+      try {
+        await refreshAccountStatuses(client, account);
+      } catch (error) {
+        logger.error("Meta status refresh failed", {
+          accountName: account.name,
+          accountId: account.accountId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+
+        accountResult.failures.push(
+          `statuses: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
 
       metadata.set("currentBreakdown", "enriching");

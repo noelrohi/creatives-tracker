@@ -13,6 +13,7 @@ import {
   enrichMetaCreativePreviews,
   importMetaBreakdownRows,
   importMetaRows,
+  refreshMetaAdSetStatusesForAccount,
   refreshMetaAdStatusesForAccount,
 } from "@/lib/meta-import";
 import {
@@ -466,13 +467,6 @@ export const metaSyncRouter = router({
         lastNextCursor: page.nextCursor,
       };
 
-      if (done && !breakdown) {
-        await refreshMetaAdStatusesForAccount({
-          organizationId: ctx.organizationId,
-          accountId: run.accountId,
-        });
-      }
-
       await updateAccountSyncRun({
         id: run.id,
         rowsSynced: totalImported,
@@ -493,6 +487,30 @@ export const metaSyncRouter = router({
         importedThisCall,
         totalImported,
       };
+    }),
+
+  refreshStatuses: orgWriteProcedure
+    .meta(openApiMutationMeta("metaSync", "refreshStatuses", "Refresh Meta ad and ad set delivery statuses for an account"))
+    .input(z.object({ accountId: z.string() }))
+    .output(
+      z.object({
+        ads: z.object({ checked: z.number(), updated: z.number() }),
+        adSets: z.object({ checked: z.number(), updated: z.number() }),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const [adResult, adSetResult] = await Promise.all([
+        refreshMetaAdStatusesForAccount({
+          organizationId: ctx.organizationId,
+          accountId: input.accountId,
+        }),
+        refreshMetaAdSetStatusesForAccount({
+          organizationId: ctx.organizationId,
+          accountId: input.accountId,
+        }),
+      ]);
+
+      return { ads: adResult, adSets: adSetResult };
     }),
 
   enrichPreviews: orgWriteProcedure
