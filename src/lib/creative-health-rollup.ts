@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { computeHealth, rollupCreativeHealth, type CreativeHealth } from "./creative-health";
+import { effectiveAdStatusSql } from "./effective-ad-status";
 import { basePerformanceLogFilter } from "./performance-log-sql";
 
 type AdHealthRow = {
@@ -56,7 +57,7 @@ export async function computeCreativeHealthByCreativeId(opts: {
         ad.id as ad_id,
         ad.ad_creative_id,
         ac.format::text as format,
-        ad.status::text as status,
+        ${effectiveAdStatusSql(sql`ad.status`, sql`ast.status`)} as status,
         sum(pl.spend)::text as spend,
         sum(pl.conversions)::text as conversions,
         (
@@ -139,10 +140,11 @@ export async function computeCreativeHealthByCreativeId(opts: {
         ) as prior_hook_rate
       FROM ad
       JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+      LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
       LEFT JOIN performance_log pl ON pl.ad_id = ad.id AND ${basePl} ${plDateFilter}
       WHERE ad.organization_id = ${organizationId}
         AND ad.ad_creative_id IN (${sql.join(creativeIds.map((id) => sql`${id}`), sql`, `)})
-      GROUP BY ad.id, ac.format
+      GROUP BY ad.id, ac.format, ast.status
     `)
   ).rows as AdHealthRow[];
 

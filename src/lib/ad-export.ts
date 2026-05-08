@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { computeHealth, rollupCreativeHealth, type CreativeHealth } from "./creative-health";
+import { effectiveAdStatusSql } from "./effective-ad-status";
 import { basePerformanceLogFilter } from "./performance-log-sql";
 
 type RawAdRow = {
@@ -8,6 +9,7 @@ type RawAdRow = {
   meta_ad_id: string | null;
   ad_name: string;
   ad_status: string | null;
+  ad_set_status: string | null;
   ad_destination_url: string | null;
 
   creative_id: string;
@@ -446,7 +448,8 @@ export async function fetchAgentExportRows(opts: {
         ad.id AS ad_id,
         ad.meta_id AS meta_ad_id,
         ad.name AS ad_name,
-        ad.status::text AS ad_status,
+        ${effectiveAdStatusSql(sql`ad.status`, sql`ast.status`)} AS ad_status,
+        ast.status::text AS ad_set_status,
         ad.destination_url AS ad_destination_url,
 
         ac.id AS creative_id,

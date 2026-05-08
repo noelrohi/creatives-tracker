@@ -8,11 +8,13 @@ import { adCreatives } from "@/schema/ad-creative";
 import { ads } from "@/schema/ad";
 import { performanceLogs } from "@/schema/performance-log";
 import { adAccounts } from "@/schema/account";
+import { adSets } from "@/schema/ad-set";
 import { fetchMetaCreativePreview, fetchMetaAdPreviewUrl } from "@/lib/meta-creative-assets";
 import { importMetaRows } from "@/lib/meta-import";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 import { computeCreativeHealthByCreativeId } from "@/lib/creative-health-rollup";
 import { fetchAgentExportRows } from "@/lib/ad-export";
+import { effectiveAdActiveSql, effectiveAdStatusSql } from "@/lib/effective-ad-status";
 
 export const adCreativeRouter = router({
   list: orgProcedure
@@ -135,8 +137,11 @@ export const adCreativeRouter = router({
             WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
           )`.as("total_conversions"),
           adStatus: sql<string | null>`(
-            SELECT ad.status FROM ad
+            SELECT ${effectiveAdStatusSql(sql`ad.status`, sql`ast.status`)}
+            FROM ad
+            LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
             WHERE ad.ad_creative_id = "ad_creative"."id"
+            ORDER BY ${effectiveAdActiveSql(sql`ad.status`, sql`ast.status`)} DESC
             LIMIT 1
           )`.as("ad_status"),
           metaAdId: sql<string | null>`(
@@ -317,7 +322,7 @@ export const adCreativeRouter = router({
     .query(async ({ input, ctx }) => {
       const conditions: SQL[] = [
         eq(ads.organizationId, ctx.organizationId),
-        eq(ads.status, "active"),
+        effectiveAdActiveSql(ads.status, adSets.status),
       ];
       if (input?.accountId) {
         conditions.push(eq(ads.accountId, input.accountId));
@@ -371,6 +376,7 @@ export const adCreativeRouter = router({
         })
         .from(performanceLogs)
         .innerJoin(ads, eq(performanceLogs.adId, ads.id))
+        .leftJoin(adSets, eq(ads.adSetId, adSets.id))
         .leftJoin(adCreatives, eq(ads.adCreativeId, adCreatives.id))
         .where(and(...conditions))
         .orderBy(desc(performanceLogs.dateStart), ads.name);
@@ -414,7 +420,7 @@ export const adCreativeRouter = router({
         ? sql`AND ad.ad_set_id IN (${sql.join(input.adSetIds.map((id) => sql`${id}`), sql`, `)})`
         : sql``;
       const statusFilter = input?.statuses?.length
-        ? sql`AND ad.status::text IN (${sql.join(input.statuses.map((s) => sql`${s}`), sql`, `)})`
+        ? sql`AND ${effectiveAdStatusSql(sql`ad.status`, sql`ast.status`)} IN (${sql.join(input.statuses.map((s) => sql`${s}`), sql`, `)})`
         : sql``;
 
       const dateFilter = input?.from && input?.to
@@ -440,6 +446,7 @@ export const adCreativeRouter = router({
           sum(pl.conversions)::text as total_conversions
         FROM performance_log pl
         JOIN ad ON ad.id = pl.ad_id
+        LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
         JOIN ad_creative ac ON ac.id = ad.ad_creative_id
         WHERE ${dateFilter} AND ${basePl} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter} ${teamFilter}
       `);
@@ -483,16 +490,17 @@ export const adCreativeRouter = router({
           (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as cpa,
           avg(pl.ctr)::text as ctr,
           sum(pl.conversions)::text as total_conversions,
-          CASE WHEN bool_or(ad.status = 'active') THEN 'active' ELSE 'paused' END AS ad_status,
+          CASE WHEN bool_or(${effectiveAdActiveSql(sql`ad.status`, sql`ast.status`)}) THEN 'active' ELSE 'paused' END AS ad_status,
           (max(pl.date_end)::date - min(pl.date_start)::date) as running_days
         FROM ad_creative ac
         JOIN ad ON ad.ad_creative_id = ac.id
+        LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
         JOIN performance_log pl ON pl.ad_id = ad.id
         WHERE ${dateFilter} AND ${basePl} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter} ${teamFilter}
         GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
         HAVING sum(pl.spend) >= 50
           AND coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) >= 1
-          AND bool_or(ad.status = 'active' AND pl.spend > 0)
+          AND bool_or(${effectiveAdActiveSql(sql`ad.status`, sql`ast.status`)} AND pl.spend > 0)
         ORDER BY sum(pl.conversions) DESC NULLS LAST, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST
         LIMIT 10
       `);
@@ -518,10 +526,11 @@ export const adCreativeRouter = router({
           (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as cpa,
           avg(pl.ctr)::text as ctr,
           sum(pl.conversions)::text as total_conversions,
-          CASE WHEN bool_or(ad.status = 'active') THEN 'active' ELSE 'paused' END AS ad_status,
+          CASE WHEN bool_or(${effectiveAdActiveSql(sql`ad.status`, sql`ast.status`)}) THEN 'active' ELSE 'paused' END AS ad_status,
           (max(pl.date_end)::date - min(pl.date_start)::date) as running_days
         FROM ad_creative ac
         JOIN ad ON ad.ad_creative_id = ac.id
+        LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
         JOIN performance_log pl ON pl.ad_id = ad.id
         WHERE ad.organization_id = ${ctx.organizationId}
           AND ${basePl}
@@ -531,7 +540,7 @@ export const adCreativeRouter = router({
         HAVING sum(pl.spend) >= 50
           AND coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) >= 1
           AND (max(pl.date_end)::date - min(pl.date_start)::date) >= 14
-          AND bool_or(ad.status = 'active' AND pl.spend > 0)
+          AND bool_or(${effectiveAdActiveSql(sql`ad.status`, sql`ast.status`)} AND pl.spend > 0)
         ORDER BY (max(pl.date_end)::date - min(pl.date_start)::date) DESC, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST
         LIMIT 10
       `);
@@ -574,7 +583,7 @@ export const adCreativeRouter = router({
             ad.id AS ad_id,
             ad.meta_id AS meta_ad_id,
             ad.ad_creative_id,
-            ad.status::text AS status,
+            ${effectiveAdStatusSql(sql`ad.status`, sql`ast.status`)} AS status,
             sum(pl.spend) AS spend,
             sum(pl.purchase_value) AS revenue,
             sum(pl.conversions) AS conversions,
@@ -583,12 +592,13 @@ export const adCreativeRouter = router({
           FROM ad
           JOIN performance_log pl ON pl.ad_id = ad.id
           JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+          LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
           LEFT JOIN ad_lifetime_days ald ON ald.ad_id = ad.id
           WHERE ${dateFilter}
             AND ${basePl}
             AND ad.organization_id = ${ctx.organizationId}
             ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter}
-          GROUP BY ad.id, ad.meta_id, ad.ad_creative_id, ad.status, ald.running_days
+          GROUP BY ad.id, ad.meta_id, ad.ad_creative_id, ad.status, ast.status, ald.running_days
         ),
         bleeder AS (
           SELECT
@@ -777,7 +787,7 @@ export const adCreativeRouter = router({
           c.name   AS campaign_name,
           ast.name AS ad_set_name,
           ad.name  AS ad_name,
-          ad.status AS ad_status,
+          ${effectiveAdStatusSql(sql`ad.status`, sql`ast.status`)} AS ad_status,
           ad.caption,
           ad.destination_url,
           ac.name  AS creative_name,
@@ -1457,8 +1467,11 @@ export const adCreativeRouter = router({
 
       // Derive live status from linked ads
       const adStatuses = await db
-        .select({ status: ads.status })
+        .select({
+          status: effectiveAdStatusSql(ads.status, adSets.status),
+        })
         .from(ads)
+        .leftJoin(adSets, eq(ads.adSetId, adSets.id))
         .where(
           and(
             eq(ads.adCreativeId, input.id),

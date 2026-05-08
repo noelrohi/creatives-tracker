@@ -8,6 +8,7 @@ import { adSets } from "@/schema/ad-set";
 import { adCreatives } from "@/schema/ad-creative";
 import { campaigns } from "@/schema/campaign";
 import { performanceLogs } from "@/schema/performance-log";
+import { effectiveAdStatusSql } from "@/lib/effective-ad-status";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 
 export const adRouter = router({
@@ -23,7 +24,7 @@ export const adRouter = router({
         adCreativeId: ads.adCreativeId,
         adCreativeName: adCreatives.name,
         destinationUrl: ads.destinationUrl,
-        status: ads.status,
+        status: effectiveAdStatusSql(ads.status, adSets.status),
         notes: ads.notes,
         createdAt: ads.createdAt,
         updatedAt: ads.updatedAt,
@@ -47,12 +48,13 @@ export const adRouter = router({
           adCreativeId: ads.adCreativeId,
           adCreativeName: adCreatives.name,
           destinationUrl: ads.destinationUrl,
-          status: ads.status,
+          status: effectiveAdStatusSql(ads.status, adSets.status),
           notes: ads.notes,
           createdAt: ads.createdAt,
         })
         .from(ads)
         .leftJoin(adCreatives, eq(ads.adCreativeId, adCreatives.id))
+        .leftJoin(adSets, eq(ads.adSetId, adSets.id))
         .where(and(eq(ads.adSetId, input.adSetId), eq(ads.organizationId, ctx.organizationId)))
         .orderBy(desc(ads.createdAt));
     }),
@@ -81,7 +83,7 @@ export const adRouter = router({
           adSetName: adSets.name,
           campaignName: campaigns.name,
           destinationUrl: ads.destinationUrl,
-          status: ads.status,
+          status: effectiveAdStatusSql(ads.status, adSets.status),
           notes: ads.notes,
           createdAt: ads.createdAt,
           totalSpend: sql<string | null>`sum(${performanceLogs.spend})`.as("total_spend"),
@@ -95,7 +97,7 @@ export const adRouter = router({
         .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
         .leftJoin(performanceLogs, and(eq(performanceLogs.adId, ads.id), dateFilter))
         .where(and(eq(ads.adCreativeId, input.adCreativeId), eq(ads.organizationId, ctx.organizationId)))
-        .groupBy(ads.id, ads.metaId, ads.name, ads.caption, ads.adSetId, adSets.name, campaigns.name, ads.destinationUrl, ads.status, ads.notes, ads.createdAt)
+        .groupBy(ads.id, ads.metaId, ads.name, ads.caption, ads.adSetId, adSets.name, adSets.status, campaigns.name, ads.destinationUrl, ads.status, ads.notes, ads.createdAt)
         .orderBy(desc(ads.createdAt));
     }),
 
@@ -114,7 +116,7 @@ export const adRouter = router({
           adCreativeId: ads.adCreativeId,
           adCreativeName: adCreatives.name,
           destinationUrl: ads.destinationUrl,
-          status: ads.status,
+          status: effectiveAdStatusSql(ads.status, adSets.status),
           notes: ads.notes,
           createdAt: ads.createdAt,
           updatedAt: ads.updatedAt,
