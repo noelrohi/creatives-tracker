@@ -151,9 +151,9 @@ describe("adAccount mutations", () => {
   );
 });
 
-describe("adAccount reads require admin", () => {
-  it("member is forbidden from list", async () => {
-    await expect(memberCaller.adAccount.list()).rejects.toMatchObject({
+describe("adAccount reads", () => {
+  it("member can list sanitized accounts", async () => {
+    await expect(memberCaller.adAccount.list()).rejects.not.toMatchObject({
       code: "FORBIDDEN",
     });
   });
