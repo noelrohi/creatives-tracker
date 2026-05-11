@@ -686,7 +686,14 @@ export default function CreativeDetailPage() {
 
         {/* Ads tab */}
         <TabsContent value="ads" className="pt-4">
-          <CreativeAdsTab ads={linkedAds.data} />
+          <CreativeAdsTab
+            key={`${id}-${fromValue}-${toValue}`}
+            ads={linkedAds.data}
+            creativeId={id}
+            from={fromValue}
+            to={toValue}
+            canPauseMetaAds={!isReadOnly}
+          />
         </TabsContent>
 
         {/* Demographics tab */}

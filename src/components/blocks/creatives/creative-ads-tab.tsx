@@ -1,9 +1,11 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { Copy, ExternalLink, MoreHorizontal, FileText } from "lucide-react";
+import { useMemo, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Copy, ExternalLink, FileText, MoreHorizontal, PauseCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -17,6 +19,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
+import { useTRPC } from "@/lib/trpc/client";
 import {
   Tooltip,
   TooltipContent,
@@ -35,6 +38,22 @@ function fmt(
   return `${opts?.prefix ?? ""}${formatted}${opts?.suffix ?? ""}`;
 }
 
+function tierLabel(tier: LinkedAd["disableTier"]) {
+  if (tier === "pause_now") return "Pause";
+  if (tier === "watch") return "Watch";
+  return null;
+}
+
+function BleederTierBadge({ tier }: { tier: LinkedAd["disableTier"] }) {
+  const label = tierLabel(tier);
+  if (!label) return null;
+  const className = tier === "pause_now"
+    ? "bg-red-500/15 text-red-500 dark:text-red-400"
+    : "bg-amber-500/15 text-amber-600 dark:text-amber-400";
+
+  return <span className={`rounded px-1.5 py-0.5 text-[9px] font-medium ${className}`}>{label}</span>;
+}
+
 interface LinkedAd {
   id: string;
   metaId: string | null;
@@ -47,12 +66,26 @@ interface LinkedAd {
   totalSpend: string | null;
   avgRoas: string | null;
   totalConversions: number | null;
+  runningDays?: number | null;
+  disableTier?: "pause_now" | "watch" | null;
   minDate: string | null;
   maxDate: string | null;
 }
 
-export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
+type CreativeAdsTabProps = {
+  ads: LinkedAd[] | undefined;
+  creativeId: string;
+  from: string;
+  to: string;
+  canPauseMetaAds?: boolean;
+};
+
+export function CreativeAdsTab({ ads, creativeId, from, to, canPauseMetaAds = false }: CreativeAdsTabProps) {
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
   const [captionAd, setCaptionAd] = useState<LinkedAd | null>(null);
+  const [manualSelectedAdIds, setManualSelectedAdIds] = useState<string[] | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const sharedCaption = useMemo(() => {
     if (!ads || ads.length === 0) return null;
@@ -61,6 +94,45 @@ export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
     const allSame = captions.every((c) => c === captions[0]);
     return allSame ? captions[0] : null;
   }, [ads]);
+
+  const defaultSelectedAdIds = useMemo(
+    () => (ads ?? [])
+      .filter((ad) => ad.disableTier === "pause_now" && ad.status === "active" && ad.metaId)
+      .map((ad) => ad.id),
+    [ads],
+  );
+  const selectedAdIds = manualSelectedAdIds ?? defaultSelectedAdIds;
+  const selectedAds = useMemo(
+    () => (ads ?? []).filter((ad) => selectedAdIds.includes(ad.id)),
+    [ads, selectedAdIds],
+  );
+
+  const pauseMutation = useMutation(
+    trpc.ad.pauseMetaAds.mutationOptions({
+      onSuccess: (result) => {
+        const pausedCount = result.paused.length;
+        const failedCount = result.failed.length;
+
+        if (pausedCount > 0 && failedCount === 0) {
+          toast.success(`Paused ${pausedCount} ${pausedCount === 1 ? "ad" : "ads"} in Meta`);
+        } else if (pausedCount > 0) {
+          toast.warning(`Paused ${pausedCount} ${pausedCount === 1 ? "ad" : "ads"}; ${failedCount} failed`, {
+            description: result.failed[0]?.error,
+          });
+        } else {
+          toast.error("No ads were paused", { description: result.failed[0]?.error });
+        }
+
+        setConfirmOpen(false);
+        setManualSelectedAdIds([]);
+        queryClient.invalidateQueries({ queryKey: trpc.ad.listByCreative.queryKey({ adCreativeId: creativeId, from, to }) });
+        queryClient.invalidateQueries({ queryKey: trpc.adCreative.getPerformance.queryKey({ id: creativeId, from, to }) });
+        queryClient.invalidateQueries({ queryKey: trpc.adCreative.list.queryKey() });
+        queryClient.invalidateQueries({ queryKey: trpc.adCreative.dashboardStats.queryKey() });
+      },
+      onError: (error) => toast.error(error.message || "Failed to pause ads"),
+    }),
+  );
 
   if (!ads || ads.length === 0) {
     return (
@@ -72,23 +144,39 @@ export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
 
   return (
     <>
-    {sharedCaption && (
-      <div className="mb-3 flex items-center gap-2">
-        <span className="text-[12px] text-muted-foreground/50">Same caption across all ads</span>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-7 text-xs"
-          onClick={() => setCaptionAd(ads![0])}
-        >
-          <FileText className="size-3" /> View Caption
-        </Button>
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <div className="flex items-center gap-2">
+        {sharedCaption && (
+          <>
+            <span className="text-[12px] text-muted-foreground/50">Same caption across all ads</span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => setCaptionAd(ads![0])}
+            >
+              <FileText className="size-3" /> View Caption
+            </Button>
+          </>
+        )}
       </div>
-    )}
+      {canPauseMetaAds && (
+        <Button
+          variant="destructive"
+          size="sm"
+          className="h-8 text-xs"
+          disabled={selectedAdIds.length === 0 || pauseMutation.isPending}
+          onClick={() => setConfirmOpen(true)}
+        >
+          <PauseCircle className="size-3.5" /> Pause selected ({selectedAdIds.length})
+        </Button>
+      )}
+    </div>
     <div className="overflow-x-auto rounded-lg border border-border/50">
       <table className="w-full text-[13px]">
         <thead>
           <tr className="border-b border-border/30 bg-muted/30 text-muted-foreground/60">
+            {canPauseMetaAds && <th className="w-9 px-3 py-2" />}
             <th className="px-3 py-2 text-left font-medium">Ad</th>
             <th className="px-3 py-2 text-left font-medium">Campaign</th>
             <th className="px-3 py-2 text-left font-medium">Landing Page</th>
@@ -100,8 +188,28 @@ export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
           </tr>
         </thead>
         <tbody>
-          {ads.map((ad) => (
-            <tr key={ad.id} className="border-b border-border/20 last:border-0">
+          {ads.map((ad) => {
+            const canSelect = canPauseMetaAds && ad.status === "active" && Boolean(ad.metaId);
+            const isSelected = selectedAdIds.includes(ad.id);
+            return (
+            <tr key={ad.id} className={`border-b border-border/20 last:border-0 ${ad.disableTier === "pause_now" ? "bg-red-500/[0.03]" : ad.disableTier === "watch" ? "bg-amber-500/[0.03]" : ""}`}>
+              {canPauseMetaAds && (
+                <td className="px-3 py-2 align-middle">
+                  <Checkbox
+                    checked={isSelected}
+                    disabled={!canSelect || pauseMutation.isPending}
+                    aria-label={`Select ${ad.name} to pause`}
+                    onCheckedChange={(checked) => {
+                      setManualSelectedAdIds((current) => {
+                        const selected = current ?? defaultSelectedAdIds;
+                        return checked
+                          ? [...new Set([...selected, ad.id])]
+                          : selected.filter((id) => id !== ad.id);
+                      });
+                    }}
+                  />
+                </td>
+              )}
               <td className="px-3 py-2">
                 <div className="flex items-center gap-2">
                   <span className="max-w-[200px] truncate font-medium">{ad.name}</span>
@@ -119,6 +227,7 @@ export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
                         ? "Paused"
                         : "Archived"}
                   </Badge>
+                  <BleederTierBadge tier={ad.disableTier} />
                 </div>
                 {ad.adSetName && (
                   <div className="mt-0.5 max-w-[240px] truncate text-[11px] text-muted-foreground/50">
@@ -170,7 +279,10 @@ export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
                 {fmt(ad.totalConversions, { decimals: 0 })}
               </td>
               <td className="px-3 py-2 text-right text-[11px] text-muted-foreground/50">
-                {ad.minDate ?? "—"}
+                <div>{ad.minDate ?? "—"}</div>
+                {ad.runningDays != null && ad.runningDays > 0 && (
+                  <div className="text-[10px]">{ad.runningDays}d running</div>
+                )}
               </td>
               <td className="px-2 py-2">
                 {(ad.metaId || (ad.caption && !sharedCaption)) && (
@@ -207,10 +319,51 @@ export function CreativeAdsTab({ ads }: { ads: LinkedAd[] | undefined }) {
                 )}
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-sm font-medium">Pause selected Meta ads?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 text-sm text-muted-foreground">
+            <p>
+              This will pause {selectedAds.length} {selectedAds.length === 1 ? "ad" : "ads"} in Meta and mark successful pauses as paused locally.
+            </p>
+            <div className="max-h-56 space-y-1 overflow-y-auto rounded-md border border-border/50 bg-muted/20 p-2">
+              {selectedAds.map((ad) => (
+                <div key={ad.id} className="flex items-center justify-between gap-3 rounded px-2 py-1.5">
+                  <div className="min-w-0">
+                    <div className="truncate font-medium text-foreground">{ad.name}</div>
+                    <div className="text-[11px]">{ad.metaId}</div>
+                  </div>
+                  <div className="shrink-0 text-right text-[11px] tabular-nums">
+                    <div>{fmt(ad.totalSpend, { prefix: "$" })}</div>
+                    <div>{fmt(ad.avgRoas, { suffix: "x" })} · {fmt(ad.totalConversions, { decimals: 0 })} conv</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setConfirmOpen(false)} disabled={pauseMutation.isPending}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={selectedAds.length === 0 || pauseMutation.isPending}
+              onClick={() => pauseMutation.mutate({ adIds: selectedAds.map((ad) => ad.id) })}
+            >
+              {pauseMutation.isPending ? "Pausing..." : "Pause in Meta"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!captionAd} onOpenChange={(open) => !open && setCaptionAd(null)}>
         <DialogContent className="sm:max-w-md">
