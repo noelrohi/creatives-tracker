@@ -61,6 +61,34 @@ describe("media-buyer actionability regressions", () => {
     });
   });
 
+  it("treats breakeven-to-thin-margin ROAS as warning, not healthy", () => {
+    expect(computeHealth({
+      roas: 1.0,
+      spend: 100,
+      conversions: 2,
+      status: "active",
+    })).toEqual({
+      health: "warning",
+      reasons: ["Marginal ROAS 1.00x on $100 spent"],
+    });
+
+    expect(computeHealth({
+      roas: 1.19,
+      spend: 100,
+      conversions: 2,
+      status: "active",
+    })).toMatchObject({ health: "warning" });
+  });
+
+  it("keeps 1.2x ROAS as healthy when no other warning signals fire", () => {
+    expect(computeHealth({
+      roas: 1.2,
+      spend: 100,
+      conversions: 2,
+      status: "active",
+    })).toEqual({ health: "healthy", reasons: [] });
+  });
+
   it("excludes paused-parent ads from creative rollups so historical losers do not pollute live action", () => {
     const pausedByParent = resolveEffectiveAdStatus({
       adStatus: "active",

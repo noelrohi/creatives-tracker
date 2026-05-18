@@ -50,6 +50,8 @@ export function computeHealth(opts: {
   let warningSignals = 0;
   let criticalSignals = 0;
   let hasTrendData = false;
+  const marginalRoasReason = () =>
+    roas != null ? `Marginal ROAS ${roas.toFixed(2)}x on ${fmtMoney(spend)} spent` : null;
 
   const { recentCtr, avgCtr } = opts;
   if (recentCtr != null && avgCtr != null && avgCtr > 0) {
@@ -139,6 +141,13 @@ export function computeHealth(opts: {
       if (criticalSignals >= 2 || (criticalSignals >= 1 && warningSignals >= 2)) {
         return { health: "critical", reasons };
       }
+      if (roas < 1.2) {
+        const roasReason = marginalRoasReason();
+        return {
+          health: "warning",
+          reasons: roasReason ? [...reasons, roasReason] : reasons,
+        };
+      }
       if (criticalSignals > 0 || warningSignals > 0) {
         return { health: "warning", reasons };
       }
@@ -164,6 +173,12 @@ export function computeHealth(opts: {
     return {
       health: "warning",
       reasons: [`ROAS ${roas.toFixed(2)}x on ${fmtMoney(spend)} spent`],
+    };
+  }
+  if (roas < 1.2) {
+    return {
+      health: "warning",
+      reasons: [`Marginal ROAS ${roas.toFixed(2)}x on ${fmtMoney(spend)} spent`],
     };
   }
   return { health: "healthy", reasons: [] };
