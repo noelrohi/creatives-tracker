@@ -10,6 +10,12 @@ type MockContextOptions = {
   organizationId?: string;
 };
 
+type ApiKeyContextOptions = {
+  apiKeyId?: string;
+  organizationId?: string;
+  scopes?: string[];
+};
+
 /**
  * Create a tRPC caller with a mocked session context for the given org role.
  * Useful for testing RBAC middleware without a database.
@@ -45,5 +51,25 @@ export function createUnauthenticatedCaller() {
     orgRole: null,
     apiKeyId: null,
     apiKeyScopes: [],
+  });
+}
+
+/**
+ * Create a tRPC caller authenticated through an API key principal.
+ * Useful for proving session-only procedures cannot be invoked by API keys.
+ */
+export function createApiKeyCaller({
+  apiKeyId = "test-api-key-id",
+  organizationId = "test-org-id",
+  scopes = ["*"],
+}: ApiKeyContextOptions = {}) {
+  return createCaller({
+    session: null,
+    principalType: "apiKey" as const,
+    userId: null,
+    organizationId,
+    orgRole: null,
+    apiKeyId,
+    apiKeyScopes: scopes,
   });
 }
