@@ -231,6 +231,27 @@ describe("Launchpad single-static planner", () => {
     );
   });
 
+  it("validates static image asset URL shape and HTTPS before publish", () => {
+    const malformed = buildLaunchpadPlannerOutput(
+      basePlannerInput({ creative: creative({ assetUrl: "not-a-url" }) }),
+    );
+    const httpAsset = buildLaunchpadPlannerOutput(
+      basePlannerInput({ creative: creative({ assetUrl: "http://cdn.example.com/static.png" }) }),
+    );
+
+    expect(malformed.issues.map((issue) => issue.code)).toContain(
+      "INVALID_CREATIVE_ASSET_URL",
+    );
+    expect(httpAsset.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "INVALID_CREATIVE_ASSET_URL",
+          message: expect.stringContaining("HTTPS"),
+        }),
+      ]),
+    );
+  });
+
   it("records static-only, asset, HTTPS URL, and existing Meta ad conflict validation issues", () => {
     const plannerOutput = buildLaunchpadPlannerOutput(
       basePlannerInput({
