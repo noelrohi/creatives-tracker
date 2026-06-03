@@ -279,6 +279,72 @@ describe("account publishing identity sanitization", () => {
   });
 });
 
+describe("ad set account link tenant safety", () => {
+  it("rejects create links to accounts outside the active organization", async () => {
+    dbMocks.selectQueue = [[{ id: "campaign-1" }], []];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.adSet.create({
+        campaignId: "campaign-1",
+        accountId: "foreign-account",
+      }),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: expect.stringContaining("Ad account"),
+    });
+    expect(dbMocks.insertValues).toEqual([]);
+  });
+
+  it("rejects create links to campaigns outside the active organization", async () => {
+    dbMocks.selectQueue = [[]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.adSet.create({
+        campaignId: "foreign-campaign",
+        accountId: "account-1",
+      }),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: expect.stringContaining("Campaign"),
+    });
+    expect(dbMocks.insertValues).toEqual([]);
+  });
+
+  it("rejects update links to accounts outside the active organization", async () => {
+    dbMocks.selectQueue = [[]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.adSet.update({
+        id: "ad-set-1",
+        accountId: "foreign-account",
+      }),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: expect.stringContaining("Ad account"),
+    });
+    expect(dbMocks.updateValues).toEqual([]);
+  });
+
+  it("rejects update links to campaigns outside the active organization", async () => {
+    dbMocks.selectQueue = [[]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.adSet.update({
+        id: "ad-set-1",
+        campaignId: "foreign-campaign",
+      }),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: expect.stringContaining("Campaign"),
+    });
+    expect(dbMocks.updateValues).toEqual([]);
+  });
+});
+
 describe("launchpad destination selection", () => {
   it("lists destination accounts without token disclosure", async () => {
     dbMocks.selectQueue = [[eligibleAccount({ metaAccessToken: "secret" })]];

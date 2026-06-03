@@ -6,14 +6,17 @@ UPDATE "ad_set" AS "target"
 SET "account_id" = "linked"."account_id"
 FROM (
   SELECT
-    "ad_set_id",
-    "organization_id",
-    min("account_id") AS "account_id"
+    "ad"."ad_set_id",
+    "ad"."organization_id",
+    min("ad"."account_id") AS "account_id"
   FROM "ad"
-  WHERE "ad_set_id" IS NOT NULL
-    AND "account_id" IS NOT NULL
-  GROUP BY "ad_set_id", "organization_id"
-  HAVING count(DISTINCT "account_id") = 1
+  INNER JOIN "ad_account"
+    ON "ad_account"."id" = "ad"."account_id"
+   AND "ad_account"."organization_id" IS NOT DISTINCT FROM "ad"."organization_id"
+  WHERE "ad"."ad_set_id" IS NOT NULL
+    AND "ad"."account_id" IS NOT NULL
+  GROUP BY "ad"."ad_set_id", "ad"."organization_id"
+  HAVING count(DISTINCT "ad"."account_id") = 1
 ) AS "linked"
 WHERE "target"."id" = "linked"."ad_set_id"
   AND "target"."organization_id" IS NOT DISTINCT FROM "linked"."organization_id"

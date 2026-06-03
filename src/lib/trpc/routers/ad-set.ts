@@ -1,3 +1,4 @@
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { eq, desc, and, sql } from "drizzle-orm";
 import { router, orgProcedure, orgWriteProcedure } from "../init";
@@ -7,6 +8,66 @@ import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
 import { adAccounts } from "@/schema/account";
 
+async function assertCampaignBelongsToOrg(
+  campaignId: string,
+  organizationId: string,
+) {
+  const [campaign] = await db
+    .select({ id: campaigns.id })
+    .from(campaigns)
+    .where(
+      and(
+        eq(campaigns.id, campaignId),
+        eq(campaigns.organizationId, organizationId),
+      ),
+    )
+    .limit(1);
+
+  if (!campaign) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Campaign does not exist in this organization",
+    });
+  }
+}
+
+async function assertAccountBelongsToOrg(
+  accountId: string,
+  organizationId: string,
+) {
+  const [account] = await db
+    .select({ id: adAccounts.id })
+    .from(adAccounts)
+    .where(
+      and(
+        eq(adAccounts.id, accountId),
+        eq(adAccounts.organizationId, organizationId),
+      ),
+    )
+    .limit(1);
+
+  if (!account) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Ad account does not exist in this organization",
+    });
+  }
+}
+
+async function assertWritableReferencesBelongToOrg(input: {
+  campaignId?: string;
+  accountId?: string | null;
+  organizationId: string;
+}) {
+  if (input.campaignId !== undefined) {
+    await assertCampaignBelongsToOrg(input.campaignId, input.organizationId);
+  }
+
+  if (input.accountId) {
+    await assertAccountBelongsToOrg(input.accountId, input.organizationId);
+  }
+}
+
 export const adSetRouter = router({
   list: orgProcedure.meta(openApiQueryMeta("adSet", "list")).query(async ({ ctx }) => {
     const rows = await db
@@ -15,7 +76,7 @@ export const adSetRouter = router({
         name: adSets.name,
         campaignId: adSets.campaignId,
         campaignName: campaigns.name,
-        accountId: adSets.accountId,
+        accountId: adAccounts.id,
         accountName: adAccounts.name,
         accountMetaAccountId: adAccounts.metaAccountId,
         metaId: adSets.metaId,
@@ -34,8 +95,20 @@ export const adSetRouter = router({
         adCount: sql<number>`(SELECT count(*) FROM ad WHERE ad.ad_set_id = ${adSets.id})`.as("ad_count"),
       })
       .from(adSets)
-      .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
-      .leftJoin(adAccounts, eq(adSets.accountId, adAccounts.id))
+      .leftJoin(
+        campaigns,
+        and(
+          eq(adSets.campaignId, campaigns.id),
+          eq(campaigns.organizationId, ctx.organizationId),
+        ),
+      )
+      .leftJoin(
+        adAccounts,
+        and(
+          eq(adSets.accountId, adAccounts.id),
+          eq(adAccounts.organizationId, ctx.organizationId),
+        ),
+      )
       .where(eq(adSets.organizationId, ctx.organizationId))
       .orderBy(desc(adSets.createdAt));
     return rows;
@@ -49,7 +122,7 @@ export const adSetRouter = router({
         .select({
           id: adSets.id,
           name: adSets.name,
-          accountId: adSets.accountId,
+          accountId: adAccounts.id,
           metaId: adSets.metaId,
           costCap: adSets.costCap,
           dailyBudget: adSets.dailyBudget,
@@ -59,6 +132,13 @@ export const adSetRouter = router({
           adCount: sql<number>`(SELECT count(*) FROM ad WHERE ad.ad_set_id = ${adSets.id})`.as("ad_count"),
         })
         .from(adSets)
+        .leftJoin(
+          adAccounts,
+          and(
+            eq(adSets.accountId, adAccounts.id),
+            eq(adAccounts.organizationId, ctx.organizationId),
+          ),
+        )
         .where(and(eq(adSets.campaignId, input.campaignId), eq(adSets.organizationId, ctx.organizationId)))
         .orderBy(desc(adSets.createdAt));
       return rows;
@@ -74,7 +154,7 @@ export const adSetRouter = router({
           name: adSets.name,
           campaignId: adSets.campaignId,
           campaignName: campaigns.name,
-          accountId: adSets.accountId,
+          accountId: adAccounts.id,
           accountName: adAccounts.name,
           accountMetaAccountId: adAccounts.metaAccountId,
           metaId: adSets.metaId,
@@ -92,8 +172,20 @@ export const adSetRouter = router({
           updatedAt: adSets.updatedAt,
         })
         .from(adSets)
-        .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
-        .leftJoin(adAccounts, eq(adSets.accountId, adAccounts.id))
+        .leftJoin(
+          campaigns,
+          and(
+            eq(adSets.campaignId, campaigns.id),
+            eq(campaigns.organizationId, ctx.organizationId),
+          ),
+        )
+        .leftJoin(
+          adAccounts,
+          and(
+            eq(adSets.accountId, adAccounts.id),
+            eq(adAccounts.organizationId, ctx.organizationId),
+          ),
+        )
         .where(and(eq(adSets.id, input.id), eq(adSets.organizationId, ctx.organizationId)));
       if (!adSet) throw new Error("Ad set not found");
       return adSet;
@@ -118,6 +210,12 @@ export const adSetRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      await assertWritableReferencesBelongToOrg({
+        campaignId: input.campaignId,
+        accountId: input.accountId,
+        organizationId: ctx.organizationId,
+      });
+
       const [adSet] = await db
         .insert(adSets)
         .values({
@@ -161,6 +259,12 @@ export const adSetRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      await assertWritableReferencesBelongToOrg({
+        campaignId: input.campaignId,
+        accountId: input.accountId,
+        organizationId: ctx.organizationId,
+      });
+
       const { id, scheduleStart, scheduleEnd, ...rest } = input;
       const data: Record<string, unknown> = { ...rest };
       if (scheduleStart !== undefined) {
@@ -174,6 +278,12 @@ export const adSetRouter = router({
         .set(data)
         .where(and(eq(adSets.id, id), eq(adSets.organizationId, ctx.organizationId)))
         .returning();
+      if (!adSet) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Ad set does not exist in this organization",
+        });
+      }
       return adSet;
     }),
 
@@ -186,6 +296,11 @@ export const adSetRouter = router({
         .from(adSets)
         .where(and(eq(adSets.id, input.id), eq(adSets.organizationId, ctx.organizationId)));
       if (!source) throw new Error("Ad set not found");
+      await assertCampaignBelongsToOrg(source.campaignId, ctx.organizationId);
+      if (source.accountId) {
+        await assertAccountBelongsToOrg(source.accountId, ctx.organizationId);
+      }
+
       const [duplicate] = await db
         .insert(adSets)
         .values({
@@ -223,6 +338,8 @@ export const adSetRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      await assertCampaignBelongsToOrg(input.campaignId, ctx.organizationId);
+
       const results: { id: string; name: string }[] = [];
       for (const row of input.rows) {
         const [existing] = await db

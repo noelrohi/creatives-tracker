@@ -156,7 +156,7 @@ async function getAdSetContext(
       id: adSets.id,
       name: adSets.name,
       metaId: adSets.metaId,
-      accountId: adSets.accountId,
+      accountId: adAccounts.id,
       status: adSets.status,
       campaignId: adSets.campaignId,
       campaignName: campaigns.name,
@@ -164,7 +164,20 @@ async function getAdSetContext(
       campaignStatus: campaigns.status,
     })
     .from(adSets)
-    .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
+    .leftJoin(
+      adAccounts,
+      and(
+        eq(adSets.accountId, adAccounts.id),
+        eq(adAccounts.organizationId, organizationId),
+      ),
+    )
+    .leftJoin(
+      campaigns,
+      and(
+        eq(adSets.campaignId, campaigns.id),
+        eq(campaigns.organizationId, organizationId),
+      ),
+    )
     .where(
       and(
         eq(adSets.id, adSetId),
@@ -199,7 +212,7 @@ export async function listEligibleLaunchpadAdSets(
       id: adSets.id,
       name: adSets.name,
       metaId: adSets.metaId,
-      accountId: adSets.accountId,
+      accountId: adAccounts.id,
       status: adSets.status,
       campaignId: adSets.campaignId,
       campaignName: campaigns.name,
@@ -207,7 +220,20 @@ export async function listEligibleLaunchpadAdSets(
       campaignStatus: campaigns.status,
     })
     .from(adSets)
-    .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
+    .leftJoin(
+      adAccounts,
+      and(
+        eq(adSets.accountId, adAccounts.id),
+        eq(adAccounts.organizationId, organizationId),
+      ),
+    )
+    .leftJoin(
+      campaigns,
+      and(
+        eq(adSets.campaignId, campaigns.id),
+        eq(campaigns.organizationId, organizationId),
+      ),
+    )
     .where(
       and(
         eq(adSets.organizationId, organizationId),
