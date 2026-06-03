@@ -78,7 +78,11 @@ const navItems = [
   { label: "Accounts", href: "/accounts", icon: Settings },
 ];
 
-export function AppSidebar() {
+export function AppSidebar({
+  launchpadEnabled = false,
+}: {
+  launchpadEnabled?: boolean;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -118,11 +122,12 @@ export function AppSidebar() {
       ? currentUserRole
       : null,
   );
-  const visibleNavItems = isPrivileged
+  const featureNavItems = launchpadEnabled
     ? navItems
-    : navItems.filter(
-        (item) => item.href !== "/accounts" && item.href !== "/launchpad",
-      );
+    : navItems.filter((item) => item.href !== "/launchpad");
+  const visibleNavItems = isPrivileged
+    ? featureNavItems
+    : featureNavItems.filter((item) => item.href !== "/accounts");
 
   async function handleSignOut() {
     await authClient.signOut();
