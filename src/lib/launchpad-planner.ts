@@ -366,6 +366,7 @@ function buildExpectedMetaObjectShape(input: {
 
 function buildCreativeIssues(input: LaunchpadPlannerInput) {
   const issues: LaunchpadValidationIssue[] = [];
+  const assetUrl = normalizedText(input.creative.assetUrl);
 
   if (input.creative.format !== "static") {
     issues.push({
@@ -376,12 +377,39 @@ function buildCreativeIssues(input: LaunchpadPlannerInput) {
     });
   }
 
-  if (!normalizedText(input.creative.assetUrl)) {
+  if (!assetUrl) {
     issues.push({
       code: "CREATIVE_ASSET_REQUIRED",
       message: "Static image dry-run requires a creative asset URL",
       field: "creativeId",
       details: { creativeId: input.creative.id },
+    });
+    return issues;
+  }
+
+  let parsedAssetUrl: URL;
+  try {
+    parsedAssetUrl = new URL(assetUrl);
+  } catch {
+    issues.push({
+      code: "INVALID_CREATIVE_ASSET_URL",
+      message: "Static image asset URL must be a valid HTTPS URL",
+      field: "creativeId",
+      details: { creativeId: input.creative.id, assetUrl },
+    });
+    return issues;
+  }
+
+  if (parsedAssetUrl.protocol !== "https:") {
+    issues.push({
+      code: "INVALID_CREATIVE_ASSET_URL",
+      message: "Static image asset URL must use HTTPS",
+      field: "creativeId",
+      details: {
+        creativeId: input.creative.id,
+        assetUrl,
+        protocol: parsedAssetUrl.protocol,
+      },
     });
   }
 

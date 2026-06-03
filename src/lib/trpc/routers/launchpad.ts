@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
+import { isLaunchpadEnabled } from "@/lib/feature-flags";
 import {
   LAUNCHPAD_MAX_ITEMS,
   PAUSED_META_STATUS,
@@ -100,6 +101,17 @@ const createValidationRunInputSchema = z.object({
     )
     .min(1)
     .max(1),
+});
+
+const launchpadAdminProcedure = orgAdminProcedure.use(async ({ next }) => {
+  if (!isLaunchpadEnabled()) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Launchpad is not enabled",
+    });
+  }
+
+  return next();
 });
 
 function asTrpcError(error: unknown): never {
@@ -299,14 +311,14 @@ async function assertNoItemKeyConflicts(
 }
 
 export const launchpadRouter = router({
-  destinationAccounts: orgAdminProcedure
+  destinationAccounts: launchpadAdminProcedure
     .meta(openApiQueryMeta("launchpad", "destinationAccounts"))
     .output(z.array(launchpadDestinationAccountSchema))
     .query(async ({ ctx }) => {
       return listLaunchpadDestinationAccounts(db, ctx.organizationId);
     }),
 
-  eligibleAdSets: orgAdminProcedure
+  eligibleAdSets: launchpadAdminProcedure
     .meta(openApiQueryMeta("launchpad", "eligibleAdSets"))
     .input(z.object({ accountId: z.string().trim().min(1) }))
     .output(z.array(launchpadDestinationAdSetSchema))
@@ -322,7 +334,7 @@ export const launchpadRouter = router({
       }
     }),
 
-  destinationContext: orgAdminProcedure
+  destinationContext: launchpadAdminProcedure
     .meta(openApiQueryMeta("launchpad", "destinationContext"))
     .input(
       z.object({
@@ -343,7 +355,7 @@ export const launchpadRouter = router({
       }
     }),
 
-  list: orgAdminProcedure
+  list: launchpadAdminProcedure
     .meta(openApiQueryMeta("launchpad", "list"))
     .input(z.object({ limit: z.number().int().min(1).max(100).default(25) }).optional())
     .query(async ({ input, ctx }) => {
@@ -378,7 +390,7 @@ export const launchpadRouter = router({
         .limit(input?.limit ?? 25);
     }),
 
-  getById: orgAdminProcedure
+  getById: launchpadAdminProcedure
     .meta(openApiQueryMeta("launchpad", "getById"))
     .input(z.object({ id: z.string() }))
     .query(async ({ input, ctx }) => {
@@ -410,7 +422,7 @@ export const launchpadRouter = router({
       return { run, items };
     }),
 
-  createValidationRun: orgAdminProcedure
+  createValidationRun: launchpadAdminProcedure
     .meta(openApiMutationMeta("launchpad", "createValidationRun"))
     .input(createValidationRunInputSchema)
     .mutation(async ({ input, ctx }) => {
@@ -605,7 +617,7 @@ export const launchpadRouter = router({
       });
     }),
 
-  requestLivePublish: orgAdminProcedure
+  requestLivePublish: launchpadAdminProcedure
     .meta(openApiMutationMeta("launchpad", "requestLivePublish"))
     .input(
       z.object({
