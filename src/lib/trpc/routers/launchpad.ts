@@ -1,4 +1,5 @@
 import { TRPCError } from "@trpc/server";
+import { tasks } from "@trigger.dev/sdk";
 import { and, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
@@ -20,17 +21,28 @@ import {
   assertLockedHashStable,
   createLaunchpadRunDraft,
   summarizeLaunchpadValidationIssues,
+  type LaunchpadItemPayload,
   type LaunchpadRunDraft,
 } from "@/lib/launchpad-ledger";
+import {
+  LaunchpadMetaPublishError,
+  createMetaStaticCreative,
+  createPausedMetaAd,
+  fetchMetaAdSnapshot,
+  reconcileCreatedMetaAd,
+  uploadMetaImageByUrl,
+} from "@/lib/launchpad-meta-publish";
 import { buildLaunchpadPlannerOutput } from "@/lib/launchpad-planner";
 import { ads } from "@/schema/ad";
+import { adAccounts } from "@/schema/account";
 import { adCreatives } from "@/schema/ad-creative";
 import {
   launchpadPublishItems,
   launchpadPublishRuns,
 } from "@/schema/launchpad";
-import { router, orgAdminProcedure } from "../init";
+import { router, internalWorkerProcedure, orgAdminProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
+import type { launchpadPublishTask } from "../../../../trigger/launchpad-publish";
 
 const actorSchema = z
   .object({
@@ -308,6 +320,486 @@ async function assertNoItemKeyConflicts(
       cause: { itemIds: conflictingItems.map((item) => item.id) },
     });
   }
+}
+
+type LaunchpadWriter = Pick<typeof db, "select" | "insert" | "update">;
+type LaunchpadRunRow = typeof launchpadPublishRuns.$inferSelect;
+type LaunchpadItemRow = typeof launchpadPublishItems.$inferSelect;
+
+type PublishFailureInput = {
+  organizationId: string;
+  runId: string;
+  itemId: string;
+  category: "retryable" | "terminal" | "ambiguous" | "manual_intervention";
+  code: string;
+  message: string;
+  details?: Record<string, unknown> | null;
+  reconciliationStatus?: "pending" | "checking" | "reconciled" | "mismatched" | "manual_intervention";
+  manualInterventionReason?: string | null;
+  rawMetaConfiguredStatus?: string | null;
+  rawMetaEffectiveStatus?: string | null;
+};
+
+function manifestSafety(run: LaunchpadRunRow) {
+  const manifest = run.manifest as { safety?: Record<string, unknown> } | null;
+  return manifest?.safety ?? {};
+}
+
+function assertSingleItemRun(run: LaunchpadRunRow) {
+  if (run.itemCount !== 1) {
+    throw new LaunchpadLedgerError(
+      "SINGLE_ITEM_PUBLISH_ONLY",
+      "This Launchpad release can only publish one item at a time",
+      { itemCount: run.itemCount },
+    );
+  }
+}
+
+function assertLaunchpadEnabledForWorker() {
+  if (!isLaunchpadEnabled()) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Launchpad is not enabled",
+    });
+  }
+}
+
+function assertStaticPublishPayload(payload: LaunchpadItemPayload) {
+  if (payload.creative.format !== "static") {
+    throw new LaunchpadLedgerError(
+      "UNSUPPORTED_CREATIVE_FORMAT",
+      "Launchpad live publishing currently supports static image creatives only",
+      { format: payload.creative.format, creativeId: payload.creative.id },
+    );
+  }
+
+  const assetUrl = payload.creative.assetUrl;
+  if (!assetUrl) {
+    throw new LaunchpadLedgerError(
+      "CREATIVE_ASSET_REQUIRED",
+      "Static image publishing requires a creative asset URL",
+      { creativeId: payload.creative.id },
+    );
+  }
+
+  const destinationUrl = payload.launch.destinationUrl;
+  if (!destinationUrl) {
+    throw new LaunchpadLedgerError(
+      "DESTINATION_URL_REQUIRED",
+      "Static image publishing requires a destination URL",
+    );
+  }
+
+  for (const [field, value] of [
+    ["assetUrl", assetUrl],
+    ["destinationUrl", destinationUrl],
+  ] as const) {
+    let parsed: URL;
+    try {
+      parsed = new URL(value);
+    } catch {
+      throw new LaunchpadLedgerError(
+        field === "assetUrl" ? "INVALID_CREATIVE_ASSET_URL" : "INVALID_DESTINATION_URL",
+        field === "assetUrl"
+          ? "Static image asset URL must be a valid HTTPS URL"
+          : "Destination URL must be a valid HTTPS URL",
+        { [field]: value },
+      );
+    }
+
+    if (parsed.protocol !== "https:") {
+      throw new LaunchpadLedgerError(
+        field === "assetUrl" ? "INVALID_CREATIVE_ASSET_URL" : "INVALID_DESTINATION_URL",
+        field === "assetUrl"
+          ? "Static image asset URL must use HTTPS"
+          : "Destination URL must use HTTPS",
+        { [field]: value, protocol: parsed.protocol },
+      );
+    }
+  }
+}
+
+function assertRunReadyForPublish(run: LaunchpadRunRow) {
+  assertLockedHashStable({
+    label: "manifest",
+    lockedHash: run.manifestHash,
+    nextValue: run.manifest,
+  });
+  assertSingleItemRun(run);
+  const safety = manifestSafety(run);
+
+  assertLivePublishSafety({
+    principalType: "session",
+    orgRole: "admin",
+    requestedStatus: run.requestedStatus,
+    itemCount: run.itemCount,
+    confirmationAccepted: true,
+    previouslyValidatedManifest: Boolean(run.manifestLockedAt && run.validatedAt),
+    campaignCreationRequested: safety.campaignCreationAllowed === true,
+    adSetCreationRequested: safety.adSetCreationAllowed === true,
+    activePublishingPathAvailable: true,
+    env: process.env,
+  });
+}
+
+function assertItemReadyForPublish(item: LaunchpadItemRow) {
+  assertLockedHashStable({
+    label: "payload",
+    lockedHash: item.payloadHash,
+    nextValue: item.payload,
+  });
+
+  if (!item.validatedAt) {
+    throw new LaunchpadLedgerError(
+      "VALIDATED_ITEM_REQUIRED",
+      "Live Launchpad publishing requires a previously validated item payload",
+      { itemId: item.id },
+    );
+  }
+
+  if (item.requestedStatus !== PAUSED_META_STATUS) {
+    throw new LaunchpadLedgerError(
+      "ACTIVE_META_STATUS_FORBIDDEN",
+      "Launchpad can only request PAUSED Meta ads",
+      { requestedStatus: item.requestedStatus },
+    );
+  }
+
+  if (!["validated", "queued", "publishing"].includes(item.status)) {
+    throw new LaunchpadLedgerError(
+      "VALIDATED_ITEM_REQUIRED",
+      "Only validated Launchpad items can be promoted to live publishing",
+      { itemId: item.id, status: item.status },
+    );
+  }
+
+  assertStaticPublishPayload(item.payload as LaunchpadItemPayload);
+}
+
+async function loadLaunchpadRunOrThrow(
+  client: LaunchpadReader,
+  organizationId: string,
+  runId: string,
+) {
+  const [run] = await client
+    .select()
+    .from(launchpadPublishRuns)
+    .where(
+      and(
+        eq(launchpadPublishRuns.id, runId),
+        eq(launchpadPublishRuns.organizationId, organizationId),
+      ),
+    )
+    .limit(1);
+
+  if (!run) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Launchpad run not found" });
+  }
+
+  return run;
+}
+
+async function loadRunItems(
+  client: LaunchpadReader,
+  organizationId: string,
+  runId: string,
+) {
+  return client
+    .select()
+    .from(launchpadPublishItems)
+    .where(
+      and(
+        eq(launchpadPublishItems.runId, runId),
+        eq(launchpadPublishItems.organizationId, organizationId),
+      ),
+    )
+    .orderBy(launchpadPublishItems.position);
+}
+
+async function loadLaunchpadItemOrThrow(
+  client: LaunchpadReader,
+  organizationId: string,
+  input: { runId: string; itemId: string },
+) {
+  const [item] = await client
+    .select()
+    .from(launchpadPublishItems)
+    .where(
+      and(
+        eq(launchpadPublishItems.id, input.itemId),
+        eq(launchpadPublishItems.runId, input.runId),
+        eq(launchpadPublishItems.organizationId, organizationId),
+      ),
+    )
+    .limit(1);
+
+  if (!item) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Launchpad item not found" });
+  }
+
+  return item;
+}
+
+async function loadAccountAccessToken(
+  client: LaunchpadReader,
+  organizationId: string,
+  accountId: string,
+) {
+  const [account] = await client
+    .select({ metaAccessToken: adAccounts.metaAccessToken })
+    .from(adAccounts)
+    .where(
+      and(
+        eq(adAccounts.id, accountId),
+        eq(adAccounts.organizationId, organizationId),
+      ),
+    )
+    .limit(1);
+
+  if (!account?.metaAccessToken) {
+    throw new LaunchpadDestinationError(
+      "ACCOUNT_ACCESS_TOKEN_REQUIRED",
+      "The selected Meta ad account needs a stored access token before publishing",
+      { accountId },
+    );
+  }
+
+  return account.metaAccessToken;
+}
+
+async function assertPublishDestinationStillEligible(
+  client: LaunchpadReader,
+  organizationId: string,
+  run: LaunchpadRunRow,
+) {
+  if (!run.actorAccountId || !run.destinationAdSetId) {
+    throw new LaunchpadDestinationError(
+      "AD_SET_ID_REQUIRED",
+      "A Launchpad publish requires a persisted destination account and ad set",
+      {
+        accountId: run.actorAccountId,
+        adSetId: run.destinationAdSetId,
+      },
+    );
+  }
+
+  const destination = await assertEligibleLaunchpadDestination(client, organizationId, {
+    accountId: run.actorAccountId,
+    adSetId: run.destinationAdSetId,
+  });
+  const accessToken = await loadAccountAccessToken(
+    client,
+    organizationId,
+    run.actorAccountId,
+  );
+
+  return { ...destination, accessToken };
+}
+
+async function persistPublishFailure(
+  client: LaunchpadWriter,
+  input: PublishFailureInput,
+) {
+  const now = new Date();
+  const status = input.category === "ambiguous" ? "ambiguous" : "failed";
+  const reconciliationStatus = input.reconciliationStatus
+    ?? (input.category === "ambiguous" ? "manual_intervention" : "pending");
+
+  await client
+    .update(launchpadPublishItems)
+    .set({
+      status,
+      errorCategory: input.category,
+      errorCode: input.code,
+      errorMessage: input.message,
+      errorDetails: input.details ?? null,
+      rawMetaConfiguredStatus: input.rawMetaConfiguredStatus,
+      rawMetaEffectiveStatus: input.rawMetaEffectiveStatus,
+      reconciliationStatus,
+      reconciliationCheckedAt: input.reconciliationStatus ? now : undefined,
+      manualInterventionReason: input.manualInterventionReason,
+      completedAt: now,
+    })
+    .where(
+      and(
+        eq(launchpadPublishItems.id, input.itemId),
+        eq(launchpadPublishItems.organizationId, input.organizationId),
+      ),
+    );
+
+  await client
+    .update(launchpadPublishRuns)
+    .set({
+      status,
+      errorCategory: input.category,
+      errorCode: input.code,
+      errorMessage: input.message,
+      errorDetails: input.details ?? null,
+      reconciliationStatus,
+      reconciliationCheckedAt: input.reconciliationStatus ? now : undefined,
+      manualInterventionReason: input.manualInterventionReason,
+      completedAt: now,
+    })
+    .where(
+      and(
+        eq(launchpadPublishRuns.id, input.runId),
+        eq(launchpadPublishRuns.organizationId, input.organizationId),
+      ),
+    );
+
+  return { status, errorCode: input.code, errorCategory: input.category };
+}
+
+async function markPublishInProgress(
+  client: LaunchpadWriter,
+  organizationId: string,
+  input: { runId: string; itemId: string },
+) {
+  const now = new Date();
+  await client
+    .update(launchpadPublishRuns)
+    .set({
+      status: "publishing",
+      mode: "publish",
+      startedAt: now,
+      reconciliationStatus: "pending",
+      errorCategory: null,
+      errorCode: null,
+      errorMessage: null,
+      errorDetails: null,
+      manualInterventionReason: null,
+    })
+    .where(
+      and(
+        eq(launchpadPublishRuns.id, input.runId),
+        eq(launchpadPublishRuns.organizationId, organizationId),
+      ),
+    );
+  await client
+    .update(launchpadPublishItems)
+    .set({
+      status: "publishing",
+      startedAt: now,
+      reconciliationStatus: "pending",
+      errorCategory: null,
+      errorCode: null,
+      errorMessage: null,
+      errorDetails: null,
+      manualInterventionReason: null,
+    })
+    .where(
+      and(
+        eq(launchpadPublishItems.id, input.itemId),
+        eq(launchpadPublishItems.organizationId, organizationId),
+      ),
+    );
+}
+
+async function ensureLocalPausedAd(
+  client: LaunchpadWriter,
+  organizationId: string,
+  item: LaunchpadItemRow,
+  payload: LaunchpadItemPayload,
+) {
+  if (item.localAdId) return item.localAdId;
+
+  const [localAd] = await client
+    .insert(ads)
+    .values({
+      name: item.requestedAdName ?? payload.launch.adName,
+      adSetId: item.adSetId,
+      adCreativeId: item.creativeId,
+      accountId: item.accountId,
+      caption: payload.launch.primaryText ?? payload.launch.caption,
+      destinationUrl: payload.launch.destinationUrl,
+      organizationId,
+      status: "paused",
+      metaImageHash: item.externalMetaImageHash,
+      metaCreativeId: item.externalMetaCreativeId,
+      metaId: item.externalMetaAdId,
+      rawMetaConfiguredStatus: item.rawMetaConfiguredStatus,
+      rawMetaEffectiveStatus: item.rawMetaEffectiveStatus,
+    })
+    .returning({ id: ads.id });
+
+  if (!localAd) {
+    throw new LaunchpadLedgerError(
+      "LOCAL_AD_CREATE_FAILED",
+      "Launchpad could not create a local paused ad before publishing",
+      { itemId: item.id },
+    );
+  }
+
+  await client
+    .update(launchpadPublishItems)
+    .set({ localAdId: localAd.id })
+    .where(
+      and(
+        eq(launchpadPublishItems.id, item.id),
+        eq(launchpadPublishItems.organizationId, organizationId),
+      ),
+    );
+
+  return localAd.id;
+}
+
+async function persistMetaIds(
+  client: LaunchpadWriter,
+  organizationId: string,
+  input: {
+    itemId: string;
+    localAdId: string;
+    imageHash?: string | null;
+    creativeId?: string | null;
+    adId?: string | null;
+    rawMetaConfiguredStatus?: string | null;
+    rawMetaEffectiveStatus?: string | null;
+  },
+) {
+  await client
+    .update(launchpadPublishItems)
+    .set({
+      externalMetaImageHash: input.imageHash,
+      externalMetaCreativeId: input.creativeId,
+      externalMetaAdId: input.adId,
+      rawMetaConfiguredStatus: input.rawMetaConfiguredStatus,
+      rawMetaEffectiveStatus: input.rawMetaEffectiveStatus,
+    })
+    .where(
+      and(
+        eq(launchpadPublishItems.id, input.itemId),
+        eq(launchpadPublishItems.organizationId, organizationId),
+      ),
+    );
+
+  await client
+    .update(ads)
+    .set({
+      metaImageHash: input.imageHash,
+      metaCreativeId: input.creativeId,
+      metaId: input.adId,
+      rawMetaConfiguredStatus: input.rawMetaConfiguredStatus,
+      rawMetaEffectiveStatus: input.rawMetaEffectiveStatus,
+      status: "paused",
+    })
+    .where(and(eq(ads.id, input.localAdId), eq(ads.organizationId, organizationId)));
+}
+
+function publishErrorInput(input: {
+  organizationId: string;
+  runId: string;
+  itemId: string;
+  error: LaunchpadMetaPublishError;
+}): PublishFailureInput {
+  return {
+    organizationId: input.organizationId,
+    runId: input.runId,
+    itemId: input.itemId,
+    category: input.error.category,
+    code: input.error.code,
+    message: input.error.message,
+    details: input.error.details,
+  };
 }
 
 export const launchpadRouter = router({
@@ -627,22 +1119,11 @@ export const launchpadRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      const [run] = await db
-        .select()
-        .from(launchpadPublishRuns)
-        .where(
-          and(
-            eq(launchpadPublishRuns.id, input.runId),
-            eq(launchpadPublishRuns.organizationId, ctx.organizationId),
-          ),
-        );
-
-      if (!run) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Launchpad run not found",
-        });
-      }
+      const run = await loadLaunchpadRunOrThrow(
+        db,
+        ctx.organizationId,
+        input.runId,
+      );
 
       try {
         assertLockedHashStable({
@@ -650,24 +1131,418 @@ export const launchpadRouter = router({
           lockedHash: run.manifestHash,
           nextValue: run.manifest,
         });
+        assertSingleItemRun(run);
+        const safety = manifestSafety(run);
         assertLivePublishSafety({
           principalType: ctx.principalType,
           orgRole: ctx.orgRole,
-          requestedStatus: run.requestedStatus,
+          requestedStatus: input.requestedStatus,
           itemCount: run.itemCount,
           confirmationAccepted: input.confirmation === "PUBLISH_PAUSED_META_ADS",
           previouslyValidatedManifest:
             run.status === "validated" && !!run.manifestLockedAt && !!run.validatedAt,
-          activePublishingPathAvailable: false,
+          campaignCreationRequested: safety.campaignCreationAllowed === true,
+          adSetCreationRequested: safety.adSetCreationAllowed === true,
+          activePublishingPathAvailable: true,
           env: process.env,
         });
+
+        if (run.requestedStatus !== PAUSED_META_STATUS) {
+          throw new LaunchpadLedgerError(
+            "ACTIVE_META_STATUS_FORBIDDEN",
+            "Launchpad can only request PAUSED Meta ads",
+            { requestedStatus: run.requestedStatus },
+          );
+        }
       } catch (error) {
         asTrpcError(error);
       }
 
-      throw new TRPCError({
-        code: "PRECONDITION_FAILED",
-        message: "Live Meta publishing is not implemented in this foundation slice",
-      });
+      const items = await loadRunItems(db, ctx.organizationId, run.id);
+      if (items.length !== 1) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "This Launchpad release can only publish one item at a time",
+        });
+      }
+      const item = items[0];
+
+      try {
+        if (item.status !== "validated") {
+          throw new LaunchpadLedgerError(
+            "VALIDATED_ITEM_REQUIRED",
+            "Only validated Launchpad items can be promoted to live publishing",
+            { itemId: item.id, status: item.status },
+          );
+        }
+        assertItemReadyForPublish(item);
+        await assertPublishDestinationStillEligible(db, ctx.organizationId, run);
+      } catch (error) {
+        asTrpcError(error);
+      }
+
+      const now = new Date();
+      await db
+        .update(launchpadPublishRuns)
+        .set({
+          status: "queued",
+          mode: "publish",
+          queuedAt: now,
+          reconciliationStatus: "pending",
+          errorCategory: null,
+          errorCode: null,
+          errorMessage: null,
+          errorDetails: null,
+          manualInterventionReason: null,
+        })
+        .where(
+          and(
+            eq(launchpadPublishRuns.id, run.id),
+            eq(launchpadPublishRuns.organizationId, ctx.organizationId),
+          ),
+        );
+      await db
+        .update(launchpadPublishItems)
+        .set({
+          status: "queued",
+          queuedAt: now,
+          reconciliationStatus: "pending",
+          errorCategory: null,
+          errorCode: null,
+          errorMessage: null,
+          errorDetails: null,
+          manualInterventionReason: null,
+        })
+        .where(
+          and(
+            eq(launchpadPublishItems.id, item.id),
+            eq(launchpadPublishItems.organizationId, ctx.organizationId),
+          ),
+        );
+
+      let handle: { id: string };
+      try {
+        handle = await tasks.trigger<typeof launchpadPublishTask>(
+          "launchpad-publish",
+          {
+            organizationId: ctx.organizationId,
+            runId: run.id,
+            itemIds: [item.id],
+            requestedStatus: PAUSED_META_STATUS,
+          },
+        );
+      } catch (error) {
+        await persistPublishFailure(db, {
+          organizationId: ctx.organizationId,
+          runId: run.id,
+          itemId: item.id,
+          category: "retryable",
+          code: "TRIGGER_ENQUEUE_FAILED",
+          message: "Launchpad publish task could not be enqueued",
+          details: {
+            errorName: error instanceof Error ? error.name : undefined,
+            errorMessage: error instanceof Error ? error.message : String(error),
+          },
+        });
+
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Launchpad publish task could not be enqueued",
+        });
+      }
+
+      await db
+        .update(launchpadPublishRuns)
+        .set({ externalTriggerRunId: handle.id })
+        .where(
+          and(
+            eq(launchpadPublishRuns.id, run.id),
+            eq(launchpadPublishRuns.organizationId, ctx.organizationId),
+          ),
+        );
+
+      return {
+        runId: run.id,
+        itemIds: [item.id],
+        triggerRunId: handle.id,
+        status: "queued" as const,
+      };
+    }),
+
+  workerExecuteLivePublish: internalWorkerProcedure
+    .input(
+      z.object({
+        runId: z.string(),
+        itemId: z.string(),
+        requestedStatus: z.literal(PAUSED_META_STATUS).default(PAUSED_META_STATUS),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      assertLaunchpadEnabledForWorker();
+      if (!ctx.organizationId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Worker publish execution requires an organization scope",
+        });
+      }
+
+      const organizationId = ctx.organizationId;
+      const run = await loadLaunchpadRunOrThrow(db, organizationId, input.runId);
+      const item = await loadLaunchpadItemOrThrow(db, organizationId, input);
+
+      if (
+        run.status === "success" &&
+        item.status === "success" &&
+        item.localAdId &&
+        item.externalMetaAdId
+      ) {
+        return {
+          status: "success" as const,
+          replayed: true,
+          runId: run.id,
+          itemId: item.id,
+          localAdId: item.localAdId,
+          metaImageHash: item.externalMetaImageHash,
+          metaCreativeId: item.externalMetaCreativeId,
+          metaAdId: item.externalMetaAdId,
+          rawMetaConfiguredStatus: item.rawMetaConfiguredStatus,
+          rawMetaEffectiveStatus: item.rawMetaEffectiveStatus,
+        };
+      }
+
+      let destination: Awaited<ReturnType<typeof assertPublishDestinationStillEligible>>;
+      try {
+        if (!["queued", "publishing"].includes(run.status)) {
+          throw new LaunchpadLedgerError(
+            "QUEUED_PUBLISH_REQUIRED",
+            "Launchpad live publishing must be started from a queued durable intent",
+            { runId: run.id, status: run.status },
+          );
+        }
+        if (!["queued", "publishing"].includes(item.status)) {
+          throw new LaunchpadLedgerError(
+            "QUEUED_PUBLISH_REQUIRED",
+            "Launchpad live publishing item must be queued before worker execution",
+            { itemId: item.id, status: item.status },
+          );
+        }
+        if (input.requestedStatus !== PAUSED_META_STATUS) {
+          throw new LaunchpadLedgerError(
+            "ACTIVE_META_STATUS_FORBIDDEN",
+            "Launchpad can only request PAUSED Meta ads",
+            { requestedStatus: input.requestedStatus },
+          );
+        }
+        assertRunReadyForPublish(run);
+        assertItemReadyForPublish(item);
+        destination = await assertPublishDestinationStillEligible(
+          db,
+          organizationId,
+          run,
+        );
+      } catch (error) {
+        asTrpcError(error);
+      }
+
+      const payload = item.payload as LaunchpadItemPayload;
+      let localAdId = item.localAdId;
+      let imageHash = item.externalMetaImageHash;
+      let metaCreativeId = item.externalMetaCreativeId;
+      let metaAdId = item.externalMetaAdId;
+
+      try {
+        await markPublishInProgress(db, organizationId, {
+          runId: run.id,
+          itemId: item.id,
+        });
+
+        localAdId = await ensureLocalPausedAd(db, organizationId, item, payload);
+
+        if (!imageHash) {
+          const imageResult = await uploadMetaImageByUrl({
+            metaAccountId: destination.account.metaAccountId,
+            accessToken: destination.accessToken,
+            sourceUrl: payload.creative.assetUrl!,
+          });
+          imageHash = imageResult.imageHash;
+          await persistMetaIds(db, organizationId, {
+            itemId: item.id,
+            localAdId,
+            imageHash,
+            creativeId: metaCreativeId,
+            adId: metaAdId,
+          });
+        }
+
+        if (!metaCreativeId) {
+          const creativeResult = await createMetaStaticCreative({
+            metaAccountId: destination.account.metaAccountId,
+            accessToken: destination.accessToken,
+            creativeName: `${payload.launch.adName} / Creative`,
+            pageId: destination.account.defaultFacebookPageId!,
+            instagramActorId: destination.account.defaultInstagramActorId,
+            imageHash,
+            destinationUrl: payload.launch.destinationUrl!,
+            primaryText: payload.launch.primaryText,
+            headline: payload.launch.headline,
+            cta: payload.launch.cta,
+          });
+          metaCreativeId = creativeResult.creativeId;
+          await persistMetaIds(db, organizationId, {
+            itemId: item.id,
+            localAdId,
+            imageHash,
+            creativeId: metaCreativeId,
+            adId: metaAdId,
+          });
+        }
+
+        if (!metaAdId) {
+          const adResult = await createPausedMetaAd({
+            metaAccountId: destination.account.metaAccountId,
+            accessToken: destination.accessToken,
+            adName: payload.launch.adName,
+            adSetMetaId: destination.adSet.metaId!,
+            creativeId: metaCreativeId,
+            requestedStatus: PAUSED_META_STATUS,
+          });
+          metaAdId = adResult.adId;
+          await persistMetaIds(db, organizationId, {
+            itemId: item.id,
+            localAdId,
+            imageHash,
+            creativeId: metaCreativeId,
+            adId: metaAdId,
+          });
+        }
+
+        const snapshot = await fetchMetaAdSnapshot({
+          adMetaId: metaAdId,
+          accessToken: destination.accessToken,
+        });
+        const reconciliation = reconcileCreatedMetaAd({
+          snapshot,
+          expectedAdMetaId: metaAdId,
+          expectedAdSetMetaId: destination.adSet.metaId!,
+          expectedCreativeMetaId: metaCreativeId,
+        });
+
+        await persistMetaIds(db, organizationId, {
+          itemId: item.id,
+          localAdId,
+          imageHash,
+          creativeId: metaCreativeId,
+          adId: metaAdId,
+          rawMetaConfiguredStatus: reconciliation.rawMetaConfiguredStatus,
+          rawMetaEffectiveStatus: reconciliation.rawMetaEffectiveStatus,
+        });
+
+        if (!reconciliation.ok) {
+          return persistPublishFailure(db, {
+            organizationId,
+            runId: run.id,
+            itemId: item.id,
+            category: "ambiguous",
+            code: "META_RECONCILIATION_FAILED",
+            message: "Created Meta ad could not be reconciled as the expected paused ad",
+            details: reconciliation.details,
+            reconciliationStatus: "mismatched",
+            manualInterventionReason: reconciliation.failureReason,
+            rawMetaConfiguredStatus: reconciliation.rawMetaConfiguredStatus,
+            rawMetaEffectiveStatus: reconciliation.rawMetaEffectiveStatus,
+          });
+        }
+
+        const now = new Date();
+        await db
+          .update(launchpadPublishItems)
+          .set({
+            status: "success",
+            localAdId,
+            externalMetaImageHash: imageHash,
+            externalMetaCreativeId: metaCreativeId,
+            externalMetaAdId: metaAdId,
+            rawMetaConfiguredStatus: reconciliation.rawMetaConfiguredStatus,
+            rawMetaEffectiveStatus: reconciliation.rawMetaEffectiveStatus,
+            reconciliationStatus: "reconciled",
+            reconciliationCheckedAt: now,
+            completedAt: now,
+            errorCategory: null,
+            errorCode: null,
+            errorMessage: null,
+            errorDetails: null,
+            manualInterventionReason: null,
+          })
+          .where(
+            and(
+              eq(launchpadPublishItems.id, item.id),
+              eq(launchpadPublishItems.organizationId, organizationId),
+            ),
+          );
+        await db
+          .update(launchpadPublishRuns)
+          .set({
+            status: "success",
+            reconciliationStatus: "reconciled",
+            reconciliationCheckedAt: now,
+            completedAt: now,
+            errorCategory: null,
+            errorCode: null,
+            errorMessage: null,
+            errorDetails: null,
+            manualInterventionReason: null,
+          })
+          .where(
+            and(
+              eq(launchpadPublishRuns.id, run.id),
+              eq(launchpadPublishRuns.organizationId, organizationId),
+            ),
+          );
+
+        return {
+          status: "success" as const,
+          replayed: false,
+          runId: run.id,
+          itemId: item.id,
+          localAdId,
+          metaImageHash: imageHash,
+          metaCreativeId,
+          metaAdId,
+          rawMetaConfiguredStatus: reconciliation.rawMetaConfiguredStatus,
+          rawMetaEffectiveStatus: reconciliation.rawMetaEffectiveStatus,
+        };
+      } catch (error) {
+        if (error instanceof LaunchpadMetaPublishError) {
+          if (
+            error.operation === "reconcile_ad" ||
+            (error.operation === "create_ad" && error.code === "META_TIMEOUT")
+          ) {
+            return persistPublishFailure(db, {
+              organizationId,
+              runId: run.id,
+              itemId: item.id,
+              category: "ambiguous",
+              code: error.operation === "reconcile_ad"
+                ? "META_RECONCILIATION_AMBIGUOUS"
+                : "META_AD_CREATE_AMBIGUOUS",
+              message: error.operation === "reconcile_ad"
+                ? "Created Meta ad could not be reconciled after publishing"
+                : "Meta ad creation timed out and needs reconciliation before retry",
+              details: error.details,
+              reconciliationStatus: "manual_intervention",
+              manualInterventionReason: error.message,
+            });
+          }
+
+          return persistPublishFailure(db, publishErrorInput({
+            organizationId,
+            runId: run.id,
+            itemId: item.id,
+            error,
+          }));
+        }
+
+        asTrpcError(error);
+      }
     }),
 });
