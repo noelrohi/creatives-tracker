@@ -92,37 +92,66 @@ function throwReferenceNotFound(entityName: string, missingIds: string[]): never
   });
 }
 
+function throwReferenceMismatch(
+  entityName: string,
+  expected: string,
+  received: string,
+): never {
+  throw new TRPCError({
+    code: "PRECONDITION_FAILED",
+    message: `${entityName} Meta ID does not match the org-owned record`,
+    cause: { expected, received },
+  });
+}
+
 async function assertLaunchpadReferencesBelongToOrg(
   client: LaunchpadReader,
   organizationId: string,
   draft: LaunchpadRunDraft,
 ) {
   const accountId = draft.manifest.actor.accountId;
-  if (accountId) {
+  const accountMetaId = draft.manifest.actor.accountMetaId;
+  if (accountId || accountMetaId) {
     const accountRows = await client
-      .select({ id: adAccounts.id })
+      .select({ id: adAccounts.id, metaAccountId: adAccounts.metaAccountId })
       .from(adAccounts)
       .where(
         and(
-          eq(adAccounts.id, accountId),
+          accountId
+            ? eq(adAccounts.id, accountId)
+            : eq(adAccounts.metaAccountId, accountMetaId!),
           eq(adAccounts.organizationId, organizationId),
         ),
       );
     if (accountRows.length !== 1) {
-      throwReferenceNotFound("Ad account", [accountId]);
+      throwReferenceNotFound("Ad account", [accountId ?? accountMetaId!]);
+    }
+    if (accountMetaId && accountRows[0]!.metaAccountId !== accountMetaId) {
+      throwReferenceMismatch(
+        "Ad account",
+        accountRows[0]!.metaAccountId,
+        accountMetaId,
+      );
     }
   }
 
   const adSetId = draft.manifest.destination.adSetId;
-  if (adSetId) {
+  const adSetMetaId = draft.manifest.destination.adSetMetaId;
+  if (adSetId || adSetMetaId) {
     const adSetRows = await client
-      .select({ id: adSets.id })
+      .select({ id: adSets.id, metaId: adSets.metaId })
       .from(adSets)
       .where(
-        and(eq(adSets.id, adSetId), eq(adSets.organizationId, organizationId)),
+        and(
+          adSetId ? eq(adSets.id, adSetId) : eq(adSets.metaId, adSetMetaId!),
+          eq(adSets.organizationId, organizationId),
+        ),
       );
     if (adSetRows.length !== 1) {
-      throwReferenceNotFound("Ad set", [adSetId]);
+      throwReferenceNotFound("Ad set", [adSetId ?? adSetMetaId!]);
+    }
+    if (adSetMetaId && adSetRows[0]!.metaId !== adSetMetaId) {
+      throwReferenceMismatch("Ad set", adSetRows[0]!.metaId ?? "", adSetMetaId);
     }
   }
 
@@ -150,35 +179,75 @@ async function findExistingRunForReplay(
   organizationId: string,
   draft: LaunchpadRunDraft,
 ) {
-  const [existing] = await client
+  const [sameIdempotencyRun] = await client
     .select()
     .from(launchpadPublishRuns)
     .where(
       and(
         eq(launchpadPublishRuns.organizationId, organizationId),
-        or(
-          eq(launchpadPublishRuns.idempotencyKey, draft.idempotencyKey),
-          eq(launchpadPublishRuns.dedupeKey, draft.dedupeKey),
-        ),
+        eq(launchpadPublishRuns.idempotencyKey, draft.idempotencyKey),
       ),
     )
     .limit(1);
 
-  return existing;
+  if (sameIdempotencyRun) {
+    if (sameIdempotencyRun.manifestHash !== draft.manifestHash) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          "Launchpad idempotency key was replayed with a different manifest",
+      });
+    }
+
+    return sameIdempotencyRun;
+  }
+
+  const [sameDedupeRun] = await client
+    .select()
+    .from(launchpadPublishRuns)
+    .where(
+      and(
+        eq(launchpadPublishRuns.organizationId, organizationId),
+        eq(launchpadPublishRuns.dedupeKey, draft.dedupeKey),
+      ),
+    )
+    .limit(1);
+
+  return sameDedupeRun;
 }
 
-function assertExistingRunMatchesReplay(
-  existing: typeof launchpadPublishRuns.$inferSelect,
+async function assertNoItemKeyConflicts(
+  client: LaunchpadReader,
+  organizationId: string,
   draft: LaunchpadRunDraft,
 ) {
-  if (
-    existing.idempotencyKey === draft.idempotencyKey &&
-    existing.manifestHash !== draft.manifestHash
-  ) {
+  const itemIdempotencyKeys = uniqueStrings(
+    draft.items.map((item) => item.idempotencyKey),
+  );
+  const itemDedupeKeys = uniqueStrings(draft.items.map((item) => item.dedupeKey));
+  const conflictingItems = await client
+    .select({
+      id: launchpadPublishItems.id,
+      idempotencyKey: launchpadPublishItems.idempotencyKey,
+      dedupeKey: launchpadPublishItems.dedupeKey,
+    })
+    .from(launchpadPublishItems)
+    .where(
+      and(
+        eq(launchpadPublishItems.organizationId, organizationId),
+        or(
+          inArray(launchpadPublishItems.idempotencyKey, itemIdempotencyKeys),
+          inArray(launchpadPublishItems.dedupeKey, itemDedupeKeys),
+        ),
+      ),
+    );
+
+  if (conflictingItems.length > 0) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
       message:
-        "Launchpad idempotency key was replayed with a different manifest",
+        "Launchpad item idempotency or dedupe key collides with an existing item",
+      cause: { itemIds: conflictingItems.map((item) => item.id) },
     });
   }
 }
@@ -282,6 +351,17 @@ export const launchpadRouter = router({
           draft,
         );
 
+        const existingRun = await findExistingRunForReplay(
+          tx,
+          ctx.organizationId,
+          draft,
+        );
+        if (existingRun) {
+          return existingRun;
+        }
+
+        await assertNoItemKeyConflicts(tx, ctx.organizationId, draft);
+
         const now = new Date();
         const [run] = await tx
           .insert(launchpadPublishRuns)
@@ -321,7 +401,6 @@ export const launchpadRouter = router({
           );
 
           if (existing) {
-            assertExistingRunMatchesReplay(existing, draft);
             return existing;
           }
 
@@ -331,30 +410,42 @@ export const launchpadRouter = router({
           });
         }
 
-        await tx.insert(launchpadPublishItems).values(
-          draft.items.map((item) => ({
-            runId: run.id,
-            organizationId: ctx.organizationId,
-            position: item.position,
-            status: "validated" as const,
-            requestedStatus: item.requestedStatus,
-            creativeId: item.creativeId,
-            accountId: draft.manifest.actor.accountId,
-            adSetId: draft.manifest.destination.adSetId,
-            actorPageId: draft.manifest.actor.facebookPageId,
-            actorInstagramId: draft.manifest.actor.instagramActorId,
-            payload: item.payload,
-            payloadHash: item.payloadHash,
-            idempotencyKey: item.idempotencyKey,
-            dedupeKey: item.dedupeKey,
-            requestedAdName: item.adName,
-            createdByUserId: ctx.userId,
-            createdByPrincipalType: ctx.principalType,
-            createdByRole: ctx.orgRole,
-            reconciliationStatus: "not_required" as const,
-            validatedAt: now,
-          })),
-        );
+        const insertedItems = await tx
+          .insert(launchpadPublishItems)
+          .values(
+            draft.items.map((item) => ({
+              runId: run.id,
+              organizationId: ctx.organizationId,
+              position: item.position,
+              status: "validated" as const,
+              requestedStatus: item.requestedStatus,
+              creativeId: item.creativeId,
+              accountId: draft.manifest.actor.accountId,
+              adSetId: draft.manifest.destination.adSetId,
+              actorPageId: draft.manifest.actor.facebookPageId,
+              actorInstagramId: draft.manifest.actor.instagramActorId,
+              payload: item.payload,
+              payloadHash: item.payloadHash,
+              idempotencyKey: item.idempotencyKey,
+              dedupeKey: item.dedupeKey,
+              requestedAdName: item.adName,
+              createdByUserId: ctx.userId,
+              createdByPrincipalType: ctx.principalType,
+              createdByRole: ctx.orgRole,
+              reconciliationStatus: "not_required" as const,
+              validatedAt: now,
+            })),
+          )
+          .onConflictDoNothing()
+          .returning({ id: launchpadPublishItems.id });
+
+        if (insertedItems.length !== draft.items.length) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "Launchpad item idempotency or dedupe key collides with an existing item",
+          });
+        }
 
         return run;
       });

@@ -188,7 +188,8 @@ describe("launchpad router safety", () => {
 
 describe("launchpad router ledger persistence", () => {
   it("persists a validation run and items with audit metadata", async () => {
-    dbMocks.insertReturningQueue = [[{ id: "run-new" }]];
+    dbMocks.selectQueue = [[], [], []];
+    dbMocks.insertReturningQueue = [[{ id: "run-new" }], [{ id: "item-new" }]];
     const adminCaller = createMockCaller({ role: "admin" });
 
     const result = await adminCaller.launchpad.createValidationRun({
@@ -265,8 +266,7 @@ describe("launchpad router ledger persistence", () => {
       dedupeKey: draft.dedupeKey,
       manifestHash: "older-order-or-audit-specific-manifest",
     };
-    dbMocks.insertReturningQueue = [[]];
-    dbMocks.selectQueue = [[existing]];
+    dbMocks.selectQueue = [[], [existing]];
     const adminCaller = createMockCaller({ role: "admin" });
 
     await expect(
@@ -274,6 +274,24 @@ describe("launchpad router ledger persistence", () => {
         items: baseRunInput().items,
       }),
     ).resolves.toEqual(existing);
+  });
+
+  it("rejects item-level idempotency/dedupe conflicts before persistence", async () => {
+    dbMocks.selectQueue = [
+      [],
+      [],
+      [{ id: "existing-item", idempotencyKey: "item-key", dedupeKey: "dedupe" }],
+    ];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createValidationRun({
+        items: [{ adName: "Item collision demo", idempotencyKey: "item-key" }],
+      }),
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("item idempotency or dedupe key"),
+    });
   });
 
   it("rejects foreign-org account references before persistence", async () => {
@@ -291,5 +309,35 @@ describe("launchpad router ledger persistence", () => {
       message: expect.stringContaining("Ad account"),
     });
     expect(dbMocks.insertValues).toEqual([]);
+  });
+
+  it("rejects external Meta account IDs that mismatch org-owned accounts", async () => {
+    dbMocks.selectQueue = [[{ id: "account-1", metaAccountId: "act_owned" }]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createValidationRun({
+        actor: { accountId: "account-1", accountMetaId: "act_foreign" },
+        items: [{ adName: "Meta mismatch demo" }],
+      }),
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("Meta ID does not match"),
+    });
+  });
+
+  it("rejects external Meta ad set IDs that are not org-owned", async () => {
+    dbMocks.selectQueue = [[]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createValidationRun({
+        destination: { adSetMetaId: "238_foreign" },
+        items: [{ adName: "Foreign Meta ad set demo" }],
+      }),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: expect.stringContaining("Ad set"),
+    });
   });
 });
