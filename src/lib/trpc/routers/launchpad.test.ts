@@ -5,6 +5,7 @@ import { ads } from "@/schema/ad";
 import {
   createApiKeyCaller,
   createMockCaller,
+  createWorkerCaller,
 } from "../test-helpers";
 
 const dbMocks = vi.hoisted(() => ({
@@ -14,6 +15,16 @@ const dbMocks = vi.hoisted(() => ({
   insertValues: [] as unknown[],
   insertTables: [] as unknown[],
   updateValues: [] as unknown[],
+}));
+
+const triggerMocks = vi.hoisted(() => ({
+  trigger: vi.fn(),
+  createPublicToken: vi.fn(),
+}));
+
+vi.mock("@trigger.dev/sdk", () => ({
+  auth: { createPublicToken: triggerMocks.createPublicToken },
+  tasks: { trigger: triggerMocks.trigger },
 }));
 
 vi.mock("@/db", () => {
@@ -243,8 +254,83 @@ function persistedValidatedRun(overrides: Record<string, unknown> = {}) {
     validatedAt: new Date("2026-01-01T00:00:00.000Z"),
     idempotencyKey: draft.idempotencyKey,
     dedupeKey: draft.dedupeKey,
+    actorAccountId: "account-1",
+    actorAccountMetaId: "act_123",
+    actorPageId: "page-123",
+    actorInstagramId: "ig-123",
+    destinationAdSetId: "ad-set-1",
+    destinationAdSetMetaId: "23800000000000000",
     ...overrides,
   };
+}
+
+function persistedValidatedItem(overrides: Record<string, unknown> = {}) {
+  const draft = createLaunchpadRunDraft(baseRunInput());
+  const item = draft.items[0];
+  return {
+    id: "item-1",
+    runId: "run-1",
+    organizationId: "test-org-id",
+    position: 1,
+    status: "validated",
+    requestedStatus: "PAUSED",
+    creativeId: item.creativeId,
+    localAdId: null,
+    accountId: "account-1",
+    adSetId: "ad-set-1",
+    actorPageId: "page-123",
+    actorInstagramId: "ig-123",
+    payload: item.payload,
+    payloadHash: item.payloadHash,
+    payloadLockedAt: new Date("2026-01-01T00:00:00.000Z"),
+    idempotencyKey: item.idempotencyKey,
+    dedupeKey: item.dedupeKey,
+    requestedAdName: item.adName,
+    externalMetaImageHash: null,
+    externalMetaCreativeId: null,
+    externalMetaAdId: null,
+    rawMetaConfiguredStatus: null,
+    rawMetaEffectiveStatus: null,
+    createdByUserId: "test-user-id",
+    createdByPrincipalType: "session",
+    createdByRole: "admin",
+    errorCategory: null,
+    errorCode: null,
+    errorMessage: null,
+    errorDetails: null,
+    reconciliationStatus: "not_required",
+    reconciliationCheckedAt: null,
+    manualInterventionReason: null,
+    validatedAt: new Date("2026-01-01T00:00:00.000Z"),
+    queuedAt: null,
+    startedAt: null,
+    completedAt: null,
+    skippedAt: null,
+    cancelledAt: null,
+    createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+    ...overrides,
+  };
+}
+
+function persistedQueuedRun(overrides: Record<string, unknown> = {}) {
+  return persistedValidatedRun({
+    status: "queued",
+    mode: "publish",
+    queuedAt: new Date("2026-01-01T00:01:00.000Z"),
+    externalTriggerRunId: "trigger-run-1",
+    reconciliationStatus: "pending",
+    ...overrides,
+  });
+}
+
+function persistedQueuedItem(overrides: Record<string, unknown> = {}) {
+  return persistedValidatedItem({
+    status: "queued",
+    queuedAt: new Date("2026-01-01T00:01:00.000Z"),
+    reconciliationStatus: "pending",
+    ...overrides,
+  });
 }
 
 function enqueueEligibleDestination() {
@@ -264,6 +350,7 @@ function enqueueDryRunPlanningRows(
 beforeEach(() => {
   vi.clearAllMocks();
   resetDbMocks();
+  triggerMocks.trigger.mockResolvedValue({ id: "trigger-run-1" });
   process.env.ADSOLUTE_LAUNCHPAD_ENABLED = "true";
 });
 
@@ -584,9 +671,16 @@ describe("launchpad router safety", () => {
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
-  it("blocks API keys from requesting live publishing", async () => {
+  it("blocks members and API keys from requesting live publishing", async () => {
+    const memberCaller = createMockCaller({ role: "member" });
     const apiKeyCaller = createApiKeyCaller();
 
+    await expect(
+      memberCaller.launchpad.requestLivePublish({
+        runId: "run-1",
+        confirmation: "PUBLISH_PAUSED_META_ADS",
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(
       apiKeyCaller.launchpad.requestLivePublish({
         runId: "run-1",
@@ -943,5 +1037,353 @@ describe("launchpad router ledger persistence", () => {
       code: "PRECONDITION_FAILED",
       message: expect.stringContaining("Meta ID does not match"),
     });
+  });
+});
+
+function jsonResponse(body: unknown, status = 200, statusText = "OK") {
+  return new Response(JSON.stringify(body), {
+    status,
+    statusText,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function enqueueWorkerPublishRows(options: {
+  run?: Record<string, unknown>;
+  item?: Record<string, unknown>;
+} = {}) {
+  dbMocks.selectQueue = [
+    [persistedQueuedRun(options.run)],
+    [persistedQueuedItem(options.item)],
+    [eligibleAccount()],
+    [eligibleAdSet()],
+    [{ metaAccessToken: "secret-token" }],
+  ];
+  dbMocks.insertReturningQueue = [[{ id: "local-ad-1" }]];
+}
+
+describe("launchpad live publish enqueue", () => {
+  it("enqueues one validated run through Trigger and persists queued intent", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    dbMocks.selectQueue = [
+      [persistedValidatedRun()],
+      [persistedValidatedItem()],
+      [eligibleAccount()],
+      [eligibleAdSet()],
+      [{ metaAccessToken: "secret-token" }],
+    ];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    const result = await adminCaller.launchpad.requestLivePublish({
+      runId: "run-1",
+      confirmation: "PUBLISH_PAUSED_META_ADS",
+    });
+
+    expect(result).toEqual({
+      runId: "run-1",
+      itemIds: ["item-1"],
+      triggerRunId: "trigger-run-1",
+      status: "queued",
+    });
+    expect(triggerMocks.trigger).toHaveBeenCalledWith("launchpad-publish", {
+      organizationId: "test-org-id",
+      runId: "run-1",
+      itemIds: ["item-1"],
+      requestedStatus: "PAUSED",
+    });
+    expect(dbMocks.updateValues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: "queued", mode: "publish" }),
+        expect.objectContaining({ status: "queued" }),
+        expect.objectContaining({ externalTriggerRunId: "trigger-run-1" }),
+      ]),
+    );
+  });
+
+  it("rejects validation-failed runs before enqueue", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    dbMocks.selectQueue = [[
+      persistedValidatedRun({ status: "failed", validatedAt: null }),
+    ]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.requestLivePublish({
+        runId: "run-1",
+        confirmation: "PUBLISH_PAUSED_META_ADS",
+      }),
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("previously validated"),
+    });
+    expect(triggerMocks.trigger).not.toHaveBeenCalled();
+  });
+
+  it("enforces PAUSED-only requested status from the persisted run", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    dbMocks.selectQueue = [[persistedValidatedRun({ requestedStatus: "ACTIVE" })]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.requestLivePublish({
+        runId: "run-1",
+        confirmation: "PUBLISH_PAUSED_META_ADS",
+      }),
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("PAUSED"),
+    });
+    expect(triggerMocks.trigger).not.toHaveBeenCalled();
+  });
+
+  it("rejects live publish when the persisted destination is no longer eligible", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    dbMocks.selectQueue = [
+      [persistedValidatedRun()],
+      [persistedValidatedItem()],
+      [eligibleAccount({ metaAccessToken: null })],
+    ];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.requestLivePublish({
+        runId: "run-1",
+        confirmation: "PUBLISH_PAUSED_META_ADS",
+      }),
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("access token"),
+    });
+    expect(triggerMocks.trigger).not.toHaveBeenCalled();
+  });
+});
+
+describe("launchpad worker static publish", () => {
+  it("creates a local paused ad, publishes one paused Meta ad, persists IDs, and stores raw statuses separately", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    enqueueWorkerPublishRows();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        if (url.includes("/adimages")) {
+          expect(init?.method).toBe("POST");
+          return jsonResponse({
+            images: {
+              "https://cdn.example.com/router-static.png": {
+                hash: "meta-image-hash-1",
+              },
+            },
+          });
+        }
+        if (url.includes("/adcreatives")) {
+          expect(init?.method).toBe("POST");
+          return jsonResponse({ id: "meta-creative-1" });
+        }
+        if (url.includes("/ads")) {
+          expect(init?.method).toBe("POST");
+          const body = init?.body as URLSearchParams;
+          expect(body.get("status")).toBe("PAUSED");
+          return jsonResponse({ id: "meta-ad-1" });
+        }
+        if (url.includes("/meta-ad-1")) {
+          return jsonResponse({
+            id: "meta-ad-1",
+            adset_id: "23800000000000000",
+            creative: { id: "meta-creative-1" },
+            configured_status: "PAUSED",
+            effective_status: "PAUSED",
+          });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      },
+    );
+    const workerCaller = createWorkerCaller();
+
+    const result = await workerCaller.launchpad.workerExecuteLivePublish({
+      runId: "run-1",
+      itemId: "item-1",
+    });
+
+    expect(result).toMatchObject({
+      status: "success",
+      replayed: false,
+      localAdId: "local-ad-1",
+      metaImageHash: "meta-image-hash-1",
+      metaCreativeId: "meta-creative-1",
+      metaAdId: "meta-ad-1",
+      rawMetaConfiguredStatus: "PAUSED",
+      rawMetaEffectiveStatus: "PAUSED",
+    });
+    expect(dbMocks.insertValues[0]).toMatchObject({
+      organizationId: "test-org-id",
+      status: "paused",
+      adSetId: "ad-set-1",
+      adCreativeId: "creative-1",
+      accountId: "account-1",
+      destinationUrl: "https://example.com/products?utm_source=meta&utm_medium=paid_social",
+    });
+    expect(dbMocks.updateValues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          externalMetaImageHash: "meta-image-hash-1",
+          externalMetaCreativeId: "meta-creative-1",
+          externalMetaAdId: "meta-ad-1",
+          rawMetaConfiguredStatus: "PAUSED",
+          rawMetaEffectiveStatus: "PAUSED",
+        }),
+        expect.objectContaining({
+          metaImageHash: "meta-image-hash-1",
+          metaCreativeId: "meta-creative-1",
+          metaId: "meta-ad-1",
+          rawMetaConfiguredStatus: "PAUSED",
+          rawMetaEffectiveStatus: "PAUSED",
+          status: "paused",
+        }),
+        expect.objectContaining({
+          status: "success",
+          reconciliationStatus: "reconciled",
+        }),
+      ]),
+    );
+    fetchSpy.mockRestore();
+  });
+
+  it("returns saved success on Trigger replay without duplicate local ads or Meta calls", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    dbMocks.selectQueue = [
+      [persistedQueuedRun({ status: "success" })],
+      [
+        persistedQueuedItem({
+          status: "success",
+          localAdId: "local-ad-1",
+          externalMetaImageHash: "meta-image-hash-1",
+          externalMetaCreativeId: "meta-creative-1",
+          externalMetaAdId: "meta-ad-1",
+          rawMetaConfiguredStatus: "PAUSED",
+          rawMetaEffectiveStatus: "PAUSED",
+        }),
+      ],
+    ];
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const workerCaller = createWorkerCaller();
+
+    const result = await workerCaller.launchpad.workerExecuteLivePublish({
+      runId: "run-1",
+      itemId: "item-1",
+    });
+
+    expect(result).toMatchObject({ status: "success", replayed: true });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(dbMocks.insertValues).toEqual([]);
+    expect(dbMocks.updateValues).toEqual([]);
+    fetchSpy.mockRestore();
+  });
+
+  it.each([
+    { status: 429, body: { error: { message: "Rate limited" } }, code: "META_RATE_LIMIT" },
+    { status: 500, body: { error: { message: "Server error" } }, code: "META_SERVER_ERROR" },
+  ])("classifies Meta HTTP $status as a retryable publish failure", async ({ status, body, code }) => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    enqueueWorkerPublishRows();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(body, status, status === 429 ? "Too Many Requests" : "Server Error"),
+    );
+    const workerCaller = createWorkerCaller();
+
+    const result = await workerCaller.launchpad.workerExecuteLivePublish({
+      runId: "run-1",
+      itemId: "item-1",
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      errorCategory: "retryable",
+      errorCode: code,
+    });
+    expect(dbMocks.updateValues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "failed",
+          errorCategory: "retryable",
+          errorCode: code,
+        }),
+      ]),
+    );
+    fetchSpy.mockRestore();
+  });
+
+  it("classifies Meta timeouts as retryable publish failures", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    enqueueWorkerPublishRows();
+    const timeout = new Error("request timed out");
+    timeout.name = "AbortError";
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(timeout);
+    const workerCaller = createWorkerCaller();
+
+    const result = await workerCaller.launchpad.workerExecuteLivePublish({
+      runId: "run-1",
+      itemId: "item-1",
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      errorCategory: "retryable",
+      errorCode: "META_TIMEOUT",
+    });
+    fetchSpy.mockRestore();
+  });
+
+  it("records an ambiguous reconciliation failure when the created Meta ad is not safely paused", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    enqueueWorkerPublishRows();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/adimages")) {
+          return jsonResponse({
+            images: {
+              "https://cdn.example.com/router-static.png": {
+                hash: "meta-image-hash-1",
+              },
+            },
+          });
+        }
+        if (url.includes("/adcreatives")) return jsonResponse({ id: "meta-creative-1" });
+        if (url.includes("/ads")) return jsonResponse({ id: "meta-ad-1" });
+        if (url.includes("/meta-ad-1")) {
+          return jsonResponse({
+            id: "meta-ad-1",
+            adset_id: "23800000000000000",
+            creative: { id: "meta-creative-1" },
+            configured_status: "ACTIVE",
+            effective_status: "ACTIVE",
+          });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      },
+    );
+    const workerCaller = createWorkerCaller();
+
+    const result = await workerCaller.launchpad.workerExecuteLivePublish({
+      runId: "run-1",
+      itemId: "item-1",
+    });
+
+    expect(result).toMatchObject({
+      status: "ambiguous",
+      errorCategory: "ambiguous",
+      errorCode: "META_RECONCILIATION_FAILED",
+    });
+    expect(dbMocks.updateValues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "ambiguous",
+          reconciliationStatus: "mismatched",
+          rawMetaConfiguredStatus: "ACTIVE",
+          rawMetaEffectiveStatus: "ACTIVE",
+        }),
+      ]),
+    );
+    fetchSpy.mockRestore();
   });
 });

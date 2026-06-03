@@ -73,3 +73,20 @@ export function createApiKeyCaller({
     apiKeyScopes: scopes,
   });
 }
+
+/**
+ * Create a tRPC caller authenticated as the internal worker principal.
+ */
+export function createWorkerCaller({
+  organizationId = "test-org-id",
+}: { organizationId?: string } = {}) {
+  return createCaller({
+    session: null,
+    principalType: "worker" as const,
+    userId: null,
+    organizationId,
+    orgRole: null,
+    apiKeyId: null,
+    apiKeyScopes: [],
+  });
+}
