@@ -1,16 +1,15 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import {
-  DEFAULT_META_CTA,
   LAUNCHPAD_MAX_ITEMS,
   PAUSED_META_STATUS,
-  metaCtaValues,
 } from "@/lib/launchpad-constants";
 import {
   LaunchpadDestinationError,
   assertEligibleLaunchpadDestination,
+  inspectLaunchpadDestinationForDryRun,
   listEligibleLaunchpadAdSets,
   listLaunchpadDestinationAccounts,
 } from "@/lib/launchpad-destinations";
@@ -19,8 +18,11 @@ import {
   assertLivePublishSafety,
   assertLockedHashStable,
   createLaunchpadRunDraft,
+  summarizeLaunchpadValidationIssues,
   type LaunchpadRunDraft,
 } from "@/lib/launchpad-ledger";
+import { buildLaunchpadPlannerOutput } from "@/lib/launchpad-planner";
+import { ads } from "@/schema/ad";
 import { adCreatives } from "@/schema/ad-creative";
 import {
   launchpadPublishItems,
@@ -81,25 +83,23 @@ const createValidationRunInputSchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(160).optional(),
   actor: actorSchema,
   destination: destinationSchema,
+  defaultDestinationUrl: z.string().trim().optional(),
+  namingTemplate: z.string().optional(),
   items: z
     .array(
       z.object({
-        creativeId: z.string().trim().min(1).optional(),
-        creativeName: z.string().trim().min(1).optional(),
-        format: z.string().trim().min(1).optional(),
-        assetUrl: z.string().trim().url().optional(),
-        adName: z.string().trim().min(1),
-        caption: z.string().trim().min(1).optional(),
-        headline: z.string().trim().min(1).optional(),
-        destinationUrl: z.string().trim().url().optional(),
-        cta: z.enum(metaCtaValues).default(DEFAULT_META_CTA),
+        creativeId: z.string().trim().min(1),
+        adName: z.string().optional(),
+        primaryText: z.string().optional(),
+        caption: z.string().optional(),
+        headline: z.string().optional(),
+        destinationUrl: z.string().trim().optional(),
+        cta: z.string().trim().optional(),
         requestedStatus: z.literal(PAUSED_META_STATUS).default(PAUSED_META_STATUS),
-        idempotencyKey: z.string().trim().min(8).max(160).optional(),
-        dedupeKey: z.string().trim().min(8).max(160).optional(),
       }),
     )
     .min(1)
-    .max(LAUNCHPAD_MAX_ITEMS),
+    .max(1),
 });
 
 function asTrpcError(error: unknown): never {
@@ -170,28 +170,54 @@ function assertProvidedDestinationMetadataMatches(
   }
 }
 
-async function assertLaunchpadCreativeReferencesBelongToOrg(
+async function loadSingleLaunchpadCreative(
   client: LaunchpadReader,
   organizationId: string,
-  draft: LaunchpadRunDraft,
+  creativeId: string,
 ) {
-  const creativeIds = uniqueStrings(draft.items.map((item) => item.creativeId));
-  if (creativeIds.length > 0) {
-    const creativeRows = await client
-      .select({ id: adCreatives.id })
-      .from(adCreatives)
-      .where(
-        and(
-          inArray(adCreatives.id, creativeIds),
-          eq(adCreatives.organizationId, organizationId),
-        ),
-      );
-    const foundIds = new Set(creativeRows.map((row) => row.id));
-    const missingIds = creativeIds.filter((id) => !foundIds.has(id));
-    if (missingIds.length > 0) {
-      throwReferenceNotFound("Creative", missingIds);
-    }
+  const [creative] = await client
+    .select({
+      id: adCreatives.id,
+      name: adCreatives.name,
+      format: adCreatives.format,
+      assetUrl: adCreatives.assetUrl,
+      videoUrl: adCreatives.videoUrl,
+      hook: adCreatives.hook,
+      cta: adCreatives.cta,
+    })
+    .from(adCreatives)
+    .where(
+      and(
+        eq(adCreatives.id, creativeId),
+        eq(adCreatives.organizationId, organizationId),
+      ),
+    )
+    .limit(1);
+
+  if (!creative) {
+    throwReferenceNotFound("Creative", [creativeId]);
   }
+
+  return creative;
+}
+
+async function findExistingMetaAdConflicts(
+  client: LaunchpadReader,
+  organizationId: string,
+  input: { creativeId: string; adSetId: string },
+) {
+  return client
+    .select({ id: ads.id, name: ads.name, metaId: ads.metaId })
+    .from(ads)
+    .where(
+      and(
+        eq(ads.organizationId, organizationId),
+        eq(ads.adCreativeId, input.creativeId),
+        eq(ads.adSetId, input.adSetId),
+        isNotNull(ads.metaId),
+      ),
+    )
+    .limit(5);
 }
 
 async function findExistingRunForReplay(
@@ -391,7 +417,7 @@ export const launchpadRouter = router({
       return db.transaction(async (tx) => {
         const destinationContext = await (async () => {
           try {
-            return await assertEligibleLaunchpadDestination(
+            return await inspectLaunchpadDestinationForDryRun(
               tx,
               ctx.organizationId,
               {
@@ -405,41 +431,56 @@ export const launchpadRouter = router({
         })();
         assertProvidedDestinationMetadataMatches(input, destinationContext);
 
+        const itemInput = input.items[0];
+        const creative = await loadSingleLaunchpadCreative(
+          tx,
+          ctx.organizationId,
+          itemInput.creativeId,
+        );
+        const existingMetaAdConflicts = await findExistingMetaAdConflicts(
+          tx,
+          ctx.organizationId,
+          {
+            creativeId: creative.id,
+            adSetId: destinationContext.adSet.id,
+          },
+        );
+
+        const plannerOutput = buildLaunchpadPlannerOutput({
+          organizationId: ctx.organizationId,
+          requestedBy: {
+            userId: ctx.userId,
+            principalType: ctx.principalType,
+            orgRole: ctx.orgRole,
+          },
+          destination: {
+            account: destinationContext.account,
+            adSet: destinationContext.adSet,
+            issues: destinationContext.issues,
+          },
+          creative,
+          launch: {
+            defaultDestinationUrl: input.defaultDestinationUrl,
+            destinationUrlOverride: itemInput.destinationUrl,
+            primaryText: itemInput.primaryText,
+            caption: itemInput.caption,
+            headline: itemInput.headline,
+            cta: itemInput.cta,
+            adName: itemInput.adName,
+            namingTemplate: input.namingTemplate,
+          },
+          existingMetaAdConflicts,
+          idempotencyKey: input.idempotencyKey,
+          env: process.env,
+        });
+
         const draft = (() => {
           try {
-            return createLaunchpadRunDraft({
-              organizationId: ctx.organizationId,
-              requestedBy: {
-                userId: ctx.userId,
-                principalType: ctx.principalType,
-                orgRole: ctx.orgRole,
-              },
-              actor: {
-                accountId: destinationContext.account.id,
-                accountMetaId: destinationContext.account.metaAccountId,
-                facebookPageId:
-                  destinationContext.account.defaultFacebookPageId ?? undefined,
-                instagramActorId:
-                  destinationContext.account.defaultInstagramActorId ?? undefined,
-              },
-              destination: {
-                adSetId: destinationContext.adSet.id,
-                adSetMetaId: destinationContext.adSet.metaId ?? undefined,
-              },
-              items: input.items,
-              idempotencyKey: input.idempotencyKey,
-              env: process.env,
-            });
+            return createLaunchpadRunDraft(plannerOutput.runDraftInput);
           } catch (error) {
             asTrpcError(error);
           }
         })();
-
-        await assertLaunchpadCreativeReferencesBelongToOrg(
-          tx,
-          ctx.organizationId,
-          draft,
-        );
 
         const existingRun = await findExistingRunForReplay(
           tx,
@@ -453,6 +494,7 @@ export const launchpadRouter = router({
         await assertNoItemKeyConflicts(tx, ctx.organizationId, draft);
 
         const now = new Date();
+        const runError = summarizeLaunchpadValidationIssues(draft.validationIssues);
         const [run] = await tx
           .insert(launchpadPublishRuns)
           .values({
@@ -478,7 +520,15 @@ export const launchpadRouter = router({
             livePublishEnabledAtValidation:
               draft.manifest.safety.livePublishEnabled,
             reconciliationStatus: "not_required",
-            validatedAt: now,
+            ...(runError
+              ? {
+                  errorCategory: runError.errorCategory,
+                  errorCode: runError.errorCode,
+                  errorMessage: runError.errorMessage,
+                  errorDetails: runError.errorDetails,
+                  completedAt: now,
+                }
+              : { validatedAt: now }),
           })
           .onConflictDoNothing()
           .returning();
@@ -503,28 +553,42 @@ export const launchpadRouter = router({
         const insertedItems = await tx
           .insert(launchpadPublishItems)
           .values(
-            draft.items.map((item) => ({
-              runId: run.id,
-              organizationId: ctx.organizationId,
-              position: item.position,
-              status: "validated" as const,
-              requestedStatus: item.requestedStatus,
-              creativeId: item.creativeId,
-              accountId: draft.manifest.actor.accountId,
-              adSetId: draft.manifest.destination.adSetId,
-              actorPageId: draft.manifest.actor.facebookPageId,
-              actorInstagramId: draft.manifest.actor.instagramActorId,
-              payload: item.payload,
-              payloadHash: item.payloadHash,
-              idempotencyKey: item.idempotencyKey,
-              dedupeKey: item.dedupeKey,
-              requestedAdName: item.adName,
-              createdByUserId: ctx.userId,
-              createdByPrincipalType: ctx.principalType,
-              createdByRole: ctx.orgRole,
-              reconciliationStatus: "not_required" as const,
-              validatedAt: now,
-            })),
+            draft.items.map((item) => {
+              const itemError = summarizeLaunchpadValidationIssues(
+                item.validationIssues,
+              );
+
+              return {
+                runId: run.id,
+                organizationId: ctx.organizationId,
+                position: item.position,
+                status: item.status,
+                requestedStatus: item.requestedStatus,
+                creativeId: item.creativeId,
+                accountId: draft.manifest.actor.accountId,
+                adSetId: draft.manifest.destination.adSetId,
+                actorPageId: draft.manifest.actor.facebookPageId,
+                actorInstagramId: draft.manifest.actor.instagramActorId,
+                payload: item.payload,
+                payloadHash: item.payloadHash,
+                idempotencyKey: item.idempotencyKey,
+                dedupeKey: item.dedupeKey,
+                requestedAdName: item.adName,
+                createdByUserId: ctx.userId,
+                createdByPrincipalType: ctx.principalType,
+                createdByRole: ctx.orgRole,
+                reconciliationStatus: "not_required" as const,
+                ...(itemError
+                  ? {
+                      errorCategory: itemError.errorCategory,
+                      errorCode: itemError.errorCode,
+                      errorMessage: itemError.errorMessage,
+                      errorDetails: itemError.errorDetails,
+                      completedAt: now,
+                    }
+                  : { validatedAt: now }),
+              };
+            }),
           )
           .onConflictDoNothing()
           .returning({ id: launchpadPublishItems.id });

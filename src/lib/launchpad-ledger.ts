@@ -17,6 +17,19 @@ export type LaunchpadOrgRole = "owner" | "admin" | "member" | null;
 
 type ErrorDetails = Record<string, unknown>;
 
+export type LaunchpadValidationIssue = {
+  code: string;
+  message: string;
+  field?: string;
+  details?: Record<string, unknown>;
+};
+
+export type LaunchpadValidationSummary = {
+  status: "passed" | "failed";
+  issueCount: number;
+  issues: LaunchpadValidationIssue[];
+};
+
 export class LaunchpadLedgerError extends Error {
   readonly code: string;
   readonly details: ErrorDetails | undefined;
@@ -46,12 +59,23 @@ export type LaunchpadManifestItemInput = {
   creativeName?: string | null;
   format?: string | null;
   assetUrl?: string | null;
+  videoUrl?: string | null;
+  hook?: string | null;
   adName: string;
+  adNameSource?: string | null;
   caption?: string | null;
+  primaryText?: string | null;
   headline?: string | null;
+  headlineSource?: string | null;
   destinationUrl?: string | null;
   cta?: MetaCallToAction;
+  ctaSource?: string | null;
   requestedStatus?: typeof PAUSED_META_STATUS;
+  target?: Record<string, unknown> | null;
+  media?: Record<string, unknown> | null;
+  url?: Record<string, unknown> | null;
+  expectedMetaObjectShape?: Record<string, unknown> | null;
+  validationIssues?: LaunchpadValidationIssue[];
   idempotencyKey?: string | null;
   dedupeKey?: string | null;
 };
@@ -65,6 +89,9 @@ export type LaunchpadRunDraftInput = {
   };
   actor?: LaunchpadActorInput;
   destination?: LaunchpadDestinationInput;
+  destinationContext?: Record<string, unknown> | null;
+  plannerManifest?: Record<string, unknown> | null;
+  validationIssues?: LaunchpadValidationIssue[];
   items: LaunchpadManifestItemInput[];
   idempotencyKey?: string | null;
   env?: Record<string, string | undefined>;
@@ -76,15 +103,26 @@ export type LaunchpadItemPayload = {
     name: string | null;
     format: string | null;
     assetUrl: string | null;
+    videoUrl: string | null;
+    hook: string | null;
   };
   launch: {
     adName: string;
+    adNameSource: string | null;
     caption: string | null;
+    primaryText: string | null;
     headline: string | null;
+    headlineSource: string | null;
     destinationUrl: string | null;
     cta: MetaCallToAction;
+    ctaSource: string | null;
     requestedStatus: typeof PAUSED_META_STATUS;
   };
+  target: Record<string, unknown> | null;
+  media: Record<string, unknown> | null;
+  url: Record<string, unknown> | null;
+  expectedMetaObjectShape: Record<string, unknown> | null;
+  validation: LaunchpadValidationSummary;
   safety: {
     localAdStatus: "paused";
     metaAdStatus: typeof PAUSED_META_STATUS;
@@ -93,10 +131,12 @@ export type LaunchpadItemPayload = {
 
 export type LaunchpadItemDraft = {
   position: number;
+  status: "validated" | "failed";
   creativeId: string | null;
   adName: string;
   cta: MetaCallToAction;
   requestedStatus: typeof PAUSED_META_STATUS;
+  validationIssues: LaunchpadValidationIssue[];
   payload: LaunchpadItemPayload;
   payloadHash: string;
   idempotencyKey: string;
@@ -119,6 +159,9 @@ export type LaunchpadManifest = {
       orgRole: LaunchpadOrgRole;
     };
   };
+  destinationContext: Record<string, unknown> | null;
+  plannerManifest: Record<string, unknown> | null;
+  validation: LaunchpadValidationSummary;
   safety: {
     dryRunOnly: true;
     activePublishingPathAvailable: false;
@@ -129,7 +172,15 @@ export type LaunchpadManifest = {
   };
   items: Array<{
     position: number;
+    status: "validated" | "failed";
     creativeId: string | null;
+    creative: LaunchpadItemPayload["creative"];
+    launch: LaunchpadItemPayload["launch"];
+    target: LaunchpadItemPayload["target"];
+    media: LaunchpadItemPayload["media"];
+    url: LaunchpadItemPayload["url"];
+    expectedMetaObjectShape: LaunchpadItemPayload["expectedMetaObjectShape"];
+    validation: LaunchpadValidationSummary;
     adName: string;
     cta: MetaCallToAction;
     requestedStatus: typeof PAUSED_META_STATUS;
@@ -139,7 +190,8 @@ export type LaunchpadManifest = {
 };
 
 export type LaunchpadRunDraft = {
-  status: "validated";
+  status: "validated" | "failed";
+  validationIssues: LaunchpadValidationIssue[];
   manifest: LaunchpadManifest;
   manifestHash: string;
   idempotencyKey: string;
@@ -206,6 +258,30 @@ const itemStatusTransitions = {
 function normalizedText(value: string | null | undefined) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function validationSummary(issues: LaunchpadValidationIssue[]): LaunchpadValidationSummary {
+  return {
+    status: issues.length > 0 ? "failed" : "passed",
+    issueCount: issues.length,
+    issues,
+  };
+}
+
+export function summarizeLaunchpadValidationIssues(
+  issues: LaunchpadValidationIssue[],
+) {
+  if (issues.length === 0) return null;
+
+  return {
+    errorCategory: "terminal" as const,
+    errorCode: "LAUNCHPAD_VALIDATION_FAILED",
+    errorMessage:
+      issues.length === 1
+        ? issues[0]?.message ?? "Launchpad dry-run validation failed"
+        : `Launchpad dry-run validation failed with ${issues.length} QA issues`,
+    errorDetails: { issues },
+  };
 }
 
 function requireNonEmpty(value: string, code: string, field: string) {
@@ -357,6 +433,7 @@ function buildItemPayload(item: LaunchpadManifestItemInput): LaunchpadItemPayloa
   const adName = requireNonEmpty(item.adName, "AD_NAME_REQUIRED", "adName");
   const destinationUrl = normalizedText(item.destinationUrl);
   assertHttpsUrl(destinationUrl);
+  const validationIssues = item.validationIssues ?? [];
 
   return {
     creative: {
@@ -364,15 +441,26 @@ function buildItemPayload(item: LaunchpadManifestItemInput): LaunchpadItemPayloa
       name: normalizedText(item.creativeName),
       format: normalizedText(item.format),
       assetUrl: normalizedText(item.assetUrl),
+      videoUrl: normalizedText(item.videoUrl),
+      hook: normalizedText(item.hook),
     },
     launch: {
       adName,
+      adNameSource: normalizedText(item.adNameSource),
       caption: normalizedText(item.caption),
+      primaryText: normalizedText(item.primaryText ?? item.caption),
       headline: normalizedText(item.headline),
+      headlineSource: normalizedText(item.headlineSource),
       destinationUrl,
       cta,
+      ctaSource: normalizedText(item.ctaSource),
       requestedStatus,
     },
+    target: item.target ?? null,
+    media: item.media ?? null,
+    url: item.url ?? null,
+    expectedMetaObjectShape: item.expectedMetaObjectShape ?? null,
+    validation: validationSummary(validationIssues),
     safety: {
       localAdStatus: "paused",
       metaAdStatus: PAUSED_META_STATUS,
@@ -423,18 +511,27 @@ export function createLaunchpadRunDraft(input: LaunchpadRunDraftInput): Launchpa
         payloadHash,
       });
 
+    const validationIssues = item.validationIssues ?? [];
+    const status = validationIssues.length > 0 ? "failed" : "validated";
+
     return {
       position,
+      status,
       creativeId: payload.creative.id,
       adName: payload.launch.adName,
       cta: payload.launch.cta,
       requestedStatus: payload.launch.requestedStatus,
+      validationIssues,
       payload,
       payloadHash,
       idempotencyKey,
       dedupeKey,
     };
   });
+
+  const validationIssues = input.validationIssues ?? items.flatMap((item) => item.validationIssues);
+  const runStatus = validationIssues.length > 0 ? "failed" : "validated";
+  const runValidation = validationSummary(validationIssues);
 
   const manifest: LaunchpadManifest = {
     version: launchpadManifestVersion,
@@ -445,6 +542,9 @@ export function createLaunchpadRunDraft(input: LaunchpadRunDraftInput): Launchpa
     actor,
     destination,
     audit,
+    destinationContext: input.destinationContext ?? null,
+    plannerManifest: input.plannerManifest ?? null,
+    validation: runValidation,
     safety: {
       dryRunOnly: true,
       activePublishingPathAvailable: false,
@@ -455,7 +555,15 @@ export function createLaunchpadRunDraft(input: LaunchpadRunDraftInput): Launchpa
     },
     items: items.map((item) => ({
       position: item.position,
+      status: item.status,
       creativeId: item.creativeId,
+      creative: item.payload.creative,
+      launch: item.payload.launch,
+      target: item.payload.target,
+      media: item.payload.media,
+      url: item.payload.url,
+      expectedMetaObjectShape: item.payload.expectedMetaObjectShape,
+      validation: item.payload.validation,
       adName: item.adName,
       cta: item.cta,
       requestedStatus: item.requestedStatus,
@@ -477,7 +585,8 @@ export function createLaunchpadRunDraft(input: LaunchpadRunDraftInput): Launchpa
     });
 
   return {
-    status: "validated",
+    status: runStatus,
+    validationIssues,
     manifest,
     manifestHash,
     idempotencyKey,

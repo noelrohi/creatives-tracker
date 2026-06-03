@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   Archive,
   CheckCircle2,
+  FileImage,
   Fingerprint,
   LockKeyhole,
   Plus,
@@ -13,10 +14,12 @@ import {
   Target,
 } from "lucide-react";
 import { toast } from "sonner";
-import { LAUNCHPAD_MAX_ITEMS } from "@/lib/launchpad-constants";
+import { LAUNCHPAD_MAX_ITEMS, metaCtaValues } from "@/lib/launchpad-constants";
 import { useTRPC } from "@/lib/trpc/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -25,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Table,
   TableBody,
@@ -53,13 +57,32 @@ function readinessLabel(reason: string) {
   }
 }
 
+function formatJson(value: unknown) {
+  return JSON.stringify(value, null, 2);
+}
+
 export function LaunchpadPageClient() {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [selectedAdSetId, setSelectedAdSetId] = useState("");
+  const [selectedCreativeId, setSelectedCreativeId] = useState("");
+  const [primaryText, setPrimaryText] = useState("");
+  const [headline, setHeadline] = useState("");
+  const [defaultDestinationUrl, setDefaultDestinationUrl] = useState("");
+  const [destinationUrlOverride, setDestinationUrlOverride] = useState("");
+  const [adNameOverride, setAdNameOverride] = useState("");
+  const [cta, setCta] = useState("SHOP_NOW");
+  const [selectedRunId, setSelectedRunId] = useState("");
 
   const runs = useQuery(trpc.launchpad.list.queryOptions({ limit: 50 }));
+  const staticCreatives = useQuery(
+    trpc.adCreative.list.queryOptions({ format: "static" }),
+  );
+  const selectedRun = useQuery({
+    ...trpc.launchpad.getById.queryOptions({ id: selectedRunId || "__no_run__" }),
+    enabled: Boolean(selectedRunId),
+  });
   const destinationAccounts = useQuery(
     trpc.launchpad.destinationAccounts.queryOptions(),
   );
@@ -75,6 +98,9 @@ export function LaunchpadPageClient() {
   const selectedAdSet = eligibleAdSets.data?.find(
     (adSet) => adSet.id === selectedAdSetId,
   );
+  const selectedCreative = staticCreatives.data?.find(
+    (creative) => creative.id === selectedCreativeId,
+  );
   const destinationContext = useQuery({
     ...trpc.launchpad.destinationContext.queryOptions({
       accountId: selectedAccountId || "__no_account_selected__",
@@ -85,9 +111,10 @@ export function LaunchpadPageClient() {
 
   const createRun = useMutation(
     trpc.launchpad.createValidationRun.mutationOptions({
-      onSuccess: () => {
+      onSuccess: (run) => {
         queryClient.invalidateQueries({ queryKey: trpc.launchpad.list.queryKey() });
-        toast.success("Launchpad validation run recorded");
+        if (run?.id) setSelectedRunId(run.id);
+        toast.success("Launchpad dry-run manifest recorded");
       },
       onError: (error) => toast.error(error.message),
     }),
@@ -98,22 +125,35 @@ export function LaunchpadPageClient() {
     setSelectedAdSetId("");
   }
 
-  function createDemoRun() {
+  function createDryRun() {
     if (!selectedAccountId || !selectedAdSetId) {
       toast.error("Select an eligible Meta destination first.");
       return;
     }
 
+    if (!selectedCreativeId) {
+      toast.error("Choose one static creative for the dry run.");
+      return;
+    }
+
+    if (!defaultDestinationUrl.trim() && !destinationUrlOverride.trim()) {
+      toast.error("Provide a batch URL or a single-item URL override.");
+      return;
+    }
+
     createRun.mutate({
-      idempotencyKey: `demo_${crypto.randomUUID()}`,
+      idempotencyKey: `dry_run_${crypto.randomUUID()}`,
       actor: { accountId: selectedAccountId },
       destination: { adSetId: selectedAdSetId },
+      defaultDestinationUrl: defaultDestinationUrl.trim() || undefined,
       items: [
         {
-          adName: "Launchpad ledger demo / paused static ad",
-          destinationUrl:
-            "https://example.com/products?utm_source=meta&utm_medium=paid_social",
-          cta: "SHOP_NOW",
+          creativeId: selectedCreativeId,
+          adName: adNameOverride.trim() || undefined,
+          primaryText: primaryText.trim() || undefined,
+          headline: headline.trim() || undefined,
+          destinationUrl: destinationUrlOverride.trim() || undefined,
+          cta,
           requestedStatus: "PAUSED",
         },
       ],
@@ -121,6 +161,11 @@ export function LaunchpadPageClient() {
   }
 
   const destinationReady = Boolean(selectedAccountId && selectedAdSetId);
+  const dryRunReady = Boolean(
+    destinationReady &&
+      selectedCreativeId &&
+      (defaultDestinationUrl.trim() || destinationUrlOverride.trim()),
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -139,20 +184,21 @@ export function LaunchpadPageClient() {
                 Creative Launchpad
               </h1>
               <p className="mt-1 text-sm text-muted-foreground">
-                Select one eligible synced Meta destination before recording a
-                Launchpad validation run. Destination context is read-only: no
-                budget, targeting, pixel, placement, or optimization controls.
+                Select one eligible synced Meta destination, one existing static
+                creative, and launch copy to freeze a side-effect-free dry-run
+                manifest. Destination context is read-only: no budget, targeting,
+                pixel, placement, or optimization controls.
               </p>
             </div>
           </div>
           <Button
             size="sm"
-            onClick={createDemoRun}
-            disabled={createRun.isPending || !destinationReady}
+            onClick={createDryRun}
+            disabled={createRun.isPending || !dryRunReady}
             className="gap-1.5"
           >
             <Plus className="size-3.5" />
-            {createRun.isPending ? "Recording…" : "Create demo run"}
+            {createRun.isPending ? "Recording…" : "Generate dry run"}
           </Button>
         </div>
       </div>
@@ -323,6 +369,155 @@ export function LaunchpadPageClient() {
         </div>
       </div>
 
+      <div className="rounded-xl border bg-card">
+        <div className="border-b px-4 py-3">
+          <div className="flex items-center gap-2">
+            <FileImage className="size-4 text-primary" />
+            <h2 className="text-sm font-semibold">Single static creative dry run</h2>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            The server reloads creative metadata before planning. Only the
+            creative ID, launch copy, CTA, URL, and optional overrides are sent
+            from this form.
+          </p>
+        </div>
+        <div className="grid gap-4 p-4 lg:grid-cols-[1fr_1fr]">
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+                Static creative
+              </Label>
+              <Select
+                value={selectedCreativeId}
+                onValueChange={setSelectedCreativeId}
+                disabled={staticCreatives.isLoading}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose one static creative…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {staticCreatives.data?.map((creative) => (
+                    <SelectItem key={creative.id} value={creative.id}>
+                      <span>{creative.name}</span>
+                      {creative.assetUrl ? (
+                        <span className="ml-2 text-xs text-muted-foreground">
+                          asset ready
+                        </span>
+                      ) : (
+                        <span className="ml-2 text-xs text-amber-600">
+                          missing asset
+                        </span>
+                      )}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedCreative ? (
+                <p className="text-xs text-muted-foreground">
+                  {selectedCreative.hook
+                    ? `Headline fallback: ${selectedCreative.hook}`
+                    : `Headline fallback: ${selectedCreative.name}`}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="primaryText" className="text-xs uppercase tracking-wide text-muted-foreground">
+                Primary text / caption
+              </Label>
+              <Textarea
+                id="primaryText"
+                value={primaryText}
+                onChange={(event) => setPrimaryText(event.target.value)}
+                placeholder="Write the launch-specific primary text…"
+                className="min-h-24"
+              />
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="headline" className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Optional headline
+                </Label>
+                <Input
+                  id="headline"
+                  value={headline}
+                  onChange={(event) => setHeadline(event.target.value)}
+                  placeholder="Defaults from hook/name"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="adName" className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Optional ad name override
+                </Label>
+                <Input
+                  id="adName"
+                  value={adNameOverride}
+                  onChange={(event) => setAdNameOverride(event.target.value)}
+                  placeholder="Template-generated if blank"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="defaultUrl" className="text-xs uppercase tracking-wide text-muted-foreground">
+                Batch default URL
+              </Label>
+              <Input
+                id="defaultUrl"
+                value={defaultDestinationUrl}
+                onChange={(event) => setDefaultDestinationUrl(event.target.value)}
+                placeholder="https://example.com/products?utm_source=meta&utm_medium=paid_social"
+              />
+              <p className="text-xs text-muted-foreground">
+                Dry-run validation requires HTTPS plus utm_source and utm_medium.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="overrideUrl" className="text-xs uppercase tracking-wide text-muted-foreground">
+                Single-item URL override
+              </Label>
+              <Input
+                id="overrideUrl"
+                value={destinationUrlOverride}
+                onChange={(event) => setDestinationUrlOverride(event.target.value)}
+                placeholder="Overrides the batch URL for this creative"
+              />
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Meta CTA
+                </Label>
+                <Select value={cta} onValueChange={setCta}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select CTA" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {metaCtaValues.map((value) => (
+                      <SelectItem key={value} value={value}>
+                        {value.replace(/_/g, " ")}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
+                <p className="font-medium text-foreground">Dry-run boundary</p>
+                <p className="mt-1">
+                  Records a run, item, frozen manifest, payload preview, and QA
+                  errors only. No Meta API calls and no local ad rows.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="grid gap-3 md:grid-cols-4">
         <div className="rounded-xl border bg-card p-4">
           <LockKeyhole className="mb-3 size-4 text-primary" />
@@ -356,6 +551,59 @@ export function LaunchpadPageClient() {
 
       <div className="rounded-xl border bg-card">
         <div className="border-b px-4 py-3">
+          <h2 className="text-sm font-semibold">Frozen manifest / payload preview</h2>
+          <p className="text-xs text-muted-foreground">
+            Select a run to inspect the manifest and item payload stored for
+            dry-run promotion. Access tokens are never included.
+          </p>
+        </div>
+        {selectedRun.isLoading ? (
+          <div className="space-y-3 p-4">
+            <Skeleton className="h-5 w-1/3" />
+            <Skeleton className="h-40 w-full" />
+          </div>
+        ) : selectedRun.data ? (
+          <div className="grid gap-4 p-4 lg:grid-cols-[0.8fr_1.2fr]">
+            <div className="space-y-3 text-sm">
+              <div className="flex items-center gap-2">
+                <Badge variant={selectedRun.data.run.status === "failed" ? "destructive" : "outline"} className="capitalize">
+                  {statusLabel(selectedRun.data.run.status)}
+                </Badge>
+                <code className="text-xs text-muted-foreground">
+                  {shortHash(selectedRun.data.run.manifestHash)}
+                </code>
+              </div>
+              <dl className="grid gap-2 text-xs">
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted-foreground">Requested status</dt>
+                  <dd>{selectedRun.data.run.requestedStatus}</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted-foreground">Items</dt>
+                  <dd>{selectedRun.data.items.length}</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted-foreground">Run ID</dt>
+                  <dd className="max-w-48 truncate font-mono">{selectedRun.data.run.id}</dd>
+                </div>
+              </dl>
+            </div>
+            <pre className="max-h-96 overflow-auto rounded-lg border bg-muted/30 p-3 text-[11px] leading-relaxed text-muted-foreground">
+              {formatJson({
+                manifest: selectedRun.data.run.manifest,
+                itemPayloads: selectedRun.data.items.map((item) => item.payload),
+              })}
+            </pre>
+          </div>
+        ) : (
+          <div className="p-4 text-sm text-muted-foreground">
+            Generate a dry run or choose one from the table below.
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-xl border bg-card">
+        <div className="border-b px-4 py-3">
           <h2 className="text-sm font-semibold">Validation runs</h2>
           <p className="text-xs text-muted-foreground">
             Non-publishing records only; live publish is intentionally gated off.
@@ -375,8 +623,8 @@ export function LaunchpadPageClient() {
             <div>
               <p className="text-sm font-medium">No Launchpad runs yet</p>
               <p className="text-xs text-muted-foreground">
-                Select a destination and create a demo run to verify the ledger
-                without calling Meta.
+                Select a destination and creative, then generate a dry run to
+                verify the planner without calling Meta.
               </p>
             </div>
           </div>
@@ -389,6 +637,7 @@ export function LaunchpadPageClient() {
                 <TableHead>Manifest hash</TableHead>
                 <TableHead>Live env at validation</TableHead>
                 <TableHead>Created</TableHead>
+                <TableHead className="text-right">Preview</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -418,6 +667,15 @@ export function LaunchpadPageClient() {
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {new Date(run.createdAt).toLocaleString()}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setSelectedRunId(run.id)}
+                    >
+                      Inspect
+                    </Button>
                   </TableCell>
                 </TableRow>
               ))}
