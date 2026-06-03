@@ -47,6 +47,7 @@ import {
   LogOut,
   Upload,
   Image,
+  Rocket,
   Settings,
   TrendingUp,
   Users,
@@ -72,11 +73,16 @@ const dashboardSubItems = [
 
 const navItems = [
   { label: "Creatives", href: "/creatives", icon: Image },
+  { label: "Launchpad", href: "/launchpad", icon: Rocket },
   { label: "Teams", href: "/teams", icon: Users },
   { label: "Accounts", href: "/accounts", icon: Settings },
 ];
 
-export function AppSidebar() {
+export function AppSidebar({
+  launchpadEnabled = false,
+}: {
+  launchpadEnabled?: boolean;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -116,9 +122,12 @@ export function AppSidebar() {
       ? currentUserRole
       : null,
   );
-  const visibleNavItems = isPrivileged
+  const featureNavItems = launchpadEnabled
     ? navItems
-    : navItems.filter((item) => item.href !== "/accounts");
+    : navItems.filter((item) => item.href !== "/launchpad");
+  const visibleNavItems = isPrivileged
+    ? featureNavItems
+    : featureNavItems.filter((item) => item.href !== "/accounts");
 
   async function handleSignOut() {
     await authClient.signOut();
