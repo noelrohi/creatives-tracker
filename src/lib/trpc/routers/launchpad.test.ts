@@ -345,6 +345,105 @@ describe("ad set account link tenant safety", () => {
   });
 });
 
+describe("ad tenant link safety", () => {
+  it("rejects create links to ad sets outside the active organization", async () => {
+    dbMocks.selectQueue = [[]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.ad.create({ adSetId: "foreign-ad-set" }),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: expect.stringContaining("Ad set"),
+    });
+    expect(dbMocks.insertValues).toEqual([]);
+  });
+
+  it("rejects create links to creatives outside the active organization", async () => {
+    dbMocks.selectQueue = [[]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.ad.create({ adCreativeId: "foreign-creative" }),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: expect.stringContaining("Creative"),
+    });
+    expect(dbMocks.insertValues).toEqual([]);
+  });
+
+  it("rejects update links to ad sets outside the active organization", async () => {
+    dbMocks.selectQueue = [[]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.ad.update({
+        id: "ad-1",
+        adSetId: "foreign-ad-set",
+      }),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: expect.stringContaining("Ad set"),
+    });
+    expect(dbMocks.updateValues).toEqual([]);
+  });
+
+  it("rejects update links to creatives outside the active organization", async () => {
+    dbMocks.selectQueue = [[]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.ad.update({
+        id: "ad-1",
+        adCreativeId: "foreign-creative",
+      }),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: expect.stringContaining("Creative"),
+    });
+    expect(dbMocks.updateValues).toEqual([]);
+  });
+
+  it("rejects duplicate when the source ad carries an unsafe ad set link", async () => {
+    dbMocks.selectQueue = [
+      [
+        {
+          id: "ad-1",
+          name: "Corrupted link ad",
+          adSetId: "foreign-ad-set",
+          adCreativeId: null,
+          status: "active",
+          notes: null,
+        },
+      ],
+      [],
+    ];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(adminCaller.ad.duplicate({ id: "ad-1" })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: expect.stringContaining("Ad set"),
+    });
+    expect(dbMocks.insertValues).toEqual([]);
+  });
+
+  it("rejects bulk import into ad sets outside the active organization", async () => {
+    dbMocks.selectQueue = [[]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.ad.bulkImport({
+        adSetId: "foreign-ad-set",
+        rows: [{ name: "Imported ad" }],
+      }),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: expect.stringContaining("Ad set"),
+    });
+    expect(dbMocks.insertValues).toEqual([]);
+  });
+});
+
 describe("launchpad destination selection", () => {
   it("lists destination accounts without token disclosure", async () => {
     dbMocks.selectQueue = [[eligibleAccount({ metaAccessToken: "secret" })]];

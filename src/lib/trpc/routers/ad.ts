@@ -1,3 +1,4 @@
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { eq, desc, sql, and, inArray } from "drizzle-orm";
 import { router, orgProcedure, orgWriteProcedure } from "../init";
@@ -56,17 +57,74 @@ async function markAdsPausedWithRetry(adIds: string[]) {
   throw lastError;
 }
 
+async function assertAdSetBelongsToOrg(adSetId: string, organizationId: string) {
+  const [adSet] = await db
+    .select({ id: adSets.id })
+    .from(adSets)
+    .where(
+      and(
+        eq(adSets.id, adSetId),
+        eq(adSets.organizationId, organizationId),
+      ),
+    )
+    .limit(1);
+
+  if (!adSet) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Ad set does not exist in this organization",
+    });
+  }
+}
+
+async function assertCreativeBelongsToOrg(
+  adCreativeId: string,
+  organizationId: string,
+) {
+  const [creative] = await db
+    .select({ id: adCreatives.id })
+    .from(adCreatives)
+    .where(
+      and(
+        eq(adCreatives.id, adCreativeId),
+        eq(adCreatives.organizationId, organizationId),
+      ),
+    )
+    .limit(1);
+
+  if (!creative) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Creative does not exist in this organization",
+    });
+  }
+}
+
+async function assertWritableAdReferencesBelongToOrg(input: {
+  adSetId?: string | null;
+  adCreativeId?: string | null;
+  organizationId: string;
+}) {
+  if (input.adSetId) {
+    await assertAdSetBelongsToOrg(input.adSetId, input.organizationId);
+  }
+
+  if (input.adCreativeId) {
+    await assertCreativeBelongsToOrg(input.adCreativeId, input.organizationId);
+  }
+}
+
 export const adRouter = router({
   list: orgProcedure.meta(openApiQueryMeta("ad", "list")).query(async ({ ctx }) => {
     return db
       .select({
         id: ads.id,
         name: ads.name,
-        adSetId: ads.adSetId,
+        adSetId: adSets.id,
         adSetName: adSets.name,
-        campaignId: adSets.campaignId,
+        campaignId: campaigns.id,
         campaignName: campaigns.name,
-        adCreativeId: ads.adCreativeId,
+        adCreativeId: adCreatives.id,
         adCreativeName: adCreatives.name,
         destinationUrl: ads.destinationUrl,
         status: effectiveAdStatusSql(ads.status, adSets.status),
@@ -75,9 +133,27 @@ export const adRouter = router({
         updatedAt: ads.updatedAt,
       })
       .from(ads)
-      .leftJoin(adSets, eq(ads.adSetId, adSets.id))
-      .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
-      .leftJoin(adCreatives, eq(ads.adCreativeId, adCreatives.id))
+      .leftJoin(
+        adSets,
+        and(
+          eq(ads.adSetId, adSets.id),
+          eq(adSets.organizationId, ctx.organizationId),
+        ),
+      )
+      .leftJoin(
+        campaigns,
+        and(
+          eq(adSets.campaignId, campaigns.id),
+          eq(campaigns.organizationId, ctx.organizationId),
+        ),
+      )
+      .leftJoin(
+        adCreatives,
+        and(
+          eq(ads.adCreativeId, adCreatives.id),
+          eq(adCreatives.organizationId, ctx.organizationId),
+        ),
+      )
       .where(eq(ads.organizationId, ctx.organizationId))
       .orderBy(desc(ads.createdAt));
   }),
@@ -86,11 +162,13 @@ export const adRouter = router({
     .meta(openApiQueryMeta("ad", "listByAdSet"))
     .input(z.object({ adSetId: z.string() }))
     .query(async ({ input, ctx }) => {
+      await assertAdSetBelongsToOrg(input.adSetId, ctx.organizationId);
+
       return db
         .select({
           id: ads.id,
           name: ads.name,
-          adCreativeId: ads.adCreativeId,
+          adCreativeId: adCreatives.id,
           adCreativeName: adCreatives.name,
           destinationUrl: ads.destinationUrl,
           status: effectiveAdStatusSql(ads.status, adSets.status),
@@ -98,9 +176,21 @@ export const adRouter = router({
           createdAt: ads.createdAt,
         })
         .from(ads)
-        .leftJoin(adCreatives, eq(ads.adCreativeId, adCreatives.id))
-        .leftJoin(adSets, eq(ads.adSetId, adSets.id))
-        .where(and(eq(ads.adSetId, input.adSetId), eq(ads.organizationId, ctx.organizationId)))
+        .leftJoin(
+          adCreatives,
+          and(
+            eq(ads.adCreativeId, adCreatives.id),
+            eq(adCreatives.organizationId, ctx.organizationId),
+          ),
+        )
+        .leftJoin(
+          adSets,
+          and(
+            eq(ads.adSetId, adSets.id),
+            eq(adSets.organizationId, ctx.organizationId),
+          ),
+        )
+        .where(and(eq(adSets.id, input.adSetId), eq(ads.organizationId, ctx.organizationId)))
         .orderBy(desc(ads.createdAt));
     }),
 
@@ -112,6 +202,8 @@ export const adRouter = router({
       to: z.string().optional(),
     }))
     .query(async ({ input, ctx }) => {
+      await assertCreativeBelongsToOrg(input.adCreativeId, ctx.organizationId);
+
       const basePl = basePerformanceLogFilter("performance_log");
       const lifetimeBasePl = basePerformanceLogFilter("pl_lifetime");
       const dateFilter = and(
@@ -126,10 +218,12 @@ export const adRouter = router({
       const portfolioResult = await db.execute(sql`
         SELECT (coalesce(sum(pl_portfolio.spend), 0) / nullif(sum(pl_portfolio.conversions), 0))::text AS portfolio_cpa
         FROM performance_log pl_portfolio
-        JOIN ad ad_portfolio ON ad_portfolio.id = pl_portfolio.ad_id
-        WHERE ${portfolioBasePl}
+        JOIN ad ad_portfolio
+          ON ad_portfolio.id = pl_portfolio.ad_id
+         AND ad_portfolio.organization_id = ${ctx.organizationId}
+        WHERE pl_portfolio.organization_id = ${ctx.organizationId}
+          AND ${portfolioBasePl}
           AND ${portfolioDateFilter}
-          AND ad_portfolio.organization_id = ${ctx.organizationId}
       `);
       const portfolio = portfolioResult.rows[0] as { portfolio_cpa: string | null } | undefined;
       const portfolioCpa = portfolio?.portfolio_cpa ? parseFloat(portfolio.portfolio_cpa) : null;
@@ -137,7 +231,9 @@ export const adRouter = router({
       const runningDaysSql = sql<number>`coalesce((
         SELECT max(pl_lifetime.date_end)::date - min(pl_lifetime.date_start)::date
         FROM performance_log pl_lifetime
-        WHERE pl_lifetime.ad_id = ${ads.id} AND ${lifetimeBasePl}
+        WHERE pl_lifetime.ad_id = ${ads.id}
+          AND pl_lifetime.organization_id = ${ctx.organizationId}
+          AND ${lifetimeBasePl}
       ), 0)`;
       const spendSql = sql`coalesce(sum(${performanceLogs.spend}), 0)`;
       const conversionsSql = sql`coalesce(sum(${performanceLogs.conversions}), 0)`;
@@ -149,7 +245,7 @@ export const adRouter = router({
           metaId: ads.metaId,
           name: ads.name,
           caption: ads.caption,
-          adSetId: ads.adSetId,
+          adSetId: adSets.id,
           adSetName: adSets.name,
           campaignName: campaigns.name,
           destinationUrl: ads.destinationUrl,
@@ -177,11 +273,30 @@ export const adRouter = router({
           maxDate: sql<string | null>`max(${performanceLogs.dateEnd})`.as("max_date"),
         })
         .from(ads)
-        .leftJoin(adSets, eq(ads.adSetId, adSets.id))
-        .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
-        .leftJoin(performanceLogs, and(eq(performanceLogs.adId, ads.id), dateFilter))
+        .leftJoin(
+          adSets,
+          and(
+            eq(ads.adSetId, adSets.id),
+            eq(adSets.organizationId, ctx.organizationId),
+          ),
+        )
+        .leftJoin(
+          campaigns,
+          and(
+            eq(adSets.campaignId, campaigns.id),
+            eq(campaigns.organizationId, ctx.organizationId),
+          ),
+        )
+        .leftJoin(
+          performanceLogs,
+          and(
+            eq(performanceLogs.adId, ads.id),
+            eq(performanceLogs.organizationId, ctx.organizationId),
+            dateFilter,
+          ),
+        )
         .where(and(eq(ads.adCreativeId, input.adCreativeId), eq(ads.organizationId, ctx.organizationId)))
-        .groupBy(ads.id, ads.metaId, ads.name, ads.caption, ads.adSetId, adSets.name, adSets.status, campaigns.name, ads.destinationUrl, ads.status, ads.notes, ads.createdAt)
+        .groupBy(ads.id, ads.metaId, ads.name, ads.caption, adSets.id, adSets.name, adSets.status, campaigns.name, ads.destinationUrl, ads.status, ads.notes, ads.createdAt)
         .orderBy(desc(ads.createdAt));
     }),
 
@@ -193,11 +308,11 @@ export const adRouter = router({
         .select({
           id: ads.id,
           name: ads.name,
-          adSetId: ads.adSetId,
+          adSetId: adSets.id,
           adSetName: adSets.name,
-          campaignId: adSets.campaignId,
+          campaignId: campaigns.id,
           campaignName: campaigns.name,
-          adCreativeId: ads.adCreativeId,
+          adCreativeId: adCreatives.id,
           adCreativeName: adCreatives.name,
           destinationUrl: ads.destinationUrl,
           status: effectiveAdStatusSql(ads.status, adSets.status),
@@ -206,9 +321,27 @@ export const adRouter = router({
           updatedAt: ads.updatedAt,
         })
         .from(ads)
-        .leftJoin(adSets, eq(ads.adSetId, adSets.id))
-        .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
-        .leftJoin(adCreatives, eq(ads.adCreativeId, adCreatives.id))
+        .leftJoin(
+          adSets,
+          and(
+            eq(ads.adSetId, adSets.id),
+            eq(adSets.organizationId, ctx.organizationId),
+          ),
+        )
+        .leftJoin(
+          campaigns,
+          and(
+            eq(adSets.campaignId, campaigns.id),
+            eq(campaigns.organizationId, ctx.organizationId),
+          ),
+        )
+        .leftJoin(
+          adCreatives,
+          and(
+            eq(ads.adCreativeId, adCreatives.id),
+            eq(adCreatives.organizationId, ctx.organizationId),
+          ),
+        )
         .where(and(eq(ads.id, input.id), eq(ads.organizationId, ctx.organizationId)));
       if (!ad) throw new Error("Ad not found");
       return ad;
@@ -225,6 +358,12 @@ export const adRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      await assertWritableAdReferencesBelongToOrg({
+        adSetId: input.adSetId,
+        adCreativeId: input.adCreativeId,
+        organizationId: ctx.organizationId,
+      });
+
       const [ad] = await db
         .insert(ads)
         .values({
@@ -252,12 +391,24 @@ export const adRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      await assertWritableAdReferencesBelongToOrg({
+        adSetId: input.adSetId,
+        adCreativeId: input.adCreativeId,
+        organizationId: ctx.organizationId,
+      });
+
       const { id, ...data } = input;
       const [ad] = await db
         .update(ads)
         .set(data)
         .where(and(eq(ads.id, id), eq(ads.organizationId, ctx.organizationId)))
         .returning();
+      if (!ad) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Ad does not exist in this organization",
+        });
+      }
       return ad;
     }),
 
@@ -274,7 +425,13 @@ export const adRouter = router({
           metaAccessToken: adAccounts.metaAccessToken,
         })
         .from(ads)
-        .leftJoin(adAccounts, eq(ads.accountId, adAccounts.id))
+        .leftJoin(
+          adAccounts,
+          and(
+            eq(ads.accountId, adAccounts.id),
+            eq(adAccounts.organizationId, ctx.organizationId),
+          ),
+        )
         .where(and(eq(ads.organizationId, ctx.organizationId), inArray(ads.id, uniqueAdIds)));
 
       const foundIds = new Set(rows.map((row) => row.id));
@@ -369,6 +526,12 @@ export const adRouter = router({
         .from(ads)
         .where(and(eq(ads.id, input.id), eq(ads.organizationId, ctx.organizationId)));
       if (!source) throw new Error("Ad not found");
+      await assertWritableAdReferencesBelongToOrg({
+        adSetId: source.adSetId,
+        adCreativeId: source.adCreativeId,
+        organizationId: ctx.organizationId,
+      });
+
       const [duplicate] = await db
         .insert(ads)
         .values({
@@ -412,6 +575,7 @@ export const adRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       if (input.rows.length === 0) return [];
+      await assertAdSetBelongsToOrg(input.adSetId, ctx.organizationId);
 
       const insertedAds = await db
         .insert(ads)
