@@ -100,6 +100,22 @@ function publicAdSet(row: AdSetContextRow) {
   };
 }
 
+export type LaunchpadDestinationAccount = ReturnType<typeof publicAccount>;
+export type LaunchpadDestinationAdSet = ReturnType<typeof publicAdSet>;
+
+export type LaunchpadDestinationInspectionIssue = {
+  code: LaunchpadDestinationErrorCode;
+  message: string;
+  field?: "accountId" | "adSetId";
+  details?: Record<string, unknown>;
+};
+
+export type LaunchpadDestinationInspection = {
+  account: LaunchpadDestinationAccount;
+  adSet: LaunchpadDestinationAdSet;
+  issues: LaunchpadDestinationInspectionIssue[];
+};
+
 export async function listLaunchpadDestinationAccounts(
   client: LaunchpadDestinationReader,
   organizationId: string,
@@ -246,6 +262,97 @@ export async function listEligibleLaunchpadAdSets(
   return rows
     .filter((row) => row.accountId === accountId && row.metaId)
     .map(publicAdSet);
+}
+
+export async function inspectLaunchpadDestinationForDryRun(
+  client: LaunchpadDestinationReader,
+  organizationId: string,
+  input: { accountId?: string | null; adSetId?: string | null },
+): Promise<LaunchpadDestinationInspection> {
+  const accountId = normalizedText(input.accountId);
+  if (!accountId) {
+    throw new LaunchpadDestinationError(
+      "ACCOUNT_ID_REQUIRED",
+      "A Launchpad destination requires a selected Meta ad account",
+    );
+  }
+
+  const adSetId = normalizedText(input.adSetId);
+  if (!adSetId) {
+    throw new LaunchpadDestinationError(
+      "AD_SET_ID_REQUIRED",
+      "A Launchpad destination requires a selected Meta ad set",
+    );
+  }
+
+  const account = await getAccount(client, organizationId, accountId);
+  if (!account) {
+    throw new LaunchpadDestinationError(
+      "AD_ACCOUNT_NOT_FOUND",
+      "Ad account does not exist in this organization",
+      { accountId },
+    );
+  }
+
+  const adSet = await getAdSetContext(client, organizationId, adSetId);
+  if (!adSet) {
+    throw new LaunchpadDestinationError(
+      "AD_SET_NOT_FOUND",
+      "Ad set does not exist in this organization",
+      { adSetId },
+    );
+  }
+
+  const issues: LaunchpadDestinationInspectionIssue[] = [];
+
+  if (!account.metaAccessToken) {
+    issues.push({
+      code: "ACCOUNT_ACCESS_TOKEN_REQUIRED",
+      message: "The selected Meta ad account needs a stored access token before publishing",
+      field: "accountId",
+      details: { accountId },
+    });
+  }
+
+  if (!account.defaultFacebookPageId) {
+    issues.push({
+      code: "FACEBOOK_PAGE_ID_REQUIRED",
+      message: "The selected Meta ad account needs a default Facebook Page ID before publishing",
+      field: "accountId",
+      details: { accountId },
+    });
+  }
+
+  if (!adSet.accountId) {
+    issues.push({
+      code: "AD_SET_ACCOUNT_LINK_REQUIRED",
+      message: "The selected Meta ad set is not linked to a Meta ad account",
+      field: "adSetId",
+      details: { adSetId },
+    });
+  } else if (adSet.accountId !== account.id) {
+    issues.push({
+      code: "ACCOUNT_AD_SET_MISMATCH",
+      message: "The selected Meta ad set does not belong to the selected Meta ad account",
+      field: "adSetId",
+      details: { accountId: account.id, adSetId, adSetAccountId: adSet.accountId },
+    });
+  }
+
+  if (!adSet.metaId) {
+    issues.push({
+      code: "AD_SET_META_ID_REQUIRED",
+      message: "The selected ad set needs a Meta ad set ID before publishing",
+      field: "adSetId",
+      details: { adSetId },
+    });
+  }
+
+  return {
+    account: publicAccount(account),
+    adSet: publicAdSet(adSet),
+    issues,
+  };
 }
 
 export async function assertEligibleLaunchpadDestination(

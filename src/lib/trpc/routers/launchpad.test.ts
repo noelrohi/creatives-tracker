@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLaunchpadRunDraft } from "@/lib/launchpad-ledger";
+import { ads } from "@/schema/ad";
 import {
   createApiKeyCaller,
   createMockCaller,
@@ -10,6 +11,7 @@ const dbMocks = vi.hoisted(() => ({
   insertReturningQueue: [] as unknown[][],
   updateReturningQueue: [] as unknown[][],
   insertValues: [] as unknown[],
+  insertTables: [] as unknown[],
   updateValues: [] as unknown[],
 }));
 
@@ -65,7 +67,10 @@ vi.mock("@/db", () => {
 
   const tx = {
     select: vi.fn(() => createSelectBuilder(nextSelectRows())),
-    insert: vi.fn(() => createInsertBuilder()),
+    insert: vi.fn((table: unknown) => {
+      dbMocks.insertTables.push(table);
+      return createInsertBuilder();
+    }),
     update: vi.fn(() => createUpdateBuilder()),
   };
 
@@ -86,6 +91,7 @@ function resetDbMocks() {
   dbMocks.insertReturningQueue = [];
   dbMocks.updateReturningQueue = [];
   dbMocks.insertValues = [];
+  dbMocks.insertTables = [];
   dbMocks.updateValues = [];
 }
 
@@ -130,6 +136,19 @@ function eligibleAdSet(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function staticCreative(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "creative-1",
+    name: "Router static hero",
+    format: "static",
+    assetUrl: "https://cdn.example.com/router-static.png",
+    videoUrl: null,
+    hook: "Router hook fallback",
+    cta: null,
+    ...overrides,
+  };
+}
+
 type CreateValidationRunTestInput = {
   idempotencyKey?: string;
   actor?: {
@@ -139,10 +158,16 @@ type CreateValidationRunTestInput = {
     instagramActorId?: string;
   };
   destination?: { adSetId?: string; adSetMetaId?: string };
+  defaultDestinationUrl?: string;
+  namingTemplate?: string;
   items?: Array<{
-    adName: string;
+    creativeId?: string;
+    adName?: string;
+    primaryText?: string;
+    caption?: string;
+    headline?: string;
     destinationUrl?: string;
-    idempotencyKey?: string;
+    cta?: string;
   }>;
 };
 
@@ -153,11 +178,13 @@ function baseCreateValidationInput(
     idempotencyKey: "router-idempotency-key",
     actor: { accountId: "account-1" },
     destination: { adSetId: "ad-set-1" },
+    defaultDestinationUrl:
+      "https://example.com/products?utm_source=meta&utm_medium=paid_social",
     items: [
       {
+        creativeId: "creative-1",
         adName: "Router demo",
-        destinationUrl:
-          "https://example.com/products?utm_source=meta&utm_medium=paid_social",
+        primaryText: "Router dry-run primary text",
       },
     ],
     ...overrides,
@@ -184,7 +211,13 @@ function baseRunInput() {
     },
     items: [
       {
+        creativeId: "creative-1",
+        creativeName: "Router static hero",
+        format: "static",
+        assetUrl: "https://cdn.example.com/router-static.png",
+        hook: "Router hook fallback",
         adName: "Launchpad router demo",
+        caption: "Router dry-run primary text",
         destinationUrl:
           "https://example.com/products?utm_source=meta&utm_medium=paid_social",
       },
@@ -214,6 +247,16 @@ function persistedValidatedRun(overrides: Record<string, unknown> = {}) {
 
 function enqueueEligibleDestination() {
   dbMocks.selectQueue.push([eligibleAccount()], [eligibleAdSet()]);
+}
+
+function enqueueDryRunPlanningRows(
+  options: { creative?: Record<string, unknown>; conflicts?: unknown[] } = {},
+) {
+  enqueueEligibleDestination();
+  dbMocks.selectQueue.push(
+    [options.creative ?? staticCreative()],
+    options.conflicts ?? [],
+  );
 }
 
 beforeEach(() => {
@@ -527,7 +570,7 @@ describe("launchpad router safety", () => {
         idempotencyKey: "member-demo-key",
         actor: { accountId: "account-1" },
         destination: { adSetId: "ad-set-1" },
-        items: [{ adName: "Member demo" }],
+        items: [{ creativeId: "creative-1", adName: "Member demo" }],
       }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
@@ -585,77 +628,80 @@ describe("launchpad router safety", () => {
 });
 
 describe("launchpad router destination eligibility", () => {
-  it("rejects validation runs when the selected account is missing an access token", async () => {
-    dbMocks.selectQueue = [[eligibleAccount({ metaAccessToken: null })]];
+  it("persists account and ad set readiness failures as inspectable dry-run QA errors", async () => {
+    dbMocks.selectQueue = [
+      [
+        eligibleAccount({
+          metaAccessToken: null,
+          defaultFacebookPageId: null,
+        }),
+      ],
+      [eligibleAdSet({ accountId: null, metaId: null })],
+      [staticCreative()],
+      [],
+      [],
+      [],
+      [],
+    ];
+    dbMocks.insertReturningQueue = [[{ id: "run-failed" }], [{ id: "item-failed" }]];
     const adminCaller = createMockCaller({ role: "admin" });
 
     await expect(
       adminCaller.launchpad.createValidationRun(baseCreateValidationInput()),
-    ).rejects.toMatchObject({
-      code: "PRECONDITION_FAILED",
-      message: expect.stringContaining("access token"),
+    ).resolves.toEqual({ id: "run-failed" });
+
+    expect(dbMocks.insertValues[0]).toMatchObject({
+      status: "failed",
+      errorCategory: "terminal",
+      errorCode: "LAUNCHPAD_VALIDATION_FAILED",
     });
-    expect(dbMocks.insertValues).toEqual([]);
+    expect(JSON.stringify(dbMocks.insertValues[0])).toEqual(
+      expect.stringContaining("ACCOUNT_ACCESS_TOKEN_REQUIRED"),
+    );
+    expect(JSON.stringify(dbMocks.insertValues[0])).toEqual(
+      expect.stringContaining("FACEBOOK_PAGE_ID_REQUIRED"),
+    );
+    expect(JSON.stringify(dbMocks.insertValues[0])).toEqual(
+      expect.stringContaining("AD_SET_ACCOUNT_LINK_REQUIRED"),
+    );
+    expect(JSON.stringify(dbMocks.insertValues[0])).toEqual(
+      expect.stringContaining("AD_SET_META_ID_REQUIRED"),
+    );
+    expect(dbMocks.insertValues[1]).toEqual([
+      expect.objectContaining({ status: "failed", errorCategory: "terminal" }),
+    ]);
   });
 
-  it("rejects validation runs when the selected account is missing Page ID metadata", async () => {
-    dbMocks.selectQueue = [[eligibleAccount({ defaultFacebookPageId: null })]];
+  it("persists account/ad set mismatch as a failed destination dry-run", async () => {
+    dbMocks.selectQueue = [
+      [eligibleAccount()],
+      [eligibleAdSet({ accountId: "account-2" })],
+      [staticCreative()],
+      [],
+      [],
+      [],
+      [],
+    ];
+    dbMocks.insertReturningQueue = [[{ id: "run-mismatch" }], [{ id: "item-mismatch" }]];
     const adminCaller = createMockCaller({ role: "admin" });
 
     await expect(
       adminCaller.launchpad.createValidationRun(baseCreateValidationInput()),
-    ).rejects.toMatchObject({
-      code: "PRECONDITION_FAILED",
-      message: expect.stringContaining("Facebook Page ID"),
-    });
-    expect(dbMocks.insertValues).toEqual([]);
-  });
+    ).resolves.toEqual({ id: "run-mismatch" });
 
-  it("rejects validation runs when the selected ad set is missing a Meta ad set ID", async () => {
-    dbMocks.selectQueue = [[eligibleAccount()], [eligibleAdSet({ metaId: null })]];
-    const adminCaller = createMockCaller({ role: "admin" });
-
-    await expect(
-      adminCaller.launchpad.createValidationRun(baseCreateValidationInput()),
-    ).rejects.toMatchObject({
-      code: "PRECONDITION_FAILED",
-      message: expect.stringContaining("Meta ad set ID"),
-    });
-    expect(dbMocks.insertValues).toEqual([]);
-  });
-
-  it("rejects validation runs when the ad set is linked to another account", async () => {
-    dbMocks.selectQueue = [[eligibleAccount()], [eligibleAdSet({ accountId: "account-2" })]];
-    const adminCaller = createMockCaller({ role: "admin" });
-
-    await expect(
-      adminCaller.launchpad.createValidationRun(baseCreateValidationInput()),
-    ).rejects.toMatchObject({
-      code: "PRECONDITION_FAILED",
-      message: expect.stringContaining("does not belong"),
-    });
-    expect(dbMocks.insertValues).toEqual([]);
-  });
-
-  it("rejects ambiguous or unlinked ad sets", async () => {
-    dbMocks.selectQueue = [[eligibleAccount()], [eligibleAdSet({ accountId: null })]];
-    const adminCaller = createMockCaller({ role: "admin" });
-
-    await expect(
-      adminCaller.launchpad.createValidationRun(baseCreateValidationInput()),
-    ).rejects.toMatchObject({
-      code: "PRECONDITION_FAILED",
-      message: expect.stringContaining("not linked"),
-    });
-    expect(dbMocks.insertValues).toEqual([]);
+    expect(JSON.stringify(dbMocks.insertValues[0])).toEqual(
+      expect.stringContaining("ACCOUNT_AD_SET_MISMATCH"),
+    );
+    expect(dbMocks.insertValues[0]).toMatchObject({ status: "failed" });
   });
 });
 
 describe("launchpad router ledger persistence", () => {
   it("persists a validation run and items with audit metadata", async () => {
-    enqueueEligibleDestination();
+    enqueueDryRunPlanningRows();
     dbMocks.selectQueue.push([], [], []);
     dbMocks.insertReturningQueue = [[{ id: "run-new" }], [{ id: "item-new" }]];
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
     const adminCaller = createMockCaller({ role: "admin" });
 
     const result = await adminCaller.launchpad.createValidationRun(
@@ -683,6 +729,14 @@ describe("launchpad router ledger persistence", () => {
     expect(dbMocks.insertValues[0]).toHaveProperty("manifestHash");
     expect(dbMocks.insertValues[0]).toHaveProperty("dedupeKey");
     expect(dbMocks.insertValues[0]).toHaveProperty("idempotencyKey");
+    expect(dbMocks.insertValues[0]).toHaveProperty("manifest");
+    expect(JSON.stringify(dbMocks.insertValues[0])).toEqual(
+      expect.stringContaining("expectedMetaObjectShape"),
+    );
+    expect(JSON.stringify(dbMocks.insertValues[0])).not.toContain("secret-token");
+    expect(dbMocks.insertTables).not.toContain(ads);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
     expect(dbMocks.insertValues[1]).toEqual([
       expect.objectContaining({
         runId: "run-new",
@@ -701,8 +755,51 @@ describe("launchpad router ledger persistence", () => {
     ]);
   });
 
+  it("persists item QA failures for unsupported creatives, invalid CTA, URL issues, and Meta ad conflicts", async () => {
+    enqueueDryRunPlanningRows({
+      creative: staticCreative({ format: "video", assetUrl: null }),
+      conflicts: [{ id: "ad-1", name: "Existing Meta ad", metaId: "1200" }],
+    });
+    dbMocks.selectQueue.push([], [], []);
+    dbMocks.insertReturningQueue = [[{ id: "run-item-failed" }], [{ id: "item-failed" }]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createValidationRun(
+        baseCreateValidationInput({
+          defaultDestinationUrl: "http://example.com/no-utm",
+          items: [
+            {
+              creativeId: "creative-1",
+              adName: "Failed QA demo",
+              cta: "WATCH_NOW",
+            },
+          ],
+        }),
+      ),
+    ).resolves.toEqual({ id: "run-item-failed" });
+
+    const serializedRun = JSON.stringify(dbMocks.insertValues[0]);
+    expect(dbMocks.insertValues[0]).toMatchObject({ status: "failed" });
+    expect(serializedRun).toEqual(
+      expect.stringContaining("UNSUPPORTED_CREATIVE_FORMAT"),
+    );
+    expect(serializedRun).toEqual(expect.stringContaining("CREATIVE_ASSET_REQUIRED"));
+    expect(serializedRun).toEqual(expect.stringContaining("INVALID_META_CTA"));
+    expect(serializedRun).toEqual(expect.stringContaining("INVALID_DESTINATION_URL"));
+    expect(serializedRun).toEqual(
+      expect.stringContaining("MISSING_REQUIRED_UTM_PARAMETERS"),
+    );
+    expect(serializedRun).toEqual(
+      expect.stringContaining("EXISTING_META_AD_ID_CONFLICT"),
+    );
+    expect(dbMocks.insertValues[1]).toEqual([
+      expect.objectContaining({ status: "failed", errorCategory: "terminal" }),
+    ]);
+  });
+
   it("rejects idempotency-key replays with a different manifest", async () => {
-    enqueueEligibleDestination();
+    enqueueDryRunPlanningRows();
     dbMocks.selectQueue.push([
       {
         id: "existing-run",
@@ -715,7 +812,9 @@ describe("launchpad router ledger persistence", () => {
 
     await expect(
       adminCaller.launchpad.createValidationRun(
-        baseCreateValidationInput({ items: [{ adName: "Changed router demo" }] }),
+        baseCreateValidationInput({
+          items: [{ creativeId: "creative-1", adName: "Changed router demo" }],
+        }),
       ),
     ).rejects.toMatchObject({
       code: "PRECONDITION_FAILED",
@@ -732,7 +831,7 @@ describe("launchpad router ledger persistence", () => {
       dedupeKey: draft.dedupeKey,
       manifestHash: "older-order-or-audit-specific-manifest",
     };
-    enqueueEligibleDestination();
+    enqueueDryRunPlanningRows();
     dbMocks.selectQueue.push([], [existing]);
     const adminCaller = createMockCaller({ role: "admin" });
 
@@ -746,7 +845,7 @@ describe("launchpad router ledger persistence", () => {
   });
 
   it("rejects item-level idempotency/dedupe conflicts before persistence", async () => {
-    enqueueEligibleDestination();
+    enqueueDryRunPlanningRows();
     dbMocks.selectQueue.push(
       [],
       [],
@@ -757,7 +856,7 @@ describe("launchpad router ledger persistence", () => {
     await expect(
       adminCaller.launchpad.createValidationRun(
         baseCreateValidationInput({
-          items: [{ adName: "Item collision demo", idempotencyKey: "item-key" }],
+          items: [{ creativeId: "creative-1", adName: "Item collision demo" }],
         }),
       ),
     ).rejects.toMatchObject({
