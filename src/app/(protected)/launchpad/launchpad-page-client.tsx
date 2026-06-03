@@ -119,6 +119,18 @@ export function LaunchpadPageClient() {
       onError: (error) => toast.error(error.message),
     }),
   );
+  const requestPublish = useMutation(
+    trpc.launchpad.requestLivePublish.mutationOptions({
+      onSuccess: (result) => {
+        queryClient.invalidateQueries({ queryKey: trpc.launchpad.list.queryKey() });
+        queryClient.invalidateQueries({
+          queryKey: trpc.launchpad.getById.queryKey({ id: result.runId }),
+        });
+        toast.success("Paused Meta publish queued in Trigger");
+      },
+      onError: (error) => toast.error(error.message),
+    }),
+  );
 
   function handleAccountChange(accountId: string) {
     setSelectedAccountId(accountId);
@@ -160,12 +172,31 @@ export function LaunchpadPageClient() {
     });
   }
 
+  function publishSelectedRun() {
+    if (!selectedRun.data?.run.id) {
+      toast.error("Select a validated Launchpad run first.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Create one real Meta ad as PAUSED through Trigger? This will create a local paused ad row and Meta objects.",
+    );
+    if (!confirmed) return;
+
+    requestPublish.mutate({
+      runId: selectedRun.data.run.id,
+      confirmation: "PUBLISH_PAUSED_META_ADS",
+      requestedStatus: "PAUSED",
+    });
+  }
+
   const destinationReady = Boolean(selectedAccountId && selectedAdSetId);
   const dryRunReady = Boolean(
     destinationReady &&
       selectedCreativeId &&
       (defaultDestinationUrl.trim() || destinationUrlOverride.trim()),
   );
+  const selectedRunPublishable = selectedRun.data?.run.status === "validated";
 
   return (
     <div className="flex flex-col gap-6">
@@ -177,7 +208,7 @@ export function LaunchpadPageClient() {
               <Badge variant="outline" className="gap-1.5">
                 <ShieldCheck className="size-3" /> Dry-run ledger
               </Badge>
-              <Badge variant="secondary">Meta calls disabled</Badge>
+              <Badge variant="secondary">Live publish gated</Badge>
             </div>
             <div>
               <h1 className="text-2xl font-semibold tracking-tight">
@@ -509,8 +540,8 @@ export function LaunchpadPageClient() {
               <div className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
                 <p className="font-medium text-foreground">Dry-run boundary</p>
                 <p className="mt-1">
-                  Records a run, item, frozen manifest, payload preview, and QA
-                  errors only. No Meta API calls and no local ad rows.
+                  Validation records a frozen manifest and QA errors only. A
+                  separate gated action queues one PAUSED Meta publish in Trigger.
                 </p>
               </div>
             </div>
@@ -565,13 +596,21 @@ export function LaunchpadPageClient() {
         ) : selectedRun.data ? (
           <div className="grid gap-4 p-4 lg:grid-cols-[0.8fr_1.2fr]">
             <div className="space-y-3 text-sm">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Badge variant={selectedRun.data.run.status === "failed" ? "destructive" : "outline"} className="capitalize">
                   {statusLabel(selectedRun.data.run.status)}
                 </Badge>
                 <code className="text-xs text-muted-foreground">
                   {shortHash(selectedRun.data.run.manifestHash)}
                 </code>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!selectedRunPublishable || requestPublish.isPending}
+                  onClick={publishSelectedRun}
+                >
+                  {requestPublish.isPending ? "Queueing…" : "Publish paused ad"}
+                </Button>
               </div>
               <dl className="grid gap-2 text-xs">
                 <div className="flex justify-between gap-3">
@@ -606,7 +645,7 @@ export function LaunchpadPageClient() {
         <div className="border-b px-4 py-3">
           <h2 className="text-sm font-semibold">Validation runs</h2>
           <p className="text-xs text-muted-foreground">
-            Non-publishing records only; live publish is intentionally gated off.
+            Validated records can be promoted into one gated PAUSED Meta publish.
           </p>
         </div>
         {runs.isLoading ? (
