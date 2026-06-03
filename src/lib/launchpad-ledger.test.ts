@@ -101,6 +101,10 @@ describe("Launchpad ledger state machine", () => {
 
   it("aggregates item outcomes into run outcomes including partial/manual states", () => {
     expect(computeRunAggregateStatus(["success", "failed"])).toBe("partial_success");
+    expect(computeRunAggregateStatus(["failed", "skipped"])).toBe("failed");
+    expect(computeRunAggregateStatus(["failed", "cancelled"])).toBe("failed");
+    expect(computeRunAggregateStatus(["skipped", "skipped"])).toBe("skipped");
+    expect(() => assertRunStatusTransition("validated", "skipped")).not.toThrow();
     expect(computeRunAggregateStatus(["manual_intervention", "success"])).toBe(
       "manual_intervention",
     );
@@ -170,6 +174,58 @@ describe("Launchpad manifest and idempotency contract", () => {
       firstDraft.items[0]?.idempotencyKey,
     );
     expect(secondDraft.items[0]?.dedupeKey).toBe(firstDraft.items[0]?.dedupeKey);
+  });
+
+  it("dedupes publish intent across audit/env changes and item reordering", () => {
+    const firstDraft = createLaunchpadRunDraft({
+      ...baseDraftInput,
+      requestedBy: {
+        userId: "admin-a",
+        principalType: "session",
+        orgRole: "admin",
+      },
+      env: { ADSOLUTE_META_PUBLISH_ENABLED: "false" },
+      items: [
+        baseDraftInput.items[0],
+        {
+          creativeId: "creative-2",
+          creativeName: "Second static",
+          format: "static",
+          assetUrl: "https://cdn.example.com/creative-2.png",
+          adName: "Launchpad / Static hero / 002",
+          destinationUrl:
+            "https://example.com/products?utm_source=meta&utm_medium=paid_social",
+        },
+      ],
+    });
+    const secondDraft = createLaunchpadRunDraft({
+      ...baseDraftInput,
+      requestedBy: {
+        userId: "admin-b",
+        principalType: "session",
+        orgRole: "owner",
+      },
+      env: { ADSOLUTE_META_PUBLISH_ENABLED: "true" },
+      items: [
+        {
+          creativeId: "creative-2",
+          creativeName: "Second static",
+          format: "static",
+          assetUrl: "https://cdn.example.com/creative-2.png",
+          adName: "Launchpad / Static hero / 002",
+          destinationUrl:
+            "https://example.com/products?utm_source=meta&utm_medium=paid_social",
+        },
+        baseDraftInput.items[0],
+      ],
+    });
+
+    expect(secondDraft.manifestHash).not.toBe(firstDraft.manifestHash);
+    expect(secondDraft.idempotencyKey).not.toBe(firstDraft.idempotencyKey);
+    expect(secondDraft.dedupeKey).toBe(firstDraft.dedupeKey);
+    expect(new Set(secondDraft.items.map((item) => item.dedupeKey))).toEqual(
+      new Set(firstDraft.items.map((item) => item.dedupeKey)),
+    );
   });
 
   it("detects attempts to change locked manifest or payload content", () => {

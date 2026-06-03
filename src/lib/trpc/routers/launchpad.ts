@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, or } from "drizzle-orm";
+import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import {
@@ -11,8 +11,13 @@ import {
 import {
   LaunchpadLedgerError,
   assertLivePublishSafety,
+  assertLockedHashStable,
   createLaunchpadRunDraft,
+  type LaunchpadRunDraft,
 } from "@/lib/launchpad-ledger";
+import { adAccounts } from "@/schema/account";
+import { adCreatives } from "@/schema/ad-creative";
+import { adSets } from "@/schema/ad-set";
 import {
   launchpadPublishItems,
   launchpadPublishRuns,
@@ -71,6 +76,111 @@ function asTrpcError(error: unknown): never {
   }
 
   throw error;
+}
+
+type LaunchpadReader = Pick<typeof db, "select">;
+
+function uniqueStrings(values: Array<string | null | undefined>) {
+  return Array.from(new Set(values.filter((value): value is string => !!value)));
+}
+
+function throwReferenceNotFound(entityName: string, missingIds: string[]): never {
+  throw new TRPCError({
+    code: "NOT_FOUND",
+    message: `${entityName} does not exist in this organization`,
+    cause: { missingIds },
+  });
+}
+
+async function assertLaunchpadReferencesBelongToOrg(
+  client: LaunchpadReader,
+  organizationId: string,
+  draft: LaunchpadRunDraft,
+) {
+  const accountId = draft.manifest.actor.accountId;
+  if (accountId) {
+    const accountRows = await client
+      .select({ id: adAccounts.id })
+      .from(adAccounts)
+      .where(
+        and(
+          eq(adAccounts.id, accountId),
+          eq(adAccounts.organizationId, organizationId),
+        ),
+      );
+    if (accountRows.length !== 1) {
+      throwReferenceNotFound("Ad account", [accountId]);
+    }
+  }
+
+  const adSetId = draft.manifest.destination.adSetId;
+  if (adSetId) {
+    const adSetRows = await client
+      .select({ id: adSets.id })
+      .from(adSets)
+      .where(
+        and(eq(adSets.id, adSetId), eq(adSets.organizationId, organizationId)),
+      );
+    if (adSetRows.length !== 1) {
+      throwReferenceNotFound("Ad set", [adSetId]);
+    }
+  }
+
+  const creativeIds = uniqueStrings(draft.items.map((item) => item.creativeId));
+  if (creativeIds.length > 0) {
+    const creativeRows = await client
+      .select({ id: adCreatives.id })
+      .from(adCreatives)
+      .where(
+        and(
+          inArray(adCreatives.id, creativeIds),
+          eq(adCreatives.organizationId, organizationId),
+        ),
+      );
+    const foundIds = new Set(creativeRows.map((row) => row.id));
+    const missingIds = creativeIds.filter((id) => !foundIds.has(id));
+    if (missingIds.length > 0) {
+      throwReferenceNotFound("Creative", missingIds);
+    }
+  }
+}
+
+async function findExistingRunForReplay(
+  client: LaunchpadReader,
+  organizationId: string,
+  draft: LaunchpadRunDraft,
+) {
+  const [existing] = await client
+    .select()
+    .from(launchpadPublishRuns)
+    .where(
+      and(
+        eq(launchpadPublishRuns.organizationId, organizationId),
+        or(
+          eq(launchpadPublishRuns.idempotencyKey, draft.idempotencyKey),
+          eq(launchpadPublishRuns.dedupeKey, draft.dedupeKey),
+        ),
+      ),
+    )
+    .limit(1);
+
+  return existing;
+}
+
+function assertExistingRunMatchesReplay(
+  existing: typeof launchpadPublishRuns.$inferSelect,
+  draft: LaunchpadRunDraft,
+) {
+  if (
+    existing.idempotencyKey === draft.idempotencyKey &&
+    existing.manifestHash !== draft.manifestHash
+  ) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "Launchpad idempotency key was replayed with a different manifest",
+    });
+  }
 }
 
 export const launchpadRouter = router({
@@ -166,23 +276,11 @@ export const launchpadRouter = router({
       })();
 
       return db.transaction(async (tx) => {
-        const [existing] = await tx
-          .select()
-          .from(launchpadPublishRuns)
-          .where(
-            and(
-              eq(launchpadPublishRuns.organizationId, ctx.organizationId),
-              or(
-                eq(launchpadPublishRuns.idempotencyKey, draft.idempotencyKey),
-                eq(launchpadPublishRuns.dedupeKey, draft.dedupeKey),
-              ),
-            ),
-          )
-          .limit(1);
-
-        if (existing) {
-          return existing;
-        }
+        await assertLaunchpadReferencesBelongToOrg(
+          tx,
+          ctx.organizationId,
+          draft,
+        );
 
         const now = new Date();
         const [run] = await tx
@@ -212,7 +310,26 @@ export const launchpadRouter = router({
             reconciliationStatus: "not_required",
             validatedAt: now,
           })
+          .onConflictDoNothing()
           .returning();
+
+        if (!run) {
+          const existing = await findExistingRunForReplay(
+            tx,
+            ctx.organizationId,
+            draft,
+          );
+
+          if (existing) {
+            assertExistingRunMatchesReplay(existing, draft);
+            return existing;
+          }
+
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "Launchpad run conflicted but could not be reloaded",
+          });
+        }
 
         await tx.insert(launchpadPublishItems).values(
           draft.items.map((item) => ({
@@ -253,14 +370,37 @@ export const launchpadRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      const [run] = await db
+        .select()
+        .from(launchpadPublishRuns)
+        .where(
+          and(
+            eq(launchpadPublishRuns.id, input.runId),
+            eq(launchpadPublishRuns.organizationId, ctx.organizationId),
+          ),
+        );
+
+      if (!run) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Launchpad run not found",
+        });
+      }
+
       try {
+        assertLockedHashStable({
+          label: "manifest",
+          lockedHash: run.manifestHash,
+          nextValue: run.manifest,
+        });
         assertLivePublishSafety({
           principalType: ctx.principalType,
           orgRole: ctx.orgRole,
-          requestedStatus: input.requestedStatus,
-          itemCount: 1,
+          requestedStatus: run.requestedStatus,
+          itemCount: run.itemCount,
           confirmationAccepted: input.confirmation === "PUBLISH_PAUSED_META_ADS",
-          previouslyValidatedManifest: true,
+          previouslyValidatedManifest:
+            run.status === "validated" && !!run.manifestLockedAt && !!run.validatedAt,
           activePublishingPathAvailable: false,
           env: process.env,
         });

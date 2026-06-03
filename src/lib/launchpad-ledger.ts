@@ -161,14 +161,15 @@ export type LivePublishSafetyInput = {
 };
 
 const runStatusTransitions = {
-  validation: ["validated", "failed", "cancelled", "manual_intervention"],
-  validated: ["queued", "failed", "cancelled", "manual_intervention"],
-  queued: ["publishing", "failed", "cancelled", "manual_intervention"],
+  validation: ["validated", "failed", "skipped", "cancelled", "manual_intervention"],
+  validated: ["queued", "failed", "skipped", "cancelled", "manual_intervention"],
+  queued: ["publishing", "failed", "skipped", "cancelled", "manual_intervention"],
   publishing: [
     "success",
     "partial_success",
     "failed",
     "ambiguous",
+    "skipped",
     "cancelled",
     "manual_intervention",
   ],
@@ -392,19 +393,28 @@ export function createLaunchpadRunDraft(input: LaunchpadRunDraftInput): Launchpa
     organizationId: input.organizationId,
     requestedBy: input.requestedBy,
   };
+  const publishDestination = {
+    accountId: actor.accountId,
+    accountMetaId: actor.accountMetaId,
+    facebookPageId: actor.facebookPageId,
+    instagramActorId: actor.instagramActorId,
+    adSetId: destination.adSetId,
+    adSetMetaId: destination.adSetMetaId,
+  };
+  const itemIntentHashes: string[] = [];
 
   const items = input.items.map((item, index): LaunchpadItemDraft => {
     const payload = buildItemPayload(item);
     const payloadHash = hashLaunchpadPayload(payload);
     const position = index + 1;
-    const dedupeKey =
-      normalizedText(item.dedupeKey) ??
-      prefixedHash("lpi_dedupe", {
-        organizationId: input.organizationId,
-        destination,
-        position,
-        payloadHash,
-      });
+    const itemIntentHash = prefixedHash("lpi_intent", {
+      organizationId: input.organizationId,
+      destination: publishDestination,
+      creativeId: payload.creative.id,
+      payloadHash,
+    });
+    itemIntentHashes.push(itemIntentHash);
+    const dedupeKey = normalizedText(item.dedupeKey) ?? itemIntentHash;
     const idempotencyKey =
       normalizedText(item.idempotencyKey) ??
       prefixedHash("lpi", {
@@ -456,7 +466,8 @@ export function createLaunchpadRunDraft(input: LaunchpadRunDraftInput): Launchpa
   const manifestHash = hashLaunchpadPayload(manifest);
   const dedupeKey = prefixedHash("lpr_dedupe", {
     organizationId: input.organizationId,
-    manifestHash,
+    destination: publishDestination,
+    itemIntentHashes: [...itemIntentHashes].sort(),
   });
   const idempotencyKey =
     normalizedText(input.idempotencyKey) ??
@@ -566,11 +577,20 @@ export function computeRunAggregateStatus(
   if (itemStatuses.some((status) => status === "ambiguous")) {
     return "ambiguous";
   }
+  if (itemStatuses.some((status) => status === "publishing")) {
+    return "publishing";
+  }
+  if (itemStatuses.some((status) => status === "queued")) {
+    return "queued";
+  }
   if (itemStatuses.every((status) => status === "success")) {
     return "success";
   }
   if (itemStatuses.some((status) => status === "success")) {
     return "partial_success";
+  }
+  if (itemStatuses.some((status) => status === "failed")) {
+    return "failed";
   }
   if (itemStatuses.every((status) => status === "skipped")) {
     return "skipped";
@@ -578,17 +598,11 @@ export function computeRunAggregateStatus(
   if (itemStatuses.every((status) => status === "cancelled")) {
     return "cancelled";
   }
-  if (itemStatuses.every((status) => status === "failed")) {
-    return "failed";
-  }
-  if (itemStatuses.some((status) => status === "publishing")) {
-    return "publishing";
-  }
-  if (itemStatuses.some((status) => status === "queued")) {
-    return "queued";
-  }
   if (itemStatuses.every((status) => status === "validated")) {
     return "validated";
   }
-  return "validation";
+  if (itemStatuses.every((status) => status === "validation")) {
+    return "validation";
+  }
+  return "cancelled";
 }

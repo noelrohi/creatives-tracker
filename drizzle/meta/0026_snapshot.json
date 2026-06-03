@@ -1,5 +1,5 @@
 {
-  "id": "e34f03fd-2b21-4310-bf12-589447a62e0d",
+  "id": "c2e840c7-6d71-487b-b6fe-45e0e48c77fd",
   "prevId": "16b43e2b-d2e4-416f-8806-3c997c9af074",
   "version": "7",
   "dialect": "postgresql",
@@ -2189,11 +2189,11 @@
           "method": "btree",
           "with": {}
         },
-        "launchpad_item_run_idempotency_uidx": {
-          "name": "launchpad_item_run_idempotency_uidx",
+        "launchpad_item_org_idempotency_uidx": {
+          "name": "launchpad_item_org_idempotency_uidx",
           "columns": [
             {
-              "expression": "run_id",
+              "expression": "organization_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -2210,11 +2210,11 @@
           "method": "btree",
           "with": {}
         },
-        "launchpad_item_run_dedupe_uidx": {
-          "name": "launchpad_item_run_dedupe_uidx",
+        "launchpad_item_org_dedupe_uidx": {
+          "name": "launchpad_item_org_dedupe_uidx",
           "columns": [
             {
-              "expression": "run_id",
+              "expression": "organization_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

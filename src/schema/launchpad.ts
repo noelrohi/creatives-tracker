@@ -213,11 +213,14 @@ export const launchpadPublishItems = pgTable(
     index("launchpad_item_external_meta_ad_idx").on(table.externalMetaAdId),
     index("launchpad_item_reconciliation_idx").on(table.reconciliationStatus),
     uniqueIndex("launchpad_item_run_position_uidx").on(table.runId, table.position),
-    uniqueIndex("launchpad_item_run_idempotency_uidx").on(
-      table.runId,
+    uniqueIndex("launchpad_item_org_idempotency_uidx").on(
+      table.organizationId,
       table.idempotencyKey,
     ),
-    uniqueIndex("launchpad_item_run_dedupe_uidx").on(table.runId, table.dedupeKey),
+    uniqueIndex("launchpad_item_org_dedupe_uidx").on(
+      table.organizationId,
+      table.dedupeKey,
+    ),
   ],
 );
 

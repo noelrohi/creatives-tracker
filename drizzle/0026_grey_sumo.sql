@@ -102,8 +102,8 @@ CREATE INDEX "launchpad_item_local_ad_idx" ON "launchpad_publish_item" USING btr
 CREATE INDEX "launchpad_item_external_meta_ad_idx" ON "launchpad_publish_item" USING btree ("external_meta_ad_id");--> statement-breakpoint
 CREATE INDEX "launchpad_item_reconciliation_idx" ON "launchpad_publish_item" USING btree ("reconciliation_status");--> statement-breakpoint
 CREATE UNIQUE INDEX "launchpad_item_run_position_uidx" ON "launchpad_publish_item" USING btree ("run_id","position");--> statement-breakpoint
-CREATE UNIQUE INDEX "launchpad_item_run_idempotency_uidx" ON "launchpad_publish_item" USING btree ("run_id","idempotency_key");--> statement-breakpoint
-CREATE UNIQUE INDEX "launchpad_item_run_dedupe_uidx" ON "launchpad_publish_item" USING btree ("run_id","dedupe_key");--> statement-breakpoint
+CREATE UNIQUE INDEX "launchpad_item_org_idempotency_uidx" ON "launchpad_publish_item" USING btree ("organization_id","idempotency_key");--> statement-breakpoint
+CREATE UNIQUE INDEX "launchpad_item_org_dedupe_uidx" ON "launchpad_publish_item" USING btree ("organization_id","dedupe_key");--> statement-breakpoint
 CREATE INDEX "launchpad_run_org_idx" ON "launchpad_publish_run" USING btree ("organization_id");--> statement-breakpoint
 CREATE INDEX "launchpad_run_status_idx" ON "launchpad_publish_run" USING btree ("status");--> statement-breakpoint
 CREATE INDEX "launchpad_run_created_at_idx" ON "launchpad_publish_run" USING btree ("created_at");--> statement-breakpoint
