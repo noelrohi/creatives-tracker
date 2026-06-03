@@ -680,17 +680,20 @@ export function computeRunAggregateStatus(
   itemStatuses: LaunchpadItemStatus[],
 ): LaunchpadRunStatus {
   if (itemStatuses.length === 0) return "validation";
+  if (itemStatuses.some((status) => status === "publishing")) {
+    return "publishing";
+  }
+  if (itemStatuses.some((status) => status === "queued")) {
+    const hasStartedItem = itemStatuses.some(
+      (status) => !["validation", "validated", "queued"].includes(status),
+    );
+    return hasStartedItem ? "publishing" : "queued";
+  }
   if (itemStatuses.some((status) => status === "manual_intervention")) {
     return "manual_intervention";
   }
   if (itemStatuses.some((status) => status === "ambiguous")) {
     return "ambiguous";
-  }
-  if (itemStatuses.some((status) => status === "publishing")) {
-    return "publishing";
-  }
-  if (itemStatuses.some((status) => status === "queued")) {
-    return "queued";
   }
   if (itemStatuses.every((status) => status === "success")) {
     return "success";

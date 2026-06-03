@@ -947,7 +947,7 @@ describe("launchpad router ledger persistence", () => {
         defaultCta: "LEARN_MORE",
         namingTemplate: "Batch {{item.positionPadded}} / {{creative.name}}",
         items: [
-          { creativeId: "creative-1" },
+          { creativeId: "creative-1", primaryText: "", cta: "" },
           {
             creativeId: "creative-2",
             adName: "Manual item two",
@@ -1007,6 +1007,23 @@ describe("launchpad router ledger persistence", () => {
       cta: "LEARN_MORE",
     });
     expect(insertedItems[1]?.payload.url).toMatchObject({ source: "item_override" });
+  });
+
+  it("rejects duplicate creatives inside the same batch before persistence", async () => {
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createValidationRun(
+        baseCreateValidationInput({
+          items: [
+            { creativeId: "creative-1" },
+            { creativeId: "creative-1" },
+          ],
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(dbMocks.selectQueue).toEqual([]);
+    expect(dbMocks.insertValues).toEqual([]);
   });
 
   it("enforces the 25-item Launchpad batch cap at the router boundary", async () => {
@@ -1328,6 +1345,34 @@ describe("launchpad live publish enqueue", () => {
     );
   });
 
+  it("sanitizes Trigger enqueue errors before persisting failure details", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    triggerMocks.trigger.mockRejectedValueOnce(
+      new Error("ADSOLUTE_WORKER_SECRET=super-secret failed to enqueue"),
+    );
+    dbMocks.selectQueue = [
+      [persistedValidatedRun()],
+      [persistedValidatedItem()],
+      [eligibleAccount()],
+      [eligibleAdSet()],
+      [{ metaAccessToken: "secret-token" }],
+    ];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.requestLivePublish({
+        runId: "run-1",
+        confirmation: "PUBLISH_PAUSED_META_ADS",
+      }),
+    ).rejects.toMatchObject({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Launchpad publish task could not be enqueued",
+    });
+    const serializedUpdates = JSON.stringify(dbMocks.updateValues);
+    expect(serializedUpdates).not.toContain("super-secret");
+    expect(serializedUpdates).not.toContain("ADSOLUTE_WORKER_SECRET");
+  });
+
   it("rejects validation-failed runs before enqueue", async () => {
     process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
     dbMocks.selectQueue = [[
@@ -1507,6 +1552,65 @@ describe("launchpad worker static publish", () => {
     fetchSpy.mockRestore();
   });
 
+  it("keeps a batch processable when one item becomes ambiguous and later items remain queued", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    const { run, items } = persistedBatchRunAndItems();
+    dbMocks.selectQueue = [
+      [persistedQueuedRun({ ...run, status: "queued", itemCount: 2 })],
+      [persistedQueuedItem({ ...items[0], id: "item-1", status: "queued" })],
+      [eligibleAccount()],
+      [eligibleAdSet()],
+      [{ metaAccessToken: "secret-token" }],
+      [{ status: "ambiguous" }, { status: "queued" }],
+    ];
+    dbMocks.insertReturningQueue = [[{ id: "local-ad-1" }]];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/adimages")) {
+          return jsonResponse({
+            images: {
+              "https://cdn.example.com/router-static.png": {
+                hash: "meta-image-hash-1",
+              },
+            },
+          });
+        }
+        if (url.includes("/adcreatives")) return jsonResponse({ id: "meta-creative-1" });
+        if (url.includes("/ads")) return jsonResponse({ id: "meta-ad-1" });
+        if (url.includes("/meta-ad-1")) {
+          return jsonResponse({
+            id: "meta-ad-1",
+            adset_id: "23800000000000000",
+            creative: { id: "meta-creative-1" },
+            configured_status: "ACTIVE",
+            effective_status: "ACTIVE",
+          });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      },
+    );
+    const workerCaller = createWorkerCaller();
+
+    const result = await workerCaller.launchpad.workerExecuteLivePublish({
+      runId: "run-1",
+      itemId: "item-1",
+    });
+
+    expect(result).toMatchObject({
+      status: "ambiguous",
+      runStatus: "publishing",
+      errorCode: "META_RECONCILIATION_FAILED",
+    });
+    expect(dbMocks.updateValues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: "ambiguous", errorCode: "META_RECONCILIATION_FAILED" }),
+        expect.objectContaining({ status: "publishing", errorCode: "META_RECONCILIATION_FAILED" }),
+      ]),
+    );
+    fetchSpy.mockRestore();
+  });
+
   it("skips an already-successful batch item on replay even when the run is partial", async () => {
     process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
     const { run, items } = persistedBatchRunAndItems();
@@ -1635,6 +1739,88 @@ describe("launchpad worker static publish", () => {
       errorCategory: "retryable",
       errorCode: "META_TIMEOUT",
     });
+    fetchSpy.mockRestore();
+  });
+
+  it("treats uncertain Meta ad creation server failures as ambiguous to prevent duplicate retries", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    enqueueWorkerPublishRows();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/adimages")) {
+          return jsonResponse({
+            images: {
+              "https://cdn.example.com/router-static.png": {
+                hash: "meta-image-hash-1",
+              },
+            },
+          });
+        }
+        if (url.includes("/adcreatives")) return jsonResponse({ id: "meta-creative-1" });
+        if (url.includes("/ads")) {
+          return jsonResponse({ error: { message: "Server error" } }, 500, "Server Error");
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      },
+    );
+    const workerCaller = createWorkerCaller();
+
+    const result = await workerCaller.launchpad.workerExecuteLivePublish({
+      runId: "run-1",
+      itemId: "item-1",
+    });
+
+    expect(result).toMatchObject({
+      status: "ambiguous",
+      runStatus: "ambiguous",
+      errorCategory: "ambiguous",
+      errorCode: "META_AD_CREATE_AMBIGUOUS",
+    });
+    fetchSpy.mockRestore();
+  });
+
+  it("records an ambiguous reconciliation failure when the created Meta ad omits required linkage fields", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    enqueueWorkerPublishRows();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/adimages")) {
+          return jsonResponse({
+            images: {
+              "https://cdn.example.com/router-static.png": {
+                hash: "meta-image-hash-1",
+              },
+            },
+          });
+        }
+        if (url.includes("/adcreatives")) return jsonResponse({ id: "meta-creative-1" });
+        if (url.includes("/ads")) return jsonResponse({ id: "meta-ad-1" });
+        if (url.includes("/meta-ad-1")) {
+          return jsonResponse({
+            id: "meta-ad-1",
+            configured_status: "PAUSED",
+            effective_status: "PAUSED",
+          });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      },
+    );
+    const workerCaller = createWorkerCaller();
+
+    const result = await workerCaller.launchpad.workerExecuteLivePublish({
+      runId: "run-1",
+      itemId: "item-1",
+    });
+
+    expect(result).toMatchObject({
+      status: "ambiguous",
+      errorCategory: "ambiguous",
+      errorCode: "META_RECONCILIATION_FAILED",
+    });
+    expect(JSON.stringify(dbMocks.updateValues)).toContain("ad_set_missing");
+    expect(JSON.stringify(dbMocks.updateValues)).toContain("creative_missing");
     fetchSpy.mockRestore();
   });
 

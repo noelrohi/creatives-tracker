@@ -117,6 +117,24 @@ const createValidationRunInputSchema = z.object({
     )
     .min(1)
     .max(LAUNCHPAD_MAX_ITEMS),
+}).superRefine((input, ctx) => {
+  const firstIndexByCreativeId = new Map<string, number>();
+
+  input.items.forEach((item, index) => {
+    const creativeId = item.creativeId.trim();
+    const firstIndex = firstIndexByCreativeId.get(creativeId);
+    if (firstIndex !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["items", index, "creativeId"],
+        message: "Launchpad batches cannot include the same creative more than once",
+        params: { firstIndex, duplicateIndex: index },
+      });
+      return;
+    }
+
+    firstIndexByCreativeId.set(creativeId, index);
+  });
 });
 
 const launchpadAdminProcedure = orgAdminProcedure.use(async ({ next }) => {
@@ -154,6 +172,11 @@ type LaunchpadReader = Pick<typeof db, "select">;
 
 function uniqueStrings(values: Array<string | null | undefined>) {
   return Array.from(new Set(values.filter((value): value is string => !!value)));
+}
+
+function normalizedInputText(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
 }
 
 function throwReferenceNotFound(entityName: string, missingIds: string[]): never {
@@ -756,11 +779,6 @@ async function markPublishInProgress(
       mode: "publish",
       startedAt: now,
       reconciliationStatus: "pending",
-      errorCategory: null,
-      errorCode: null,
-      errorMessage: null,
-      errorDetails: null,
-      manualInterventionReason: null,
     })
     .where(
       and(
@@ -1063,10 +1081,11 @@ export const launchpadRouter = router({
             launch: {
               defaultDestinationUrl: input.defaultDestinationUrl,
               destinationUrlOverride: itemInput.destinationUrl,
-              primaryText: itemInput.primaryText ?? input.defaultPrimaryText,
-              caption: itemInput.caption ?? input.defaultCaption,
+              primaryText:
+                normalizedInputText(itemInput.primaryText) ?? input.defaultPrimaryText,
+              caption: normalizedInputText(itemInput.caption) ?? input.defaultCaption,
               headline: itemInput.headline,
-              cta: itemInput.cta ?? input.defaultCta,
+              cta: normalizedInputText(itemInput.cta) ?? input.defaultCta,
               adName: itemInput.adName,
               namingTemplate: input.namingTemplate,
             },
@@ -1377,7 +1396,6 @@ export const launchpadRouter = router({
           message: "Launchpad publish task could not be enqueued",
           details: {
             errorName: error instanceof Error ? error.name : undefined,
-            errorMessage: error instanceof Error ? error.message : String(error),
           },
         });
 
@@ -1662,10 +1680,11 @@ export const launchpadRouter = router({
         };
       } catch (error) {
         if (error instanceof LaunchpadMetaPublishError) {
-          if (
-            error.operation === "reconcile_ad" ||
-            (error.operation === "create_ad" && error.code === "META_TIMEOUT")
-          ) {
+          const isUncertainAdCreateFailure =
+            error.operation === "create_ad" &&
+            error.category === "retryable" &&
+            error.code !== "META_RATE_LIMIT";
+          if (error.operation === "reconcile_ad" || isUncertainAdCreateFailure) {
             return persistPublishFailure(db, {
               organizationId,
               runId: run.id,
@@ -1677,7 +1696,7 @@ export const launchpadRouter = router({
                 : "META_AD_CREATE_AMBIGUOUS",
               message: error.operation === "reconcile_ad"
                 ? "Created Meta ad could not be reconciled after publishing"
-                : "Meta ad creation timed out and needs reconciliation before retry",
+                : "Meta ad creation failed after the /ads request was sent and needs reconciliation before retry",
               details: error.details,
               reconciliationStatus: "manual_intervention",
               manualInterventionReason: error.message,

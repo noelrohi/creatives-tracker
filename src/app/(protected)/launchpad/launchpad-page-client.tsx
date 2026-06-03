@@ -68,6 +68,7 @@ type LaunchpadDraftItem = {
   primaryText: string;
   headline: string;
   destinationUrl: string;
+  cta: string;
 };
 
 export function LaunchpadPageClient() {
@@ -90,6 +91,14 @@ export function LaunchpadPageClient() {
   const selectedRun = useQuery({
     ...trpc.launchpad.getById.queryOptions({ id: selectedRunId || "__no_run__" }),
     enabled: Boolean(selectedRunId),
+    refetchInterval: (query) => {
+      const data = query.state.data as
+        | { run?: { status?: string } }
+        | undefined;
+      return ["queued", "publishing"].includes(data?.run?.status ?? "")
+        ? 3000
+        : false;
+    },
   });
   const destinationAccounts = useQuery(
     trpc.launchpad.destinationAccounts.queryOptions(),
@@ -164,6 +173,7 @@ export function LaunchpadPageClient() {
         primaryText: "",
         headline: "",
         destinationUrl: "",
+        cta: "",
       },
     ]);
     setSelectedCreativeId("");
@@ -218,6 +228,7 @@ export function LaunchpadPageClient() {
         primaryText: item.primaryText.trim() || undefined,
         headline: item.headline.trim() || undefined,
         destinationUrl: item.destinationUrl.trim() || undefined,
+        cta: item.cta.trim() || undefined,
         requestedStatus: "PAUSED" as const,
       })),
     });
@@ -666,6 +677,31 @@ export function LaunchpadPageClient() {
                             placeholder="Uses batch copy if blank"
                           />
                         </div>
+                        <div className="space-y-1.5 sm:col-span-2">
+                          <Label className="text-xs text-muted-foreground">
+                            CTA override
+                          </Label>
+                          <Select
+                            value={item.cta || "__batch_default__"}
+                            onValueChange={(value) => updateLaunchItem(
+                              item.creativeId,
+                              "cta",
+                              value === "__batch_default__" ? "" : value,
+                            )}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Use batch CTA" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__batch_default__">Use batch CTA</SelectItem>
+                              {metaCtaValues.map((value) => (
+                                <SelectItem key={value} value={value}>
+                                  {value.replace(/_/g, " ")}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
                       </div>
                     </div>
                   );
@@ -760,6 +796,23 @@ export function LaunchpadPageClient() {
                   <dd className="max-w-48 truncate font-mono">{selectedRun.data.run.id}</dd>
                 </div>
               </dl>
+              <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Publish item outcomes
+                </p>
+                <div className="space-y-1.5">
+                  {selectedRun.data.items.map((item) => (
+                    <div key={item.id} className="flex items-center justify-between gap-3 text-xs">
+                      <span className="truncate">
+                        {item.position}. {item.requestedAdName ?? item.creativeId}
+                      </span>
+                      <Badge variant="outline" className="shrink-0 capitalize">
+                        {statusLabel(item.status)}
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
             <pre className="max-h-96 overflow-auto rounded-lg border bg-muted/30 p-3 text-[11px] leading-relaxed text-muted-foreground">
               {formatJson({
