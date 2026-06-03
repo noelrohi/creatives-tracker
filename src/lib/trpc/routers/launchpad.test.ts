@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLaunchpadRunDraft } from "@/lib/launchpad-ledger";
+import { getOpenApiProcedures } from "@/lib/trpc/openapi";
 import { ads } from "@/schema/ad";
 import {
   createApiKeyCaller,
@@ -85,6 +86,7 @@ vi.mock("@/db", () => {
 });
 
 const previousPublishFlag = process.env.ADSOLUTE_META_PUBLISH_ENABLED;
+const previousLaunchpadFlag = process.env.ADSOLUTE_LAUNCHPAD_ENABLED;
 
 function resetDbMocks() {
   dbMocks.selectQueue = [];
@@ -262,6 +264,7 @@ function enqueueDryRunPlanningRows(
 beforeEach(() => {
   vi.clearAllMocks();
   resetDbMocks();
+  process.env.ADSOLUTE_LAUNCHPAD_ENABLED = "true";
 });
 
 afterEach(() => {
@@ -270,6 +273,12 @@ afterEach(() => {
     delete process.env.ADSOLUTE_META_PUBLISH_ENABLED;
   } else {
     process.env.ADSOLUTE_META_PUBLISH_ENABLED = previousPublishFlag;
+  }
+
+  if (previousLaunchpadFlag === undefined) {
+    delete process.env.ADSOLUTE_LAUNCHPAD_ENABLED;
+  } else {
+    process.env.ADSOLUTE_LAUNCHPAD_ENABLED = previousLaunchpadFlag;
   }
 });
 
@@ -584,6 +593,27 @@ describe("launchpad router safety", () => {
         confirmation: "PUBLISH_PAUSED_META_ADS",
       }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("gates Launchpad tRPC and OpenAPI surfaces behind the feature flag", async () => {
+    expect(
+      getOpenApiProcedures().some(
+        (procedure) => procedure.routerName === "launchpad",
+      ),
+    ).toBe(true);
+
+    process.env.ADSOLUTE_LAUNCHPAD_ENABLED = "false";
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(adminCaller.launchpad.list()).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: expect.stringContaining("Launchpad is not enabled"),
+    });
+    expect(
+      getOpenApiProcedures().some(
+        (procedure) => procedure.routerName === "launchpad",
+      ),
+    ).toBe(false);
   });
 
   it("loads the persisted run before returning an env-disabled live publish rejection", async () => {
