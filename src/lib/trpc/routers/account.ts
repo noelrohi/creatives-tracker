@@ -10,6 +10,8 @@ const publicAdAccountSchema = z.object({
   id: z.string(),
   name: z.string(),
   metaAccountId: z.string(),
+  defaultFacebookPageId: z.string().nullable(),
+  defaultInstagramActorId: z.string().nullable(),
   notes: z.string().nullable(),
   lastImportedAt: z.date().nullable(),
   dataDateEnd: z.string().nullable(),
@@ -24,6 +26,8 @@ function sanitizeAccount(account: typeof adAccounts.$inferSelect) {
     id: account.id,
     name: account.name,
     metaAccountId: account.metaAccountId,
+    defaultFacebookPageId: account.defaultFacebookPageId,
+    defaultInstagramActorId: account.defaultInstagramActorId,
     notes: account.notes,
     lastImportedAt: account.lastImportedAt,
     dataDateEnd: account.dataDateEnd,
@@ -40,10 +44,10 @@ export const adAccountRouter = router({
     .output(z.array(publicAdAccountSchema))
     .query(async ({ ctx }) => {
       const accounts = await db
-      .select()
-      .from(adAccounts)
-      .where(eq(adAccounts.organizationId, ctx.organizationId))
-      .orderBy(desc(adAccounts.createdAt));
+        .select()
+        .from(adAccounts)
+        .where(eq(adAccounts.organizationId, ctx.organizationId))
+        .orderBy(desc(adAccounts.createdAt));
       return accounts.map(sanitizeAccount);
     }),
 
@@ -72,6 +76,8 @@ export const adAccountRouter = router({
         name: z.string().min(1),
         metaAccountId: z.string().min(1),
         metaAccessToken: z.string().optional(),
+        defaultFacebookPageId: z.string().trim().min(1).optional(),
+        defaultInstagramActorId: z.string().trim().min(1).optional(),
         notes: z.string().optional(),
       }),
     )
@@ -115,6 +121,8 @@ export const adAccountRouter = router({
         name: z.string().min(1).optional(),
         metaAccountId: z.string().min(1).optional(),
         metaAccessToken: z.string().nullable().optional(),
+        defaultFacebookPageId: z.string().trim().min(1).nullable().optional(),
+        defaultInstagramActorId: z.string().trim().min(1).nullable().optional(),
         notes: z.string().nullable().optional(),
       }),
     )

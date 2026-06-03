@@ -2,6 +2,7 @@ import { relations } from "drizzle-orm";
 import { pgTable, text, timestamp, numeric, index } from "drizzle-orm/pg-core";
 import { statusEnum } from "./enums";
 import { campaigns } from "./campaign";
+import { adAccounts } from "./account";
 
 export const adSets = pgTable(
   "ad_set",
@@ -13,6 +14,9 @@ export const adSets = pgTable(
     campaignId: text("campaign_id")
       .notNull()
       .references(() => campaigns.id, { onDelete: "cascade" }),
+    accountId: text("account_id").references(() => adAccounts.id, {
+      onDelete: "set null",
+    }),
     costCap: text("cost_cap"),
     dailyBudget: numeric("daily_budget"),
     targetingMethod: text("targeting_method").array(),
@@ -33,6 +37,7 @@ export const adSets = pgTable(
   },
   (table) => [
     index("ad_set_campaign_id_idx").on(table.campaignId),
+    index("ad_set_account_id_idx").on(table.accountId),
     index("ad_set_organization_id_idx").on(table.organizationId),
   ],
 );
@@ -41,5 +46,9 @@ export const adSetRelations = relations(adSets, ({ one }) => ({
   campaign: one(campaigns, {
     fields: [adSets.campaignId],
     references: [campaigns.id],
+  }),
+  account: one(adAccounts, {
+    fields: [adSets.accountId],
+    references: [adAccounts.id],
   }),
 }));

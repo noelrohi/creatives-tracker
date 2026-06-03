@@ -777,6 +777,7 @@ export async function importMetaRows(input: {
   const [accountRecord] = input.accountId
     ? await db
         .select({
+          id: adAccounts.id,
           dataDateEnd: adAccounts.dataDateEnd,
         })
         .from(adAccounts)
@@ -787,6 +788,7 @@ export async function importMetaRows(input: {
           ),
         )
     : [];
+  const knownAccountId = accountRecord?.id;
 
   const campaignInfoMap = new Map<string, { name: string; metaId?: string }>();
   for (const row of rows) {
@@ -882,7 +884,7 @@ export async function importMetaRows(input: {
     }
   }
 
-  const adSetInfoMap = new Map<string, { name: string; metaId?: string; campaignDbId: string }>();
+  const adSetInfoMap = new Map<string, { name: string; metaId?: string; campaignDbId: string; accountId?: string }>();
   for (const row of rows) {
     const adSetName = normalizeName(row.adSetName);
     const adSetMetaId = normalizeName(row.adSetId);
@@ -897,17 +899,24 @@ export async function importMetaRows(input: {
         name: adSetName ?? `Ad Set ${adSetMetaId}`,
         metaId: adSetMetaId,
         campaignDbId,
+        accountId: knownAccountId,
       });
     }
   }
 
-  const existingAdSetByMetaId = new Map<string, { id: string; name: string; metaId: string | null; campaignId: string }>();
+  const existingAdSetByMetaId = new Map<string, { id: string; name: string; metaId: string | null; campaignId: string; accountId: string | null }>();
   const adSetMetaIds = [...adSetInfoMap.values()]
     .map((adSet) => adSet.metaId)
     .filter(Boolean) as string[];
   if (adSetMetaIds.length > 0) {
     const existingAdSetRows = await db
-      .select({ id: adSets.id, name: adSets.name, metaId: adSets.metaId, campaignId: adSets.campaignId })
+      .select({
+        id: adSets.id,
+        name: adSets.name,
+        metaId: adSets.metaId,
+        campaignId: adSets.campaignId,
+        accountId: adSets.accountId,
+      })
       .from(adSets)
       .where(
         and(
@@ -923,10 +932,16 @@ export async function importMetaRows(input: {
   const adSetNamesWithoutMeta = [...new Set(
     [...adSetInfoMap.values()].filter((adSet) => !adSet.metaId).map((adSet) => adSet.name),
   )];
-  const existingAdSetsByName = new Map<string, { id: string; name: string; metaId: string | null; campaignId: string }[]>();
+  const existingAdSetsByName = new Map<string, { id: string; name: string; metaId: string | null; campaignId: string; accountId: string | null }[]>();
   if (adSetNamesWithoutMeta.length > 0) {
     const existingAdSetRows = await db
-      .select({ id: adSets.id, name: adSets.name, metaId: adSets.metaId, campaignId: adSets.campaignId })
+      .select({
+        id: adSets.id,
+        name: adSets.name,
+        metaId: adSets.metaId,
+        campaignId: adSets.campaignId,
+        accountId: adSets.accountId,
+      })
       .from(adSets)
       .where(
         and(
@@ -942,7 +957,7 @@ export async function importMetaRows(input: {
   }
 
   const adSetIdByKey = new Map<string, string>();
-  const adSetsToCreate: { key: string; name: string; metaId?: string; campaignDbId: string }[] = [];
+  const adSetsToCreate: { key: string; name: string; metaId?: string; campaignDbId: string; accountId?: string }[] = [];
 
   for (const [key, adSet] of adSetInfoMap) {
     const existing = (adSet.metaId && existingAdSetByMetaId.get(adSet.metaId))
@@ -952,11 +967,13 @@ export async function importMetaRows(input: {
       const needsUpdate =
         existing.name !== adSet.name
         || existing.campaignId !== adSet.campaignDbId
+        || (adSet.accountId && existing.accountId !== adSet.accountId)
         || (adSet.metaId && existing.metaId !== adSet.metaId);
       if (needsUpdate) {
         await db.update(adSets).set({
           name: adSet.name,
           campaignId: adSet.campaignDbId,
+          ...(adSet.accountId ? { accountId: adSet.accountId } : {}),
           ...(adSet.metaId ? { metaId: adSet.metaId } : {}),
         }).where(
           and(
@@ -972,6 +989,7 @@ export async function importMetaRows(input: {
       name: adSet.name,
       metaId: adSet.metaId,
       campaignDbId: adSet.campaignDbId,
+      accountId: adSet.accountId,
     });
   }
 
@@ -983,6 +1001,7 @@ export async function importMetaRows(input: {
           name: adSet.name,
           metaId: adSet.metaId,
           campaignId: adSet.campaignDbId,
+          accountId: adSet.accountId,
           organizationId: input.organizationId,
         })),
       ).returning({ id: adSets.id });
@@ -1161,7 +1180,7 @@ export async function importMetaRows(input: {
         metaId: info.metaAdId,
         destinationUrl: info.destinationUrl,
         caption: info.caption,
-        accountId: input.accountId,
+        accountId: knownAccountId,
         organizationId: input.organizationId,
       };
     });
@@ -1183,7 +1202,7 @@ export async function importMetaRows(input: {
       ...(info.metaAdId ? { metaId: info.metaAdId } : {}),
       ...(info.destinationUrl ? { destinationUrl: info.destinationUrl } : {}),
       ...(info.caption ? { caption: info.caption } : {}),
-      ...(input.accountId ? { accountId: input.accountId } : {}),
+      ...(knownAccountId ? { accountId: knownAccountId } : {}),
     }).where(
       and(eq(ads.id, existing.id), eq(ads.organizationId, input.organizationId)),
     );
@@ -1244,7 +1263,7 @@ export async function importMetaRows(input: {
 
   await updateAccountFreshness({
     organizationId: input.organizationId,
-    accountId: input.accountId,
+    accountId: knownAccountId,
     currentDataDateEnd: accountRecord?.dataDateEnd ?? null,
     perfRows,
   });

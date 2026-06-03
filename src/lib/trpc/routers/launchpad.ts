@@ -9,15 +9,19 @@ import {
   metaCtaValues,
 } from "@/lib/launchpad-constants";
 import {
+  LaunchpadDestinationError,
+  assertEligibleLaunchpadDestination,
+  listEligibleLaunchpadAdSets,
+  listLaunchpadDestinationAccounts,
+} from "@/lib/launchpad-destinations";
+import {
   LaunchpadLedgerError,
   assertLivePublishSafety,
   assertLockedHashStable,
   createLaunchpadRunDraft,
   type LaunchpadRunDraft,
 } from "@/lib/launchpad-ledger";
-import { adAccounts } from "@/schema/account";
 import { adCreatives } from "@/schema/ad-creative";
-import { adSets } from "@/schema/ad-set";
 import {
   launchpadPublishItems,
   launchpadPublishRuns,
@@ -40,6 +44,38 @@ const destinationSchema = z
     adSetMetaId: z.string().trim().min(1).optional(),
   })
   .optional();
+
+const launchpadDestinationAccountSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  metaAccountId: z.string(),
+  defaultFacebookPageId: z.string().nullable(),
+  defaultInstagramActorId: z.string().nullable(),
+  hasMetaAccessToken: z.boolean(),
+  canPublish: z.boolean(),
+  ineligibleReasons: z.array(
+    z.enum(["missing_access_token", "missing_facebook_page_id"]),
+  ),
+});
+
+const launchpadDestinationAdSetSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  metaId: z.string().nullable(),
+  accountId: z.string().nullable(),
+  status: z.string(),
+  campaign: z.object({
+    id: z.string(),
+    name: z.string().nullable(),
+    metaId: z.string().nullable(),
+    status: z.string().nullable(),
+  }),
+});
+
+const launchpadDestinationContextSchema = z.object({
+  account: launchpadDestinationAccountSchema,
+  adSet: launchpadDestinationAdSetSchema,
+});
 
 const createValidationRunInputSchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(160).optional(),
@@ -75,6 +111,14 @@ function asTrpcError(error: unknown): never {
     });
   }
 
+  if (error instanceof LaunchpadDestinationError) {
+    throw new TRPCError({
+      code: error.code.endsWith("NOT_FOUND") ? "NOT_FOUND" : "PRECONDITION_FAILED",
+      message: error.message,
+      cause: error,
+    });
+  }
+
   throw error;
 }
 
@@ -104,57 +148,33 @@ function throwReferenceMismatch(
   });
 }
 
-async function assertLaunchpadReferencesBelongToOrg(
+function assertProvidedDestinationMetadataMatches(
+  input: z.infer<typeof createValidationRunInputSchema>,
+  context: Awaited<ReturnType<typeof assertEligibleLaunchpadDestination>>,
+) {
+  const providedAccountMetaId = input.actor?.accountMetaId;
+  if (
+    providedAccountMetaId &&
+    providedAccountMetaId !== context.account.metaAccountId
+  ) {
+    throwReferenceMismatch(
+      "Ad account",
+      context.account.metaAccountId,
+      providedAccountMetaId,
+    );
+  }
+
+  const providedAdSetMetaId = input.destination?.adSetMetaId;
+  if (providedAdSetMetaId && providedAdSetMetaId !== context.adSet.metaId) {
+    throwReferenceMismatch("Ad set", context.adSet.metaId ?? "", providedAdSetMetaId);
+  }
+}
+
+async function assertLaunchpadCreativeReferencesBelongToOrg(
   client: LaunchpadReader,
   organizationId: string,
   draft: LaunchpadRunDraft,
 ) {
-  const accountId = draft.manifest.actor.accountId;
-  const accountMetaId = draft.manifest.actor.accountMetaId;
-  if (accountId || accountMetaId) {
-    const accountRows = await client
-      .select({ id: adAccounts.id, metaAccountId: adAccounts.metaAccountId })
-      .from(adAccounts)
-      .where(
-        and(
-          accountId
-            ? eq(adAccounts.id, accountId)
-            : eq(adAccounts.metaAccountId, accountMetaId!),
-          eq(adAccounts.organizationId, organizationId),
-        ),
-      );
-    if (accountRows.length !== 1) {
-      throwReferenceNotFound("Ad account", [accountId ?? accountMetaId!]);
-    }
-    if (accountMetaId && accountRows[0]!.metaAccountId !== accountMetaId) {
-      throwReferenceMismatch(
-        "Ad account",
-        accountRows[0]!.metaAccountId,
-        accountMetaId,
-      );
-    }
-  }
-
-  const adSetId = draft.manifest.destination.adSetId;
-  const adSetMetaId = draft.manifest.destination.adSetMetaId;
-  if (adSetId || adSetMetaId) {
-    const adSetRows = await client
-      .select({ id: adSets.id, metaId: adSets.metaId })
-      .from(adSets)
-      .where(
-        and(
-          adSetId ? eq(adSets.id, adSetId) : eq(adSets.metaId, adSetMetaId!),
-          eq(adSets.organizationId, organizationId),
-        ),
-      );
-    if (adSetRows.length !== 1) {
-      throwReferenceNotFound("Ad set", [adSetId ?? adSetMetaId!]);
-    }
-    if (adSetMetaId && adSetRows[0]!.metaId !== adSetMetaId) {
-      throwReferenceMismatch("Ad set", adSetRows[0]!.metaId ?? "", adSetMetaId);
-    }
-  }
-
   const creativeIds = uniqueStrings(draft.items.map((item) => item.creativeId));
   if (creativeIds.length > 0) {
     const creativeRows = await client
@@ -253,6 +273,50 @@ async function assertNoItemKeyConflicts(
 }
 
 export const launchpadRouter = router({
+  destinationAccounts: orgAdminProcedure
+    .meta(openApiQueryMeta("launchpad", "destinationAccounts"))
+    .output(z.array(launchpadDestinationAccountSchema))
+    .query(async ({ ctx }) => {
+      return listLaunchpadDestinationAccounts(db, ctx.organizationId);
+    }),
+
+  eligibleAdSets: orgAdminProcedure
+    .meta(openApiQueryMeta("launchpad", "eligibleAdSets"))
+    .input(z.object({ accountId: z.string().trim().min(1) }))
+    .output(z.array(launchpadDestinationAdSetSchema))
+    .query(async ({ input, ctx }) => {
+      try {
+        return await listEligibleLaunchpadAdSets(
+          db,
+          ctx.organizationId,
+          input.accountId,
+        );
+      } catch (error) {
+        asTrpcError(error);
+      }
+    }),
+
+  destinationContext: orgAdminProcedure
+    .meta(openApiQueryMeta("launchpad", "destinationContext"))
+    .input(
+      z.object({
+        accountId: z.string().trim().min(1),
+        adSetId: z.string().trim().min(1),
+      }),
+    )
+    .output(launchpadDestinationContextSchema)
+    .query(async ({ input, ctx }) => {
+      try {
+        return await assertEligibleLaunchpadDestination(
+          db,
+          ctx.organizationId,
+          input,
+        );
+      } catch (error) {
+        asTrpcError(error);
+      }
+    }),
+
   list: orgAdminProcedure
     .meta(openApiQueryMeta("launchpad", "list"))
     .input(z.object({ limit: z.number().int().min(1).max(100).default(25) }).optional())
@@ -324,28 +388,54 @@ export const launchpadRouter = router({
     .meta(openApiMutationMeta("launchpad", "createValidationRun"))
     .input(createValidationRunInputSchema)
     .mutation(async ({ input, ctx }) => {
-      const draft = (() => {
-        try {
-          return createLaunchpadRunDraft({
-            organizationId: ctx.organizationId,
-            requestedBy: {
-              userId: ctx.userId,
-              principalType: ctx.principalType,
-              orgRole: ctx.orgRole,
-            },
-            actor: input.actor,
-            destination: input.destination,
-            items: input.items,
-            idempotencyKey: input.idempotencyKey,
-            env: process.env,
-          });
-        } catch (error) {
-          asTrpcError(error);
-        }
-      })();
-
       return db.transaction(async (tx) => {
-        await assertLaunchpadReferencesBelongToOrg(
+        const destinationContext = await (async () => {
+          try {
+            return await assertEligibleLaunchpadDestination(
+              tx,
+              ctx.organizationId,
+              {
+                accountId: input.actor?.accountId,
+                adSetId: input.destination?.adSetId,
+              },
+            );
+          } catch (error) {
+            asTrpcError(error);
+          }
+        })();
+        assertProvidedDestinationMetadataMatches(input, destinationContext);
+
+        const draft = (() => {
+          try {
+            return createLaunchpadRunDraft({
+              organizationId: ctx.organizationId,
+              requestedBy: {
+                userId: ctx.userId,
+                principalType: ctx.principalType,
+                orgRole: ctx.orgRole,
+              },
+              actor: {
+                accountId: destinationContext.account.id,
+                accountMetaId: destinationContext.account.metaAccountId,
+                facebookPageId:
+                  destinationContext.account.defaultFacebookPageId ?? undefined,
+                instagramActorId:
+                  destinationContext.account.defaultInstagramActorId ?? undefined,
+              },
+              destination: {
+                adSetId: destinationContext.adSet.id,
+                adSetMetaId: destinationContext.adSet.metaId ?? undefined,
+              },
+              items: input.items,
+              idempotencyKey: input.idempotencyKey,
+              env: process.env,
+            });
+          } catch (error) {
+            asTrpcError(error);
+          }
+        })();
+
+        await assertLaunchpadCreativeReferencesBelongToOrg(
           tx,
           ctx.organizationId,
           draft,

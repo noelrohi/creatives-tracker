@@ -297,7 +297,9 @@ async function fetchAdDemographicSummaries(opts: {
               sum(pl.conversions)::text AS conversions,
               (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text AS roas
             FROM performance_log pl
-            JOIN ad ON ad.id = pl.ad_id
+            JOIN ad
+              ON ad.id = pl.ad_id
+             AND ad.organization_id = ${organizationId}
             WHERE pl.organization_id = ${organizationId}
               AND pl.ad_id IN (${adIdList})
               AND pl.date_start = pl.date_end
@@ -352,13 +354,13 @@ export async function fetchAgentExportRows(opts: {
   const { organizationId, from, to, filter } = opts;
 
   const whereParts: SQL[] = [sql`ad.organization_id = ${organizationId}`];
-  if (filter?.accountId) whereParts.push(sql`ad.account_id = ${filter.accountId}`);
-  if (filter?.teamId) whereParts.push(sql`ac.team_id = ${filter.teamId}`);
+  if (filter?.accountId) whereParts.push(sql`aa.id = ${filter.accountId}`);
+  if (filter?.teamId) whereParts.push(sql`t.id = ${filter.teamId}`);
   if (filter?.format) whereParts.push(sql`ac.format::text = ${filter.format}`);
   if (filter?.awarenessLevel) whereParts.push(sql`ac.awareness_level::text = ${filter.awarenessLevel}`);
   if (filter?.search) whereParts.push(sql`ac.name ILIKE ${"%" + filter.search + "%"}`);
   if (filter?.adSetIds?.length) {
-    whereParts.push(sql`ad.ad_set_id IN (${sql.join(filter.adSetIds.map((id) => sql`${id}`), sql`, `)})`);
+    whereParts.push(sql`ast.id IN (${sql.join(filter.adSetIds.map((id) => sql`${id}`), sql`, `)})`);
   }
   if (filter?.ownership === "ours") whereParts.push(sql`ac.ownership = 'ours'`);
   if (filter?.ownership === "theirs") whereParts.push(sql`(ac.ownership IS NULL OR ac.ownership != 'ours')`);
@@ -385,7 +387,8 @@ export async function fetchAgentExportRows(opts: {
           sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0) AS hook_rate,
           count(DISTINCT pl.date_start)::int AS days_in_window
         FROM performance_log pl
-        WHERE pl.date_start = pl.date_end
+        WHERE pl.organization_id = ${organizationId}
+          AND pl.date_start = pl.date_end
           AND pl.date_start >= ${from}::date
           AND pl.date_start <= ${to}::date
           AND ${basePl}
@@ -404,7 +407,8 @@ export async function fetchAgentExportRows(opts: {
           max(pl.date_end)::date - min(pl.date_start)::date AS running_days,
           max(pl.date_end) AS last_log_at
         FROM performance_log pl
-        WHERE pl.date_start = pl.date_end
+        WHERE pl.organization_id = ${organizationId}
+          AND pl.date_start = pl.date_end
           AND ${basePl}
         GROUP BY pl.ad_id
       ),
@@ -417,12 +421,14 @@ export async function fetchAgentExportRows(opts: {
           coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0) AS cpa,
           sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0) AS hook_rate
         FROM performance_log pl
-        WHERE pl.date_start = pl.date_end
+        WHERE pl.organization_id = ${organizationId}
+          AND pl.date_start = pl.date_end
           AND ${basePl}
           AND pl.date_start > (
             SELECT max(pl2.date_end) - 3
             FROM performance_log pl2
             WHERE pl2.ad_id = pl.ad_id
+              AND pl2.organization_id = ${organizationId}
               AND pl2.date_start = pl2.date_end
               AND ${basePl2}
           )
@@ -433,12 +439,14 @@ export async function fetchAgentExportRows(opts: {
           pl.ad_id,
           sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0) AS hook_rate
         FROM performance_log pl
-        WHERE pl.date_start = pl.date_end
+        WHERE pl.organization_id = ${organizationId}
+          AND pl.date_start = pl.date_end
           AND ${basePl}
           AND pl.date_end <= (
             SELECT max(pl2.date_end) - 3
             FROM performance_log pl2
             WHERE pl2.ad_id = pl.ad_id
+              AND pl2.organization_id = ${organizationId}
               AND pl2.date_start = pl2.date_end
               AND ${basePl2}
           )
@@ -500,11 +508,21 @@ export async function fetchAgentExportRows(opts: {
         rm.hook_rate::text AS recent_hook_rate,
         pm.hook_rate::text AS prior_hook_rate
       FROM ad
-      JOIN ad_creative ac ON ac.id = ad.ad_creative_id
-      LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
-      LEFT JOIN campaign c ON c.id = ast.campaign_id
-      LEFT JOIN ad_account aa ON aa.id = ad.account_id
-      LEFT JOIN team t ON t.id = ac.team_id
+      JOIN ad_creative ac
+        ON ac.id = ad.ad_creative_id
+       AND ac.organization_id = ${organizationId}
+      LEFT JOIN ad_set ast
+        ON ast.id = ad.ad_set_id
+       AND ast.organization_id = ${organizationId}
+      LEFT JOIN campaign c
+        ON c.id = ast.campaign_id
+       AND c.organization_id = ${organizationId}
+      LEFT JOIN ad_account aa
+        ON aa.id = ad.account_id
+       AND aa.organization_id = ${organizationId}
+      LEFT JOIN team t
+        ON t.id = ac.team_id
+       AND t.organization_id = ${organizationId}
       LEFT JOIN window_m w ON w.ad_id = ad.id
       LEFT JOIN lifetime_m lm ON lm.ad_id = ad.id
       LEFT JOIN recent_m rm ON rm.ad_id = ad.id
