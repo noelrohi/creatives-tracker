@@ -5,7 +5,7 @@ import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
-import { ads } from "@/schema/ad";
+import { adAccounts } from "@/schema/account";
 
 export const adSetRouter = router({
   list: orgProcedure.meta(openApiQueryMeta("adSet", "list")).query(async ({ ctx }) => {
@@ -15,6 +15,10 @@ export const adSetRouter = router({
         name: adSets.name,
         campaignId: adSets.campaignId,
         campaignName: campaigns.name,
+        accountId: adSets.accountId,
+        accountName: adAccounts.name,
+        accountMetaAccountId: adAccounts.metaAccountId,
+        metaId: adSets.metaId,
         costCap: adSets.costCap,
         dailyBudget: adSets.dailyBudget,
         targetingMethod: adSets.targetingMethod,
@@ -31,6 +35,7 @@ export const adSetRouter = router({
       })
       .from(adSets)
       .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
+      .leftJoin(adAccounts, eq(adSets.accountId, adAccounts.id))
       .where(eq(adSets.organizationId, ctx.organizationId))
       .orderBy(desc(adSets.createdAt));
     return rows;
@@ -44,6 +49,8 @@ export const adSetRouter = router({
         .select({
           id: adSets.id,
           name: adSets.name,
+          accountId: adSets.accountId,
+          metaId: adSets.metaId,
           costCap: adSets.costCap,
           dailyBudget: adSets.dailyBudget,
           status: adSets.status,
@@ -67,6 +74,10 @@ export const adSetRouter = router({
           name: adSets.name,
           campaignId: adSets.campaignId,
           campaignName: campaigns.name,
+          accountId: adSets.accountId,
+          accountName: adAccounts.name,
+          accountMetaAccountId: adAccounts.metaAccountId,
+          metaId: adSets.metaId,
           costCap: adSets.costCap,
           dailyBudget: adSets.dailyBudget,
           targetingMethod: adSets.targetingMethod,
@@ -77,11 +88,12 @@ export const adSetRouter = router({
           scheduleEnd: adSets.scheduleEnd,
           status: adSets.status,
           notes: adSets.notes,
-            createdAt: adSets.createdAt,
+          createdAt: adSets.createdAt,
           updatedAt: adSets.updatedAt,
         })
         .from(adSets)
         .leftJoin(campaigns, eq(adSets.campaignId, campaigns.id))
+        .leftJoin(adAccounts, eq(adSets.accountId, adAccounts.id))
         .where(and(eq(adSets.id, input.id), eq(adSets.organizationId, ctx.organizationId)));
       if (!adSet) throw new Error("Ad set not found");
       return adSet;
@@ -93,6 +105,7 @@ export const adSetRouter = router({
       z.object({
         name: z.string().optional(),
         campaignId: z.string(),
+        accountId: z.string().optional(),
         costCap: z.string().optional(),
         dailyBudget: z.string().optional(),
         targetingMethod: z.array(z.string()).optional(),
@@ -111,6 +124,7 @@ export const adSetRouter = router({
           name: input.name ?? "Untitled Ad Set",
           metaId: input.metaId,
           campaignId: input.campaignId,
+          accountId: input.accountId,
           costCap: input.costCap,
           dailyBudget: input.dailyBudget,
           targetingMethod: input.targetingMethod,
@@ -132,6 +146,7 @@ export const adSetRouter = router({
         id: z.string(),
         name: z.string().min(1).optional(),
         campaignId: z.string().optional(),
+        accountId: z.string().nullable().optional(),
         costCap: z.string().nullable().optional(),
         dailyBudget: z.string().nullable().optional(),
         targetingMethod: z.array(z.string()).nullable().optional(),
@@ -176,6 +191,7 @@ export const adSetRouter = router({
         .values({
           name: `Copy of ${source.name}`,
           campaignId: source.campaignId,
+          accountId: source.accountId,
           costCap: source.costCap,
           dailyBudget: source.dailyBudget,
           targetingMethod: source.targetingMethod,

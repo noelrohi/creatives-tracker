@@ -8,7 +8,9 @@ import {
 const dbMocks = vi.hoisted(() => ({
   selectQueue: [] as unknown[][],
   insertReturningQueue: [] as unknown[][],
+  updateReturningQueue: [] as unknown[][],
   insertValues: [] as unknown[],
+  updateValues: [] as unknown[],
 }));
 
 vi.mock("@/db", () => {
@@ -19,6 +21,7 @@ vi.mock("@/db", () => {
   function createSelectBuilder(rows: unknown[]) {
     const builder = {
       from: vi.fn(() => builder),
+      leftJoin: vi.fn(() => builder),
       where: vi.fn(() => builder),
       orderBy: vi.fn(() => Promise.resolve(rows)),
       limit: vi.fn(() => Promise.resolve(rows)),
@@ -44,9 +47,26 @@ vi.mock("@/db", () => {
     return builder;
   }
 
+  function createUpdateBuilder() {
+    const builder = {
+      set: vi.fn((values: unknown) => {
+        dbMocks.updateValues.push(values);
+        return builder;
+      }),
+      where: vi.fn(() => builder),
+      returning: vi.fn(() =>
+        Promise.resolve(dbMocks.updateReturningQueue.shift() ?? []),
+      ),
+      then: (resolve: (rows: unknown[]) => unknown, reject?: (error: unknown) => unknown) =>
+        Promise.resolve([]).then(resolve, reject),
+    };
+    return builder;
+  }
+
   const tx = {
     select: vi.fn(() => createSelectBuilder(nextSelectRows())),
     insert: vi.fn(() => createInsertBuilder()),
+    update: vi.fn(() => createUpdateBuilder()),
   };
 
   return {
@@ -64,7 +84,84 @@ const previousPublishFlag = process.env.ADSOLUTE_META_PUBLISH_ENABLED;
 function resetDbMocks() {
   dbMocks.selectQueue = [];
   dbMocks.insertReturningQueue = [];
+  dbMocks.updateReturningQueue = [];
   dbMocks.insertValues = [];
+  dbMocks.updateValues = [];
+}
+
+function eligibleAccount(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "account-1",
+    name: "Main Meta Account",
+    metaAccountId: "act_123",
+    metaAccessToken: "secret-token",
+    defaultFacebookPageId: "page-123",
+    defaultInstagramActorId: "ig-123",
+    ...overrides,
+  };
+}
+
+function publicAccountRow(overrides: Record<string, unknown> = {}) {
+  const now = new Date("2026-01-01T00:00:00.000Z");
+  return {
+    ...eligibleAccount(),
+    notes: null,
+    lastImportedAt: null,
+    dataDateEnd: null,
+    organizationId: "test-org-id",
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+function eligibleAdSet(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "ad-set-1",
+    name: "Prospecting / Static tests",
+    metaId: "23800000000000000",
+    accountId: "account-1",
+    status: "active",
+    campaignId: "campaign-1",
+    campaignName: "Campaign Alpha",
+    campaignMetaId: "cmp_123",
+    campaignStatus: "active",
+    ...overrides,
+  };
+}
+
+type CreateValidationRunTestInput = {
+  idempotencyKey?: string;
+  actor?: {
+    accountId?: string;
+    accountMetaId?: string;
+    facebookPageId?: string;
+    instagramActorId?: string;
+  };
+  destination?: { adSetId?: string; adSetMetaId?: string };
+  items?: Array<{
+    adName: string;
+    destinationUrl?: string;
+    idempotencyKey?: string;
+  }>;
+};
+
+function baseCreateValidationInput(
+  overrides: CreateValidationRunTestInput = {},
+) {
+  return {
+    idempotencyKey: "router-idempotency-key",
+    actor: { accountId: "account-1" },
+    destination: { adSetId: "ad-set-1" },
+    items: [
+      {
+        adName: "Router demo",
+        destinationUrl:
+          "https://example.com/products?utm_source=meta&utm_medium=paid_social",
+      },
+    ],
+    ...overrides,
+  };
 }
 
 function baseRunInput() {
@@ -74,6 +171,16 @@ function baseRunInput() {
       userId: "test-user-id",
       principalType: "session" as const,
       orgRole: "admin" as const,
+    },
+    actor: {
+      accountId: "account-1",
+      accountMetaId: "act_123",
+      facebookPageId: "page-123",
+      instagramActorId: "ig-123",
+    },
+    destination: {
+      adSetId: "ad-set-1",
+      adSetMetaId: "23800000000000000",
     },
     items: [
       {
@@ -105,6 +212,10 @@ function persistedValidatedRun(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function enqueueEligibleDestination() {
+  dbMocks.selectQueue.push([eligibleAccount()], [eligibleAdSet()]);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   resetDbMocks();
@@ -119,6 +230,126 @@ afterEach(() => {
   }
 });
 
+describe("account publishing identity sanitization", () => {
+  it("lists account publishing metadata without exposing access tokens", async () => {
+    dbMocks.selectQueue = [[publicAccountRow({ metaAccessToken: "super-secret" })]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    const result = await adminCaller.adAccount.list();
+
+    expect(result[0]).toMatchObject({
+      id: "account-1",
+      defaultFacebookPageId: "page-123",
+      defaultInstagramActorId: "ig-123",
+      hasMetaAccessToken: true,
+    });
+    expect(result[0]).not.toHaveProperty("metaAccessToken");
+    expect(JSON.stringify(result)).not.toContain("super-secret");
+  });
+
+  it("updates manual Page and Instagram actor metadata without returning tokens", async () => {
+    dbMocks.updateReturningQueue = [[
+      publicAccountRow({
+        metaAccessToken: "new-secret",
+        defaultFacebookPageId: "page-new",
+        defaultInstagramActorId: null,
+      }),
+    ]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    const result = await adminCaller.adAccount.update({
+      id: "account-1",
+      defaultFacebookPageId: "page-new",
+      defaultInstagramActorId: null,
+      metaAccessToken: "new-secret",
+    });
+
+    expect(dbMocks.updateValues[0]).toMatchObject({
+      defaultFacebookPageId: "page-new",
+      defaultInstagramActorId: null,
+      metaAccessToken: "new-secret",
+    });
+    expect(result).toMatchObject({
+      defaultFacebookPageId: "page-new",
+      defaultInstagramActorId: null,
+      hasMetaAccessToken: true,
+    });
+    expect(result).not.toHaveProperty("metaAccessToken");
+    expect(JSON.stringify(result)).not.toContain("new-secret");
+  });
+});
+
+describe("launchpad destination selection", () => {
+  it("lists destination accounts without token disclosure", async () => {
+    dbMocks.selectQueue = [[eligibleAccount({ metaAccessToken: "secret" })]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    const result = await adminCaller.launchpad.destinationAccounts();
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: "account-1",
+        metaAccountId: "act_123",
+        defaultFacebookPageId: "page-123",
+        defaultInstagramActorId: "ig-123",
+        hasMetaAccessToken: true,
+        canPublish: true,
+        ineligibleReasons: [],
+      }),
+    ]);
+    expect(JSON.stringify(result)).not.toContain("secret");
+  });
+
+  it("filters eligible ad sets to the selected account and linked Meta IDs", async () => {
+    dbMocks.selectQueue = [
+      [eligibleAccount()],
+      [
+        eligibleAdSet(),
+        eligibleAdSet({ id: "wrong-account", accountId: "account-2" }),
+        eligibleAdSet({ id: "missing-meta", metaId: null }),
+      ],
+    ];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    const result = await adminCaller.launchpad.eligibleAdSets({
+      accountId: "account-1",
+    });
+
+    expect(result.map((adSet) => adSet.id)).toEqual(["ad-set-1"]);
+  });
+
+  it("returns read-only context for an eligible selected destination", async () => {
+    enqueueEligibleDestination();
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    const result = await adminCaller.launchpad.destinationContext({
+      accountId: "account-1",
+      adSetId: "ad-set-1",
+    });
+
+    expect(result).toMatchObject({
+      account: {
+        id: "account-1",
+        metaAccountId: "act_123",
+        defaultFacebookPageId: "page-123",
+        hasMetaAccessToken: true,
+      },
+      adSet: {
+        id: "ad-set-1",
+        metaId: "23800000000000000",
+        accountId: "account-1",
+        campaign: {
+          id: "campaign-1",
+          name: "Campaign Alpha",
+          metaId: "cmp_123",
+          status: "active",
+        },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("secret-token");
+  });
+});
+
 describe("launchpad router safety", () => {
   it("blocks ordinary members from the Launchpad ledger surface", async () => {
     const memberCaller = createMockCaller({ role: "member" });
@@ -129,6 +360,8 @@ describe("launchpad router safety", () => {
     await expect(
       memberCaller.launchpad.createValidationRun({
         idempotencyKey: "member-demo-key",
+        actor: { accountId: "account-1" },
+        destination: { adSetId: "ad-set-1" },
         items: [{ adName: "Member demo" }],
       }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
@@ -186,22 +419,83 @@ describe("launchpad router safety", () => {
   });
 });
 
+describe("launchpad router destination eligibility", () => {
+  it("rejects validation runs when the selected account is missing an access token", async () => {
+    dbMocks.selectQueue = [[eligibleAccount({ metaAccessToken: null })]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createValidationRun(baseCreateValidationInput()),
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("access token"),
+    });
+    expect(dbMocks.insertValues).toEqual([]);
+  });
+
+  it("rejects validation runs when the selected account is missing Page ID metadata", async () => {
+    dbMocks.selectQueue = [[eligibleAccount({ defaultFacebookPageId: null })]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createValidationRun(baseCreateValidationInput()),
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("Facebook Page ID"),
+    });
+    expect(dbMocks.insertValues).toEqual([]);
+  });
+
+  it("rejects validation runs when the selected ad set is missing a Meta ad set ID", async () => {
+    dbMocks.selectQueue = [[eligibleAccount()], [eligibleAdSet({ metaId: null })]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createValidationRun(baseCreateValidationInput()),
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("Meta ad set ID"),
+    });
+    expect(dbMocks.insertValues).toEqual([]);
+  });
+
+  it("rejects validation runs when the ad set is linked to another account", async () => {
+    dbMocks.selectQueue = [[eligibleAccount()], [eligibleAdSet({ accountId: "account-2" })]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createValidationRun(baseCreateValidationInput()),
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("does not belong"),
+    });
+    expect(dbMocks.insertValues).toEqual([]);
+  });
+
+  it("rejects ambiguous or unlinked ad sets", async () => {
+    dbMocks.selectQueue = [[eligibleAccount()], [eligibleAdSet({ accountId: null })]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createValidationRun(baseCreateValidationInput()),
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("not linked"),
+    });
+    expect(dbMocks.insertValues).toEqual([]);
+  });
+});
+
 describe("launchpad router ledger persistence", () => {
   it("persists a validation run and items with audit metadata", async () => {
-    dbMocks.selectQueue = [[], [], []];
+    enqueueEligibleDestination();
+    dbMocks.selectQueue.push([], [], []);
     dbMocks.insertReturningQueue = [[{ id: "run-new" }], [{ id: "item-new" }]];
     const adminCaller = createMockCaller({ role: "admin" });
 
-    const result = await adminCaller.launchpad.createValidationRun({
-      idempotencyKey: "router-idempotency-key",
-      items: [
-        {
-          adName: "Router demo",
-          destinationUrl:
-            "https://example.com/products?utm_source=meta&utm_medium=paid_social",
-        },
-      ],
-    });
+    const result = await adminCaller.launchpad.createValidationRun(
+      baseCreateValidationInput(),
+    );
 
     expect(result).toEqual({ id: "run-new" });
     expect(dbMocks.insertValues).toHaveLength(2);
@@ -214,6 +508,12 @@ describe("launchpad router ledger persistence", () => {
       requestedStatus: "PAUSED",
       itemCount: 1,
       maxItemCap: 25,
+      actorAccountId: "account-1",
+      actorAccountMetaId: "act_123",
+      actorPageId: "page-123",
+      actorInstagramId: "ig-123",
+      destinationAdSetId: "ad-set-1",
+      destinationAdSetMetaId: "23800000000000000",
     });
     expect(dbMocks.insertValues[0]).toHaveProperty("manifestHash");
     expect(dbMocks.insertValues[0]).toHaveProperty("dedupeKey");
@@ -224,6 +524,10 @@ describe("launchpad router ledger persistence", () => {
         organizationId: "test-org-id",
         status: "validated",
         requestedStatus: "PAUSED",
+        accountId: "account-1",
+        adSetId: "ad-set-1",
+        actorPageId: "page-123",
+        actorInstagramId: "ig-123",
         createdByUserId: "test-user-id",
         createdByPrincipalType: "session",
         createdByRole: "admin",
@@ -233,24 +537,21 @@ describe("launchpad router ledger persistence", () => {
   });
 
   it("rejects idempotency-key replays with a different manifest", async () => {
-    dbMocks.insertReturningQueue = [[]];
-    dbMocks.selectQueue = [
-      [
-        {
-          id: "existing-run",
-          idempotencyKey: "router-idempotency-key",
-          dedupeKey: "different-dedupe",
-          manifestHash: "different-manifest-hash",
-        },
-      ],
-    ];
+    enqueueEligibleDestination();
+    dbMocks.selectQueue.push([
+      {
+        id: "existing-run",
+        idempotencyKey: "router-idempotency-key",
+        dedupeKey: "different-dedupe",
+        manifestHash: "different-manifest-hash",
+      },
+    ]);
     const adminCaller = createMockCaller({ role: "admin" });
 
     await expect(
-      adminCaller.launchpad.createValidationRun({
-        idempotencyKey: "router-idempotency-key",
-        items: [{ adName: "Changed router demo" }],
-      }),
+      adminCaller.launchpad.createValidationRun(
+        baseCreateValidationInput({ items: [{ adName: "Changed router demo" }] }),
+      ),
     ).rejects.toMatchObject({
       code: "PRECONDITION_FAILED",
       message: expect.stringContaining("different manifest"),
@@ -266,28 +567,34 @@ describe("launchpad router ledger persistence", () => {
       dedupeKey: draft.dedupeKey,
       manifestHash: "older-order-or-audit-specific-manifest",
     };
-    dbMocks.selectQueue = [[], [existing]];
+    enqueueEligibleDestination();
+    dbMocks.selectQueue.push([], [existing]);
     const adminCaller = createMockCaller({ role: "admin" });
 
     await expect(
       adminCaller.launchpad.createValidationRun({
+        actor: { accountId: "account-1" },
+        destination: { adSetId: "ad-set-1" },
         items: baseRunInput().items,
       }),
     ).resolves.toEqual(existing);
   });
 
   it("rejects item-level idempotency/dedupe conflicts before persistence", async () => {
-    dbMocks.selectQueue = [
+    enqueueEligibleDestination();
+    dbMocks.selectQueue.push(
       [],
       [],
       [{ id: "existing-item", idempotencyKey: "item-key", dedupeKey: "dedupe" }],
-    ];
+    );
     const adminCaller = createMockCaller({ role: "admin" });
 
     await expect(
-      adminCaller.launchpad.createValidationRun({
-        items: [{ adName: "Item collision demo", idempotencyKey: "item-key" }],
-      }),
+      adminCaller.launchpad.createValidationRun(
+        baseCreateValidationInput({
+          items: [{ adName: "Item collision demo", idempotencyKey: "item-key" }],
+        }),
+      ),
     ).rejects.toMatchObject({
       code: "PRECONDITION_FAILED",
       message: expect.stringContaining("item idempotency or dedupe key"),
@@ -300,10 +607,11 @@ describe("launchpad router ledger persistence", () => {
     const adminCaller = createMockCaller({ role: "admin" });
 
     await expect(
-      adminCaller.launchpad.createValidationRun({
-        actor: { accountId: "foreign-account-id" },
-        items: [{ adName: "Foreign account demo" }],
-      }),
+      adminCaller.launchpad.createValidationRun(
+        baseCreateValidationInput({
+          actor: { accountId: "foreign-account-id" },
+        }),
+      ),
     ).rejects.toMatchObject({
       code: "NOT_FOUND",
       message: expect.stringContaining("Ad account"),
@@ -312,32 +620,34 @@ describe("launchpad router ledger persistence", () => {
   });
 
   it("rejects external Meta account IDs that mismatch org-owned accounts", async () => {
-    dbMocks.selectQueue = [[{ id: "account-1", metaAccountId: "act_owned" }]];
+    enqueueEligibleDestination();
     const adminCaller = createMockCaller({ role: "admin" });
 
     await expect(
-      adminCaller.launchpad.createValidationRun({
-        actor: { accountId: "account-1", accountMetaId: "act_foreign" },
-        items: [{ adName: "Meta mismatch demo" }],
-      }),
+      adminCaller.launchpad.createValidationRun(
+        baseCreateValidationInput({
+          actor: { accountId: "account-1", accountMetaId: "act_foreign" },
+        }),
+      ),
     ).rejects.toMatchObject({
       code: "PRECONDITION_FAILED",
       message: expect.stringContaining("Meta ID does not match"),
     });
   });
 
-  it("rejects external Meta ad set IDs that are not org-owned", async () => {
-    dbMocks.selectQueue = [[]];
+  it("rejects external Meta ad set IDs that mismatch org-owned ad sets", async () => {
+    enqueueEligibleDestination();
     const adminCaller = createMockCaller({ role: "admin" });
 
     await expect(
-      adminCaller.launchpad.createValidationRun({
-        destination: { adSetMetaId: "238_foreign" },
-        items: [{ adName: "Foreign Meta ad set demo" }],
-      }),
+      adminCaller.launchpad.createValidationRun(
+        baseCreateValidationInput({
+          destination: { adSetId: "ad-set-1", adSetMetaId: "238_foreign" },
+        }),
+      ),
     ).rejects.toMatchObject({
-      code: "NOT_FOUND",
-      message: expect.stringContaining("Ad set"),
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("Meta ID does not match"),
     });
   });
 });

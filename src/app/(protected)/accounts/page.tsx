@@ -36,6 +36,8 @@ interface AccountForm {
   name: string;
   metaAccountId: string;
   metaAccessToken: string;
+  defaultFacebookPageId: string;
+  defaultInstagramActorId: string;
   notes: string;
 }
 
@@ -43,6 +45,8 @@ type AccountRow = {
   id: string;
   name: string;
   metaAccountId: string;
+  defaultFacebookPageId: string | null;
+  defaultInstagramActorId: string | null;
   notes: string | null;
   hasMetaAccessToken: boolean;
 };
@@ -58,7 +62,14 @@ export default function AccountsPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const form = useForm<AccountForm>({
-    defaultValues: { name: "", metaAccountId: "", metaAccessToken: "", notes: "" },
+    defaultValues: {
+      name: "",
+      metaAccountId: "",
+      metaAccessToken: "",
+      defaultFacebookPageId: "",
+      defaultInstagramActorId: "",
+      notes: "",
+    },
   });
 
   const createMutation = useMutation(
@@ -96,7 +107,14 @@ export default function AccountsPage() {
 
   function openCreate() {
     setEditingId(null);
-    form.reset({ name: "", metaAccountId: "", metaAccessToken: "", notes: "" });
+    form.reset({
+      name: "",
+      metaAccountId: "",
+      metaAccessToken: "",
+      defaultFacebookPageId: "",
+      defaultInstagramActorId: "",
+      notes: "",
+    });
     setDialogOpen(true);
   }
 
@@ -106,6 +124,8 @@ export default function AccountsPage() {
       name: account.name,
       metaAccountId: account.metaAccountId,
       metaAccessToken: "",
+      defaultFacebookPageId: account.defaultFacebookPageId ?? "",
+      defaultInstagramActorId: account.defaultInstagramActorId ?? "",
       notes: account.notes ?? "",
     });
     setDialogOpen(true);
@@ -122,6 +142,8 @@ export default function AccountsPage() {
         id: editingId,
         name: values.name,
         metaAccountId: values.metaAccountId,
+        defaultFacebookPageId: values.defaultFacebookPageId || null,
+        defaultInstagramActorId: values.defaultInstagramActorId || null,
         notes: values.notes || null,
         ...(values.metaAccessToken
           ? { metaAccessToken: values.metaAccessToken }
@@ -132,6 +154,8 @@ export default function AccountsPage() {
         name: values.name,
         metaAccountId: values.metaAccountId,
         metaAccessToken: values.metaAccessToken || undefined,
+        defaultFacebookPageId: values.defaultFacebookPageId || undefined,
+        defaultInstagramActorId: values.defaultInstagramActorId || undefined,
         notes: values.notes || undefined,
       });
     }
@@ -183,6 +207,7 @@ export default function AccountsPage() {
               <TableRow>
                 <TableHead>Name</TableHead>
                 <TableHead>Meta Account ID</TableHead>
+                <TableHead>Publishing identity</TableHead>
                 <TableHead>Access Token</TableHead>
                 <TableHead className="w-10" />
               </TableRow>
@@ -205,6 +230,24 @@ export default function AccountsPage() {
                       >
                         <ExternalLink className="size-3" />
                       </a>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="space-y-1 text-[13px]">
+                      {account.defaultFacebookPageId ? (
+                        <div>
+                          <span className="text-muted-foreground">Page </span>
+                          <code>{account.defaultFacebookPageId}</code>
+                        </div>
+                      ) : (
+                        <div className="text-muted-foreground/50">No Page ID</div>
+                      )}
+                      {account.defaultInstagramActorId ? (
+                        <div>
+                          <span className="text-muted-foreground">IG </span>
+                          <code>{account.defaultInstagramActorId}</code>
+                        </div>
+                      ) : null}
                     </div>
                   </TableCell>
                   <TableCell>
@@ -261,6 +304,14 @@ export default function AccountsPage() {
             <Field>
               <FieldLabel>Access Token {editingId ? "(leave blank to keep current)" : "(optional)"}</FieldLabel>
               <Input {...form.register("metaAccessToken")} placeholder="Meta API access token" type="password" />
+            </Field>
+            <Field>
+              <FieldLabel>Default Facebook Page ID</FieldLabel>
+              <Input {...form.register("defaultFacebookPageId")} placeholder="e.g., 1234567890" />
+            </Field>
+            <Field>
+              <FieldLabel>Default Instagram actor ID (optional)</FieldLabel>
+              <Input {...form.register("defaultInstagramActorId")} placeholder="e.g., 17841400000000000" />
             </Field>
             <Field>
               <FieldLabel>Notes (optional)</FieldLabel>

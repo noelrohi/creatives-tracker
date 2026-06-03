@@ -9,6 +9,8 @@ export const adAccounts = pgTable(
     name: text("name").notNull(),
     metaAccountId: text("meta_account_id").notNull().unique(),
     metaAccessToken: text("meta_access_token"),
+    defaultFacebookPageId: text("default_facebook_page_id"),
+    defaultInstagramActorId: text("default_instagram_actor_id"),
     notes: text("notes"),
     lastImportedAt: timestamp("last_imported_at"),
     dataDateEnd: date("data_date_end"),
