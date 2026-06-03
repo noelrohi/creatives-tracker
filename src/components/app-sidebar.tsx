@@ -47,6 +47,7 @@ import {
   LogOut,
   Upload,
   Image,
+  Rocket,
   Settings,
   TrendingUp,
   Users,
@@ -72,6 +73,7 @@ const dashboardSubItems = [
 
 const navItems = [
   { label: "Creatives", href: "/creatives", icon: Image },
+  { label: "Launchpad", href: "/launchpad", icon: Rocket },
   { label: "Teams", href: "/teams", icon: Users },
   { label: "Accounts", href: "/accounts", icon: Settings },
 ];
@@ -118,7 +120,9 @@ export function AppSidebar() {
   );
   const visibleNavItems = isPrivileged
     ? navItems
-    : navItems.filter((item) => item.href !== "/accounts");
+    : navItems.filter(
+        (item) => item.href !== "/accounts" && item.href !== "/launchpad",
+      );
 
   async function handleSignOut() {
     await authClient.signOut();
