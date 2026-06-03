@@ -172,6 +172,9 @@ type CreateValidationRunTestInput = {
   };
   destination?: { adSetId?: string; adSetMetaId?: string };
   defaultDestinationUrl?: string;
+  defaultPrimaryText?: string;
+  defaultCaption?: string;
+  defaultCta?: string;
   namingTemplate?: string;
   items?: Array<{
     creativeId?: string;
@@ -331,6 +334,51 @@ function persistedQueuedItem(overrides: Record<string, unknown> = {}) {
     reconciliationStatus: "pending",
     ...overrides,
   });
+}
+
+function batchRunInput() {
+  return {
+    ...baseRunInput(),
+    items: [
+      baseRunInput().items[0],
+      {
+        creativeId: "creative-2",
+        creativeName: "Router static second",
+        format: "static",
+        assetUrl: "https://cdn.example.com/router-static-2.png",
+        hook: "Second hook fallback",
+        adName: "Launchpad router demo 2",
+        caption: "Router dry-run primary text 2",
+        destinationUrl:
+          "https://example.com/products-2?utm_source=meta&utm_medium=paid_social",
+      },
+    ],
+  };
+}
+
+function persistedBatchRunAndItems() {
+  const draft = createLaunchpadRunDraft(batchRunInput());
+  const run = persistedValidatedRun({
+    itemCount: draft.items.length,
+    manifest: draft.manifest,
+    manifestHash: draft.manifestHash,
+    idempotencyKey: draft.idempotencyKey,
+    dedupeKey: draft.dedupeKey,
+  });
+  const items = draft.items.map((item, index) =>
+    persistedValidatedItem({
+      id: `item-${index + 1}`,
+      position: index + 1,
+      creativeId: item.creativeId,
+      payload: item.payload,
+      payloadHash: item.payloadHash,
+      idempotencyKey: item.idempotencyKey,
+      dedupeKey: item.dedupeKey,
+      requestedAdName: item.adName,
+    }),
+  );
+
+  return { run, items };
 }
 
 function enqueueEligibleDestination() {
@@ -879,6 +927,148 @@ describe("launchpad router ledger persistence", () => {
     ]);
   });
 
+  it("persists a batch validation run with defaults, per-item overrides, and generated names", async () => {
+    enqueueEligibleDestination();
+    dbMocks.selectQueue.push(
+      [staticCreative({ id: "creative-1", name: "Router static hero" })],
+      [],
+      [staticCreative({ id: "creative-2", name: "Router static second" })],
+      [],
+      [],
+      [],
+      [],
+    );
+    dbMocks.insertReturningQueue = [[{ id: "run-batch" }], [{ id: "item-1" }, { id: "item-2" }]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    const result = await adminCaller.launchpad.createValidationRun(
+      baseCreateValidationInput({
+        defaultPrimaryText: "Batch-level launch copy",
+        defaultCta: "LEARN_MORE",
+        namingTemplate: "Batch {{item.positionPadded}} / {{creative.name}}",
+        items: [
+          { creativeId: "creative-1" },
+          {
+            creativeId: "creative-2",
+            adName: "Manual item two",
+            primaryText: "Item two copy override",
+            headline: "Item two headline",
+            destinationUrl:
+              "https://example.com/override?utm_source=meta&utm_medium=paid_social",
+          },
+        ],
+      }),
+    );
+
+    expect(result).toEqual({ id: "run-batch" });
+    expect(dbMocks.insertValues[0]).toMatchObject({
+      status: "validated",
+      itemCount: 2,
+      maxItemCap: 25,
+    });
+    expect(dbMocks.insertValues[0]).toHaveProperty("manifest.plannerManifest.batchDefaults", {
+      destinationUrl:
+        "https://example.com/products?utm_source=meta&utm_medium=paid_social",
+      primaryText: "Batch-level launch copy",
+      caption: null,
+      cta: "LEARN_MORE",
+      namingTemplate: "Batch {{item.positionPadded}} / {{creative.name}}",
+      requiredUtmParameters: ["utm_source", "utm_medium"],
+    });
+    const insertedItems = dbMocks.insertValues[1] as Array<{
+      requestedAdName: string;
+      payload: {
+        launch: {
+          adName: string;
+          primaryText: string | null;
+          headline: string | null;
+          destinationUrl: string | null;
+          cta: string;
+        };
+        url: { source: string };
+      };
+    }>;
+    expect(insertedItems).toHaveLength(2);
+    expect(insertedItems[0]?.requestedAdName).toBe("Batch 01 / Router static hero");
+    expect(insertedItems[0]?.payload.launch).toMatchObject({
+      adName: "Batch 01 / Router static hero",
+      primaryText: "Batch-level launch copy",
+      destinationUrl:
+        "https://example.com/products?utm_source=meta&utm_medium=paid_social",
+      cta: "LEARN_MORE",
+    });
+    expect(insertedItems[0]?.payload.url).toMatchObject({ source: "batch_default" });
+    expect(insertedItems[1]?.payload.launch).toMatchObject({
+      adName: "Manual item two",
+      primaryText: "Item two copy override",
+      headline: "Item two headline",
+      destinationUrl:
+        "https://example.com/override?utm_source=meta&utm_medium=paid_social",
+      cta: "LEARN_MORE",
+    });
+    expect(insertedItems[1]?.payload.url).toMatchObject({ source: "item_override" });
+  });
+
+  it("enforces the 25-item Launchpad batch cap at the router boundary", async () => {
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createValidationRun(
+        baseCreateValidationInput({
+          items: Array.from({ length: 26 }, (_, index) => ({
+            creativeId: `creative-${index + 1}`,
+          })),
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(dbMocks.selectQueue).toEqual([]);
+    expect(dbMocks.insertValues).toEqual([]);
+  });
+
+  it("validates URL and UTM rules independently across batch items", async () => {
+    enqueueEligibleDestination();
+    dbMocks.selectQueue.push(
+      [staticCreative({ id: "creative-1" })],
+      [],
+      [staticCreative({ id: "creative-2" })],
+      [],
+      [],
+      [],
+      [],
+    );
+    dbMocks.insertReturningQueue = [[{ id: "run-batch-failed" }], [{ id: "item-1" }, { id: "item-2" }]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createValidationRun(
+        baseCreateValidationInput({
+          items: [
+            { creativeId: "creative-1" },
+            {
+              creativeId: "creative-2",
+              destinationUrl: "https://example.com/no-medium?utm_source=meta",
+            },
+          ],
+        }),
+      ),
+    ).resolves.toEqual({ id: "run-batch-failed" });
+
+    expect(dbMocks.insertValues[0]).toMatchObject({ status: "failed", itemCount: 2 });
+    const insertedItems = dbMocks.insertValues[1] as Array<{
+      status: string;
+      errorCategory?: string;
+      payload: { validation: { issues: Array<{ code: string }> } };
+    }>;
+    expect(insertedItems[0]?.status).toBe("validated");
+    expect(insertedItems[1]).toMatchObject({
+      status: "failed",
+      errorCategory: "terminal",
+    });
+    expect(insertedItems[1]?.payload.validation.issues.map((issue) => issue.code)).toContain(
+      "MISSING_REQUIRED_UTM_PARAMETERS",
+    );
+  });
+
   it("persists item QA failures for unsupported creatives, invalid CTA, URL issues, and Meta ad conflicts", async () => {
     enqueueDryRunPlanningRows({
       creative: staticCreative({ format: "video", assetUrl: null }),
@@ -1100,6 +1290,44 @@ describe("launchpad live publish enqueue", () => {
     );
   });
 
+  it("enqueues all validated batch items through Trigger and persists queued intent", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    const { run, items } = persistedBatchRunAndItems();
+    dbMocks.selectQueue = [
+      [run],
+      items,
+      [eligibleAccount()],
+      [eligibleAdSet()],
+      [{ metaAccessToken: "secret-token" }],
+    ];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    const result = await adminCaller.launchpad.requestLivePublish({
+      runId: "run-1",
+      confirmation: "PUBLISH_PAUSED_META_ADS",
+    });
+
+    expect(result).toEqual({
+      runId: "run-1",
+      itemIds: ["item-1", "item-2"],
+      triggerRunId: "trigger-run-1",
+      status: "queued",
+    });
+    expect(triggerMocks.trigger).toHaveBeenCalledWith("launchpad-publish", {
+      organizationId: "test-org-id",
+      runId: "run-1",
+      itemIds: ["item-1", "item-2"],
+      requestedStatus: "PAUSED",
+    });
+    expect(dbMocks.updateValues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: "queued", mode: "publish" }),
+        expect.objectContaining({ status: "queued" }),
+        expect.objectContaining({ externalTriggerRunId: "trigger-run-1" }),
+      ]),
+    );
+  });
+
   it("rejects validation-failed runs before enqueue", async () => {
     process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
     dbMocks.selectQueue = [[
@@ -1276,6 +1504,83 @@ describe("launchpad worker static publish", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(dbMocks.insertValues).toEqual([]);
     expect(dbMocks.updateValues).toEqual([]);
+    fetchSpy.mockRestore();
+  });
+
+  it("skips an already-successful batch item on replay even when the run is partial", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    const { run, items } = persistedBatchRunAndItems();
+    dbMocks.selectQueue = [
+      [persistedQueuedRun({
+        ...run,
+        status: "partial_success",
+        itemCount: 2,
+      })],
+      [persistedQueuedItem({
+        ...items[0],
+        status: "success",
+        localAdId: "local-ad-1",
+        externalMetaImageHash: "meta-image-hash-1",
+        externalMetaCreativeId: "meta-creative-1",
+        externalMetaAdId: "meta-ad-1",
+        rawMetaConfiguredStatus: "PAUSED",
+        rawMetaEffectiveStatus: "PAUSED",
+      })],
+    ];
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const workerCaller = createWorkerCaller();
+
+    const result = await workerCaller.launchpad.workerExecuteLivePublish({
+      runId: "run-1",
+      itemId: "item-1",
+    });
+
+    expect(result).toMatchObject({
+      status: "success",
+      runStatus: "partial_success",
+      replayed: true,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(dbMocks.insertValues).toEqual([]);
+    expect(dbMocks.updateValues).toEqual([]);
+    fetchSpy.mockRestore();
+  });
+
+  it("aggregates a batch item failure into partial success without touching successful items", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    const { run, items } = persistedBatchRunAndItems();
+    dbMocks.selectQueue = [
+      [persistedQueuedRun({ ...run, status: "queued", itemCount: 2 })],
+      [persistedQueuedItem({ ...items[1], id: "item-2", status: "queued" })],
+      [eligibleAccount()],
+      [eligibleAdSet()],
+      [{ metaAccessToken: "secret-token" }],
+      [{ status: "success" }, { status: "failed" }],
+    ];
+    dbMocks.insertReturningQueue = [[{ id: "local-ad-2" }]];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ error: { message: "Server error" } }, 500, "Server Error"),
+    );
+    const workerCaller = createWorkerCaller();
+
+    const result = await workerCaller.launchpad.workerExecuteLivePublish({
+      runId: "run-1",
+      itemId: "item-2",
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      runStatus: "partial_success",
+      errorCategory: "retryable",
+      errorCode: "META_SERVER_ERROR",
+    });
+    expect(dbMocks.updateValues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: "failed", errorCode: "META_SERVER_ERROR" }),
+        expect.objectContaining({ status: "partial_success", errorCode: "META_SERVER_ERROR" }),
+      ]),
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
     fetchSpy.mockRestore();
   });
 

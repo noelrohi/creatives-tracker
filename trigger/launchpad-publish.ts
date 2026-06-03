@@ -1,5 +1,8 @@
 import { logger, metadata, task, tags } from "@trigger.dev/sdk";
-import { PAUSED_META_STATUS } from "@/lib/launchpad-constants";
+import {
+  LAUNCHPAD_MAX_ITEMS,
+  PAUSED_META_STATUS,
+} from "@/lib/launchpad-constants";
 import { createApiClient, getEnvConfig } from "./client";
 
 type LaunchpadPublishPayload = {
@@ -31,38 +34,57 @@ export const launchpadPublishTask = task({
       throw new Error("Launchpad publish task only supports PAUSED Meta ads");
     }
 
-    if (payload.itemIds.length !== 1) {
-      throw new Error("Launchpad publish task only supports one item in this release");
+    if (payload.itemIds.length < 1 || payload.itemIds.length > LAUNCHPAD_MAX_ITEMS) {
+      throw new Error(`Launchpad publish task supports 1-${LAUNCHPAD_MAX_ITEMS} items`);
     }
 
-    const itemId = payload.itemIds[0];
-    metadata.set("itemId", itemId);
     metadata.set("step", "Calling internal publish procedure");
 
     logger.info("Starting Launchpad publish task", {
       organizationId: payload.organizationId,
       runId: payload.runId,
-      itemId,
+      itemCount: payload.itemIds.length,
       requestedStatus: payload.requestedStatus,
     });
 
-    const result = await client.launchpad.workerExecuteLivePublish.mutate({
-      runId: payload.runId,
-      itemId,
-      requestedStatus: PAUSED_META_STATUS,
-    });
+    const results = [];
+    for (const [index, itemId] of payload.itemIds.entries()) {
+      metadata.set("itemId", itemId);
+      metadata.set("currentItem", index + 1);
+      metadata.set("progress", Math.round((index / payload.itemIds.length) * 100));
 
-    metadata.set("status", result.status);
+      const result = await client.launchpad.workerExecuteLivePublish.mutate({
+        runId: payload.runId,
+        itemId,
+        requestedStatus: PAUSED_META_STATUS,
+      });
+
+      results.push({ itemId, result });
+      metadata.set("status", result.runStatus);
+
+      logger.info("Completed Launchpad publish item", {
+        organizationId: payload.organizationId,
+        runId: payload.runId,
+        itemId,
+        status: result.status,
+        runStatus: result.runStatus,
+        replayed: "replayed" in result ? result.replayed : false,
+      });
+    }
+
+    const lastResult = results.at(-1)?.result;
+    const status = lastResult?.runStatus ?? "success";
+    metadata.set("status", status);
+    metadata.set("progress", 100);
     metadata.set("step", "Launchpad publish task completed");
 
     logger.info("Completed Launchpad publish task", {
       organizationId: payload.organizationId,
       runId: payload.runId,
-      itemId,
-      status: result.status,
-      replayed: "replayed" in result ? result.replayed : false,
+      itemCount: payload.itemIds.length,
+      status,
     });
 
-    return result;
+    return { status, itemCount: payload.itemIds.length, results };
   },
 });
