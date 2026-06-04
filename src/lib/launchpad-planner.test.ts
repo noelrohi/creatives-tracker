@@ -252,10 +252,93 @@ describe("Launchpad single-static planner", () => {
     );
   });
 
-  it("records static-only, asset, HTTPS URL, and existing Meta ad conflict validation issues", () => {
+  it("builds video/UGC media previews and Meta video object shapes", () => {
     const plannerOutput = buildLaunchpadPlannerOutput(
       basePlannerInput({
-        creative: creative({ format: "video", assetUrl: null }),
+        creative: creative({
+          id: "creative-video-1",
+          name: "Summer UGC try-on",
+          format: "ugc",
+          assetUrl: "https://cdn.example.com/video-thumb.jpg",
+          videoUrl: "https://cdn.example.com/video.mp4",
+        }),
+      }),
+    );
+    const draft = createLaunchpadRunDraft(plannerOutput.runDraftInput);
+
+    expect(plannerOutput.issues).toEqual([]);
+    expect(draft.status).toBe("validated");
+    expect(draft.manifest.items[0]).toMatchObject({
+      creative: {
+        id: "creative-video-1",
+        format: "ugc",
+        videoUrl: "https://cdn.example.com/video.mp4",
+      },
+      media: {
+        type: "video",
+        uploadMethod: "file_url",
+        sourceUrl: "https://cdn.example.com/video.mp4",
+        thumbnailUrl: "https://cdn.example.com/video-thumb.jpg",
+      },
+      expectedMetaObjectShape: {
+        videoUpload: {
+          endpoint: "/act_123/advideos",
+          fields: {
+            file_url: "https://cdn.example.com/video.mp4",
+          },
+          resultReference: "<META_VIDEO_ID_FROM_URL_UPLOAD>",
+        },
+        creative: {
+          fields: {
+            object_story_spec: {
+              video_data: {
+                video_id: "<META_VIDEO_ID_FROM_URL_UPLOAD>",
+                link:
+                  "https://example.com/products?utm_source=meta&utm_medium=paid_social&utm_campaign=summer",
+              },
+            },
+          },
+        },
+        ad: {
+          fields: {
+            status: "PAUSED",
+          },
+        },
+      },
+    });
+  });
+
+  it("validates video URLs and optional thumbnails for video/UGC creatives", () => {
+    const missingVideo = buildLaunchpadPlannerOutput(
+      basePlannerInput({
+        creative: creative({ format: "video", assetUrl: null, videoUrl: null }),
+      }),
+    );
+    const httpVideo = buildLaunchpadPlannerOutput(
+      basePlannerInput({
+        creative: creative({
+          format: "ugc",
+          assetUrl: "http://cdn.example.com/thumb.jpg",
+          videoUrl: "http://cdn.example.com/video.mp4",
+        }),
+      }),
+    );
+
+    expect(missingVideo.issues.map((issue) => issue.code)).toContain(
+      "CREATIVE_VIDEO_REQUIRED",
+    );
+    expect(httpVideo.issues.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining([
+        "INVALID_CREATIVE_VIDEO_URL",
+        "INVALID_CREATIVE_ASSET_URL",
+      ]),
+    );
+  });
+
+  it("records unsupported format, HTTPS URL, and existing Meta ad conflict validation issues", () => {
+    const plannerOutput = buildLaunchpadPlannerOutput(
+      basePlannerInput({
+        creative: creative({ format: "carousel", assetUrl: null }),
         launch: {
           ...basePlannerInput().launch,
           defaultDestinationUrl: "http://example.com/products",
@@ -269,7 +352,6 @@ describe("Launchpad single-static planner", () => {
     expect(plannerOutput.issues.map((issue) => issue.code)).toEqual(
       expect.arrayContaining([
         "UNSUPPORTED_CREATIVE_FORMAT",
-        "CREATIVE_ASSET_REQUIRED",
         "INVALID_DESTINATION_URL",
         "MISSING_REQUIRED_UTM_PARAMETERS",
         "EXISTING_META_AD_ID_CONFLICT",

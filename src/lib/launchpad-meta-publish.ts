@@ -7,6 +7,7 @@ import { META_GRAPH_API_BASE } from "@/lib/meta-insights-sync";
 
 export type LaunchpadMetaOperation =
   | "upload_image"
+  | "upload_video"
   | "create_creative"
   | "create_ad"
   | "reconcile_ad";
@@ -58,6 +59,10 @@ type MetaImageUploadResponse = {
   images?: Record<string, { hash?: string }>;
   data?: Array<{ hash?: string }>;
   hash?: string;
+};
+
+type MetaVideoUploadResponse = {
+  id?: string;
 };
 
 type MetaIdResponse = {
@@ -135,6 +140,31 @@ function classifyMetaHttpError(
       category: "retryable",
       code: "META_SERVER_ERROR",
       message: "Meta API returned a server error while publishing Launchpad item",
+      operation,
+      details,
+    });
+  }
+
+  if (body?.error?.is_transient) {
+    return new LaunchpadMetaPublishError({
+      category: "retryable",
+      code: "META_TRANSIENT_ERROR",
+      message: "Meta API reported a transient error while publishing Launchpad item",
+      operation,
+      details,
+    });
+  }
+
+  if (
+    operation === "create_creative" &&
+    /video.+(processing|not ready|not available|try again)|processing.+video/i.test(
+      metaMessage,
+    )
+  ) {
+    return new LaunchpadMetaPublishError({
+      category: "retryable",
+      code: "META_VIDEO_PROCESSING",
+      message: "Meta video is still processing and the Launchpad item can be retried later",
       operation,
       details,
     });
@@ -262,6 +292,34 @@ export async function uploadMetaImageByUrl(input: {
   return { imageHash };
 }
 
+export async function uploadMetaVideoByUrl(input: {
+  metaAccountId: string;
+  accessToken: string;
+  sourceUrl: string;
+  videoName: string;
+}) {
+  const body = new URLSearchParams({
+    access_token: input.accessToken,
+    file_url: input.sourceUrl,
+    name: input.videoName,
+  });
+
+  const response = await metaFetchJson<MetaVideoUploadResponse>(
+    "upload_video",
+    `${META_GRAPH_API_BASE}/${metaAccountNode(input.metaAccountId)}/advideos`,
+    { method: "POST", body },
+  );
+
+  return {
+    videoId: requireMetaId(
+      "upload_video",
+      response,
+      "META_VIDEO_ID_MISSING",
+      "Meta video upload did not return a video ID",
+    ),
+  };
+}
+
 function buildObjectStorySpec(input: {
   pageId: string;
   instagramActorId: string | null;
@@ -304,6 +362,73 @@ export async function createMetaStaticCreative(input: {
   cta: MetaCallToAction;
 }) {
   const objectStorySpec = buildObjectStorySpec(input);
+  const body = new URLSearchParams({
+    access_token: input.accessToken,
+    name: input.creativeName,
+    object_story_spec: JSON.stringify(objectStorySpec),
+  });
+
+  const response = await metaFetchJson<MetaIdResponse>(
+    "create_creative",
+    `${META_GRAPH_API_BASE}/${metaAccountNode(input.metaAccountId)}/adcreatives`,
+    { method: "POST", body },
+  );
+
+  return {
+    creativeId: requireMetaId(
+      "create_creative",
+      response,
+      "META_CREATIVE_ID_MISSING",
+      "Meta creative creation did not return a creative ID",
+    ),
+  };
+}
+
+function buildVideoObjectStorySpec(input: {
+  pageId: string;
+  instagramActorId: string | null;
+  videoId: string;
+  thumbnailUrl: string | null;
+  destinationUrl: string;
+  primaryText: string | null;
+  headline: string | null;
+  cta: MetaCallToAction;
+}) {
+  return {
+    page_id: input.pageId,
+    ...(input.instagramActorId ? { instagram_actor_id: input.instagramActorId } : {}),
+    video_data: {
+      video_id: input.videoId,
+      link: input.destinationUrl,
+      ...(input.thumbnailUrl ? { image_url: input.thumbnailUrl } : {}),
+      ...(input.primaryText ? { message: input.primaryText } : {}),
+      ...(input.headline ? { title: input.headline } : {}),
+      ...(input.cta === "NO_BUTTON"
+        ? {}
+        : {
+            call_to_action: {
+              type: input.cta,
+              value: { link: input.destinationUrl },
+            },
+          }),
+    },
+  };
+}
+
+export async function createMetaVideoCreative(input: {
+  metaAccountId: string;
+  accessToken: string;
+  creativeName: string;
+  pageId: string;
+  instagramActorId: string | null;
+  videoId: string;
+  thumbnailUrl: string | null;
+  destinationUrl: string;
+  primaryText: string | null;
+  headline: string | null;
+  cta: MetaCallToAction;
+}) {
+  const objectStorySpec = buildVideoObjectStorySpec(input);
   const body = new URLSearchParams({
     access_token: input.accessToken,
     name: input.creativeName,

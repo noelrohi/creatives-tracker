@@ -1,5 +1,13 @@
 export const LAUNCHPAD_MAX_ITEMS = 25;
 
+export const launchpadSupportedCreativeFormats = ["static", "video", "ugc"] as const;
+export type LaunchpadSupportedCreativeFormat =
+  (typeof launchpadSupportedCreativeFormats)[number];
+
+export const launchpadVideoCreativeFormats = ["video", "ugc"] as const;
+export type LaunchpadVideoCreativeFormat =
+  (typeof launchpadVideoCreativeFormats)[number];
+
 export const launchpadRunStatuses = [
   "validation",
   "validated",

@@ -162,6 +162,19 @@ function staticCreative(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function videoCreative(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "creative-video-1",
+    name: "Router UGC video",
+    format: "ugc",
+    assetUrl: "https://cdn.example.com/router-video-thumb.jpg",
+    videoUrl: "https://cdn.example.com/router-video.mp4",
+    hook: "UGC hook fallback",
+    cta: null,
+    ...overrides,
+  };
+}
+
 type CreateValidationRunTestInput = {
   idempotencyKey?: string;
   actor?: {
@@ -231,6 +244,7 @@ function baseRunInput() {
         creativeName: "Router static hero",
         format: "static",
         assetUrl: "https://cdn.example.com/router-static.png",
+        videoUrl: null,
         hook: "Router hook fallback",
         adName: "Launchpad router demo",
         caption: "Router dry-run primary text",
@@ -239,6 +253,27 @@ function baseRunInput() {
       },
     ],
     env: process.env,
+  };
+}
+
+function videoRunInput() {
+  return {
+    ...baseRunInput(),
+    items: [
+      {
+        creativeId: "creative-video-1",
+        creativeName: "Router UGC video",
+        format: "ugc",
+        assetUrl: "https://cdn.example.com/router-video-thumb.jpg",
+        videoUrl: "https://cdn.example.com/router-video.mp4",
+        hook: "UGC hook fallback",
+        adName: "Launchpad router UGC demo",
+        caption: "Router UGC launch copy",
+        headline: "UGC hook fallback",
+        destinationUrl:
+          "https://example.com/video?utm_source=meta&utm_medium=paid_social",
+      },
+    ],
   };
 }
 
@@ -290,6 +325,7 @@ function persistedValidatedItem(overrides: Record<string, unknown> = {}) {
     dedupeKey: item.dedupeKey,
     requestedAdName: item.adName,
     externalMetaImageHash: null,
+    externalMetaVideoId: null,
     externalMetaCreativeId: null,
     externalMetaAdId: null,
     rawMetaConfiguredStatus: null,
@@ -336,6 +372,52 @@ function persistedQueuedItem(overrides: Record<string, unknown> = {}) {
   });
 }
 
+function persistedVideoRun(overrides: Record<string, unknown> = {}) {
+  const draft = createLaunchpadRunDraft(videoRunInput());
+  return persistedValidatedRun({
+    itemCount: draft.items.length,
+    manifest: draft.manifest,
+    manifestHash: draft.manifestHash,
+    idempotencyKey: draft.idempotencyKey,
+    dedupeKey: draft.dedupeKey,
+    ...overrides,
+  });
+}
+
+function persistedVideoItem(overrides: Record<string, unknown> = {}) {
+  const draft = createLaunchpadRunDraft(videoRunInput());
+  const item = draft.items[0];
+  return persistedValidatedItem({
+    creativeId: item.creativeId,
+    payload: item.payload,
+    payloadHash: item.payloadHash,
+    idempotencyKey: item.idempotencyKey,
+    dedupeKey: item.dedupeKey,
+    requestedAdName: item.adName,
+    ...overrides,
+  });
+}
+
+function persistedQueuedVideoRun(overrides: Record<string, unknown> = {}) {
+  return persistedVideoRun({
+    status: "queued",
+    mode: "publish",
+    queuedAt: new Date("2026-01-01T00:01:00.000Z"),
+    externalTriggerRunId: "trigger-run-1",
+    reconciliationStatus: "pending",
+    ...overrides,
+  });
+}
+
+function persistedQueuedVideoItem(overrides: Record<string, unknown> = {}) {
+  return persistedVideoItem({
+    status: "queued",
+    queuedAt: new Date("2026-01-01T00:01:00.000Z"),
+    reconciliationStatus: "pending",
+    ...overrides,
+  });
+}
+
 function batchRunInput() {
   return {
     ...baseRunInput(),
@@ -346,6 +428,7 @@ function batchRunInput() {
         creativeName: "Router static second",
         format: "static",
         assetUrl: "https://cdn.example.com/router-static-2.png",
+        videoUrl: null,
         hook: "Second hook fallback",
         adName: "Launchpad router demo 2",
         caption: "Router dry-run primary text 2",
@@ -1009,6 +1092,63 @@ describe("launchpad router ledger persistence", () => {
     expect(insertedItems[1]?.payload.url).toMatchObject({ source: "item_override" });
   });
 
+  it("persists mixed static and video dry-run items with media-specific payload previews", async () => {
+    enqueueEligibleDestination();
+    dbMocks.selectQueue.push(
+      [staticCreative({ id: "creative-1", name: "Router static hero" })],
+      [],
+      [videoCreative()],
+      [],
+      [],
+      [],
+      [],
+    );
+    dbMocks.insertReturningQueue = [[{ id: "run-mixed" }], [{ id: "item-1" }, { id: "item-2" }]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    const result = await adminCaller.launchpad.createValidationRun(
+      baseCreateValidationInput({
+        items: [
+          { creativeId: "creative-1" },
+          { creativeId: "creative-video-1", adName: "Manual UGC launch" },
+        ],
+      }),
+    );
+
+    expect(result).toEqual({ id: "run-mixed" });
+    expect(dbMocks.insertValues[0]).toMatchObject({ status: "validated", itemCount: 2 });
+    expect(dbMocks.insertValues[0]).toHaveProperty(
+      "manifest.plannerManifest.items.1.expectedMetaObjectShape.videoUpload.endpoint",
+      "/act_123/advideos",
+    );
+    const insertedItems = dbMocks.insertValues[1] as Array<{
+      requestedAdName: string;
+      payload: {
+        creative: { format: string; videoUrl: string | null };
+        media: { type: string; uploadMethod: string; sourceUrl: string | null };
+        expectedMetaObjectShape: { videoUpload?: unknown; imageUpload?: unknown };
+      };
+    }>;
+    expect(insertedItems).toHaveLength(2);
+    expect(insertedItems[0]?.payload.media).toMatchObject({ type: "image" });
+    expect(insertedItems[1]).toMatchObject({
+      requestedAdName: "Manual UGC launch",
+      payload: {
+        creative: {
+          format: "ugc",
+          videoUrl: "https://cdn.example.com/router-video.mp4",
+        },
+        media: {
+          type: "video",
+          uploadMethod: "file_url",
+          sourceUrl: "https://cdn.example.com/router-video.mp4",
+        },
+      },
+    });
+    expect(insertedItems[1]?.payload.expectedMetaObjectShape.videoUpload).toBeDefined();
+    expect(insertedItems[1]?.payload.expectedMetaObjectShape.imageUpload).toBeUndefined();
+  });
+
   it("rejects duplicate creatives inside the same batch before persistence", async () => {
     const adminCaller = createMockCaller({ role: "admin" });
 
@@ -1088,7 +1228,7 @@ describe("launchpad router ledger persistence", () => {
 
   it("persists item QA failures for unsupported creatives, invalid CTA, URL issues, and Meta ad conflicts", async () => {
     enqueueDryRunPlanningRows({
-      creative: staticCreative({ format: "video", assetUrl: null }),
+      creative: staticCreative({ format: "carousel", assetUrl: null }),
       conflicts: [{ id: "ad-1", name: "Existing Meta ad", metaId: "1200" }],
     });
     dbMocks.selectQueue.push([], [], []);
@@ -1115,7 +1255,6 @@ describe("launchpad router ledger persistence", () => {
     expect(serializedRun).toEqual(
       expect.stringContaining("UNSUPPORTED_CREATIVE_FORMAT"),
     );
-    expect(serializedRun).toEqual(expect.stringContaining("CREATIVE_ASSET_REQUIRED"));
     expect(serializedRun).toEqual(expect.stringContaining("INVALID_META_CTA"));
     expect(serializedRun).toEqual(expect.stringContaining("INVALID_DESTINATION_URL"));
     expect(serializedRun).toEqual(
@@ -1124,6 +1263,30 @@ describe("launchpad router ledger persistence", () => {
     expect(serializedRun).toEqual(
       expect.stringContaining("EXISTING_META_AD_ID_CONFLICT"),
     );
+    expect(dbMocks.insertValues[1]).toEqual([
+      expect.objectContaining({ status: "failed", errorCategory: "terminal" }),
+    ]);
+  });
+
+  it("persists clear QA failures for video creatives without a usable video URL", async () => {
+    enqueueDryRunPlanningRows({
+      creative: videoCreative({ videoUrl: null }),
+    });
+    dbMocks.selectQueue.push([], [], []);
+    dbMocks.insertReturningQueue = [[{ id: "run-video-failed" }], [{ id: "item-video-failed" }]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createValidationRun(
+        baseCreateValidationInput({
+          items: [{ creativeId: "creative-video-1", adName: "Missing video" }],
+        }),
+      ),
+    ).resolves.toEqual({ id: "run-video-failed" });
+
+    const serializedRun = JSON.stringify(dbMocks.insertValues[0]);
+    expect(serializedRun).toContain("CREATIVE_VIDEO_REQUIRED");
+    expect(serializedRun).not.toContain("UNSUPPORTED_CREATIVE_FORMAT");
     expect(dbMocks.insertValues[1]).toEqual([
       expect.objectContaining({ status: "failed", errorCategory: "terminal" }),
     ]);
@@ -1274,6 +1437,7 @@ describe("launchpad run detail", () => {
             name: "Launchpad router demo",
             status: "paused",
             metaId: "23800000000000000",
+            metaVideoId: null,
             destinationUrl:
               "https://example.com/products?utm_source=meta&utm_medium=paid_social",
             rawMetaConfiguredStatus: "PAUSED",
@@ -1332,6 +1496,20 @@ function enqueueWorkerPublishRows(options: {
     [{ metaAccessToken: "secret-token" }],
   ];
   dbMocks.insertReturningQueue = [[{ id: "local-ad-1" }]];
+}
+
+function enqueueVideoWorkerPublishRows(options: {
+  run?: Record<string, unknown>;
+  item?: Record<string, unknown>;
+} = {}) {
+  dbMocks.selectQueue = [
+    [persistedQueuedVideoRun(options.run)],
+    [persistedQueuedVideoItem(options.item)],
+    [eligibleAccount()],
+    [eligibleAdSet()],
+    [{ metaAccessToken: "secret-token" }],
+  ];
+  dbMocks.insertReturningQueue = [[{ id: "local-ad-video-1" }]];
 }
 
 describe("launchpad live publish enqueue", () => {
@@ -1408,6 +1586,37 @@ describe("launchpad live publish enqueue", () => {
         expect.objectContaining({ externalTriggerRunId: "trigger-run-1" }),
       ]),
     );
+  });
+
+  it("enqueues mixed static and video items without rejecting supported video payloads", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    const staticItem = persistedValidatedItem({ id: "item-1", position: 1 });
+    const videoItem = persistedVideoItem({ id: "item-2", position: 2 });
+    dbMocks.selectQueue = [
+      [persistedValidatedRun({ itemCount: 2 })],
+      [staticItem, videoItem],
+      [eligibleAccount()],
+      [eligibleAdSet()],
+      [{ metaAccessToken: "secret-token" }],
+    ];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    const result = await adminCaller.launchpad.requestLivePublish({
+      runId: "run-1",
+      confirmation: "PUBLISH_PAUSED_META_ADS",
+    });
+
+    expect(result).toMatchObject({
+      runId: "run-1",
+      itemIds: ["item-1", "item-2"],
+      status: "queued",
+    });
+    expect(triggerMocks.trigger).toHaveBeenCalledWith("launchpad-publish", {
+      organizationId: "test-org-id",
+      runId: "run-1",
+      itemIds: ["item-1", "item-2"],
+      requestedStatus: "PAUSED",
+    });
   });
 
   it("sanitizes Trigger enqueue errors before persisting failure details", async () => {
@@ -1709,7 +1918,7 @@ describe("launchpad retry and reconciliation", () => {
   });
 });
 
-describe("launchpad worker static publish", () => {
+describe("launchpad worker media publish", () => {
   it("creates a local paused ad, publishes one paused Meta ad, persists IDs, and stores raw statuses separately", async () => {
     process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
     enqueueWorkerPublishRows();
@@ -1796,6 +2005,112 @@ describe("launchpad worker static publish", () => {
         }),
       ]),
     );
+    fetchSpy.mockRestore();
+  });
+
+  it("uploads one video asset, creates a video creative and paused Meta ad, then persists video linkage", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    enqueueVideoWorkerPublishRows();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        if (url.includes("/advideos")) {
+          expect(init?.method).toBe("POST");
+          const body = init?.body as URLSearchParams;
+          expect(body.get("file_url")).toBe("https://cdn.example.com/router-video.mp4");
+          expect(body.get("name")).toBe("Launchpad router UGC demo / Video");
+          return jsonResponse({ id: "meta-video-1" });
+        }
+        if (url.includes("/adcreatives")) {
+          expect(init?.method).toBe("POST");
+          const body = init?.body as URLSearchParams;
+          const objectStorySpec = JSON.parse(body.get("object_story_spec") ?? "{}");
+          expect(objectStorySpec).toMatchObject({
+            page_id: "page-123",
+            instagram_actor_id: "ig-123",
+            video_data: {
+              video_id: "meta-video-1",
+              link: "https://example.com/video?utm_source=meta&utm_medium=paid_social",
+              image_url: "https://cdn.example.com/router-video-thumb.jpg",
+              message: "Router UGC launch copy",
+              title: "UGC hook fallback",
+              call_to_action: {
+                type: "SHOP_NOW",
+                value: {
+                  link: "https://example.com/video?utm_source=meta&utm_medium=paid_social",
+                },
+              },
+            },
+          });
+          expect(JSON.stringify(objectStorySpec)).not.toContain("image_hash");
+          return jsonResponse({ id: "meta-creative-video-1" });
+        }
+        if (url.includes("/ads")) {
+          expect(init?.method).toBe("POST");
+          const body = init?.body as URLSearchParams;
+          expect(body.get("status")).toBe("PAUSED");
+          expect(body.get("creative")).toBe(JSON.stringify({ creative_id: "meta-creative-video-1" }));
+          return jsonResponse({ id: "meta-ad-video-1" });
+        }
+        if (url.includes("/meta-ad-video-1")) {
+          return jsonResponse({
+            id: "meta-ad-video-1",
+            adset_id: "23800000000000000",
+            creative: { id: "meta-creative-video-1" },
+            configured_status: "PAUSED",
+            effective_status: "PAUSED",
+          });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      },
+    );
+    const workerCaller = createWorkerCaller();
+
+    const result = await workerCaller.launchpad.workerExecuteLivePublish({
+      runId: "run-1",
+      itemId: "item-1",
+    });
+
+    expect(result).toMatchObject({
+      status: "success",
+      replayed: false,
+      localAdId: "local-ad-video-1",
+      metaImageHash: null,
+      metaVideoId: "meta-video-1",
+      metaCreativeId: "meta-creative-video-1",
+      metaAdId: "meta-ad-video-1",
+      rawMetaConfiguredStatus: "PAUSED",
+      rawMetaEffectiveStatus: "PAUSED",
+    });
+    expect(dbMocks.insertValues[0]).toMatchObject({
+      organizationId: "test-org-id",
+      status: "paused",
+      adSetId: "ad-set-1",
+      adCreativeId: "creative-video-1",
+      accountId: "account-1",
+      destinationUrl: "https://example.com/video?utm_source=meta&utm_medium=paid_social",
+    });
+    expect(dbMocks.updateValues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          externalMetaVideoId: "meta-video-1",
+          externalMetaCreativeId: "meta-creative-video-1",
+          externalMetaAdId: "meta-ad-video-1",
+          rawMetaConfiguredStatus: "PAUSED",
+          rawMetaEffectiveStatus: "PAUSED",
+        }),
+        expect.objectContaining({
+          metaVideoId: "meta-video-1",
+          metaCreativeId: "meta-creative-video-1",
+          metaId: "meta-ad-video-1",
+          rawMetaConfiguredStatus: "PAUSED",
+          rawMetaEffectiveStatus: "PAUSED",
+          status: "paused",
+        }),
+        expect.objectContaining({ status: "success", reconciliationStatus: "reconciled" }),
+      ]),
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
     fetchSpy.mockRestore();
   });
 
@@ -2061,6 +2376,63 @@ describe("launchpad worker static publish", () => {
     fetchSpy.mockRestore();
   });
 
+  it("retries a video item with a saved Meta video ID without uploading a duplicate video", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    dbMocks.selectQueue = [
+      [persistedQueuedVideoRun({ status: "queued" })],
+      [persistedQueuedVideoItem({
+        status: "queued",
+        localAdId: "local-ad-video-1",
+        externalMetaVideoId: "meta-video-saved",
+        errorCategory: null,
+        errorCode: null,
+      })],
+      [eligibleAccount()],
+      [eligibleAdSet()],
+      [{ metaAccessToken: "secret-token" }],
+      [{ status: "success" }],
+    ];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        if (url.includes("/advideos")) throw new Error("duplicate video upload");
+        if (url.includes("/adcreatives")) {
+          const body = init?.body as URLSearchParams;
+          const objectStorySpec = JSON.parse(body.get("object_story_spec") ?? "{}");
+          expect(objectStorySpec.video_data.video_id).toBe("meta-video-saved");
+          return jsonResponse({ id: "meta-creative-video-retry" });
+        }
+        if (url.includes("/ads")) return jsonResponse({ id: "meta-ad-video-retry" });
+        if (url.includes("/meta-ad-video-retry")) {
+          return jsonResponse({
+            id: "meta-ad-video-retry",
+            adset_id: "23800000000000000",
+            creative: { id: "meta-creative-video-retry" },
+            configured_status: "PAUSED",
+            effective_status: "PAUSED",
+          });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      },
+    );
+    const workerCaller = createWorkerCaller();
+
+    const result = await workerCaller.launchpad.workerExecuteLivePublish({
+      runId: "run-1",
+      itemId: "item-1",
+    });
+
+    expect(result).toMatchObject({
+      status: "success",
+      metaVideoId: "meta-video-saved",
+      metaCreativeId: "meta-creative-video-retry",
+      metaAdId: "meta-ad-video-retry",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect(dbMocks.insertValues).toEqual([]);
+    fetchSpy.mockRestore();
+  });
+
   it.each([
     { status: 429, body: { error: { message: "Rate limited" } }, code: "META_RATE_LIMIT" },
     { status: 500, body: { error: { message: "Server error" } }, code: "META_SERVER_ERROR" },
@@ -2112,6 +2484,71 @@ describe("launchpad worker static publish", () => {
       errorCategory: "retryable",
       errorCode: "META_TIMEOUT",
     });
+    fetchSpy.mockRestore();
+  });
+
+  it("classifies Meta video upload failures through the existing retryable taxonomy", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    enqueueVideoWorkerPublishRows();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ error: { message: "Video upload temporarily failed" } }, 500, "Server Error"),
+    );
+    const workerCaller = createWorkerCaller();
+
+    const result = await workerCaller.launchpad.workerExecuteLivePublish({
+      runId: "run-1",
+      itemId: "item-1",
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      errorCategory: "retryable",
+      errorCode: "META_SERVER_ERROR",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(dbMocks.updateValues)).not.toContain("secret-token");
+    fetchSpy.mockRestore();
+  });
+
+  it("classifies Meta video processing rejections as retryable without duplicating uploaded video IDs", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    enqueueVideoWorkerPublishRows();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/advideos")) return jsonResponse({ id: "meta-video-processing" });
+        if (url.includes("/adcreatives")) {
+          return jsonResponse(
+            { error: { message: "Video is still processing, please try again" } },
+            400,
+            "Bad Request",
+          );
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      },
+    );
+    const workerCaller = createWorkerCaller();
+
+    const result = await workerCaller.launchpad.workerExecuteLivePublish({
+      runId: "run-1",
+      itemId: "item-1",
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      errorCategory: "retryable",
+      errorCode: "META_VIDEO_PROCESSING",
+    });
+    expect(dbMocks.updateValues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ externalMetaVideoId: "meta-video-processing" }),
+        expect.objectContaining({
+          status: "failed",
+          errorCategory: "retryable",
+          errorCode: "META_VIDEO_PROCESSING",
+        }),
+      ]),
+    );
     fetchSpy.mockRestore();
   });
 

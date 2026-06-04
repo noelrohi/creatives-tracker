@@ -184,6 +184,7 @@ export const launchpadPublishItems = pgTable(
 
     requestedAdName: text("requested_ad_name"),
     externalMetaImageHash: text("external_meta_image_hash"),
+    externalMetaVideoId: text("external_meta_video_id"),
     externalMetaCreativeId: text("external_meta_creative_id"),
     externalMetaAdId: text("external_meta_ad_id"),
     rawMetaConfiguredStatus: text("raw_meta_configured_status"),

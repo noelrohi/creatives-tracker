@@ -34,6 +34,8 @@ function item(overrides: Partial<LaunchpadRunDetailItem> = {}): LaunchpadRunDeta
         id: "creative-1",
         name: "Static winner",
         format: "static",
+        assetUrl: "https://cdn.example.com/static.png",
+        videoUrl: null,
       },
       launch: {
         adName: "Launchpad / Static winner",
@@ -46,6 +48,11 @@ function item(overrides: Partial<LaunchpadRunDetailItem> = {}): LaunchpadRunDeta
         cta: "SHOP_NOW",
         ctaSource: "default",
         requestedStatus: "PAUSED",
+      },
+      media: {
+        type: "image",
+        uploadMethod: "url",
+        sourceUrl: "https://cdn.example.com/static.png",
       },
       url: {
         finalUrl:
@@ -88,12 +95,60 @@ describe("Launchpad run detail presentation", () => {
     expect(summary).toMatchObject({
       creativeId: "creative-1",
       creativeName: "Static winner",
+      creativeAssetUrl: "https://cdn.example.com/static.png",
+      mediaType: "image",
+      mediaUploadMethod: "url",
+      mediaSourceUrl: "https://cdn.example.com/static.png",
       adName: "Launchpad / Static winner",
       finalUrl:
         "https://example.com/products?utm_source=meta&utm_medium=paid_social",
       cta: "SHOP_NOW",
       requestedStatus: "PAUSED",
       plannedLocalStatus: "paused",
+    });
+  });
+
+  it("extracts video media and Meta video linkage for operator audit", () => {
+    const summary = getLaunchpadItemManifestSummary(
+      item({
+        externalMetaVideoId: "meta-video-1",
+        payload: {
+          creative: {
+            id: "creative-video-1",
+            name: "UGC winner",
+            format: "ugc",
+            assetUrl: "https://cdn.example.com/thumb.jpg",
+            videoUrl: "https://cdn.example.com/video.mp4",
+          },
+          media: {
+            type: "video",
+            uploadMethod: "file_url",
+            sourceUrl: "https://cdn.example.com/video.mp4",
+            thumbnailUrl: "https://cdn.example.com/thumb.jpg",
+          },
+          launch: {
+            adName: "Launchpad / UGC winner",
+            destinationUrl:
+              "https://example.com/products?utm_source=meta&utm_medium=paid_social",
+            cta: "SHOP_NOW",
+            requestedStatus: "PAUSED",
+          },
+          safety: {
+            localAdStatus: "paused",
+            metaAdStatus: "PAUSED",
+          },
+        },
+      }),
+    );
+
+    expect(summary).toMatchObject({
+      creativeId: "creative-video-1",
+      creativeFormat: "ugc",
+      creativeVideoUrl: "https://cdn.example.com/video.mp4",
+      mediaType: "video",
+      mediaUploadMethod: "file_url",
+      mediaSourceUrl: "https://cdn.example.com/video.mp4",
+      mediaThumbnailUrl: "https://cdn.example.com/thumb.jpg",
     });
   });
 

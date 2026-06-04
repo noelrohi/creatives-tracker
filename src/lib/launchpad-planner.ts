@@ -1,6 +1,8 @@
 import {
   DEFAULT_META_CTA,
   PAUSED_META_STATUS,
+  launchpadSupportedCreativeFormats,
+  launchpadVideoCreativeFormats,
   metaCtaValues,
   type MetaCallToAction,
 } from "@/lib/launchpad-constants";
@@ -95,6 +97,20 @@ function normalizedText(value: string | null | undefined) {
 
 function isMetaCta(value: string): value is MetaCallToAction {
   return (metaCtaValues as readonly string[]).includes(value);
+}
+
+function isSupportedCreativeFormat(
+  format: string | null | undefined,
+): format is "static" | "video" | "ugc" {
+  return (launchpadSupportedCreativeFormats as readonly string[]).includes(
+    format ?? "",
+  );
+}
+
+function isVideoCreativeFormat(
+  format: string | null | undefined,
+): format is "video" | "ugc" {
+  return (launchpadVideoCreativeFormats as readonly string[]).includes(format ?? "");
 }
 
 function destinationIssueToValidationIssue(
@@ -302,11 +318,23 @@ function buildTargetPreview(input: LaunchpadPlannerInput) {
 }
 
 function buildMediaPreview(creative: LaunchpadPlannerCreative) {
+  if (isVideoCreativeFormat(creative.format)) {
+    return {
+      type: "video",
+      uploadMethod: "file_url",
+      creativeId: creative.id,
+      sourceUrl: normalizedText(creative.videoUrl),
+      thumbnailUrl: normalizedText(creative.assetUrl),
+      format: creative.format,
+    };
+  }
+
   return {
     type: "image",
     uploadMethod: "url",
     creativeId: creative.id,
     sourceUrl: normalizedText(creative.assetUrl),
+    format: creative.format,
   };
 }
 
@@ -318,11 +346,68 @@ function buildExpectedMetaObjectShape(input: {
   headline: string | null;
   cta: MetaCallToAction;
   finalUrl: string | null;
+  creativeFormat: string | null;
   assetUrl: string | null;
+  videoUrl: string | null;
 }) {
   const accountPath = input.account.metaAccountId.startsWith("act_")
     ? input.account.metaAccountId
     : `act_${input.account.metaAccountId}`;
+  const callToAction =
+    input.cta === "NO_BUTTON"
+      ? null
+      : {
+          type: input.cta,
+          value: { link: input.finalUrl },
+        };
+
+  if (isVideoCreativeFormat(input.creativeFormat)) {
+    const creativeObjectStorySpec = {
+      page_id: input.account.defaultFacebookPageId,
+      instagram_actor_id: input.account.defaultInstagramActorId,
+      video_data: {
+        video_id: "<META_VIDEO_ID_FROM_URL_UPLOAD>",
+        link: input.finalUrl,
+        message: input.primaryText,
+        title: input.headline,
+        image_url: input.assetUrl,
+        call_to_action: callToAction,
+      },
+    };
+
+    return {
+      videoUpload: {
+        method: "POST",
+        endpoint: `/${accountPath}/advideos`,
+        fields: {
+          file_url: input.videoUrl,
+          name: `${input.adName} / Video`,
+        },
+        resultReference: "<META_VIDEO_ID_FROM_URL_UPLOAD>",
+      },
+      creative: {
+        method: "POST",
+        endpoint: `/${accountPath}/adcreatives`,
+        fields: {
+          name: `${input.adName} / Creative`,
+          object_story_spec: creativeObjectStorySpec,
+        },
+        resultReference: "<META_CREATIVE_ID>",
+      },
+      ad: {
+        method: "POST",
+        endpoint: `/${accountPath}/ads`,
+        fields: {
+          name: input.adName,
+          adset_id: input.adSet.metaId,
+          creative: { creative_id: "<META_CREATIVE_ID>" },
+          status: PAUSED_META_STATUS,
+        },
+        resultReference: "<META_AD_ID>",
+      },
+    };
+  }
+
   const creativeObjectStorySpec = {
     page_id: input.account.defaultFacebookPageId,
     instagram_actor_id: input.account.defaultInstagramActorId,
@@ -331,13 +416,7 @@ function buildExpectedMetaObjectShape(input: {
       link: input.finalUrl,
       message: input.primaryText,
       name: input.headline,
-      call_to_action:
-        input.cta === "NO_BUTTON"
-          ? null
-          : {
-              type: input.cta,
-              value: { link: input.finalUrl },
-            },
+      call_to_action: callToAction,
     },
   };
 
@@ -373,53 +452,111 @@ function buildExpectedMetaObjectShape(input: {
   };
 }
 
-function buildCreativeIssues(input: LaunchpadPlannerInput) {
-  const issues: LaunchpadValidationIssue[] = [];
-  const assetUrl = normalizedText(input.creative.assetUrl);
-
-  if (input.creative.format !== "static") {
-    issues.push({
-      code: "UNSUPPORTED_CREATIVE_FORMAT",
-      message: "Launchpad dry-run currently supports static image creatives only",
-      field: "creativeId",
-      details: { creativeId: input.creative.id, format: input.creative.format },
-    });
-  }
-
-  if (!assetUrl) {
-    issues.push({
-      code: "CREATIVE_ASSET_REQUIRED",
-      message: "Static image dry-run requires a creative asset URL",
-      field: "creativeId",
-      details: { creativeId: input.creative.id },
-    });
-    return issues;
-  }
-
-  let parsedAssetUrl: URL;
+function validateCreativeHttpsUrl(input: {
+  creativeId: string;
+  url: string;
+  fieldName: "assetUrl" | "videoUrl";
+  label: string;
+}): LaunchpadValidationIssue | null {
+  let parsedUrl: URL;
   try {
-    parsedAssetUrl = new URL(assetUrl);
+    parsedUrl = new URL(input.url);
   } catch {
-    issues.push({
-      code: "INVALID_CREATIVE_ASSET_URL",
-      message: "Static image asset URL must be a valid HTTPS URL",
+    return {
+      code: input.fieldName === "assetUrl"
+        ? "INVALID_CREATIVE_ASSET_URL"
+        : "INVALID_CREATIVE_VIDEO_URL",
+      message: `${input.label} must be a valid HTTPS URL`,
       field: "creativeId",
-      details: { creativeId: input.creative.id, assetUrl },
-    });
-    return issues;
+      details: { creativeId: input.creativeId, [input.fieldName]: input.url },
+    };
   }
 
-  if (parsedAssetUrl.protocol !== "https:") {
-    issues.push({
-      code: "INVALID_CREATIVE_ASSET_URL",
-      message: "Static image asset URL must use HTTPS",
+  if (parsedUrl.protocol !== "https:") {
+    return {
+      code: input.fieldName === "assetUrl"
+        ? "INVALID_CREATIVE_ASSET_URL"
+        : "INVALID_CREATIVE_VIDEO_URL",
+      message: `${input.label} must use HTTPS`,
       field: "creativeId",
       details: {
-        creativeId: input.creative.id,
-        assetUrl,
-        protocol: parsedAssetUrl.protocol,
+        creativeId: input.creativeId,
+        [input.fieldName]: input.url,
+        protocol: parsedUrl.protocol,
+      },
+    };
+  }
+
+  return null;
+}
+
+function buildCreativeIssues(input: LaunchpadPlannerInput) {
+  const issues: LaunchpadValidationIssue[] = [];
+  const { creative } = input;
+  const assetUrl = normalizedText(creative.assetUrl);
+  const videoUrl = normalizedText(creative.videoUrl);
+
+  if (!isSupportedCreativeFormat(creative.format)) {
+    issues.push({
+      code: "UNSUPPORTED_CREATIVE_FORMAT",
+      message:
+        "Launchpad supports static image and single-asset video/UGC creatives only",
+      field: "creativeId",
+      details: {
+        creativeId: creative.id,
+        format: creative.format,
+        supportedFormats: launchpadSupportedCreativeFormats,
       },
     });
+    return issues;
+  }
+
+  if (creative.format === "static") {
+    if (!assetUrl) {
+      issues.push({
+        code: "CREATIVE_ASSET_REQUIRED",
+        message: "Static image dry-run requires a creative asset URL",
+        field: "creativeId",
+        details: { creativeId: creative.id },
+      });
+      return issues;
+    }
+
+    const urlIssue = validateCreativeHttpsUrl({
+      creativeId: creative.id,
+      url: assetUrl,
+      fieldName: "assetUrl",
+      label: "Static image asset URL",
+    });
+    if (urlIssue) issues.push(urlIssue);
+    return issues;
+  }
+
+  if (!videoUrl) {
+    issues.push({
+      code: "CREATIVE_VIDEO_REQUIRED",
+      message: "Video/UGC dry-run requires a creative video URL",
+      field: "creativeId",
+      details: { creativeId: creative.id, format: creative.format },
+    });
+  } else {
+    const videoIssue = validateCreativeHttpsUrl({
+      creativeId: creative.id,
+      url: videoUrl,
+      fieldName: "videoUrl",
+      label: "Video/UGC asset URL",
+    });
+    if (videoIssue) issues.push(videoIssue);
+  }
+
+  if (assetUrl) {
+    const thumbnailIssue = validateCreativeHttpsUrl({
+      creativeId: creative.id,
+      url: assetUrl,
+      fieldName: "assetUrl",
+      label: "Video/UGC thumbnail URL",
+    });
+    if (thumbnailIssue) issues.push(thumbnailIssue);
   }
 
   return issues;
@@ -486,7 +623,9 @@ export function buildLaunchpadPlannerOutput(
     headline: headline.value,
     cta: cta.value,
     finalUrl: url.preview.finalUrl,
+    creativeFormat: input.creative.format,
     assetUrl: normalizedText(input.creative.assetUrl),
+    videoUrl: normalizedText(input.creative.videoUrl),
   });
 
   const normalizedItem = {

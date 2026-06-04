@@ -7,6 +7,8 @@ import { isLaunchpadEnabled } from "@/lib/feature-flags";
 import {
   LAUNCHPAD_MAX_ITEMS,
   PAUSED_META_STATUS,
+  launchpadSupportedCreativeFormats,
+  launchpadVideoCreativeFormats,
 } from "@/lib/launchpad-constants";
 import {
   LaunchpadDestinationError,
@@ -28,10 +30,12 @@ import {
 import {
   LaunchpadMetaPublishError,
   createMetaStaticCreative,
+  createMetaVideoCreative,
   createPausedMetaAd,
   fetchMetaAdSnapshot,
   reconcileCreatedMetaAd,
   uploadMetaImageByUrl,
+  uploadMetaVideoByUrl,
 } from "@/lib/launchpad-meta-publish";
 import { buildLaunchpadPlannerOutput } from "@/lib/launchpad-planner";
 import { ads } from "@/schema/ad";
@@ -394,21 +398,54 @@ function assertLaunchpadEnabledForWorker() {
   }
 }
 
-function assertStaticPublishPayload(payload: LaunchpadItemPayload) {
-  if (payload.creative.format !== "static") {
+function isLaunchpadVideoFormat(format: string | null | undefined) {
+  return (launchpadVideoCreativeFormats as readonly string[]).includes(format ?? "");
+}
+
+function assertHttpsField(input: {
+  value: string;
+  field: "assetUrl" | "videoUrl" | "destinationUrl";
+  label: string;
+}) {
+  let parsed: URL;
+  try {
+    parsed = new URL(input.value);
+  } catch {
     throw new LaunchpadLedgerError(
-      "UNSUPPORTED_CREATIVE_FORMAT",
-      "Launchpad live publishing currently supports static image creatives only",
-      { format: payload.creative.format, creativeId: payload.creative.id },
+      input.field === "destinationUrl"
+        ? "INVALID_DESTINATION_URL"
+        : input.field === "assetUrl"
+          ? "INVALID_CREATIVE_ASSET_URL"
+          : "INVALID_CREATIVE_VIDEO_URL",
+      `${input.label} must be a valid HTTPS URL`,
+      { [input.field]: input.value },
     );
   }
 
-  const assetUrl = payload.creative.assetUrl;
-  if (!assetUrl) {
+  if (parsed.protocol !== "https:") {
     throw new LaunchpadLedgerError(
-      "CREATIVE_ASSET_REQUIRED",
-      "Static image publishing requires a creative asset URL",
-      { creativeId: payload.creative.id },
+      input.field === "destinationUrl"
+        ? "INVALID_DESTINATION_URL"
+        : input.field === "assetUrl"
+          ? "INVALID_CREATIVE_ASSET_URL"
+          : "INVALID_CREATIVE_VIDEO_URL",
+      `${input.label} must use HTTPS`,
+      { [input.field]: input.value, protocol: parsed.protocol },
+    );
+  }
+}
+
+function assertSupportedPublishPayload(payload: LaunchpadItemPayload) {
+  const format = payload.creative.format;
+  if (!(launchpadSupportedCreativeFormats as readonly string[]).includes(format ?? "")) {
+    throw new LaunchpadLedgerError(
+      "UNSUPPORTED_CREATIVE_FORMAT",
+      "Launchpad live publishing supports static image and single-asset video/UGC creatives only",
+      {
+        format,
+        creativeId: payload.creative.id,
+        supportedFormats: launchpadSupportedCreativeFormats,
+      },
     );
   }
 
@@ -416,36 +453,52 @@ function assertStaticPublishPayload(payload: LaunchpadItemPayload) {
   if (!destinationUrl) {
     throw new LaunchpadLedgerError(
       "DESTINATION_URL_REQUIRED",
-      "Static image publishing requires a destination URL",
+      "Launchpad publishing requires a destination URL",
     );
   }
+  assertHttpsField({
+    value: destinationUrl,
+    field: "destinationUrl",
+    label: "Destination URL",
+  });
 
-  for (const [field, value] of [
-    ["assetUrl", assetUrl],
-    ["destinationUrl", destinationUrl],
-  ] as const) {
-    let parsed: URL;
-    try {
-      parsed = new URL(value);
-    } catch {
+  if (format === "static") {
+    const assetUrl = payload.creative.assetUrl;
+    if (!assetUrl) {
       throw new LaunchpadLedgerError(
-        field === "assetUrl" ? "INVALID_CREATIVE_ASSET_URL" : "INVALID_DESTINATION_URL",
-        field === "assetUrl"
-          ? "Static image asset URL must be a valid HTTPS URL"
-          : "Destination URL must be a valid HTTPS URL",
-        { [field]: value },
+        "CREATIVE_ASSET_REQUIRED",
+        "Static image publishing requires a creative asset URL",
+        { creativeId: payload.creative.id },
       );
     }
+    assertHttpsField({
+      value: assetUrl,
+      field: "assetUrl",
+      label: "Static image asset URL",
+    });
+    return;
+  }
 
-    if (parsed.protocol !== "https:") {
-      throw new LaunchpadLedgerError(
-        field === "assetUrl" ? "INVALID_CREATIVE_ASSET_URL" : "INVALID_DESTINATION_URL",
-        field === "assetUrl"
-          ? "Static image asset URL must use HTTPS"
-          : "Destination URL must use HTTPS",
-        { [field]: value, protocol: parsed.protocol },
-      );
-    }
+  const videoUrl = payload.creative.videoUrl;
+  if (!videoUrl) {
+    throw new LaunchpadLedgerError(
+      "CREATIVE_VIDEO_REQUIRED",
+      "Video/UGC publishing requires a creative video URL",
+      { creativeId: payload.creative.id, format },
+    );
+  }
+  assertHttpsField({
+    value: videoUrl,
+    field: "videoUrl",
+    label: "Video/UGC asset URL",
+  });
+
+  if (payload.creative.assetUrl) {
+    assertHttpsField({
+      value: payload.creative.assetUrl,
+      field: "assetUrl",
+      label: "Video/UGC thumbnail URL",
+    });
   }
 }
 
@@ -502,7 +555,7 @@ function assertItemReadyForPublish(item: LaunchpadItemRow) {
     );
   }
 
-  assertStaticPublishPayload(item.payload as LaunchpadItemPayload);
+  assertSupportedPublishPayload(item.payload as LaunchpadItemPayload);
 }
 
 async function loadLaunchpadRunOrThrow(
@@ -843,6 +896,7 @@ async function ensureLocalPausedAd(
       organizationId,
       status: "paused",
       metaImageHash: item.externalMetaImageHash,
+      metaVideoId: item.externalMetaVideoId,
       metaCreativeId: item.externalMetaCreativeId,
       metaId: item.externalMetaAdId,
       rawMetaConfiguredStatus: item.rawMetaConfiguredStatus,
@@ -878,6 +932,7 @@ async function persistMetaIds(
     itemId: string;
     localAdId: string;
     imageHash?: string | null;
+    videoId?: string | null;
     creativeId?: string | null;
     adId?: string | null;
     rawMetaConfiguredStatus?: string | null;
@@ -888,6 +943,7 @@ async function persistMetaIds(
     .update(launchpadPublishItems)
     .set({
       externalMetaImageHash: input.imageHash,
+      externalMetaVideoId: input.videoId,
       externalMetaCreativeId: input.creativeId,
       externalMetaAdId: input.adId,
       rawMetaConfiguredStatus: input.rawMetaConfiguredStatus,
@@ -904,6 +960,7 @@ async function persistMetaIds(
     .update(ads)
     .set({
       metaImageHash: input.imageHash,
+      metaVideoId: input.videoId,
       metaCreativeId: input.creativeId,
       metaId: input.adId,
       rawMetaConfiguredStatus: input.rawMetaConfiguredStatus,
@@ -985,7 +1042,7 @@ function assertItemReadyForRetry(item: LaunchpadItemRow) {
     );
   }
 
-  assertStaticPublishPayload(item.payload as LaunchpadItemPayload);
+  assertSupportedPublishPayload(item.payload as LaunchpadItemPayload);
 }
 
 async function persistManualIntervention(
@@ -1028,6 +1085,7 @@ async function persistReconciledSuccess(
     itemId: string;
     localAdId: string;
     imageHash: string | null;
+    videoId: string | null;
     creativeId: string;
     adId: string;
     rawMetaConfiguredStatus: string | null;
@@ -1041,6 +1099,7 @@ async function persistReconciledSuccess(
       status: "success",
       localAdId: input.localAdId,
       externalMetaImageHash: input.imageHash,
+      externalMetaVideoId: input.videoId,
       externalMetaCreativeId: input.creativeId,
       externalMetaAdId: input.adId,
       rawMetaConfiguredStatus: input.rawMetaConfiguredStatus,
@@ -1065,6 +1124,7 @@ async function persistReconciledSuccess(
     .update(ads)
     .set({
       metaImageHash: input.imageHash,
+      metaVideoId: input.videoId,
       metaCreativeId: input.creativeId,
       metaId: input.adId,
       rawMetaConfiguredStatus: input.rawMetaConfiguredStatus,
@@ -1176,6 +1236,7 @@ async function reconcileItemWithSavedMetaAd(
         itemId: item.id,
         localAdId: item.localAdId,
         imageHash: item.externalMetaImageHash,
+        videoId: item.externalMetaVideoId,
         creativeId: item.externalMetaCreativeId,
         adId: item.externalMetaAdId,
         rawMetaConfiguredStatus: reconciliation.rawMetaConfiguredStatus,
@@ -1357,6 +1418,7 @@ export const launchpadRouter = router({
             name: ads.name,
             status: ads.status,
             metaId: ads.metaId,
+            metaVideoId: ads.metaVideoId,
             destinationUrl: ads.destinationUrl,
             rawMetaConfiguredStatus: ads.rawMetaConfiguredStatus,
             rawMetaEffectiveStatus: ads.rawMetaEffectiveStatus,
@@ -2113,6 +2175,7 @@ export const launchpadRouter = router({
           itemId: item.id,
           localAdId: item.localAdId,
           metaImageHash: item.externalMetaImageHash,
+          metaVideoId: item.externalMetaVideoId,
           metaCreativeId: item.externalMetaCreativeId,
           metaAdId: item.externalMetaAdId,
           rawMetaConfiguredStatus: item.rawMetaConfiguredStatus,
@@ -2157,8 +2220,10 @@ export const launchpadRouter = router({
       const payload = item.payload as LaunchpadItemPayload;
       let localAdId = item.localAdId;
       let imageHash = item.externalMetaImageHash;
+      let videoId = item.externalMetaVideoId;
       let metaCreativeId = item.externalMetaCreativeId;
       let metaAdId = item.externalMetaAdId;
+      const isVideoPayload = isLaunchpadVideoFormat(payload.creative.format);
 
       try {
         await markPublishInProgress(db, organizationId, {
@@ -2168,43 +2233,90 @@ export const launchpadRouter = router({
 
         localAdId = await ensureLocalPausedAd(db, organizationId, item, payload);
 
-        if (!imageHash) {
-          const imageResult = await uploadMetaImageByUrl({
-            metaAccountId: destination.account.metaAccountId,
-            accessToken: destination.accessToken,
-            sourceUrl: payload.creative.assetUrl!,
-          });
-          imageHash = imageResult.imageHash;
-          await persistMetaIds(db, organizationId, {
-            itemId: item.id,
-            localAdId,
-            imageHash,
-            creativeId: metaCreativeId,
-            adId: metaAdId,
-          });
-        }
+        if (isVideoPayload) {
+          if (!videoId) {
+            const videoResult = await uploadMetaVideoByUrl({
+              metaAccountId: destination.account.metaAccountId,
+              accessToken: destination.accessToken,
+              sourceUrl: payload.creative.videoUrl!,
+              videoName: `${payload.launch.adName} / Video`,
+            });
+            videoId = videoResult.videoId;
+            await persistMetaIds(db, organizationId, {
+              itemId: item.id,
+              localAdId,
+              imageHash,
+              videoId,
+              creativeId: metaCreativeId,
+              adId: metaAdId,
+            });
+          }
 
-        if (!metaCreativeId) {
-          const creativeResult = await createMetaStaticCreative({
-            metaAccountId: destination.account.metaAccountId,
-            accessToken: destination.accessToken,
-            creativeName: `${payload.launch.adName} / Creative`,
-            pageId: destination.account.defaultFacebookPageId!,
-            instagramActorId: destination.account.defaultInstagramActorId,
-            imageHash,
-            destinationUrl: payload.launch.destinationUrl!,
-            primaryText: payload.launch.primaryText,
-            headline: payload.launch.headline,
-            cta: payload.launch.cta,
-          });
-          metaCreativeId = creativeResult.creativeId;
-          await persistMetaIds(db, organizationId, {
-            itemId: item.id,
-            localAdId,
-            imageHash,
-            creativeId: metaCreativeId,
-            adId: metaAdId,
-          });
+          if (!metaCreativeId) {
+            const creativeResult = await createMetaVideoCreative({
+              metaAccountId: destination.account.metaAccountId,
+              accessToken: destination.accessToken,
+              creativeName: `${payload.launch.adName} / Creative`,
+              pageId: destination.account.defaultFacebookPageId!,
+              instagramActorId: destination.account.defaultInstagramActorId,
+              videoId,
+              thumbnailUrl: payload.creative.assetUrl,
+              destinationUrl: payload.launch.destinationUrl!,
+              primaryText: payload.launch.primaryText,
+              headline: payload.launch.headline,
+              cta: payload.launch.cta,
+            });
+            metaCreativeId = creativeResult.creativeId;
+            await persistMetaIds(db, organizationId, {
+              itemId: item.id,
+              localAdId,
+              imageHash,
+              videoId,
+              creativeId: metaCreativeId,
+              adId: metaAdId,
+            });
+          }
+        } else {
+          if (!imageHash) {
+            const imageResult = await uploadMetaImageByUrl({
+              metaAccountId: destination.account.metaAccountId,
+              accessToken: destination.accessToken,
+              sourceUrl: payload.creative.assetUrl!,
+            });
+            imageHash = imageResult.imageHash;
+            await persistMetaIds(db, organizationId, {
+              itemId: item.id,
+              localAdId,
+              imageHash,
+              videoId,
+              creativeId: metaCreativeId,
+              adId: metaAdId,
+            });
+          }
+
+          if (!metaCreativeId) {
+            const creativeResult = await createMetaStaticCreative({
+              metaAccountId: destination.account.metaAccountId,
+              accessToken: destination.accessToken,
+              creativeName: `${payload.launch.adName} / Creative`,
+              pageId: destination.account.defaultFacebookPageId!,
+              instagramActorId: destination.account.defaultInstagramActorId,
+              imageHash,
+              destinationUrl: payload.launch.destinationUrl!,
+              primaryText: payload.launch.primaryText,
+              headline: payload.launch.headline,
+              cta: payload.launch.cta,
+            });
+            metaCreativeId = creativeResult.creativeId;
+            await persistMetaIds(db, organizationId, {
+              itemId: item.id,
+              localAdId,
+              imageHash,
+              videoId,
+              creativeId: metaCreativeId,
+              adId: metaAdId,
+            });
+          }
         }
 
         if (!metaAdId) {
@@ -2221,6 +2333,7 @@ export const launchpadRouter = router({
             itemId: item.id,
             localAdId,
             imageHash,
+            videoId,
             creativeId: metaCreativeId,
             adId: metaAdId,
           });
@@ -2241,6 +2354,7 @@ export const launchpadRouter = router({
           itemId: item.id,
           localAdId,
           imageHash,
+          videoId,
           creativeId: metaCreativeId,
           adId: metaAdId,
           rawMetaConfiguredStatus: reconciliation.rawMetaConfiguredStatus,
@@ -2271,6 +2385,7 @@ export const launchpadRouter = router({
             status: "success",
             localAdId,
             externalMetaImageHash: imageHash,
+            externalMetaVideoId: videoId,
             externalMetaCreativeId: metaCreativeId,
             externalMetaAdId: metaAdId,
             rawMetaConfiguredStatus: reconciliation.rawMetaConfiguredStatus,
@@ -2333,6 +2448,7 @@ export const launchpadRouter = router({
           itemId: item.id,
           localAdId,
           metaImageHash: imageHash,
+          metaVideoId: videoId,
           metaCreativeId,
           metaAdId,
           rawMetaConfiguredStatus: reconciliation.rawMetaConfiguredStatus,

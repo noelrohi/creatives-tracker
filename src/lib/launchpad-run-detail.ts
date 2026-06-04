@@ -13,6 +13,7 @@ type LaunchpadPayloadPreview = {
     name?: string | null;
     format?: string | null;
     assetUrl?: string | null;
+    videoUrl?: string | null;
     hook?: string | null;
   } | null;
   launch?: {
@@ -26,6 +27,12 @@ type LaunchpadPayloadPreview = {
     cta?: string | null;
     ctaSource?: string | null;
     requestedStatus?: string | null;
+  } | null;
+  media?: {
+    type?: string | null;
+    uploadMethod?: string | null;
+    sourceUrl?: string | null;
+    thumbnailUrl?: string | null;
   } | null;
   url?: {
     finalUrl?: string | null;
@@ -80,6 +87,7 @@ export type LaunchpadRunDetailItem = {
   localAdId?: string | null;
   requestedAdName?: string | null;
   externalMetaCreativeId?: string | null;
+  externalMetaVideoId?: string | null;
   externalMetaAdId?: string | null;
   rawMetaConfiguredStatus?: string | null;
   rawMetaEffectiveStatus?: string | null;
@@ -101,6 +109,7 @@ export type LaunchpadRunDetailItem = {
     name?: string | null;
     status?: string | null;
     metaId?: string | null;
+    metaVideoId?: string | null;
     destinationUrl?: string | null;
     rawMetaConfiguredStatus?: string | null;
     rawMetaEffectiveStatus?: string | null;
@@ -230,6 +239,12 @@ export function getLaunchpadItemManifestSummary(item: LaunchpadRunDetailItem) {
     creativeId,
     creativeName: normalizedText(payload.creative?.name),
     creativeFormat: normalizedText(payload.creative?.format),
+    creativeAssetUrl: normalizedText(payload.creative?.assetUrl),
+    creativeVideoUrl: normalizedText(payload.creative?.videoUrl),
+    mediaType: normalizedText(payload.media?.type),
+    mediaUploadMethod: normalizedText(payload.media?.uploadMethod),
+    mediaSourceUrl: normalizedText(payload.media?.sourceUrl),
+    mediaThumbnailUrl: normalizedText(payload.media?.thumbnailUrl),
     adName,
     adNameSource: normalizedText(payload.launch?.adNameSource),
     finalUrl:
