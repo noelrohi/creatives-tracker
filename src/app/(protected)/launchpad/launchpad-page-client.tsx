@@ -145,7 +145,16 @@ export function LaunchpadPageClient() {
         });
         toast.success("Paused Meta publish queued in Trigger");
       },
-      onError: (error) => toast.error(error.message),
+      onError: (error) => {
+        toast.error(error.message);
+        queryClient.invalidateQueries({ queryKey: trpc.launchpad.list.queryKey() });
+        const runId = selectedRun.data?.run.id ?? selectedRunId;
+        if (runId) {
+          queryClient.invalidateQueries({
+            queryKey: trpc.launchpad.getById.queryKey({ id: runId }),
+          });
+        }
+      },
     }),
   );
 
@@ -801,16 +810,66 @@ export function LaunchpadPageClient() {
                   Publish item outcomes
                 </p>
                 <div className="space-y-1.5">
-                  {selectedRun.data.items.map((item) => (
-                    <div key={item.id} className="flex items-center justify-between gap-3 text-xs">
-                      <span className="truncate">
-                        {item.position}. {item.requestedAdName ?? item.creativeId}
-                      </span>
-                      <Badge variant="outline" className="shrink-0 capitalize">
-                        {statusLabel(item.status)}
-                      </Badge>
-                    </div>
-                  ))}
+                  {selectedRun.data.items.map((item) => {
+                    const details = [
+                      item.errorCode
+                        ? {
+                            label: "Error",
+                            value: item.errorMessage
+                              ? `${item.errorCode}: ${item.errorMessage}`
+                              : item.errorCode,
+                          }
+                        : null,
+                      item.reconciliationStatus && item.reconciliationStatus !== "not_required"
+                        ? {
+                            label: "Reconciliation",
+                            value: statusLabel(item.reconciliationStatus),
+                          }
+                        : null,
+                      item.manualInterventionReason
+                        ? {
+                            label: "Manual intervention",
+                            value: item.manualInterventionReason,
+                          }
+                        : null,
+                      item.externalMetaAdId
+                        ? { label: "Meta ad", value: item.externalMetaAdId }
+                        : null,
+                      item.externalMetaCreativeId
+                        ? { label: "Meta creative", value: item.externalMetaCreativeId }
+                        : null,
+                      item.localAdId
+                        ? { label: "Local ad", value: item.localAdId }
+                        : null,
+                    ].filter((detail): detail is { label: string; value: string } =>
+                      Boolean(detail?.value),
+                    );
+
+                    return (
+                      <div key={item.id} className="rounded-md border bg-background/60 p-2 text-xs">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="truncate font-medium">
+                            {item.position}. {item.requestedAdName ?? item.creativeId}
+                          </span>
+                          <Badge variant="outline" className="shrink-0 capitalize">
+                            {statusLabel(item.status)}
+                          </Badge>
+                        </div>
+                        {details.length > 0 ? (
+                          <dl className="mt-2 grid gap-1 text-[11px] text-muted-foreground">
+                            {details.map((detail) => (
+                              <div key={detail.label} className="flex justify-between gap-3">
+                                <dt className="shrink-0">{detail.label}</dt>
+                                <dd className="truncate text-right font-mono">
+                                  {detail.value}
+                                </dd>
+                              </div>
+                            ))}
+                          </dl>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>

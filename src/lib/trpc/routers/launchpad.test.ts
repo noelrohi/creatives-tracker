@@ -947,7 +947,7 @@ describe("launchpad router ledger persistence", () => {
         defaultCta: "LEARN_MORE",
         namingTemplate: "Batch {{item.positionPadded}} / {{creative.name}}",
         items: [
-          { creativeId: "creative-1", primaryText: "", cta: "" },
+          { creativeId: "creative-1", primaryText: "", destinationUrl: "", cta: "" },
           {
             creativeId: "creative-2",
             adName: "Manual item two",
@@ -1738,6 +1738,43 @@ describe("launchpad worker static publish", () => {
       status: "failed",
       errorCategory: "retryable",
       errorCode: "META_TIMEOUT",
+    });
+    fetchSpy.mockRestore();
+  });
+
+  it("treats uncertain Meta ad creation network failures as ambiguous to prevent duplicate retries", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    enqueueWorkerPublishRows();
+    const networkError = new Error("socket hang up after /ads request");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("/adimages")) {
+          return jsonResponse({
+            images: {
+              "https://cdn.example.com/router-static.png": {
+                hash: "meta-image-hash-1",
+              },
+            },
+          });
+        }
+        if (url.includes("/adcreatives")) return jsonResponse({ id: "meta-creative-1" });
+        if (url.includes("/ads")) throw networkError;
+        throw new Error(`Unexpected fetch ${url}`);
+      },
+    );
+    const workerCaller = createWorkerCaller();
+
+    const result = await workerCaller.launchpad.workerExecuteLivePublish({
+      runId: "run-1",
+      itemId: "item-1",
+    });
+
+    expect(result).toMatchObject({
+      status: "ambiguous",
+      runStatus: "ambiguous",
+      errorCategory: "ambiguous",
+      errorCode: "META_AD_CREATE_AMBIGUOUS",
     });
     fetchSpy.mockRestore();
   });

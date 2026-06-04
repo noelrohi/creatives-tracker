@@ -109,6 +109,9 @@ describe("Launchpad ledger state machine", () => {
       "manual_intervention",
     );
     expect(computeRunAggregateStatus(["ambiguous", "queued"])).toBe("publishing");
+    expect(computeRunAggregateStatus(["manual_intervention", "queued"])).toBe(
+      "publishing",
+    );
     expect(computeRunAggregateStatus(["validated", "validated"])).toBe("validated");
   });
 });
