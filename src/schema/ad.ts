@@ -26,6 +26,7 @@ export const ads = pgTable(
     destinationUrl: text("destination_url"),
     metaId: text("meta_id").unique(),
     metaImageHash: text("meta_image_hash"),
+    metaVideoId: text("meta_video_id"),
     metaCreativeId: text("meta_creative_id"),
     rawMetaConfiguredStatus: text("raw_meta_configured_status"),
     rawMetaEffectiveStatus: text("raw_meta_effective_status"),

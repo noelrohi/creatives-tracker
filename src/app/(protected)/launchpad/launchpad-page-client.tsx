@@ -19,11 +19,17 @@ import {
   RotateCcw,
   ShieldCheck,
   Target,
+  Video,
   Wrench,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { LAUNCHPAD_MAX_ITEMS, metaCtaValues } from "@/lib/launchpad-constants";
+import {
+  LAUNCHPAD_MAX_ITEMS,
+  launchpadSupportedCreativeFormats,
+  launchpadVideoCreativeFormats,
+  metaCtaValues,
+} from "@/lib/launchpad-constants";
 import {
   buildLaunchpadLocalAdHref,
   buildMetaAdsManagerAdUrl,
@@ -80,6 +86,41 @@ function readinessLabel(reason: string) {
     default:
       return reason.replace(/_/g, " ");
   }
+}
+
+type LaunchpadSelectableCreative = {
+  id: string;
+  name: string;
+  format: string | null;
+  assetUrl: string | null;
+  videoUrl: string | null;
+  hook?: string | null;
+};
+
+function isSupportedLaunchpadFormat(format: string | null | undefined) {
+  return (launchpadSupportedCreativeFormats as readonly string[]).includes(
+    format ?? "",
+  );
+}
+
+function isVideoLaunchpadFormat(format: string | null | undefined) {
+  return (launchpadVideoCreativeFormats as readonly string[]).includes(format ?? "");
+}
+
+function creativeMediaReadiness(creative: LaunchpadSelectableCreative | undefined) {
+  if (!creative) return "Select a creative to inspect media readiness.";
+  if (creative.format === "static") {
+    return creative.assetUrl ? "Static asset ready" : "Missing image asset will fail QA";
+  }
+  if (isVideoLaunchpadFormat(creative.format)) {
+    return creative.videoUrl ? "Video asset ready" : "Missing video URL will fail QA";
+  }
+  return "Unsupported format will be blocked by QA";
+}
+
+function formatCreativeKind(format: string | null | undefined) {
+  if (!format) return "unknown";
+  return format.toUpperCase();
 }
 
 function formatJson(value: unknown) {
@@ -439,6 +480,7 @@ function LaunchpadRunDetailPanel({
               lastRetryRequestedAt: item.lastRetryRequestedAt,
               externalMetaAdId: item.externalMetaAdId,
               externalMetaCreativeId: item.externalMetaCreativeId,
+              externalMetaVideoId: item.externalMetaVideoId,
               localAdId: item.localAdId,
               localAd: item.localAd,
             })),
@@ -511,6 +553,32 @@ function LaunchpadItemDetailCard({
               Manifest summary
             </p>
             <dl className="grid gap-1.5 text-xs">
+              <DetailRow label="Media">
+                <span className="inline-flex items-center justify-end gap-1 font-mono uppercase">
+                  {manifest.mediaType === "video" ? (
+                    <Video className="size-3" />
+                  ) : (
+                    <FileImage className="size-3" />
+                  )}
+                  {manifest.creativeFormat ?? manifest.mediaType ?? "unknown"}
+                  {manifest.mediaUploadMethod ? ` · ${manifest.mediaUploadMethod}` : null}
+                </span>
+              </DetailRow>
+              <DetailRow label="Media source">
+                {manifest.mediaSourceUrl ? (
+                  <a
+                    href={manifest.mediaSourceUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex max-w-sm items-center justify-end gap-1 text-primary hover:underline"
+                  >
+                    <span className="truncate">{manifest.mediaSourceUrl}</span>
+                    <ExternalLink className="size-3 shrink-0" />
+                  </a>
+                ) : (
+                  "—"
+                )}
+              </DetailRow>
               <DetailRow label="Generated / overridden ad name">
                 <span className="break-words">{manifest.adName ?? "—"}</span>
               </DetailRow>
@@ -577,6 +645,16 @@ function LaunchpadItemDetailCard({
                   </Button>
                 ) : null}
               </div>
+              {manifest.mediaType === "video" || item.externalMetaVideoId || item.localAd?.metaVideoId ? (
+                <div className="rounded-lg border bg-background/70 p-2 sm:col-span-2">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Meta video ID
+                  </p>
+                  <p className="mt-1 font-mono text-xs">
+                    {item.externalMetaVideoId ?? item.localAd?.metaVideoId ?? "not uploaded"}
+                  </p>
+                </div>
+              ) : null}
               <div className="rounded-lg border bg-background/70 p-2 sm:col-span-2">
                 <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                   Meta creative ID
@@ -667,8 +745,9 @@ export function LaunchpadPageClient() {
   const [selectedRunId, setSelectedRunId] = useState("");
 
   const runs = useQuery(trpc.launchpad.list.queryOptions({ limit: 50 }));
-  const staticCreatives = useQuery(
-    trpc.adCreative.list.queryOptions({ format: "static" }),
+  const creatives = useQuery(trpc.adCreative.list.queryOptions());
+  const launchpadCreatives = (creatives.data ?? []).filter((creative) =>
+    isSupportedLaunchpadFormat(creative.format),
   );
   const selectedRun = useQuery({
     ...trpc.launchpad.getById.queryOptions({ id: selectedRunId || "__no_run__" }),
@@ -697,7 +776,7 @@ export function LaunchpadPageClient() {
   const selectedAdSet = eligibleAdSets.data?.find(
     (adSet) => adSet.id === selectedAdSetId,
   );
-  const selectedCreative = staticCreatives.data?.find(
+  const selectedCreative = launchpadCreatives.find(
     (creative) => creative.id === selectedCreativeId,
   );
   const destinationContext = useQuery({
@@ -823,7 +902,7 @@ export function LaunchpadPageClient() {
     }
 
     if (launchItems.length === 0) {
-      toast.error("Choose at least one static creative for the dry run.");
+      toast.error("Choose at least one supported static, video, or UGC creative for the dry run.");
       return;
     }
 
@@ -929,7 +1008,7 @@ export function LaunchpadPageClient() {
               </h1>
               <p className="mt-1 text-sm text-muted-foreground">
                 Select one eligible synced Meta destination and up to {LAUNCHPAD_MAX_ITEMS}
-                existing static creatives to freeze a side-effect-free batch
+                existing static, video, or UGC creatives to freeze a side-effect-free batch
                 dry-run manifest. Destination context is read-only: no budget,
                 targeting, pixel, placement, or optimization controls.
               </p>
@@ -1117,7 +1196,7 @@ export function LaunchpadPageClient() {
         <div className="border-b px-4 py-3">
           <div className="flex items-center gap-2">
             <FileImage className="size-4 text-primary" />
-            <h2 className="text-sm font-semibold">Batch static creative dry run</h2>
+            <h2 className="text-sm font-semibold">Batch creative dry run</h2>
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
             The server reloads every creative before planning. The form sends only
@@ -1128,34 +1207,38 @@ export function LaunchpadPageClient() {
           <div className="space-y-4">
             <div className="space-y-2">
               <Label className="text-xs uppercase tracking-wide text-muted-foreground">
-                Add static creatives
+                Add supported creatives
               </Label>
               <div className="flex gap-2">
                 <Select
                   value={selectedCreativeId}
                   onValueChange={setSelectedCreativeId}
-                  disabled={staticCreatives.isLoading || launchItems.length >= LAUNCHPAD_MAX_ITEMS}
+                  disabled={creatives.isLoading || launchItems.length >= LAUNCHPAD_MAX_ITEMS}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Choose a static creative…" />
+                    <SelectValue placeholder="Choose static, video, or UGC…" />
                   </SelectTrigger>
                   <SelectContent>
-                    {staticCreatives.data?.map((creative) => (
+                    {launchpadCreatives.map((creative) => (
                       <SelectItem
                         key={creative.id}
                         value={creative.id}
                         disabled={launchItems.some((item) => item.creativeId === creative.id)}
                       >
                         <span>{creative.name}</span>
-                        {creative.assetUrl ? (
-                          <span className="ml-2 text-xs text-muted-foreground">
-                            asset ready
-                          </span>
-                        ) : (
-                          <span className="ml-2 text-xs text-amber-600">
-                            missing asset
-                          </span>
-                        )}
+                        <span className="ml-2 text-xs text-muted-foreground">
+                          {formatCreativeKind(creative.format)}
+                        </span>
+                        <span
+                          className={cn(
+                            "ml-2 text-xs",
+                            creativeMediaReadiness(creative).includes("Missing")
+                              ? "text-amber-600"
+                              : "text-muted-foreground",
+                          )}
+                        >
+                          {creativeMediaReadiness(creative)}
+                        </span>
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -1171,9 +1254,9 @@ export function LaunchpadPageClient() {
               </div>
               <p className="text-xs text-muted-foreground">
                 {launchItems.length}/{LAUNCHPAD_MAX_ITEMS} selected. {selectedCreative
-                  ? selectedCreative.hook
+                  ? `${creativeMediaReadiness(selectedCreative)} · ${selectedCreative.hook
                     ? `Headline fallback: ${selectedCreative.hook}`
-                    : `Headline fallback: ${selectedCreative.name}`
+                    : `Headline fallback: ${selectedCreative.name}`}`
                   : "Each item can override name, URL, headline, and copy."}
               </p>
             </div>
@@ -1253,23 +1336,35 @@ export function LaunchpadPageClient() {
             </div>
             {launchItems.length === 0 ? (
               <div className="rounded-lg border border-dashed bg-muted/20 p-6 text-sm text-muted-foreground">
-                Add static creatives to build a batch manifest.
+                Add supported creatives to build a batch manifest.
               </div>
             ) : (
               <div className="max-h-[520px] space-y-3 overflow-auto pr-1">
                 {launchItems.map((item, index) => {
-                  const creative = staticCreatives.data?.find(
+                  const creative = launchpadCreatives.find(
                     (candidate) => candidate.id === item.creativeId,
                   );
                   return (
                     <div key={item.creativeId} className="rounded-lg border bg-muted/10 p-3">
                       <div className="mb-3 flex items-start justify-between gap-3">
                         <div>
-                          <p className="text-sm font-medium">
-                            {index + 1}. {creative?.name ?? item.creativeId}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {creative?.assetUrl ? "Static asset ready" : "Missing asset will fail QA"}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-medium">
+                              {index + 1}. {creative?.name ?? item.creativeId}
+                            </p>
+                            {creative ? (
+                              <Badge variant="outline" className="gap-1 text-[10px]">
+                                {isVideoLaunchpadFormat(creative.format) ? (
+                                  <Video className="size-3" />
+                                ) : (
+                                  <FileImage className="size-3" />
+                                )}
+                                {formatCreativeKind(creative.format)}
+                              </Badge>
+                            ) : null}
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {creativeMediaReadiness(creative)}
                             {creative?.hook ? ` · headline fallback: ${creative.hook}` : null}
                           </p>
                         </div>
