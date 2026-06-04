@@ -17,6 +17,7 @@ import {
   SidebarGroupContent,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
@@ -73,7 +74,7 @@ const dashboardSubItems = [
 
 const navItems = [
   { label: "Creatives", href: "/creatives", icon: Image },
-  { label: "Launchpad", href: "/launchpad", icon: Rocket },
+  { label: "Launchpad", href: "/launchpad", icon: Rocket, badge: "Beta" },
   { label: "Teams", href: "/teams", icon: Users },
   { label: "Accounts", href: "/accounts", icon: Settings },
 ];
@@ -349,12 +350,18 @@ export function AppSidebar({
                       asChild
                       tooltip={item.label}
                       isActive={pathname.startsWith(item.href)}
+                      className={item.badge ? "pr-14" : undefined}
                     >
                       <Link href={item.href}>
                         <item.icon />
                         <span>{item.label}</span>
                       </Link>
                     </SidebarMenuButton>
+                    {item.badge ? (
+                      <SidebarMenuBadge className="rounded-full border border-sidebar-border bg-sidebar-accent/80 px-2 text-[10px] font-semibold uppercase tracking-wide text-sidebar-accent-foreground">
+                        {item.badge}
+                      </SidebarMenuBadge>
+                    ) : null}
                   </SidebarMenuItem>
                 ))}
               </SidebarMenu>

@@ -1,19 +1,16 @@
 "use client";
 
-import { type ReactNode, useState } from "react";
+import { Fragment, type ReactNode, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
-  Archive,
   CalendarClock,
   CheckCircle2,
   ExternalLink,
   FileImage,
-  Fingerprint,
   Link2,
   ListChecks,
-  LockKeyhole,
   Plus,
   RadioTower,
   RotateCcw,
@@ -127,6 +124,20 @@ function formatJson(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
 
+function urlHasLaunchpadRequirements(value: string) {
+  if (!value.trim()) return false;
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      url.searchParams.has("utm_source") &&
+      url.searchParams.has("utm_medium")
+    );
+  } catch {
+    return false;
+  }
+}
+
 type LaunchpadDraftItem = {
   creativeId: string;
   adName: string;
@@ -143,6 +154,14 @@ type LaunchpadRunDetailData = {
   };
   items: LaunchpadRunDetailItem[];
 };
+
+type ReadinessChecklistItem = {
+  label: string;
+  detail: string;
+  ready: boolean;
+};
+
+type LaunchpadStep = "destination" | "creatives" | "defaults" | "runs";
 
 type Tone = "neutral" | "warning" | "danger" | "success";
 
@@ -731,6 +750,561 @@ function LaunchpadItemDetailCard({
   );
 }
 
+function ReadinessChecklist({ items }: { items: ReadinessChecklistItem[] }) {
+  return (
+    <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+      {items.map((item) => (
+        <div
+          key={item.label}
+          title={item.detail}
+          className={cn(
+            "inline-flex min-w-0 items-center gap-1.5 text-xs",
+            item.ready
+              ? "text-emerald-700 dark:text-emerald-300"
+              : "text-amber-700 dark:text-amber-300",
+          )}
+        >
+          {item.ready ? (
+            <CheckCircle2 className="size-3.5 shrink-0" />
+          ) : (
+            <AlertTriangle className="size-3.5 shrink-0" />
+          )}
+          <span className="min-w-0 truncate font-medium">{item.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function LaunchpadStepper({
+  activeStep,
+  onStepChange,
+  steps,
+}: {
+  activeStep: LaunchpadStep;
+  onStepChange: (step: LaunchpadStep) => void;
+  steps: {
+    id: LaunchpadStep;
+    label: string;
+    detail: string;
+    ready: boolean;
+  }[];
+}) {
+  return (
+    <nav className="grid overflow-hidden rounded-lg border bg-card sm:grid-cols-4">
+      {steps.map((step, index) => {
+        const isActive = step.id === activeStep;
+        return (
+          <button
+            key={step.id}
+            type="button"
+            onClick={() => onStepChange(step.id)}
+            className={cn(
+              "flex min-w-0 items-center gap-3 border-b px-3 py-2.5 text-left transition-colors last:border-b-0 sm:border-b-0 sm:border-r sm:last:border-r-0",
+              isActive ? "bg-muted/35" : "hover:bg-muted/20",
+            )}
+          >
+            <span
+              className={cn(
+                "flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-medium",
+                isActive
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : step.ready
+                    ? "border-emerald-200 text-emerald-700 dark:border-emerald-900/60 dark:text-emerald-300"
+                    : "border-border text-muted-foreground",
+              )}
+            >
+              {step.ready && !isActive ? (
+                <CheckCircle2 className="size-3.5" />
+              ) : (
+                index + 1
+              )}
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-medium">
+                {step.label}
+              </span>
+            </span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+function itemOverrideCount(item: LaunchpadDraftItem) {
+  return [
+    item.adName,
+    item.destinationUrl,
+    item.headline,
+    item.primaryText,
+    item.cta,
+  ].filter((value) => value.trim()).length;
+}
+
+function ManifestPreviewTable({
+  launchItems,
+  launchpadCreatives,
+  defaultDestinationUrl,
+  cta,
+  onUpdateItem,
+  onRemoveItem,
+}: {
+  launchItems: LaunchpadDraftItem[];
+  launchpadCreatives: LaunchpadSelectableCreative[];
+  defaultDestinationUrl: string;
+  cta: string;
+  onUpdateItem: (
+    creativeId: string,
+    field: keyof Omit<LaunchpadDraftItem, "creativeId">,
+    value: string,
+  ) => void;
+  onRemoveItem: (creativeId: string) => void;
+}) {
+  if (launchItems.length === 0) {
+    return (
+      <div className="flex min-h-56 flex-col items-center justify-center gap-3 rounded-lg border border-dashed bg-muted/15 px-4 py-10 text-center">
+        <div className="rounded-full border bg-background/70 p-3">
+          <FileImage className="size-5 text-muted-foreground" />
+        </div>
+        <div>
+          <p className="text-sm font-medium">No creatives added yet</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-lg border">
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-10">#</TableHead>
+              <TableHead>Creative</TableHead>
+              <TableHead>Format</TableHead>
+              <TableHead>URL source</TableHead>
+              <TableHead>Headline</TableHead>
+              <TableHead>CTA</TableHead>
+              <TableHead>Readiness</TableHead>
+              <TableHead>Overrides</TableHead>
+              <TableHead className="w-10" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {launchItems.map((item, index) => {
+              const creative = launchpadCreatives.find(
+                (candidate) => candidate.id === item.creativeId,
+              );
+              const readiness = creativeMediaReadiness(creative);
+              const hasReadinessIssue =
+                readiness.includes("Missing") ||
+                readiness.includes("Unsupported");
+              const overrideCount = itemOverrideCount(item);
+              const urlSource = item.destinationUrl.trim()
+                ? "Override"
+                : defaultDestinationUrl.trim()
+                  ? "Batch default"
+                  : "Missing";
+
+              return (
+                <Fragment key={item.creativeId}>
+                  <TableRow>
+                    <TableCell className="text-muted-foreground">
+                      {index + 1}
+                    </TableCell>
+                    <TableCell className="min-w-56">
+                      <div className="max-w-72">
+                        <p className="truncate text-sm font-medium">
+                          {creative?.name ?? item.creativeId}
+                        </p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {creative?.hook
+                            ? `Fallback: ${creative.hook}`
+                            : "Uses creative name fallback"}
+                        </p>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className="gap-1 text-[10px]">
+                        {isVideoLaunchpadFormat(creative?.format) ? (
+                          <Video className="size-3" />
+                        ) : (
+                          <FileImage className="size-3" />
+                        )}
+                        {formatCreativeKind(creative?.format)}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "text-[10px]",
+                          urlSource === "Missing"
+                            ? "border-amber-200 text-amber-700 dark:border-amber-900/60 dark:text-amber-300"
+                            : "",
+                        )}
+                      >
+                        {urlSource}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="max-w-56 truncate text-sm">
+                      {item.headline || creative?.hook || creative?.name || "Fallback"}
+                    </TableCell>
+                    <TableCell>
+                      <code className="text-xs">{item.cta || cta}</code>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "text-[10px]",
+                          hasReadinessIssue
+                            ? "border-amber-200 text-amber-700 dark:border-amber-900/60 dark:text-amber-300"
+                            : "border-emerald-200 text-emerald-700 dark:border-emerald-900/60 dark:text-emerald-300",
+                        )}
+                      >
+                        {hasReadinessIssue ? "Needs QA" : "Ready"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="secondary">{overrideCount} set</Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        type="button"
+                        size="icon-xs"
+                        variant="ghost"
+                        onClick={() => onRemoveItem(item.creativeId)}
+                        aria-label={`Remove ${creative?.name ?? "creative"}`}
+                      >
+                        <X className="size-3.5" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                  <TableRow className="bg-muted/10 hover:bg-muted/10">
+                    <TableCell colSpan={9} className="p-0">
+                      <details className="group">
+                        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-2 text-xs text-muted-foreground hover:text-foreground">
+                          <span>
+                            Edit per-item overrides for{" "}
+                            <span className="font-medium text-foreground">
+                              {creative?.name ?? `item ${index + 1}`}
+                            </span>
+                          </span>
+                          <span className="text-[11px] group-open:hidden">
+                            Show fields
+                          </span>
+                          <span className="hidden text-[11px] group-open:inline">
+                            Hide fields
+                          </span>
+                        </summary>
+                        <div className="grid gap-3 border-t p-4 sm:grid-cols-2 xl:grid-cols-5">
+                          <div className="space-y-1.5">
+                            <Label
+                              htmlFor={`adName-${item.creativeId}`}
+                              className="text-xs text-muted-foreground"
+                            >
+                              Ad name override
+                            </Label>
+                            <Input
+                              id={`adName-${item.creativeId}`}
+                              value={item.adName}
+                              onChange={(event) =>
+                                onUpdateItem(
+                                  item.creativeId,
+                                  "adName",
+                                  event.target.value,
+                                )
+                              }
+                              placeholder="Template-generated"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label
+                              htmlFor={`url-${item.creativeId}`}
+                              className="text-xs text-muted-foreground"
+                            >
+                              URL override
+                            </Label>
+                            <Input
+                              id={`url-${item.creativeId}`}
+                              value={item.destinationUrl}
+                              onChange={(event) =>
+                                onUpdateItem(
+                                  item.creativeId,
+                                  "destinationUrl",
+                                  event.target.value,
+                                )
+                              }
+                              placeholder="Overrides batch URL"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label
+                              htmlFor={`headline-${item.creativeId}`}
+                              className="text-xs text-muted-foreground"
+                            >
+                              Headline override
+                            </Label>
+                            <Input
+                              id={`headline-${item.creativeId}`}
+                              value={item.headline}
+                              onChange={(event) =>
+                                onUpdateItem(
+                                  item.creativeId,
+                                  "headline",
+                                  event.target.value,
+                                )
+                              }
+                              placeholder="Defaults from hook"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label
+                              htmlFor={`copy-${item.creativeId}`}
+                              className="text-xs text-muted-foreground"
+                            >
+                              Copy override
+                            </Label>
+                            <Input
+                              id={`copy-${item.creativeId}`}
+                              value={item.primaryText}
+                              onChange={(event) =>
+                                onUpdateItem(
+                                  item.creativeId,
+                                  "primaryText",
+                                  event.target.value,
+                                )
+                              }
+                              placeholder="Uses batch copy"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label className="text-xs text-muted-foreground">
+                              CTA override
+                            </Label>
+                            <Select
+                              value={item.cta || "__batch_default__"}
+                              onValueChange={(value) =>
+                                onUpdateItem(
+                                  item.creativeId,
+                                  "cta",
+                                  value === "__batch_default__" ? "" : value,
+                                )
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="Use batch CTA" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="__batch_default__">
+                                  Use batch CTA
+                                </SelectItem>
+                                {metaCtaValues.map((value) => (
+                                  <SelectItem key={value} value={value}>
+                                    {value.replace(/_/g, " ")}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                      </details>
+                    </TableCell>
+                  </TableRow>
+                </Fragment>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  );
+}
+
+function LaunchpadRunInspector({
+  data,
+  isLoading,
+  isPublishing,
+  isRetrying,
+  isMarkingManual,
+  onPublish,
+  onRetry,
+  onMarkManual,
+  onClear,
+}: {
+  data: LaunchpadRunDetailData | undefined;
+  isLoading: boolean;
+  isPublishing: boolean;
+  isRetrying: boolean;
+  isMarkingManual: boolean;
+  onPublish: () => void;
+  onRetry: () => void;
+  onMarkManual: (itemId: string) => void;
+  onClear: () => void;
+}) {
+  if (isLoading) {
+    return (
+      <aside className="rounded-xl border bg-card">
+        <div className="border-b px-4 py-3">
+          <Skeleton className="h-5 w-32" />
+        </div>
+        <div className="space-y-3 p-4">
+          <Skeleton className="h-20 w-full" />
+          <Skeleton className="h-32 w-full" />
+        </div>
+      </aside>
+    );
+  }
+
+  if (!data) {
+    return (
+      <aside className="rounded-xl border border-dashed bg-card/70 p-4">
+        <div className="rounded-full border bg-muted/40 p-3 w-fit">
+          <ListChecks className="size-5 text-muted-foreground" />
+        </div>
+        <h2 className="mt-4 text-sm font-semibold">Run detail</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Generate a dry run or open a validation run to inspect audit history,
+          item IDs, Meta status, errors, local linkage, and sync readiness.
+        </p>
+      </aside>
+    );
+  }
+
+  const { run, items } = data;
+  const aggregate = getLaunchpadRunAggregateResult(run, items);
+  const statusCounts = summarizeLaunchpadRunStatuses(items);
+  const canPublish = run.status === "validated";
+  const canRetry = canShowLaunchpadRetryAction(run, items);
+
+  return (
+    <aside className="rounded-xl border bg-card">
+      <div className="flex items-start justify-between gap-3 border-b px-4 py-3">
+        <div>
+          <h2 className="text-sm font-semibold">Run detail</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {formatTimestamp(run.createdAt)}
+          </p>
+        </div>
+        <Button
+          type="button"
+          size="icon-xs"
+          variant="ghost"
+          onClick={onClear}
+          aria-label="Close run detail"
+        >
+          <X className="size-3.5" />
+        </Button>
+      </div>
+
+      <div className="space-y-4 p-4">
+        <div className={cn("rounded-lg border p-3", toneClasses(aggregate.tone))}>
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge status={run.status} />
+            <Badge variant="secondary">{run.mode ?? "validation"}</Badge>
+          </div>
+          <p className="mt-3 text-sm font-medium text-foreground">
+            {aggregate.label}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {aggregate.detail}
+          </p>
+        </div>
+
+        <div className="grid gap-2 text-xs">
+          <DetailRow label="Run ID">
+            <code className="font-mono" title={run.id}>
+              {compactId(run.id)}
+            </code>
+          </DetailRow>
+          <DetailRow label="Items">
+            <span className="tabular-nums">{items.length}</span>
+          </DetailRow>
+          <DetailRow label="Manifest">
+            <code className="font-mono" title={run.manifestHash ?? undefined}>
+              {run.manifestHash ? shortHash(run.manifestHash) : "—"}
+            </code>
+          </DetailRow>
+          <DetailRow label="Live env">
+            {run.livePublishEnabledAtValidation ? (
+              <Badge>Enabled</Badge>
+            ) : (
+              <Badge variant="secondary">Disabled</Badge>
+            )}
+          </DetailRow>
+        </div>
+
+        <div className="grid gap-2">
+          {canPublish ? (
+            <Button
+              size="sm"
+              variant="default"
+              disabled={isPublishing}
+              onClick={onPublish}
+            >
+              {isPublishing ? "Queueing…" : "Publish paused ads"}
+            </Button>
+          ) : null}
+          {canRetry ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={isRetrying}
+              onClick={onRetry}
+              className="gap-1.5"
+            >
+              <RotateCcw className="size-3" />
+              {isRetrying ? "Reconciling…" : "Retry failed only"}
+            </Button>
+          ) : null}
+        </div>
+
+        <div className="rounded-lg border bg-muted/15 p-3">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Status counts
+          </p>
+          <div className="mt-3 grid gap-2">
+            {Object.entries(statusCounts).length > 0 ? (
+              Object.entries(statusCounts).map(([status, count]) => (
+                <div
+                  key={status}
+                  className="flex items-center justify-between gap-3 text-xs"
+                >
+                  <span className="capitalize text-muted-foreground">
+                    {formatLaunchpadStatusLabel(status)}
+                  </span>
+                  <span className="font-medium tabular-nums">{count}</span>
+                </div>
+              ))
+            ) : (
+              <p className="text-xs text-muted-foreground">No persisted items.</p>
+            )}
+          </div>
+        </div>
+
+        <details className="rounded-lg border bg-muted/10">
+          <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
+            Full audit and item diagnostics
+          </summary>
+          <div className="max-h-[72vh] overflow-auto border-t">
+            <LaunchpadRunDetailPanel
+              data={data}
+              isPublishing={isPublishing}
+              isRetrying={isRetrying}
+              isMarkingManual={isMarkingManual}
+              onPublish={onPublish}
+              onRetry={onRetry}
+              onMarkManual={onMarkManual}
+            />
+          </div>
+        </details>
+      </div>
+    </aside>
+  );
+}
+
 export function LaunchpadPageClient() {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
@@ -743,6 +1317,7 @@ export function LaunchpadPageClient() {
   const [namingTemplate, setNamingTemplate] = useState("");
   const [cta, setCta] = useState("SHOP_NOW");
   const [selectedRunId, setSelectedRunId] = useState("");
+  const [activeStep, setActiveStep] = useState<LaunchpadStep>("destination");
 
   const runs = useQuery(trpc.launchpad.list.queryOptions({ limit: 50 }));
   const creatives = useQuery(trpc.adCreative.list.queryOptions());
@@ -984,314 +1559,460 @@ export function LaunchpadPageClient() {
   }
 
   const destinationReady = Boolean(selectedAccountId && selectedAdSetId);
+  const hasDefaultDestinationUrl = Boolean(defaultDestinationUrl.trim());
+  const everyItemHasUrl = Boolean(
+    launchItems.length > 0 &&
+      launchItems.every((item) => item.destinationUrl.trim()),
+  );
+  const urlCoverageReady = Boolean(hasDefaultDestinationUrl || everyItemHasUrl);
+  const defaultUrlLooksValid = urlHasLaunchpadRequirements(defaultDestinationUrl);
+  const urlReadinessDetail = hasDefaultDestinationUrl
+    ? defaultUrlLooksValid
+      ? "Batch URL has HTTPS and UTMs"
+      : "Dry run will validate HTTPS and UTMs"
+    : everyItemHasUrl
+      ? "Every item has a URL override"
+      : "Add a batch URL or item URLs";
+  const readinessItems: ReadinessChecklistItem[] = [
+    {
+      label: "Account",
+      detail: selectedAccount?.canPublish
+        ? selectedAccount.name
+        : selectedAccount
+          ? "Setup incomplete"
+          : "Select a publish-ready account",
+      ready: Boolean(selectedAccountId && selectedAccount?.canPublish),
+    },
+    {
+      label: "Ad set",
+      detail: selectedAdSet?.name ?? "Select an eligible synced ad set",
+      ready: Boolean(selectedAdSetId),
+    },
+    {
+      label: `Creatives ${launchItems.length}/${LAUNCHPAD_MAX_ITEMS}`,
+      detail: `${launchItems.length}/${LAUNCHPAD_MAX_ITEMS} selected`,
+      ready: launchItems.length > 0 && launchItems.length <= LAUNCHPAD_MAX_ITEMS,
+    },
+    {
+      label: "URL",
+      detail: urlReadinessDetail,
+      ready: urlCoverageReady,
+    },
+    {
+      label: cta.replace(/_/g, " "),
+      detail: `CTA ${cta.replace(/_/g, " ")}`,
+      ready: true,
+    },
+  ];
   const dryRunReady = Boolean(
     destinationReady &&
       launchItems.length > 0 &&
-      (defaultDestinationUrl.trim() || launchItems.every((item) => item.destinationUrl.trim())),
+      urlCoverageReady,
   );
+  const launchpadSteps = [
+    {
+      id: "destination" as const,
+      label: "Destination",
+      detail: destinationReady ? "Selected" : "Account and ad set",
+      ready: destinationReady,
+    },
+    {
+      id: "creatives" as const,
+      label: "Creatives",
+      detail: `${launchItems.length}/${LAUNCHPAD_MAX_ITEMS} selected`,
+      ready: launchItems.length > 0,
+    },
+    {
+      id: "defaults" as const,
+      label: "Defaults",
+      detail: urlCoverageReady ? "URL covered" : "URL required",
+      ready: urlCoverageReady,
+    },
+    {
+      id: "runs" as const,
+      label: "Runs",
+      detail: runs.data?.length ? `${runs.data.length} recorded` : "Ledger",
+      ready: Boolean(runs.data?.length),
+    },
+  ];
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="relative overflow-hidden rounded-2xl border bg-card p-6 shadow-sm">
-        <div className="pointer-events-none absolute right-0 top-0 h-40 w-40 translate-x-12 -translate-y-12 rounded-full bg-primary/10 blur-3xl" />
-        <div className="relative flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-          <div className="max-w-2xl space-y-2">
-            <div className="flex items-center gap-2">
+    <div className="flex flex-col gap-4">
+      <header className="space-y-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-lg font-semibold">Creative Launchpad</h1>
               <Badge variant="outline" className="gap-1.5">
                 <ShieldCheck className="size-3" /> Dry-run ledger
               </Badge>
               <Badge variant="secondary">Live publish gated</Badge>
-            </div>
-            <div>
-              <h1 className="text-2xl font-semibold tracking-tight">
-                Creative Launchpad
-              </h1>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Select one eligible synced Meta destination and up to {LAUNCHPAD_MAX_ITEMS}
-                existing static, video, or UGC creatives to freeze a side-effect-free batch
-                dry-run manifest. Destination context is read-only: no budget,
-                targeting, pixel, placement, or optimization controls.
-              </p>
             </div>
           </div>
           <Button
             size="sm"
             onClick={createDryRun}
             disabled={createRun.isPending || !dryRunReady}
-            className="gap-1.5"
+            className="gap-1.5 lg:ml-auto"
           >
             <Plus className="size-3.5" />
             {createRun.isPending ? "Recording…" : "Generate batch dry run"}
           </Button>
         </div>
-      </div>
-
-      <div className="rounded-xl border bg-card">
-        <div className="border-b px-4 py-3">
-          <div className="flex items-center gap-2">
-            <Target className="size-4 text-primary" />
-            <h2 className="text-sm font-semibold">Publishing destination</h2>
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Choose a Meta ad account with a stored token and default Facebook
-            Page ID, then one linked synced ad set with a Meta ad set ID.
-          </p>
+        <div className="space-y-2">
+          <ReadinessChecklist items={readinessItems} />
         </div>
-        <div className="grid gap-4 p-4 lg:grid-cols-[1fr_1fr_1.3fr]">
-          <div className="space-y-2">
-            <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Account
-            </label>
-            <Select
-              value={selectedAccountId}
-              onValueChange={handleAccountChange}
-              disabled={destinationAccounts.isLoading}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select account…" />
-              </SelectTrigger>
-              <SelectContent>
-                {destinationAccounts.data?.map((account) => (
-                  <SelectItem key={account.id} value={account.id}>
-                    <span>{account.name}</span>
-                    <span className="ml-2 text-xs text-muted-foreground">
-                      {account.metaAccountId}
-                    </span>
-                    {!account.canPublish ? (
-                      <span className="ml-2 text-xs text-amber-600">
-                        needs setup
-                      </span>
-                    ) : null}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {selectedAccount && !selectedAccount.canPublish ? (
-              <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
-                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-                <span>
-                  Account setup incomplete: {selectedAccount.ineligibleReasons.map(readinessLabel).join(", ")}.
-                </span>
+      </header>
+
+      <LaunchpadStepper
+        activeStep={activeStep}
+        onStepChange={setActiveStep}
+        steps={launchpadSteps}
+      />
+
+      <div
+        className={cn(
+          "grid gap-4",
+          activeStep === "runs" ? "xl:grid-cols-[minmax(0,1fr)_380px]" : "",
+        )}
+      >
+        <main className="min-w-0 space-y-5">
+          {activeStep === "destination" ? (
+          <section className="rounded-xl border bg-card">
+            <div className="flex flex-col gap-3 border-b px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Target className="size-4 text-primary" />
+                  <h2 className="text-sm font-semibold">Publishing destination</h2>
+                </div>
               </div>
-            ) : null}
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Eligible ad set
-            </label>
-            <Select
-              value={selectedAdSetId}
-              onValueChange={setSelectedAdSetId}
-              disabled={!selectedAccount?.canPublish || eligibleAdSets.isLoading}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select ad set…" />
-              </SelectTrigger>
-              <SelectContent>
-                {eligibleAdSets.data?.map((adSet) => (
-                  <SelectItem key={adSet.id} value={adSet.id}>
-                    <span>{adSet.name}</span>
-                    <span className="ml-2 text-xs text-muted-foreground">
-                      {adSet.metaId}
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {selectedAccount?.canPublish && eligibleAdSets.data?.length === 0 ? (
-              <p className="text-xs text-muted-foreground">
-                No eligible linked ad sets for this account yet.
-              </p>
-            ) : null}
-          </div>
-
-          <div className="rounded-lg border bg-muted/20 p-3">
-            <div className="mb-2 flex items-center gap-2">
               {destinationContext.data ? (
-                <CheckCircle2 className="size-4 text-emerald-600" />
-              ) : (
-                <ShieldCheck className="size-4 text-muted-foreground" />
-              )}
-              <p className="text-sm font-medium">Read-only context</p>
+                <Badge
+                  variant="outline"
+                  className="w-fit border-emerald-200 text-emerald-700 dark:border-emerald-900/60 dark:text-emerald-300"
+                >
+                  Safe for paused launch
+                </Badge>
+              ) : null}
             </div>
-            {destinationContext.isLoading ? (
+            <div className="grid gap-4 p-4 lg:grid-cols-[0.8fr_0.8fr_1.4fr]">
               <div className="space-y-2">
-                <Skeleton className="h-4 w-3/4" />
-                <Skeleton className="h-4 w-1/2" />
-                <Skeleton className="h-4 w-2/3" />
-              </div>
-            ) : destinationContext.data ? (
-              <dl className="grid gap-2 text-xs">
-                <div className="flex justify-between gap-3">
-                  <dt className="text-muted-foreground">Account</dt>
-                  <dd className="text-right font-medium">
-                    {destinationContext.data.account.name}
-                    <span className="ml-1 text-muted-foreground">
-                      {destinationContext.data.account.metaAccountId}
-                    </span>
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <dt className="text-muted-foreground">Facebook Page</dt>
-                  <dd className="font-mono">
-                    {destinationContext.data.account.defaultFacebookPageId}
-                  </dd>
-                </div>
-                {destinationContext.data.account.defaultInstagramActorId ? (
-                  <div className="flex justify-between gap-3">
-                    <dt className="text-muted-foreground">Instagram actor</dt>
-                    <dd className="font-mono">
-                      {destinationContext.data.account.defaultInstagramActorId}
-                    </dd>
-                  </div>
-                ) : null}
-                <div className="flex justify-between gap-3">
-                  <dt className="text-muted-foreground">Campaign</dt>
-                  <dd className="text-right">
-                    {destinationContext.data.adSet.campaign.name ?? "Unknown"}
-                    {destinationContext.data.adSet.campaign.metaId ? (
-                      <span className="ml-1 font-mono text-muted-foreground">
-                        {destinationContext.data.adSet.campaign.metaId}
-                      </span>
-                    ) : null}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <dt className="text-muted-foreground">Ad set</dt>
-                  <dd className="text-right">
-                    {selectedAdSet?.name ?? destinationContext.data.adSet.name}
-                    <span className="ml-1 font-mono text-muted-foreground">
-                      {destinationContext.data.adSet.metaId}
-                    </span>
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <dt className="text-muted-foreground">Statuses</dt>
-                  <dd className="capitalize">
-                    {destinationContext.data.adSet.status}
-                    {destinationContext.data.adSet.campaign.status ? (
-                      <span className="text-muted-foreground">
-                        {` · campaign ${destinationContext.data.adSet.campaign.status}`}
-                      </span>
-                    ) : null}
-                  </dd>
-                </div>
-              </dl>
-            ) : destinationContext.error ? (
-              <p className="text-xs text-destructive">
-                {destinationContext.error.message}
-              </p>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Select an account and eligible ad set to preview the exact
-                Launchpad destination context.
-              </p>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="rounded-xl border bg-card">
-        <div className="border-b px-4 py-3">
-          <div className="flex items-center gap-2">
-            <FileImage className="size-4 text-primary" />
-            <h2 className="text-sm font-semibold">Batch creative dry run</h2>
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            The server reloads every creative before planning. The form sends only
-            creative IDs, batch defaults, and per-item launch overrides.
-          </p>
-        </div>
-        <div className="grid gap-4 p-4 lg:grid-cols-[0.9fr_1.1fr]">
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label className="text-xs uppercase tracking-wide text-muted-foreground">
-                Add supported creatives
-              </Label>
-              <div className="flex gap-2">
+                <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Account
+                </label>
                 <Select
-                  value={selectedCreativeId}
-                  onValueChange={setSelectedCreativeId}
-                  disabled={creatives.isLoading || launchItems.length >= LAUNCHPAD_MAX_ITEMS}
+                  value={selectedAccountId}
+                  onValueChange={handleAccountChange}
+                  disabled={destinationAccounts.isLoading}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Choose static, video, or UGC…" />
+                    <SelectValue placeholder="Select account…" />
                   </SelectTrigger>
                   <SelectContent>
-                    {launchpadCreatives.map((creative) => (
-                      <SelectItem
-                        key={creative.id}
-                        value={creative.id}
-                        disabled={launchItems.some((item) => item.creativeId === creative.id)}
-                      >
-                        <span>{creative.name}</span>
+                    {destinationAccounts.data?.map((account) => (
+                      <SelectItem key={account.id} value={account.id}>
+                        <span>{account.name}</span>
                         <span className="ml-2 text-xs text-muted-foreground">
-                          {formatCreativeKind(creative.format)}
+                          {account.metaAccountId}
                         </span>
-                        <span
-                          className={cn(
-                            "ml-2 text-xs",
-                            creativeMediaReadiness(creative).includes("Missing")
-                              ? "text-amber-600"
-                              : "text-muted-foreground",
-                          )}
-                        >
-                          {creativeMediaReadiness(creative)}
+                        {!account.canPublish ? (
+                          <span className="ml-2 text-xs text-amber-600">
+                            needs setup
+                          </span>
+                        ) : null}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {selectedAccount && !selectedAccount.canPublish ? (
+                  <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
+                    <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                    <span>
+                      Account setup incomplete:{" "}
+                      {selectedAccount.ineligibleReasons
+                        .map(readinessLabel)
+                        .join(", ")}
+                      .
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Eligible ad set
+                </label>
+                <Select
+                  value={selectedAdSetId}
+                  onValueChange={setSelectedAdSetId}
+                  disabled={!selectedAccount?.canPublish || eligibleAdSets.isLoading}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select ad set…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {eligibleAdSets.data?.map((adSet) => (
+                      <SelectItem key={adSet.id} value={adSet.id}>
+                        <span>{adSet.name}</span>
+                        <span className="ml-2 text-xs text-muted-foreground">
+                          {adSet.metaId}
                         </span>
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                {selectedAccount?.canPublish &&
+                eligibleAdSets.data?.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No eligible linked ad sets for this account yet.
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="rounded-lg border bg-muted/15 p-3">
+                <div className="mb-2 flex items-center gap-2">
+                  {destinationContext.data ? (
+                    <CheckCircle2 className="size-4 text-emerald-600" />
+                  ) : (
+                    <ShieldCheck className="size-4 text-muted-foreground" />
+                  )}
+                  <p className="text-sm font-medium">Context</p>
+                </div>
+                {destinationContext.isLoading ? (
+                  <div className="space-y-2">
+                    <Skeleton className="h-4 w-3/4" />
+                    <Skeleton className="h-4 w-1/2" />
+                    <Skeleton className="h-4 w-2/3" />
+                  </div>
+                ) : destinationContext.data ? (
+                  <details>
+                    <summary className="cursor-pointer list-none text-xs">
+                      <div className="grid gap-2">
+                        <DetailRow label="Campaign">
+                          <span className="truncate text-right">
+                            {destinationContext.data.adSet.campaign.name ??
+                              "Unknown"}
+                          </span>
+                        </DetailRow>
+                        <DetailRow label="Ad set">
+                          <span className="truncate text-right">
+                            {selectedAdSet?.name ??
+                              destinationContext.data.adSet.name}
+                          </span>
+                        </DetailRow>
+                        <DetailRow label="Statuses">
+                          <span className="capitalize">
+                            {destinationContext.data.adSet.status}
+                            {destinationContext.data.adSet.campaign.status ? (
+                              <span className="text-muted-foreground">
+                                {` · campaign ${destinationContext.data.adSet.campaign.status}`}
+                              </span>
+                            ) : null}
+                          </span>
+                        </DetailRow>
+                      </div>
+                      <p className="mt-2 text-[11px] text-muted-foreground">IDs</p>
+                    </summary>
+                    <dl className="mt-3 grid gap-2 border-t pt-3 text-xs">
+                      <DetailRow label="Account">
+                        <span className="text-right font-medium">
+                          {destinationContext.data.account.name}
+                          <span className="ml-1 text-muted-foreground">
+                            {destinationContext.data.account.metaAccountId}
+                          </span>
+                        </span>
+                      </DetailRow>
+                      <DetailRow label="Facebook Page">
+                        <code className="font-mono">
+                          {destinationContext.data.account.defaultFacebookPageId}
+                        </code>
+                      </DetailRow>
+                      {destinationContext.data.account.defaultInstagramActorId ? (
+                        <DetailRow label="Instagram actor">
+                          <code className="font-mono">
+                            {
+                              destinationContext.data.account
+                                .defaultInstagramActorId
+                            }
+                          </code>
+                        </DetailRow>
+                      ) : null}
+                      <DetailRow label="Campaign Meta ID">
+                        <code className="font-mono">
+                          {destinationContext.data.adSet.campaign.metaId ?? "—"}
+                        </code>
+                      </DetailRow>
+                      <DetailRow label="Ad set Meta ID">
+                        <code className="font-mono">
+                          {destinationContext.data.adSet.metaId}
+                        </code>
+                      </DetailRow>
+                    </dl>
+                  </details>
+                ) : destinationContext.error ? (
+                  <p className="text-xs text-destructive">
+                    {destinationContext.error.message}
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Select destination.
+                  </p>
+                )}
+              </div>
+            </div>
+          </section>
+          ) : null}
+
+          {activeStep === "creatives" ? (
+          <section className="rounded-xl border bg-card">
+            <div className="flex flex-col gap-3 border-b px-4 py-3 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <FileImage className="size-4 text-primary" />
+                  <h2 className="text-sm font-semibold">
+                    Manifest preview
+                  </h2>
+                </div>
+              </div>
+              <Badge variant="outline" className="w-fit">
+                {launchItems.length}/{LAUNCHPAD_MAX_ITEMS} selected
+              </Badge>
+            </div>
+
+            <div className="space-y-4 p-4">
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                <div className="space-y-2">
+                  <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+                    Add supported creatives
+                  </Label>
+                  <Select
+                    value={selectedCreativeId}
+                    onValueChange={setSelectedCreativeId}
+                    disabled={
+                      creatives.isLoading ||
+                      launchItems.length >= LAUNCHPAD_MAX_ITEMS
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Choose static, video, or UGC…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {launchpadCreatives.map((creative) => (
+                        <SelectItem
+                          key={creative.id}
+                          value={creative.id}
+                          disabled={launchItems.some(
+                            (item) => item.creativeId === creative.id,
+                          )}
+                        >
+                          <span>{creative.name}</span>
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            {formatCreativeKind(creative.format)}
+                          </span>
+                          <span
+                            className={cn(
+                              "ml-2 text-xs",
+                              creativeMediaReadiness(creative).includes(
+                                "Missing",
+                              )
+                                ? "text-amber-600"
+                                : "text-muted-foreground",
+                            )}
+                          >
+                            {creativeMediaReadiness(creative)}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {selectedCreative ? (
+                    <p className="text-xs text-muted-foreground">
+                      {creativeMediaReadiness(selectedCreative)}
+                    </p>
+                  ) : null}
+                </div>
                 <Button
                   type="button"
                   variant="outline"
                   onClick={addSelectedCreative}
-                  disabled={!selectedCreativeId || launchItems.length >= LAUNCHPAD_MAX_ITEMS}
+                  disabled={
+                    !selectedCreativeId ||
+                    launchItems.length >= LAUNCHPAD_MAX_ITEMS
+                  }
+                  className="w-full lg:w-auto"
                 >
                   Add
                 </Button>
               </div>
-              <p className="text-xs text-muted-foreground">
-                {launchItems.length}/{LAUNCHPAD_MAX_ITEMS} selected. {selectedCreative
-                  ? `${creativeMediaReadiness(selectedCreative)} · ${selectedCreative.hook
-                    ? `Headline fallback: ${selectedCreative.hook}`
-                    : `Headline fallback: ${selectedCreative.name}`}`
-                  : "Each item can override name, URL, headline, and copy."}
-              </p>
-            </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="defaultPrimaryText" className="text-xs uppercase tracking-wide text-muted-foreground">
-                Batch primary text / caption pattern
-              </Label>
-              <Textarea
-                id="defaultPrimaryText"
-                value={defaultPrimaryText}
-                onChange={(event) => setDefaultPrimaryText(event.target.value)}
-                placeholder="Default launch copy applied to items without an override…"
-                className="min-h-24"
+              <ManifestPreviewTable
+                launchItems={launchItems}
+                launchpadCreatives={launchpadCreatives}
+                defaultDestinationUrl={defaultDestinationUrl}
+                cta={cta}
+                onUpdateItem={updateLaunchItem}
+                onRemoveItem={removeLaunchItem}
               />
             </div>
+          </section>
+          ) : null}
 
-            <div className="space-y-2">
-              <Label htmlFor="defaultUrl" className="text-xs uppercase tracking-wide text-muted-foreground">
-                Batch default URL
-              </Label>
-              <Input
-                id="defaultUrl"
-                value={defaultDestinationUrl}
-                onChange={(event) => setDefaultDestinationUrl(event.target.value)}
-                placeholder="https://example.com/products?utm_source=meta&utm_medium=paid_social"
-              />
-              <p className="text-xs text-muted-foreground">
-                Dry-run validation requires HTTPS plus utm_source and utm_medium.
-              </p>
+          {activeStep === "defaults" ? (
+          <section className="rounded-xl border bg-card">
+            <div className="border-b px-4 py-3">
+              <h2 className="text-sm font-semibold">Batch defaults</h2>
             </div>
+            <div className="grid gap-4 p-4 lg:grid-cols-2">
+              <div className="space-y-2 lg:col-span-2">
+                <Label
+                  htmlFor="defaultPrimaryText"
+                  className="text-xs uppercase tracking-wide text-muted-foreground"
+                >
+                  Batch primary text / caption pattern
+                </Label>
+                <Textarea
+                  id="defaultPrimaryText"
+                  value={defaultPrimaryText}
+                  onChange={(event) =>
+                    setDefaultPrimaryText(event.target.value)
+                  }
+                  placeholder="Default launch copy..."
+                  className="min-h-24"
+                />
+              </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2 lg:col-span-2">
+                <Label
+                  htmlFor="defaultUrl"
+                  className="text-xs uppercase tracking-wide text-muted-foreground"
+                >
+                  Batch default URL
+                </Label>
+                <Input
+                  id="defaultUrl"
+                  value={defaultDestinationUrl}
+                  onChange={(event) =>
+                    setDefaultDestinationUrl(event.target.value)
+                  }
+                  placeholder="https://example.com/products?utm_source=meta&utm_medium=paid_social"
+                />
+                <p
+                  className={cn(
+                    "text-xs",
+                    hasDefaultDestinationUrl && !defaultUrlLooksValid
+                      ? "text-amber-600 dark:text-amber-300"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  HTTPS + utm_source + utm_medium
+                </p>
+              </div>
+
               <div className="space-y-2">
-                <Label htmlFor="namingTemplate" className="text-xs uppercase tracking-wide text-muted-foreground">
+                <Label
+                  htmlFor="namingTemplate"
+                  className="text-xs uppercase tracking-wide text-muted-foreground"
+                >
                   Naming template
                 </Label>
                 <Input
@@ -1300,10 +2021,8 @@ export function LaunchpadPageClient() {
                   onChange={(event) => setNamingTemplate(event.target.value)}
                   placeholder="Launchpad / {{creative.name}} / {{adSet.name}}"
                 />
-                <p className="text-xs text-muted-foreground">
-                  Supports creative, ad set, campaign, account, and item position tokens.
-                </p>
               </div>
+
               <div className="space-y-2">
                 <Label className="text-xs uppercase tracking-wide text-muted-foreground">
                   Batch Meta CTA
@@ -1322,290 +2041,125 @@ export function LaunchpadPageClient() {
                 </Select>
               </div>
             </div>
-          </div>
-
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-medium">Batch items</p>
-                <p className="text-xs text-muted-foreground">
-                  Overrides are optional unless no batch URL is provided.
-                </p>
-              </div>
-              <Badge variant="outline">{launchItems.length} selected</Badge>
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t px-4 py-3 text-xs text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
+                <ShieldCheck className="size-3.5 text-primary" />
+                Dry-run only
+              </span>
+              <span>Trigger gated</span>
+              <span>
+                <code className="text-foreground">PAUSED</code>
+              </span>
+              <span>
+                Cap <code className="text-foreground">{LAUNCHPAD_MAX_ITEMS}</code>
+              </span>
             </div>
-            {launchItems.length === 0 ? (
-              <div className="rounded-lg border border-dashed bg-muted/20 p-6 text-sm text-muted-foreground">
-                Add supported creatives to build a batch manifest.
+          </section>
+          ) : null}
+
+          {activeStep === "runs" ? (
+          <section className="rounded-xl border bg-card">
+            <div className="flex flex-col gap-2 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-sm font-semibold">Validation runs</h2>
+              </div>
+            </div>
+            {runs.isLoading ? (
+              <div className="space-y-3 p-4">
+                {Array.from({ length: 4 }).map((_, index) => (
+                  <Skeleton key={index} className="h-10 w-full" />
+                ))}
+              </div>
+            ) : runs.data?.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-3 px-4 py-10 text-center">
+                <div className="rounded-full border bg-muted/40 p-3">
+                  <ShieldCheck className="size-5 text-muted-foreground" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium">No Launchpad runs yet</p>
+                </div>
               </div>
             ) : (
-              <div className="max-h-[520px] space-y-3 overflow-auto pr-1">
-                {launchItems.map((item, index) => {
-                  const creative = launchpadCreatives.find(
-                    (candidate) => candidate.id === item.creativeId,
-                  );
-                  return (
-                    <div key={item.creativeId} className="rounded-lg border bg-muted/10 p-3">
-                      <div className="mb-3 flex items-start justify-between gap-3">
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="text-sm font-medium">
-                              {index + 1}. {creative?.name ?? item.creativeId}
-                            </p>
-                            {creative ? (
-                              <Badge variant="outline" className="gap-1 text-[10px]">
-                                {isVideoLaunchpadFormat(creative.format) ? (
-                                  <Video className="size-3" />
-                                ) : (
-                                  <FileImage className="size-3" />
-                                )}
-                                {formatCreativeKind(creative.format)}
-                              </Badge>
-                            ) : null}
-                          </div>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {creativeMediaReadiness(creative)}
-                            {creative?.hook ? ` · headline fallback: ${creative.hook}` : null}
-                          </p>
-                        </div>
-                        <Button
-                          type="button"
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => removeLaunchItem(item.creativeId)}
-                          aria-label={`Remove ${creative?.name ?? "creative"}`}
-                        >
-                          <X className="size-4" />
-                        </Button>
-                      </div>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <div className="space-y-1.5">
-                          <Label htmlFor={`adName-${item.creativeId}`} className="text-xs text-muted-foreground">
-                            Ad name override
-                          </Label>
-                          <Input
-                            id={`adName-${item.creativeId}`}
-                            value={item.adName}
-                            onChange={(event) => updateLaunchItem(item.creativeId, "adName", event.target.value)}
-                            placeholder="Template-generated if blank"
-                          />
-                        </div>
-                        <div className="space-y-1.5">
-                          <Label htmlFor={`url-${item.creativeId}`} className="text-xs text-muted-foreground">
-                            URL override
-                          </Label>
-                          <Input
-                            id={`url-${item.creativeId}`}
-                            value={item.destinationUrl}
-                            onChange={(event) => updateLaunchItem(item.creativeId, "destinationUrl", event.target.value)}
-                            placeholder="Overrides batch URL"
-                          />
-                        </div>
-                        <div className="space-y-1.5">
-                          <Label htmlFor={`headline-${item.creativeId}`} className="text-xs text-muted-foreground">
-                            Headline override
-                          </Label>
-                          <Input
-                            id={`headline-${item.creativeId}`}
-                            value={item.headline}
-                            onChange={(event) => updateLaunchItem(item.creativeId, "headline", event.target.value)}
-                            placeholder="Defaults from hook/name"
-                          />
-                        </div>
-                        <div className="space-y-1.5">
-                          <Label htmlFor={`copy-${item.creativeId}`} className="text-xs text-muted-foreground">
-                            Copy override
-                          </Label>
-                          <Input
-                            id={`copy-${item.creativeId}`}
-                            value={item.primaryText}
-                            onChange={(event) => updateLaunchItem(item.creativeId, "primaryText", event.target.value)}
-                            placeholder="Uses batch copy if blank"
-                          />
-                        </div>
-                        <div className="space-y-1.5 sm:col-span-2">
-                          <Label className="text-xs text-muted-foreground">
-                            CTA override
-                          </Label>
-                          <Select
-                            value={item.cta || "__batch_default__"}
-                            onValueChange={(value) => updateLaunchItem(
-                              item.creativeId,
-                              "cta",
-                              value === "__batch_default__" ? "" : value,
-                            )}
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Items</TableHead>
+                      <TableHead>Manifest hash</TableHead>
+                      <TableHead>Live env at validation</TableHead>
+                      <TableHead>Created</TableHead>
+                      <TableHead className="text-right">Run detail</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {runs.data?.map((run) => (
+                      <TableRow
+                        key={run.id}
+                        className={cn(
+                          selectedRunId === run.id ? "bg-muted/30" : "",
+                        )}
+                      >
+                        <TableCell>
+                          <Badge variant="outline" className="capitalize">
+                            {statusLabel(run.status)}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm tabular-nums">
+                            {run.itemCount}/{run.maxItemCap}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <code className="text-xs text-muted-foreground">
+                            {shortHash(run.manifestHash)}
+                          </code>
+                        </TableCell>
+                        <TableCell>
+                          {run.livePublishEnabledAtValidation ? (
+                            <Badge>Enabled</Badge>
+                          ) : (
+                            <Badge variant="secondary">Disabled</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {new Date(run.createdAt).toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setSelectedRunId(run.id)}
                           >
-                            <SelectTrigger>
-                              <SelectValue placeholder="Use batch CTA" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="__batch_default__">Use batch CTA</SelectItem>
-                              {metaCtaValues.map((value) => (
-                                <SelectItem key={value} value={value}>
-                                  {value.replace(/_/g, " ")}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+                            Open detail
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
             )}
-            <div className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
-              <p className="font-medium text-foreground">Dry-run boundary</p>
-              <p className="mt-1">
-                Validation records frozen manifests and QA errors only. A separate
-                gated action queues PAUSED Meta publishing through Trigger.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
+          </section>
+          ) : null}
+        </main>
 
-      <div className="grid gap-3 md:grid-cols-4">
-        <div className="rounded-xl border bg-card p-4">
-          <LockKeyhole className="mb-3 size-4 text-primary" />
-          <p className="text-sm font-medium">Immutable manifest</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Hash-locked run and item payloads.
-          </p>
-        </div>
-        <div className="rounded-xl border bg-card p-4">
-          <Archive className="mb-3 size-4 text-primary" />
-          <p className="text-sm font-medium">Durable states</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Validation through manual intervention outcomes.
-          </p>
-        </div>
-        <div className="rounded-xl border bg-card p-4">
-          <Fingerprint className="mb-3 size-4 text-primary" />
-          <p className="text-sm font-medium">Idempotent by design</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Run and item dedupe keys are persisted.
-          </p>
-        </div>
-        <div className="rounded-xl border bg-card p-4">
-          <ShieldCheck className="mb-3 size-4 text-primary" />
-          <p className="text-sm font-medium">{LAUNCHPAD_MAX_ITEMS}-item cap</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Backend-enforced, paused-only safety contract.
-          </p>
-        </div>
-      </div>
-
-      <div className="rounded-xl border bg-card">
-        <div className="border-b px-4 py-3">
-          <h2 className="text-sm font-semibold">Launchpad run detail</h2>
-          <p className="text-xs text-muted-foreground">
-            Open a run to inspect destination context, audit history, item IDs,
-            raw Meta status, errors, local linkage, and post-sync readiness.
-          </p>
-        </div>
-        {selectedRun.isLoading ? (
-          <div className="space-y-3 p-4">
-            <Skeleton className="h-5 w-1/3" />
-            <Skeleton className="h-40 w-full" />
-          </div>
-        ) : selectedRun.data ? (
-          <LaunchpadRunDetailPanel
+        {activeStep === "runs" &&
+        (selectedRunId || selectedRun.data || selectedRun.isLoading) ? (
+        <div className="xl:sticky xl:top-4 xl:self-start">
+          <LaunchpadRunInspector
             data={selectedRun.data}
+            isLoading={selectedRun.isLoading}
             isPublishing={requestPublish.isPending}
             isRetrying={retryFailed.isPending}
             isMarkingManual={markManualIntervention.isPending}
             onPublish={publishSelectedRun}
             onRetry={retrySelectedRun}
             onMarkManual={markItemForManualIntervention}
+            onClear={() => setSelectedRunId("")}
           />
-        ) : (
-          <div className="p-4 text-sm text-muted-foreground">
-            Generate a dry run or choose one from the table below.
-          </div>
-        )}
-      </div>
-
-      <div className="rounded-xl border bg-card">
-        <div className="border-b px-4 py-3">
-          <h2 className="text-sm font-semibold">Validation runs</h2>
-          <p className="text-xs text-muted-foreground">
-            Validated records can be promoted into a gated PAUSED Meta batch publish.
-          </p>
         </div>
-        {runs.isLoading ? (
-          <div className="space-y-3 p-4">
-            {Array.from({ length: 4 }).map((_, index) => (
-              <Skeleton key={index} className="h-10 w-full" />
-            ))}
-          </div>
-        ) : runs.data?.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-3 px-4 py-14 text-center">
-            <div className="rounded-full border bg-muted/40 p-3">
-              <ShieldCheck className="size-5 text-muted-foreground" />
-            </div>
-            <div>
-              <p className="text-sm font-medium">No Launchpad runs yet</p>
-              <p className="text-xs text-muted-foreground">
-                Select a destination and creative, then generate a dry run to
-                verify the planner without calling Meta.
-              </p>
-            </div>
-          </div>
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Status</TableHead>
-                <TableHead>Items</TableHead>
-                <TableHead>Manifest hash</TableHead>
-                <TableHead>Live env at validation</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="text-right">Run detail</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {runs.data?.map((run) => (
-                <TableRow key={run.id}>
-                  <TableCell>
-                    <Badge variant="outline" className="capitalize">
-                      {statusLabel(run.status)}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <span className="text-sm tabular-nums">
-                      {run.itemCount}/{run.maxItemCap}
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    <code className="text-xs text-muted-foreground">
-                      {shortHash(run.manifestHash)}
-                    </code>
-                  </TableCell>
-                  <TableCell>
-                    {run.livePublishEnabledAtValidation ? (
-                      <Badge>Enabled</Badge>
-                    ) : (
-                      <Badge variant="secondary">Disabled</Badge>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {new Date(run.createdAt).toLocaleString()}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setSelectedRunId(run.id)}
-                    >
-                      Open detail
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
+        ) : null}
       </div>
     </div>
   );
