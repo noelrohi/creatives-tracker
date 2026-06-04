@@ -1542,6 +1542,7 @@ describe("launchpad retry and reconciliation", () => {
         expect.objectContaining({
           status: "queued",
           mode: "publish",
+          completedAt: null,
           lastRetryRequestedByUserId: "test-user-id",
         }),
         expect.objectContaining({

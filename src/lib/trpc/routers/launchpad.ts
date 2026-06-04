@@ -1915,6 +1915,7 @@ export const launchpadRouter = router({
           status: "queued",
           mode: "publish",
           queuedAt: now,
+          completedAt: null,
           reconciliationStatus: "pending",
           retryCount: sql`${launchpadPublishRuns.retryCount} + 1`,
           lastRetryRequestedAt: now,
