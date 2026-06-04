@@ -19,6 +19,7 @@ import {
   LaunchpadLedgerError,
   assertLivePublishSafety,
   assertLockedHashStable,
+  computeRunAggregateStatus,
   createLaunchpadRunDraft,
   summarizeLaunchpadValidationIssues,
   type LaunchpadItemPayload,
@@ -97,6 +98,9 @@ const createValidationRunInputSchema = z.object({
   actor: actorSchema,
   destination: destinationSchema,
   defaultDestinationUrl: z.string().trim().optional(),
+  defaultPrimaryText: z.string().optional(),
+  defaultCaption: z.string().optional(),
+  defaultCta: z.string().trim().optional(),
   namingTemplate: z.string().optional(),
   items: z
     .array(
@@ -112,7 +116,25 @@ const createValidationRunInputSchema = z.object({
       }),
     )
     .min(1)
-    .max(1),
+    .max(LAUNCHPAD_MAX_ITEMS),
+}).superRefine((input, ctx) => {
+  const firstIndexByCreativeId = new Map<string, number>();
+
+  input.items.forEach((item, index) => {
+    const creativeId = item.creativeId.trim();
+    const firstIndex = firstIndexByCreativeId.get(creativeId);
+    if (firstIndex !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["items", index, "creativeId"],
+        message: "Launchpad batches cannot include the same creative more than once",
+        params: { firstIndex, duplicateIndex: index },
+      });
+      return;
+    }
+
+    firstIndexByCreativeId.set(creativeId, index);
+  });
 });
 
 const launchpadAdminProcedure = orgAdminProcedure.use(async ({ next }) => {
@@ -150,6 +172,11 @@ type LaunchpadReader = Pick<typeof db, "select">;
 
 function uniqueStrings(values: Array<string | null | undefined>) {
   return Array.from(new Set(values.filter((value): value is string => !!value)));
+}
+
+function normalizedInputText(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
 }
 
 function throwReferenceNotFound(entityName: string, missingIds: string[]): never {
@@ -329,6 +356,7 @@ type LaunchpadItemRow = typeof launchpadPublishItems.$inferSelect;
 type PublishFailureInput = {
   organizationId: string;
   runId: string;
+  runItemCount: number;
   itemId: string;
   category: "retryable" | "terminal" | "ambiguous" | "manual_intervention";
   code: string;
@@ -345,14 +373,16 @@ function manifestSafety(run: LaunchpadRunRow) {
   return manifest?.safety ?? {};
 }
 
-function assertSingleItemRun(run: LaunchpadRunRow) {
-  if (run.itemCount !== 1) {
-    throw new LaunchpadLedgerError(
-      "SINGLE_ITEM_PUBLISH_ONLY",
-      "This Launchpad release can only publish one item at a time",
-      { itemCount: run.itemCount },
-    );
-  }
+function isTerminalRunStatus(status: string) {
+  return [
+    "success",
+    "partial_success",
+    "failed",
+    "ambiguous",
+    "skipped",
+    "cancelled",
+    "manual_intervention",
+  ].includes(status);
 }
 
 function assertLaunchpadEnabledForWorker() {
@@ -425,7 +455,6 @@ function assertRunReadyForPublish(run: LaunchpadRunRow) {
     lockedHash: run.manifestHash,
     nextValue: run.manifest,
   });
-  assertSingleItemRun(run);
   const safety = manifestSafety(run);
 
   assertLivePublishSafety({
@@ -596,12 +625,41 @@ async function assertPublishDestinationStillEligible(
   return { ...destination, accessToken };
 }
 
+async function resolveRunAggregateStatusAfterItem(
+  client: LaunchpadWriter,
+  input: {
+    organizationId: string;
+    runId: string;
+    runItemCount: number;
+    itemStatus: "success" | "failed" | "ambiguous" | "manual_intervention";
+  },
+) {
+  if (input.runItemCount <= 1) return input.itemStatus;
+
+  const rows = await client
+    .select({ status: launchpadPublishItems.status })
+    .from(launchpadPublishItems)
+    .where(
+      and(
+        eq(launchpadPublishItems.runId, input.runId),
+        eq(launchpadPublishItems.organizationId, input.organizationId),
+      ),
+    );
+
+  if (rows.length === 0) return input.itemStatus;
+  return computeRunAggregateStatus(rows.map((row) => row.status));
+}
+
 async function persistPublishFailure(
   client: LaunchpadWriter,
   input: PublishFailureInput,
 ) {
   const now = new Date();
-  const status = input.category === "ambiguous" ? "ambiguous" : "failed";
+  const status = input.category === "ambiguous"
+    ? "ambiguous"
+    : input.category === "manual_intervention"
+      ? "manual_intervention"
+      : "failed";
   const reconciliationStatus = input.reconciliationStatus
     ?? (input.category === "ambiguous" ? "manual_intervention" : "pending");
 
@@ -627,10 +685,17 @@ async function persistPublishFailure(
       ),
     );
 
+  const runStatus = await resolveRunAggregateStatusAfterItem(client, {
+    organizationId: input.organizationId,
+    runId: input.runId,
+    runItemCount: input.runItemCount,
+    itemStatus: status,
+  });
+
   await client
     .update(launchpadPublishRuns)
     .set({
-      status,
+      status: runStatus,
       errorCategory: input.category,
       errorCode: input.code,
       errorMessage: input.message,
@@ -638,6 +703,57 @@ async function persistPublishFailure(
       reconciliationStatus,
       reconciliationCheckedAt: input.reconciliationStatus ? now : undefined,
       manualInterventionReason: input.manualInterventionReason,
+      completedAt: isTerminalRunStatus(runStatus) ? now : undefined,
+    })
+    .where(
+      and(
+        eq(launchpadPublishRuns.id, input.runId),
+        eq(launchpadPublishRuns.organizationId, input.organizationId),
+      ),
+    );
+
+  return { status, runStatus, errorCode: input.code, errorCategory: input.category };
+}
+
+async function persistPublishEnqueueFailure(
+  client: LaunchpadWriter,
+  input: {
+    organizationId: string;
+    runId: string;
+    itemIds: string[];
+    code: string;
+    message: string;
+    details?: Record<string, unknown> | null;
+  },
+) {
+  const now = new Date();
+  await client
+    .update(launchpadPublishItems)
+    .set({
+      status: "failed",
+      errorCategory: "retryable",
+      errorCode: input.code,
+      errorMessage: input.message,
+      errorDetails: input.details ?? null,
+      reconciliationStatus: "pending",
+      completedAt: now,
+    })
+    .where(
+      and(
+        inArray(launchpadPublishItems.id, input.itemIds),
+        eq(launchpadPublishItems.organizationId, input.organizationId),
+      ),
+    );
+
+  await client
+    .update(launchpadPublishRuns)
+    .set({
+      status: "failed",
+      errorCategory: "retryable",
+      errorCode: input.code,
+      errorMessage: input.message,
+      errorDetails: input.details ?? null,
+      reconciliationStatus: "pending",
       completedAt: now,
     })
     .where(
@@ -647,7 +763,7 @@ async function persistPublishFailure(
       ),
     );
 
-  return { status, errorCode: input.code, errorCategory: input.category };
+  return { status: "failed" as const, errorCode: input.code, errorCategory: "retryable" as const };
 }
 
 async function markPublishInProgress(
@@ -663,11 +779,6 @@ async function markPublishInProgress(
       mode: "publish",
       startedAt: now,
       reconciliationStatus: "pending",
-      errorCategory: null,
-      errorCode: null,
-      errorMessage: null,
-      errorDetails: null,
-      manualInterventionReason: null,
     })
     .where(
       and(
@@ -788,12 +899,14 @@ async function persistMetaIds(
 function publishErrorInput(input: {
   organizationId: string;
   runId: string;
+  runItemCount: number;
   itemId: string;
   error: LaunchpadMetaPublishError;
 }): PublishFailureInput {
   return {
     organizationId: input.organizationId,
     runId: input.runId,
+    runItemCount: input.runItemCount,
     itemId: input.itemId,
     category: input.error.category,
     code: input.error.code,
@@ -935,52 +1048,93 @@ export const launchpadRouter = router({
         })();
         assertProvidedDestinationMetadataMatches(input, destinationContext);
 
-        const itemInput = input.items[0];
-        const creative = await loadSingleLaunchpadCreative(
-          tx,
-          ctx.organizationId,
-          itemInput.creativeId,
-        );
-        const existingMetaAdConflicts = await findExistingMetaAdConflicts(
-          tx,
-          ctx.organizationId,
-          {
-            creativeId: creative.id,
-            adSetId: destinationContext.adSet.id,
-          },
-        );
+        const plannerOutputs = [];
+        for (const [index, itemInput] of input.items.entries()) {
+          const creative = await loadSingleLaunchpadCreative(
+            tx,
+            ctx.organizationId,
+            itemInput.creativeId,
+          );
+          const existingMetaAdConflicts = await findExistingMetaAdConflicts(
+            tx,
+            ctx.organizationId,
+            {
+              creativeId: creative.id,
+              adSetId: destinationContext.adSet.id,
+            },
+          );
 
-        const plannerOutput = buildLaunchpadPlannerOutput({
-          organizationId: ctx.organizationId,
-          requestedBy: {
-            userId: ctx.userId,
-            principalType: ctx.principalType,
-            orgRole: ctx.orgRole,
-          },
-          destination: {
-            account: destinationContext.account,
-            adSet: destinationContext.adSet,
-            issues: destinationContext.issues,
-          },
-          creative,
-          launch: {
-            defaultDestinationUrl: input.defaultDestinationUrl,
-            destinationUrlOverride: itemInput.destinationUrl,
-            primaryText: itemInput.primaryText,
-            caption: itemInput.caption,
-            headline: itemInput.headline,
-            cta: itemInput.cta,
-            adName: itemInput.adName,
-            namingTemplate: input.namingTemplate,
-          },
-          existingMetaAdConflicts,
-          idempotencyKey: input.idempotencyKey,
-          env: process.env,
+          plannerOutputs.push(buildLaunchpadPlannerOutput({
+            organizationId: ctx.organizationId,
+            requestedBy: {
+              userId: ctx.userId,
+              principalType: ctx.principalType,
+              orgRole: ctx.orgRole,
+            },
+            destination: {
+              account: destinationContext.account,
+              adSet: destinationContext.adSet,
+              issues: destinationContext.issues,
+            },
+            creative,
+            itemPosition: index + 1,
+            launch: {
+              defaultDestinationUrl: input.defaultDestinationUrl,
+              destinationUrlOverride: itemInput.destinationUrl,
+              primaryText:
+                normalizedInputText(itemInput.primaryText) ?? input.defaultPrimaryText,
+              caption: normalizedInputText(itemInput.caption) ?? input.defaultCaption,
+              headline: itemInput.headline,
+              cta: normalizedInputText(itemInput.cta) ?? input.defaultCta,
+              adName: itemInput.adName,
+              namingTemplate: input.namingTemplate,
+            },
+            existingMetaAdConflicts,
+            idempotencyKey: input.idempotencyKey,
+            env: process.env,
+          }));
+        }
+
+        const aggregateIssues = plannerOutputs.flatMap((output) => output.issues);
+        const normalizedItems = plannerOutputs.flatMap((output, index) => {
+          const manifest = output.normalizedManifest as {
+            items?: Array<Record<string, unknown>>;
+          };
+          return (manifest.items ?? []).map((item) => ({
+            ...item,
+            position: index + 1,
+          }));
         });
+        const firstPlannerOutput = plannerOutputs[0]!;
+        const combinedPlannerManifest = {
+          ...firstPlannerOutput.normalizedManifest,
+          itemCount: normalizedItems.length,
+          maxItemCap: LAUNCHPAD_MAX_ITEMS,
+          batchDefaults: {
+            destinationUrl: input.defaultDestinationUrl ?? null,
+            primaryText: input.defaultPrimaryText ?? null,
+            caption: input.defaultCaption ?? null,
+            cta: input.defaultCta ?? null,
+            namingTemplate: input.namingTemplate ?? null,
+            requiredUtmParameters: ["utm_source", "utm_medium"],
+          },
+          items: normalizedItems,
+          validation: {
+            status: aggregateIssues.length > 0 ? "failed" : "passed",
+            issueCount: aggregateIssues.length,
+            issues: aggregateIssues,
+          },
+        };
 
         const draft = (() => {
           try {
-            return createLaunchpadRunDraft(plannerOutput.runDraftInput);
+            return createLaunchpadRunDraft({
+              ...firstPlannerOutput.runDraftInput,
+              plannerManifest: combinedPlannerManifest,
+              validationIssues: aggregateIssues,
+              items: plannerOutputs.map((output) => output.runDraftInput.items[0]!),
+              idempotencyKey: input.idempotencyKey,
+            });
           } catch (error) {
             asTrpcError(error);
           }
@@ -1131,7 +1285,6 @@ export const launchpadRouter = router({
           lockedHash: run.manifestHash,
           nextValue: run.manifest,
         });
-        assertSingleItemRun(run);
         const safety = manifestSafety(run);
         assertLivePublishSafety({
           principalType: ctx.principalType,
@@ -1159,23 +1312,26 @@ export const launchpadRouter = router({
       }
 
       const items = await loadRunItems(db, ctx.organizationId, run.id);
-      if (items.length !== 1) {
+      if (items.length !== run.itemCount) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
-          message: "This Launchpad release can only publish one item at a time",
+          message: "Launchpad run item count does not match its persisted items",
+          cause: { expected: run.itemCount, actual: items.length },
         });
       }
-      const item = items[0];
+      const itemIds = items.map((item) => item.id);
 
       try {
-        if (item.status !== "validated") {
-          throw new LaunchpadLedgerError(
-            "VALIDATED_ITEM_REQUIRED",
-            "Only validated Launchpad items can be promoted to live publishing",
-            { itemId: item.id, status: item.status },
-          );
+        for (const item of items) {
+          if (item.status !== "validated") {
+            throw new LaunchpadLedgerError(
+              "VALIDATED_ITEM_REQUIRED",
+              "Only validated Launchpad items can be promoted to live publishing",
+              { itemId: item.id, status: item.status },
+            );
+          }
+          assertItemReadyForPublish(item);
         }
-        assertItemReadyForPublish(item);
         await assertPublishDestinationStillEligible(db, ctx.organizationId, run);
       } catch (error) {
         asTrpcError(error);
@@ -1215,7 +1371,7 @@ export const launchpadRouter = router({
         })
         .where(
           and(
-            eq(launchpadPublishItems.id, item.id),
+            inArray(launchpadPublishItems.id, itemIds),
             eq(launchpadPublishItems.organizationId, ctx.organizationId),
           ),
         );
@@ -1227,21 +1383,19 @@ export const launchpadRouter = router({
           {
             organizationId: ctx.organizationId,
             runId: run.id,
-            itemIds: [item.id],
+            itemIds,
             requestedStatus: PAUSED_META_STATUS,
           },
         );
       } catch (error) {
-        await persistPublishFailure(db, {
+        await persistPublishEnqueueFailure(db, {
           organizationId: ctx.organizationId,
           runId: run.id,
-          itemId: item.id,
-          category: "retryable",
+          itemIds,
           code: "TRIGGER_ENQUEUE_FAILED",
           message: "Launchpad publish task could not be enqueued",
           details: {
             errorName: error instanceof Error ? error.name : undefined,
-            errorMessage: error instanceof Error ? error.message : String(error),
           },
         });
 
@@ -1263,7 +1417,7 @@ export const launchpadRouter = router({
 
       return {
         runId: run.id,
-        itemIds: [item.id],
+        itemIds,
         triggerRunId: handle.id,
         status: "queued" as const,
       };
@@ -1290,14 +1444,10 @@ export const launchpadRouter = router({
       const run = await loadLaunchpadRunOrThrow(db, organizationId, input.runId);
       const item = await loadLaunchpadItemOrThrow(db, organizationId, input);
 
-      if (
-        run.status === "success" &&
-        item.status === "success" &&
-        item.localAdId &&
-        item.externalMetaAdId
-      ) {
+      if (item.status === "success" && item.localAdId && item.externalMetaAdId) {
         return {
           status: "success" as const,
+          runStatus: run.status,
           replayed: true,
           runId: run.id,
           itemId: item.id,
@@ -1441,6 +1591,7 @@ export const launchpadRouter = router({
           return persistPublishFailure(db, {
             organizationId,
             runId: run.id,
+            runItemCount: run.itemCount,
             itemId: item.id,
             category: "ambiguous",
             code: "META_RECONCILIATION_FAILED",
@@ -1479,18 +1630,33 @@ export const launchpadRouter = router({
               eq(launchpadPublishItems.organizationId, organizationId),
             ),
           );
+        const runStatus = await resolveRunAggregateStatusAfterItem(db, {
+          organizationId,
+          runId: run.id,
+          runItemCount: run.itemCount,
+          itemStatus: "success",
+        });
+        const runReconciliationStatus = runStatus === "success"
+          ? "reconciled"
+          : ["ambiguous", "manual_intervention"].includes(runStatus)
+            ? "manual_intervention"
+            : "pending";
         await db
           .update(launchpadPublishRuns)
           .set({
-            status: "success",
-            reconciliationStatus: "reconciled",
-            reconciliationCheckedAt: now,
-            completedAt: now,
-            errorCategory: null,
-            errorCode: null,
-            errorMessage: null,
-            errorDetails: null,
-            manualInterventionReason: null,
+            status: runStatus,
+            reconciliationStatus: runReconciliationStatus,
+            reconciliationCheckedAt: runStatus === "success" ? now : undefined,
+            completedAt: isTerminalRunStatus(runStatus) ? now : undefined,
+            ...(runStatus === "success"
+              ? {
+                  errorCategory: null,
+                  errorCode: null,
+                  errorMessage: null,
+                  errorDetails: null,
+                  manualInterventionReason: null,
+                }
+              : {}),
           })
           .where(
             and(
@@ -1501,6 +1667,7 @@ export const launchpadRouter = router({
 
         return {
           status: "success" as const,
+          runStatus,
           replayed: false,
           runId: run.id,
           itemId: item.id,
@@ -1513,13 +1680,15 @@ export const launchpadRouter = router({
         };
       } catch (error) {
         if (error instanceof LaunchpadMetaPublishError) {
-          if (
-            error.operation === "reconcile_ad" ||
-            (error.operation === "create_ad" && error.code === "META_TIMEOUT")
-          ) {
+          const isUncertainAdCreateFailure =
+            error.operation === "create_ad" &&
+            error.category === "retryable" &&
+            error.code !== "META_RATE_LIMIT";
+          if (error.operation === "reconcile_ad" || isUncertainAdCreateFailure) {
             return persistPublishFailure(db, {
               organizationId,
               runId: run.id,
+              runItemCount: run.itemCount,
               itemId: item.id,
               category: "ambiguous",
               code: error.operation === "reconcile_ad"
@@ -1527,7 +1696,7 @@ export const launchpadRouter = router({
                 : "META_AD_CREATE_AMBIGUOUS",
               message: error.operation === "reconcile_ad"
                 ? "Created Meta ad could not be reconciled after publishing"
-                : "Meta ad creation timed out and needs reconciliation before retry",
+                : "Meta ad creation failed after the /ads request was sent and needs reconciliation before retry",
               details: error.details,
               reconciliationStatus: "manual_intervention",
               manualInterventionReason: error.message,
@@ -1537,6 +1706,7 @@ export const launchpadRouter = router({
           return persistPublishFailure(db, publishErrorInput({
             organizationId,
             runId: run.id,
+            runItemCount: run.itemCount,
             itemId: item.id,
             error,
           }));

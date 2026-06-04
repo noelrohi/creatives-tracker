@@ -404,11 +404,15 @@ export function reconcileCreatedMetaAd(input: {
     mismatches.push("ad_id_mismatch");
   }
 
-  if (input.snapshot.adset_id && input.snapshot.adset_id !== input.expectedAdSetMetaId) {
+  if (!input.snapshot.adset_id) {
+    mismatches.push("ad_set_missing");
+  } else if (input.snapshot.adset_id !== input.expectedAdSetMetaId) {
     mismatches.push("ad_set_mismatch");
   }
 
-  if (creativeId && creativeId !== input.expectedCreativeMetaId) {
+  if (!creativeId) {
+    mismatches.push("creative_missing");
+  } else if (creativeId !== input.expectedCreativeMetaId) {
     mismatches.push("creative_mismatch");
   }
 

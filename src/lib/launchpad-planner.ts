@@ -53,6 +53,7 @@ export type LaunchpadPlannerInput = {
     issues?: LaunchpadDestinationInspectionIssue[];
   };
   creative: LaunchpadPlannerCreative;
+  itemPosition?: number | null;
   launch: {
     defaultDestinationUrl?: string | null;
     destinationUrlOverride?: string | null;
@@ -113,8 +114,13 @@ function renderNamingTemplate(
     creative: LaunchpadPlannerCreative;
     account: LaunchpadDestinationAccount;
     adSet: LaunchpadDestinationAdSet;
+    itemPosition?: number | null;
   },
 ) {
+  const position = input.itemPosition ? String(input.itemPosition) : null;
+  const positionPadded = input.itemPosition
+    ? String(input.itemPosition).padStart(2, "0")
+    : null;
   const replacements: Record<string, string | null | undefined> = {
     "creative.name": input.creative.name,
     "creative.id": input.creative.id,
@@ -124,6 +130,8 @@ function renderNamingTemplate(
     "campaign.metaId": input.adSet.campaign.metaId,
     "account.name": input.account.name,
     "account.metaAccountId": input.account.metaAccountId,
+    "item.position": position,
+    "item.positionPadded": positionPadded,
   };
 
   return template
@@ -147,6 +155,7 @@ function resolveAdName(input: LaunchpadPlannerInput) {
       creative: input.creative,
       account: input.destination.account,
       adSet: input.destination.adSet,
+      itemPosition: input.itemPosition,
     }),
     source: "template" as const,
   };
@@ -481,7 +490,7 @@ export function buildLaunchpadPlannerOutput(
   });
 
   const normalizedItem = {
-    position: 1,
+    position: input.itemPosition ?? 1,
     target,
     creative: {
       id: input.creative.id,
