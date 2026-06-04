@@ -1247,6 +1247,71 @@ describe("launchpad router ledger persistence", () => {
   });
 });
 
+describe("launchpad run detail", () => {
+  it("returns item local ad linkage and raw Meta status shadow fields without token disclosure", async () => {
+    const run = persistedValidatedRun({
+      status: "success",
+      requestedByUserId: "user-1",
+      requestedByPrincipalType: "session",
+      requestedByRole: "admin",
+    });
+    const item = persistedValidatedItem({
+      status: "success",
+      localAdId: "local-ad-1",
+      externalMetaCreativeId: "23800000000000111",
+      externalMetaAdId: "23800000000000000",
+      rawMetaConfiguredStatus: "PAUSED",
+      rawMetaEffectiveStatus: "IN_PROCESS",
+      reconciliationStatus: "reconciled",
+    });
+    dbMocks.selectQueue = [
+      [run],
+      [
+        {
+          item,
+          localAd: {
+            id: "local-ad-1",
+            name: "Launchpad router demo",
+            status: "paused",
+            metaId: "23800000000000000",
+            destinationUrl:
+              "https://example.com/products?utm_source=meta&utm_medium=paid_social",
+            rawMetaConfiguredStatus: "PAUSED",
+            rawMetaEffectiveStatus: "IN_PROCESS",
+          },
+        },
+      ],
+    ];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    const result = await adminCaller.launchpad.getById({ id: "run-1" });
+
+    expect(result.run).toMatchObject({
+      id: "run-1",
+      status: "success",
+      destinationAdSetMetaId: "23800000000000000",
+      requestedByPrincipalType: "session",
+      requestedByRole: "admin",
+    });
+    expect(result.items[0]).toMatchObject({
+      id: "item-1",
+      status: "success",
+      localAdId: "local-ad-1",
+      externalMetaAdId: "23800000000000000",
+      rawMetaConfiguredStatus: "PAUSED",
+      rawMetaEffectiveStatus: "IN_PROCESS",
+      localAd: {
+        id: "local-ad-1",
+        status: "paused",
+        metaId: "23800000000000000",
+        rawMetaConfiguredStatus: "PAUSED",
+        rawMetaEffectiveStatus: "IN_PROCESS",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("metaAccessToken");
+  });
+});
+
 function jsonResponse(body: unknown, status = 200, statusText = "OK") {
   return new Response(JSON.stringify(body), {
     status,
