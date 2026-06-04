@@ -90,6 +90,14 @@ export const launchpadPublishRuns = pgTable(
       .default(false),
     externalTriggerRunId: text("external_trigger_run_id"),
 
+    retryCount: integer("retry_count").notNull().default(0),
+    lastRetryRequestedAt: timestamp("last_retry_requested_at"),
+    lastRetryRequestedByUserId: text("last_retry_requested_by_user_id"),
+    lastRetryRequestedByPrincipalType: launchpadPrincipalTypeEnum(
+      "last_retry_requested_by_principal_type",
+    ),
+    lastRetryRequestedByRole: text("last_retry_requested_by_role"),
+
     errorCategory: launchpadErrorCategoryEnum("error_category"),
     errorCode: text("error_code"),
     errorMessage: text("error_message"),
@@ -165,6 +173,14 @@ export const launchpadPublishItems = pgTable(
     payloadLockedAt: timestamp("payload_locked_at").defaultNow().notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
     dedupeKey: text("dedupe_key").notNull(),
+
+    retryCount: integer("retry_count").notNull().default(0),
+    lastRetryRequestedAt: timestamp("last_retry_requested_at"),
+    lastRetryRequestedByUserId: text("last_retry_requested_by_user_id"),
+    lastRetryRequestedByPrincipalType: launchpadPrincipalTypeEnum(
+      "last_retry_requested_by_principal_type",
+    ),
+    lastRetryRequestedByRole: text("last_retry_requested_by_role"),
 
     requestedAdName: text("requested_ad_name"),
     externalMetaImageHash: text("external_meta_image_hash"),

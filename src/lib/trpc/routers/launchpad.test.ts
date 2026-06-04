@@ -1431,6 +1431,219 @@ describe("launchpad live publish enqueue", () => {
   });
 });
 
+describe("launchpad retry and reconciliation", () => {
+  it("reconciles saved Meta IDs and retries only failed retryable items", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    const run = persistedValidatedRun({
+      status: "partial_success",
+      mode: "publish",
+      itemCount: 4,
+      reconciliationStatus: "pending",
+    });
+    const successItem = persistedValidatedItem({
+      id: "item-1",
+      position: 1,
+      status: "success",
+      localAdId: "local-ad-1",
+      externalMetaCreativeId: "meta-creative-1",
+      externalMetaAdId: "meta-ad-1",
+      rawMetaConfiguredStatus: "PAUSED",
+      rawMetaEffectiveStatus: "PAUSED",
+      reconciliationStatus: "reconciled",
+    });
+    const retryableItem = persistedValidatedItem({
+      id: "item-2",
+      position: 2,
+      status: "failed",
+      errorCategory: "retryable",
+      errorCode: "META_RATE_LIMIT",
+      errorMessage: "Meta API rate limit reached while publishing Launchpad item",
+      reconciliationStatus: "pending",
+      completedAt: new Date("2026-01-01T00:02:00.000Z"),
+    });
+    const terminalItem = persistedValidatedItem({
+      id: "item-3",
+      position: 3,
+      status: "failed",
+      errorCategory: "terminal",
+      errorCode: "META_AUTH_ERROR",
+      errorMessage: "Meta authorization failed",
+      reconciliationStatus: "not_required",
+      completedAt: new Date("2026-01-01T00:02:00.000Z"),
+    });
+    const savedMetaItem = persistedValidatedItem({
+      id: "item-4",
+      position: 4,
+      status: "failed",
+      errorCategory: "retryable",
+      errorCode: "META_RECONCILIATION_AMBIGUOUS",
+      errorMessage: "Created Meta ad could not be reconciled after publishing",
+      localAdId: "local-ad-4",
+      externalMetaImageHash: "meta-image-hash-4",
+      externalMetaCreativeId: "meta-creative-4",
+      externalMetaAdId: "meta-ad-4",
+      reconciliationStatus: "manual_intervention",
+      completedAt: new Date("2026-01-01T00:02:00.000Z"),
+    });
+    dbMocks.selectQueue = [
+      [run],
+      [successItem, retryableItem, terminalItem, savedMetaItem],
+      [eligibleAccount()],
+      [eligibleAdSet()],
+      [{ metaAccessToken: "secret-token" }],
+      [
+        { status: "success" },
+        { status: "failed" },
+        { status: "failed" },
+        { status: "success" },
+      ],
+      [
+        successItem,
+        retryableItem,
+        terminalItem,
+        { ...savedMetaItem, status: "success", errorCategory: null, errorCode: null },
+      ],
+    ];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        id: "meta-ad-4",
+        adset_id: "23800000000000000",
+        creative: { id: "meta-creative-4" },
+        configured_status: "PAUSED",
+        effective_status: "PAUSED",
+      }),
+    );
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    const result = await adminCaller.launchpad.retryFailedItems({
+      runId: "run-1",
+      confirmation: "RETRY_FAILED_LAUNCHPAD_ITEMS",
+    });
+
+    expect(result).toMatchObject({
+      runId: "run-1",
+      itemIds: ["item-2"],
+      skippedItemIds: ["item-1", "item-3", "item-4"],
+      reconciledItemIds: ["item-4"],
+      triggerRunId: "trigger-run-1",
+      status: "queued",
+      queued: true,
+    });
+    expect(triggerMocks.trigger).toHaveBeenCalledWith("launchpad-publish", {
+      organizationId: "test-org-id",
+      runId: "run-1",
+      itemIds: ["item-2"],
+      requestedStatus: "PAUSED",
+    });
+    expect(dbMocks.updateValues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ reconciliationStatus: "checking" }),
+        expect.objectContaining({ status: "success", externalMetaAdId: "meta-ad-4" }),
+        expect.objectContaining({
+          status: "queued",
+          mode: "publish",
+          completedAt: null,
+          lastRetryRequestedByUserId: "test-user-id",
+        }),
+        expect.objectContaining({
+          status: "queued",
+          errorCategory: null,
+          lastRetryRequestedByUserId: "test-user-id",
+        }),
+      ]),
+    );
+    expect(dbMocks.updateValues.flatMap((value) => Object.keys(value as object))).not.toContain("manifest");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    fetchSpy.mockRestore();
+  });
+
+  it("moves unresolved ambiguous items without Meta IDs to manual intervention instead of retrying", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    const run = persistedValidatedRun({
+      status: "ambiguous",
+      mode: "publish",
+      reconciliationStatus: "manual_intervention",
+    });
+    const ambiguousItem = persistedValidatedItem({
+      status: "ambiguous",
+      errorCategory: "ambiguous",
+      errorCode: "META_AD_CREATE_AMBIGUOUS",
+      errorMessage: "Meta ad creation needs reconciliation before retry",
+      reconciliationStatus: "manual_intervention",
+      manualInterventionReason: "Meta ad creation failed after the /ads request was sent",
+      completedAt: new Date("2026-01-01T00:02:00.000Z"),
+    });
+    dbMocks.selectQueue = [
+      [run],
+      [ambiguousItem],
+      [eligibleAccount()],
+      [eligibleAdSet()],
+      [{ metaAccessToken: "secret-token" }],
+      [{ status: "manual_intervention" }],
+      [{ ...ambiguousItem, status: "manual_intervention", errorCategory: "manual_intervention" }],
+      [{ status: "manual_intervention" }],
+    ];
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    const result = await adminCaller.launchpad.retryFailedItems({
+      runId: "run-1",
+      confirmation: "RETRY_FAILED_LAUNCHPAD_ITEMS",
+    });
+
+    expect(result).toMatchObject({
+      itemIds: [],
+      manualInterventionItemIds: ["item-1"],
+      queued: false,
+      status: "manual_intervention",
+    });
+    expect(triggerMocks.trigger).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(dbMocks.updateValues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "manual_intervention",
+          errorCategory: "manual_intervention",
+          errorCode: "META_AD_CREATE_UNRESOLVED",
+        }),
+      ]),
+    );
+    fetchSpy.mockRestore();
+  });
+
+  it("allows authorized users to move stuck items to manual intervention", async () => {
+    const run = persistedQueuedRun({ itemCount: 1, status: "publishing" });
+    const item = persistedQueuedItem({ status: "publishing" });
+    dbMocks.selectQueue = [
+      [run],
+      [item],
+      [{ status: "manual_intervention" }],
+    ];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    const result = await adminCaller.launchpad.markItemManualIntervention({
+      runId: "run-1",
+      itemId: "item-1",
+      reason: "Operator confirmed this worker run is stuck",
+    });
+
+    expect(result).toMatchObject({
+      status: "manual_intervention",
+      runStatus: "manual_intervention",
+    });
+    expect(dbMocks.updateValues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "manual_intervention",
+          errorCategory: "manual_intervention",
+          errorCode: "MANUAL_INTERVENTION_MARKED",
+          manualInterventionReason: "Operator confirmed this worker run is stuck",
+        }),
+      ]),
+    );
+  });
+});
+
 describe("launchpad worker static publish", () => {
   it("creates a local paused ad, publishes one paused Meta ad, persists IDs, and stores raw statuses separately", async () => {
     process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
@@ -1685,6 +1898,101 @@ describe("launchpad worker static publish", () => {
       ]),
     );
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+    fetchSpy.mockRestore();
+  });
+
+  it("classifies Meta OAuth errors as terminal publish failures", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    enqueueWorkerPublishRows();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(
+        { error: { type: "OAuthException", message: "Invalid token" } },
+        401,
+        "Unauthorized",
+      ),
+    );
+    const workerCaller = createWorkerCaller();
+
+    const result = await workerCaller.launchpad.workerExecuteLivePublish({
+      runId: "run-1",
+      itemId: "item-1",
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      errorCategory: "terminal",
+      errorCode: "META_AUTH_ERROR",
+    });
+    expect(dbMocks.updateValues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "failed",
+          errorCategory: "terminal",
+          errorCode: "META_AUTH_ERROR",
+          reconciliationStatus: "not_required",
+        }),
+      ]),
+    );
+    fetchSpy.mockRestore();
+  });
+
+  it("retries a queued failed item without duplicating its existing local paused ad", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    const { run, items } = persistedBatchRunAndItems();
+    dbMocks.selectQueue = [
+      [persistedQueuedRun({ ...run, status: "queued", itemCount: 2 })],
+      [persistedQueuedItem({
+        ...items[1],
+        id: "item-2",
+        status: "queued",
+        localAdId: "local-ad-2",
+        errorCategory: null,
+        errorCode: null,
+      })],
+      [eligibleAccount()],
+      [eligibleAdSet()],
+      [{ metaAccessToken: "secret-token" }],
+      [{ status: "failed" }, { status: "success" }],
+    ];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        if (url.includes("/adimages")) {
+          return jsonResponse({ images: { "https://cdn.example.com/router-static-2.png": { hash: "meta-image-hash-2" } } });
+        }
+        if (url.includes("/adcreatives")) return jsonResponse({ id: "meta-creative-2" });
+        if (url.includes("/ads")) {
+          const body = init?.body as URLSearchParams;
+          expect(body.get("status")).toBe("PAUSED");
+          return jsonResponse({ id: "meta-ad-2" });
+        }
+        if (url.includes("/meta-ad-2")) {
+          return jsonResponse({
+            id: "meta-ad-2",
+            adset_id: "23800000000000000",
+            creative: { id: "meta-creative-2" },
+            configured_status: "PAUSED",
+            effective_status: "PAUSED",
+          });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      },
+    );
+    const workerCaller = createWorkerCaller();
+
+    const result = await workerCaller.launchpad.workerExecuteLivePublish({
+      runId: "run-1",
+      itemId: "item-2",
+    });
+
+    expect(result).toMatchObject({
+      status: "success",
+      runStatus: "partial_success",
+      localAdId: "local-ad-2",
+      metaAdId: "meta-ad-2",
+    });
+    expect(dbMocks.insertValues).toEqual([]);
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
     fetchSpy.mockRestore();
   });
 

@@ -1,6 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { tasks } from "@trigger.dev/sdk";
-import { and, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { isLaunchpadEnabled } from "@/lib/feature-flags";
@@ -661,7 +661,11 @@ async function persistPublishFailure(
       ? "manual_intervention"
       : "failed";
   const reconciliationStatus = input.reconciliationStatus
-    ?? (input.category === "ambiguous" ? "manual_intervention" : "pending");
+    ?? (input.category === "ambiguous" || input.category === "manual_intervention"
+      ? "manual_intervention"
+      : input.category === "terminal"
+        ? "not_required"
+        : "pending");
 
   await client
     .update(launchpadPublishItems)
@@ -745,16 +749,29 @@ async function persistPublishEnqueueFailure(
       ),
     );
 
+  const itemStatuses = await client
+    .select({ status: launchpadPublishItems.status })
+    .from(launchpadPublishItems)
+    .where(
+      and(
+        eq(launchpadPublishItems.runId, input.runId),
+        eq(launchpadPublishItems.organizationId, input.organizationId),
+      ),
+    );
+  const runStatus = itemStatuses.length > 0
+    ? computeRunAggregateStatus(itemStatuses.map((item) => item.status))
+    : "failed";
+
   await client
     .update(launchpadPublishRuns)
     .set({
-      status: "failed",
+      status: runStatus,
       errorCategory: "retryable",
       errorCode: input.code,
       errorMessage: input.message,
       errorDetails: input.details ?? null,
       reconciliationStatus: "pending",
-      completedAt: now,
+      completedAt: isTerminalRunStatus(runStatus) ? now : undefined,
     })
     .where(
       and(
@@ -763,7 +780,7 @@ async function persistPublishEnqueueFailure(
       ),
     );
 
-  return { status: "failed" as const, errorCode: input.code, errorCategory: "retryable" as const };
+  return { status: runStatus, errorCode: input.code, errorCategory: "retryable" as const };
 }
 
 async function markPublishInProgress(
@@ -915,6 +932,323 @@ function publishErrorInput(input: {
   };
 }
 
+function isRetryableFailedItem(item: LaunchpadItemRow) {
+  return (
+    item.status === "failed" &&
+    item.errorCategory === "retryable" &&
+    !item.externalMetaAdId
+  );
+}
+
+function itemNeedsPreRetryReconciliation(item: LaunchpadItemRow) {
+  return Boolean(
+    item.externalMetaAdId ||
+      item.status === "ambiguous" ||
+      item.errorCategory === "ambiguous",
+  );
+}
+
+function assertRunCanRetry(run: LaunchpadRunRow) {
+  if (
+    !["failed", "partial_success", "ambiguous", "manual_intervention"].includes(
+      run.status,
+    )
+  ) {
+    throw new LaunchpadLedgerError(
+      "RETRY_REQUIRES_FAILED_OR_AMBIGUOUS_RUN",
+      "Only failed, partially successful, ambiguous, or manual-intervention Launchpad runs can be retried",
+      { runId: run.id, status: run.status },
+    );
+  }
+}
+
+function assertItemReadyForRetry(item: LaunchpadItemRow) {
+  assertLockedHashStable({
+    label: "payload",
+    lockedHash: item.payloadHash,
+    nextValue: item.payload,
+  });
+
+  if (!item.validatedAt) {
+    throw new LaunchpadLedgerError(
+      "VALIDATED_ITEM_REQUIRED",
+      "Retrying Launchpad publishing requires a previously validated item payload",
+      { itemId: item.id },
+    );
+  }
+
+  if (item.requestedStatus !== PAUSED_META_STATUS) {
+    throw new LaunchpadLedgerError(
+      "ACTIVE_META_STATUS_FORBIDDEN",
+      "Launchpad can only retry PAUSED Meta ads",
+      { requestedStatus: item.requestedStatus },
+    );
+  }
+
+  assertStaticPublishPayload(item.payload as LaunchpadItemPayload);
+}
+
+async function persistManualIntervention(
+  client: LaunchpadWriter,
+  input: {
+    organizationId: string;
+    runId: string;
+    runItemCount: number;
+    itemId: string;
+    code: string;
+    message: string;
+    reason: string;
+    details?: Record<string, unknown> | null;
+    rawMetaConfiguredStatus?: string | null;
+    rawMetaEffectiveStatus?: string | null;
+  },
+) {
+  return persistPublishFailure(client, {
+    organizationId: input.organizationId,
+    runId: input.runId,
+    runItemCount: input.runItemCount,
+    itemId: input.itemId,
+    category: "manual_intervention",
+    code: input.code,
+    message: input.message,
+    details: input.details,
+    reconciliationStatus: "manual_intervention",
+    manualInterventionReason: input.reason,
+    rawMetaConfiguredStatus: input.rawMetaConfiguredStatus,
+    rawMetaEffectiveStatus: input.rawMetaEffectiveStatus,
+  });
+}
+
+async function persistReconciledSuccess(
+  client: LaunchpadWriter,
+  input: {
+    organizationId: string;
+    runId: string;
+    runItemCount: number;
+    itemId: string;
+    localAdId: string;
+    imageHash: string | null;
+    creativeId: string;
+    adId: string;
+    rawMetaConfiguredStatus: string | null;
+    rawMetaEffectiveStatus: string | null;
+  },
+) {
+  const now = new Date();
+  await client
+    .update(launchpadPublishItems)
+    .set({
+      status: "success",
+      localAdId: input.localAdId,
+      externalMetaImageHash: input.imageHash,
+      externalMetaCreativeId: input.creativeId,
+      externalMetaAdId: input.adId,
+      rawMetaConfiguredStatus: input.rawMetaConfiguredStatus,
+      rawMetaEffectiveStatus: input.rawMetaEffectiveStatus,
+      reconciliationStatus: "reconciled",
+      reconciliationCheckedAt: now,
+      completedAt: now,
+      errorCategory: null,
+      errorCode: null,
+      errorMessage: null,
+      errorDetails: null,
+      manualInterventionReason: null,
+    })
+    .where(
+      and(
+        eq(launchpadPublishItems.id, input.itemId),
+        eq(launchpadPublishItems.organizationId, input.organizationId),
+      ),
+    );
+
+  await client
+    .update(ads)
+    .set({
+      metaImageHash: input.imageHash,
+      metaCreativeId: input.creativeId,
+      metaId: input.adId,
+      rawMetaConfiguredStatus: input.rawMetaConfiguredStatus,
+      rawMetaEffectiveStatus: input.rawMetaEffectiveStatus,
+      status: "paused",
+    })
+    .where(
+      and(eq(ads.id, input.localAdId), eq(ads.organizationId, input.organizationId)),
+    );
+
+  const runStatus = await resolveRunAggregateStatusAfterItem(client, {
+    organizationId: input.organizationId,
+    runId: input.runId,
+    runItemCount: input.runItemCount,
+    itemStatus: "success",
+  });
+  await client
+    .update(launchpadPublishRuns)
+    .set({
+      status: runStatus,
+      reconciliationStatus: runStatus === "success"
+        ? "reconciled"
+        : ["ambiguous", "manual_intervention"].includes(runStatus)
+          ? "manual_intervention"
+          : "pending",
+      reconciliationCheckedAt: runStatus === "success" ? now : undefined,
+      completedAt: isTerminalRunStatus(runStatus) ? now : undefined,
+      ...(runStatus === "success"
+        ? {
+            errorCategory: null,
+            errorCode: null,
+            errorMessage: null,
+            errorDetails: null,
+            manualInterventionReason: null,
+          }
+        : {}),
+    })
+    .where(
+      and(
+        eq(launchpadPublishRuns.id, input.runId),
+        eq(launchpadPublishRuns.organizationId, input.organizationId),
+      ),
+    );
+
+  return { status: "success" as const, runStatus };
+}
+
+async function reconcileItemWithSavedMetaAd(
+  client: LaunchpadWriter,
+  input: {
+    organizationId: string;
+    run: LaunchpadRunRow;
+    item: LaunchpadItemRow;
+    accessToken: string;
+    expectedAdSetMetaId: string;
+  },
+) {
+  const { item, run } = input;
+  if (!item.externalMetaAdId) return null;
+
+  if (!item.localAdId || !item.externalMetaCreativeId) {
+    return persistManualIntervention(client, {
+      organizationId: input.organizationId,
+      runId: run.id,
+      runItemCount: run.itemCount,
+      itemId: item.id,
+      code: "META_AD_RECONCILIATION_UNSAFE",
+      message: "Saved Meta ad ID cannot be retried until its local ad and creative linkage are reconciled",
+      reason: "Saved Meta ad ID exists without complete local ad or creative linkage",
+      details: {
+        hasLocalAdId: Boolean(item.localAdId),
+        hasMetaCreativeId: Boolean(item.externalMetaCreativeId),
+        hasMetaAdId: true,
+      },
+    });
+  }
+
+  const now = new Date();
+  await client
+    .update(launchpadPublishItems)
+    .set({
+      reconciliationStatus: "checking",
+      reconciliationCheckedAt: now,
+    })
+    .where(
+      and(
+        eq(launchpadPublishItems.id, item.id),
+        eq(launchpadPublishItems.organizationId, input.organizationId),
+      ),
+    );
+
+  try {
+    const snapshot = await fetchMetaAdSnapshot({
+      adMetaId: item.externalMetaAdId,
+      accessToken: input.accessToken,
+    });
+    const reconciliation = reconcileCreatedMetaAd({
+      snapshot,
+      expectedAdMetaId: item.externalMetaAdId,
+      expectedAdSetMetaId: input.expectedAdSetMetaId,
+      expectedCreativeMetaId: item.externalMetaCreativeId,
+    });
+
+    if (reconciliation.ok) {
+      return persistReconciledSuccess(client, {
+        organizationId: input.organizationId,
+        runId: run.id,
+        runItemCount: run.itemCount,
+        itemId: item.id,
+        localAdId: item.localAdId,
+        imageHash: item.externalMetaImageHash,
+        creativeId: item.externalMetaCreativeId,
+        adId: item.externalMetaAdId,
+        rawMetaConfiguredStatus: reconciliation.rawMetaConfiguredStatus,
+        rawMetaEffectiveStatus: reconciliation.rawMetaEffectiveStatus,
+      });
+    }
+
+    return persistManualIntervention(client, {
+      organizationId: input.organizationId,
+      runId: run.id,
+      runItemCount: run.itemCount,
+      itemId: item.id,
+      code: "META_AD_RECONCILIATION_UNSAFE",
+      message: "Saved Meta ad ID could not be reconciled as the expected paused ad",
+      reason: reconciliation.failureReason ?? "Saved Meta ad did not match the frozen Launchpad payload",
+      details: reconciliation.details,
+      rawMetaConfiguredStatus: reconciliation.rawMetaConfiguredStatus,
+      rawMetaEffectiveStatus: reconciliation.rawMetaEffectiveStatus,
+    });
+  } catch (error) {
+    if (error instanceof LaunchpadMetaPublishError) {
+      return persistManualIntervention(client, {
+        organizationId: input.organizationId,
+        runId: run.id,
+        runItemCount: run.itemCount,
+        itemId: item.id,
+        code: "META_AD_RECONCILIATION_UNRESOLVED",
+        message: "Saved Meta ad ID could not be reconciled before retry",
+        reason: error.message,
+        details: error.details,
+      });
+    }
+
+    throw error;
+  }
+}
+
+async function refreshRunAggregateStatus(
+  client: LaunchpadWriter,
+  organizationId: string,
+  runId: string,
+) {
+  const rows = await client
+    .select({ status: launchpadPublishItems.status })
+    .from(launchpadPublishItems)
+    .where(
+      and(
+        eq(launchpadPublishItems.runId, runId),
+        eq(launchpadPublishItems.organizationId, organizationId),
+      ),
+    );
+  const status = computeRunAggregateStatus(rows.map((row) => row.status));
+  const now = new Date();
+  await client
+    .update(launchpadPublishRuns)
+    .set({
+      status,
+      reconciliationStatus: ["ambiguous", "manual_intervention"].includes(status)
+        ? "manual_intervention"
+        : status === "success"
+          ? "reconciled"
+          : "pending",
+      completedAt: isTerminalRunStatus(status) ? now : undefined,
+    })
+    .where(
+      and(
+        eq(launchpadPublishRuns.id, runId),
+        eq(launchpadPublishRuns.organizationId, organizationId),
+      ),
+    );
+  return status;
+}
+
 export const launchpadRouter = router({
   destinationAccounts: launchpadAdminProcedure
     .meta(openApiQueryMeta("launchpad", "destinationAccounts"))
@@ -981,6 +1315,8 @@ export const launchpadRouter = router({
           destinationAdSetMetaId: launchpadPublishRuns.destinationAdSetMetaId,
           livePublishEnabledAtValidation:
             launchpadPublishRuns.livePublishEnabledAtValidation,
+          retryCount: launchpadPublishRuns.retryCount,
+          lastRetryRequestedAt: launchpadPublishRuns.lastRetryRequestedAt,
           reconciliationStatus: launchpadPublishRuns.reconciliationStatus,
           errorCategory: launchpadPublishRuns.errorCategory,
           errorCode: launchpadPublishRuns.errorCode,
@@ -1420,6 +1756,307 @@ export const launchpadRouter = router({
         itemIds,
         triggerRunId: handle.id,
         status: "queued" as const,
+      };
+    }),
+
+  retryFailedItems: launchpadAdminProcedure
+    .meta(openApiMutationMeta("launchpad", "retryFailedItems"))
+    .input(
+      z.object({
+        runId: z.string(),
+        confirmation: z.literal("RETRY_FAILED_LAUNCHPAD_ITEMS"),
+        requestedStatus: z.literal(PAUSED_META_STATUS).default(PAUSED_META_STATUS),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const run = await loadLaunchpadRunOrThrow(
+        db,
+        ctx.organizationId,
+        input.runId,
+      );
+
+      try {
+        assertLockedHashStable({
+          label: "manifest",
+          lockedHash: run.manifestHash,
+          nextValue: run.manifest,
+        });
+        assertRunCanRetry(run);
+        const safety = manifestSafety(run);
+        assertLivePublishSafety({
+          principalType: ctx.principalType,
+          orgRole: ctx.orgRole,
+          requestedStatus: input.requestedStatus,
+          itemCount: run.itemCount,
+          confirmationAccepted: input.confirmation === "RETRY_FAILED_LAUNCHPAD_ITEMS",
+          previouslyValidatedManifest: Boolean(run.manifestLockedAt && run.validatedAt),
+          campaignCreationRequested: safety.campaignCreationAllowed === true,
+          adSetCreationRequested: safety.adSetCreationAllowed === true,
+          activePublishingPathAvailable: true,
+          env: process.env,
+        });
+
+        if (run.requestedStatus !== PAUSED_META_STATUS) {
+          throw new LaunchpadLedgerError(
+            "ACTIVE_META_STATUS_FORBIDDEN",
+            "Launchpad can only retry PAUSED Meta ads",
+            { requestedStatus: run.requestedStatus },
+          );
+        }
+      } catch (error) {
+        asTrpcError(error);
+      }
+
+      const items = await loadRunItems(db, ctx.organizationId, run.id);
+      if (items.length !== run.itemCount) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Launchpad run item count does not match its persisted items",
+          cause: { expected: run.itemCount, actual: items.length },
+        });
+      }
+
+      let destination: Awaited<ReturnType<typeof assertPublishDestinationStillEligible>>;
+      try {
+        destination = await assertPublishDestinationStillEligible(
+          db,
+          ctx.organizationId,
+          run,
+        );
+      } catch (error) {
+        asTrpcError(error);
+      }
+
+      const reconciledItemIds: string[] = [];
+      const manualInterventionItemIds: string[] = [];
+      for (const item of items) {
+        if (["success", "skipped", "cancelled"].includes(item.status)) {
+          continue;
+        }
+
+        if (item.errorCategory === "terminal") {
+          continue;
+        }
+
+        if (item.externalMetaAdId) {
+          const result = await reconcileItemWithSavedMetaAd(db, {
+            organizationId: ctx.organizationId,
+            run,
+            item,
+            accessToken: destination.accessToken,
+            expectedAdSetMetaId: destination.adSet.metaId!,
+          });
+          if (result?.status === "success") {
+            reconciledItemIds.push(item.id);
+          } else if (result) {
+            manualInterventionItemIds.push(item.id);
+          }
+          continue;
+        }
+
+        if (itemNeedsPreRetryReconciliation(item)) {
+          await persistManualIntervention(db, {
+            organizationId: ctx.organizationId,
+            runId: run.id,
+            runItemCount: run.itemCount,
+            itemId: item.id,
+            code: "META_AD_CREATE_UNRESOLVED",
+            message: "Ambiguous Meta ad creation has no saved Meta ad ID and cannot be retried safely",
+            reason:
+              "Inspect Meta Ads Manager before deciding whether a Launchpad retry would duplicate an ad",
+            details: {
+              previousStatus: item.status,
+              previousErrorCategory: item.errorCategory,
+              previousErrorCode: item.errorCode,
+            },
+          });
+          manualInterventionItemIds.push(item.id);
+        }
+      }
+
+      const refreshedItems = await loadRunItems(db, ctx.organizationId, run.id);
+      const retryableItems = refreshedItems.filter(isRetryableFailedItem);
+      const retryableItemIdSet = new Set(retryableItems.map((item) => item.id));
+      const skippedItemIds = refreshedItems
+        .filter((item) => !retryableItemIdSet.has(item.id))
+        .map((item) => item.id);
+
+      for (const item of retryableItems) {
+        try {
+          assertItemReadyForRetry(item);
+        } catch (error) {
+          asTrpcError(error);
+        }
+      }
+
+      if (retryableItems.length === 0) {
+        const status = await refreshRunAggregateStatus(
+          db,
+          ctx.organizationId,
+          run.id,
+        );
+        return {
+          runId: run.id,
+          itemIds: [] as string[],
+          skippedItemIds,
+          reconciledItemIds,
+          manualInterventionItemIds,
+          triggerRunId: null,
+          status,
+          queued: false,
+        };
+      }
+
+      const now = new Date();
+      const itemIds = retryableItems.map((item) => item.id);
+      await db
+        .update(launchpadPublishRuns)
+        .set({
+          status: "queued",
+          mode: "publish",
+          queuedAt: now,
+          completedAt: null,
+          reconciliationStatus: "pending",
+          retryCount: sql`${launchpadPublishRuns.retryCount} + 1`,
+          lastRetryRequestedAt: now,
+          lastRetryRequestedByUserId: ctx.userId,
+          lastRetryRequestedByPrincipalType: ctx.principalType,
+          lastRetryRequestedByRole: ctx.orgRole,
+          errorCategory: null,
+          errorCode: null,
+          errorMessage: null,
+          errorDetails: null,
+          manualInterventionReason: null,
+        })
+        .where(
+          and(
+            eq(launchpadPublishRuns.id, run.id),
+            eq(launchpadPublishRuns.organizationId, ctx.organizationId),
+          ),
+        );
+      await db
+        .update(launchpadPublishItems)
+        .set({
+          status: "queued",
+          queuedAt: now,
+          startedAt: null,
+          completedAt: null,
+          reconciliationStatus: "pending",
+          retryCount: sql`${launchpadPublishItems.retryCount} + 1`,
+          lastRetryRequestedAt: now,
+          lastRetryRequestedByUserId: ctx.userId,
+          lastRetryRequestedByPrincipalType: ctx.principalType,
+          lastRetryRequestedByRole: ctx.orgRole,
+          errorCategory: null,
+          errorCode: null,
+          errorMessage: null,
+          errorDetails: null,
+          manualInterventionReason: null,
+        })
+        .where(
+          and(
+            inArray(launchpadPublishItems.id, itemIds),
+            eq(launchpadPublishItems.organizationId, ctx.organizationId),
+          ),
+        );
+
+      let handle: { id: string };
+      try {
+        handle = await tasks.trigger<typeof launchpadPublishTask>(
+          "launchpad-publish",
+          {
+            organizationId: ctx.organizationId,
+            runId: run.id,
+            itemIds,
+            requestedStatus: PAUSED_META_STATUS,
+          },
+        );
+      } catch (error) {
+        await persistPublishEnqueueFailure(db, {
+          organizationId: ctx.organizationId,
+          runId: run.id,
+          itemIds,
+          code: "TRIGGER_RETRY_ENQUEUE_FAILED",
+          message: "Launchpad retry task could not be enqueued",
+          details: {
+            errorName: error instanceof Error ? error.name : undefined,
+          },
+        });
+
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Launchpad retry task could not be enqueued",
+        });
+      }
+
+      await db
+        .update(launchpadPublishRuns)
+        .set({ externalTriggerRunId: handle.id })
+        .where(
+          and(
+            eq(launchpadPublishRuns.id, run.id),
+            eq(launchpadPublishRuns.organizationId, ctx.organizationId),
+          ),
+        );
+
+      return {
+        runId: run.id,
+        itemIds,
+        skippedItemIds,
+        reconciledItemIds,
+        manualInterventionItemIds,
+        triggerRunId: handle.id,
+        status: "queued" as const,
+        queued: true,
+      };
+    }),
+
+  markItemManualIntervention: launchpadAdminProcedure
+    .meta(openApiMutationMeta("launchpad", "markItemManualIntervention"))
+    .input(
+      z.object({
+        runId: z.string(),
+        itemId: z.string(),
+        reason: z.string().trim().min(3).max(1000),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const run = await loadLaunchpadRunOrThrow(
+        db,
+        ctx.organizationId,
+        input.runId,
+      );
+      const item = await loadLaunchpadItemOrThrow(db, ctx.organizationId, input);
+
+      if (item.status === "success" && item.externalMetaAdId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Successful Launchpad items with Meta IDs cannot be moved to manual intervention",
+        });
+      }
+
+      const result = await persistManualIntervention(db, {
+        organizationId: ctx.organizationId,
+        runId: run.id,
+        runItemCount: run.itemCount,
+        itemId: item.id,
+        code: "MANUAL_INTERVENTION_MARKED",
+        message: "Launchpad item was moved to manual intervention by an authorized user",
+        reason: input.reason,
+        details: {
+          previousStatus: item.status,
+          previousErrorCategory: item.errorCategory,
+          previousErrorCode: item.errorCode,
+          markedByUserId: ctx.userId,
+          markedByRole: ctx.orgRole,
+        },
+      });
+
+      return {
+        runId: run.id,
+        itemId: item.id,
+        status: result.status,
+        runStatus: result.runStatus,
       };
     }),
 

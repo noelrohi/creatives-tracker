@@ -10,8 +10,10 @@ import {
   Fingerprint,
   LockKeyhole,
   Plus,
+  RotateCcw,
   ShieldCheck,
   Target,
+  Wrench,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -157,6 +159,34 @@ export function LaunchpadPageClient() {
       },
     }),
   );
+  const retryFailed = useMutation(
+    trpc.launchpad.retryFailedItems.mutationOptions({
+      onSuccess: (result) => {
+        queryClient.invalidateQueries({ queryKey: trpc.launchpad.list.queryKey() });
+        queryClient.invalidateQueries({
+          queryKey: trpc.launchpad.getById.queryKey({ id: result.runId }),
+        });
+        if (result.queued) {
+          toast.success(`Queued ${result.itemIds.length} retryable item${result.itemIds.length === 1 ? "" : "s"}`);
+        } else {
+          toast.info("No retryable Launchpad items were queued");
+        }
+      },
+      onError: (error) => toast.error(error.message),
+    }),
+  );
+  const markManualIntervention = useMutation(
+    trpc.launchpad.markItemManualIntervention.mutationOptions({
+      onSuccess: (result) => {
+        queryClient.invalidateQueries({ queryKey: trpc.launchpad.list.queryKey() });
+        queryClient.invalidateQueries({
+          queryKey: trpc.launchpad.getById.queryKey({ id: result.runId }),
+        });
+        toast.success("Launchpad item moved to manual intervention");
+      },
+      onError: (error) => toast.error(error.message),
+    }),
+  );
 
   function handleAccountChange(accountId: string) {
     setSelectedAccountId(accountId);
@@ -261,6 +291,39 @@ export function LaunchpadPageClient() {
     });
   }
 
+  function retrySelectedRun() {
+    if (!selectedRun.data?.run.id) {
+      toast.error("Select a Launchpad run with failed items first.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Retry failed/retryable Launchpad items only? Successful, skipped, terminal, and saved-Meta-ID items will be skipped or reconciled first.",
+    );
+    if (!confirmed) return;
+
+    retryFailed.mutate({
+      runId: selectedRun.data.run.id,
+      confirmation: "RETRY_FAILED_LAUNCHPAD_ITEMS",
+      requestedStatus: "PAUSED",
+    });
+  }
+
+  function markItemForManualIntervention(itemId: string) {
+    if (!selectedRun.data?.run.id) return;
+    const reason = window.prompt(
+      "Why should this Launchpad item move to manual intervention?",
+    );
+    const trimmedReason = reason?.trim();
+    if (!trimmedReason) return;
+
+    markManualIntervention.mutate({
+      runId: selectedRun.data.run.id,
+      itemId,
+      reason: trimmedReason,
+    });
+  }
+
   const destinationReady = Boolean(selectedAccountId && selectedAdSetId);
   const dryRunReady = Boolean(
     destinationReady &&
@@ -268,6 +331,12 @@ export function LaunchpadPageClient() {
       (defaultDestinationUrl.trim() || launchItems.every((item) => item.destinationUrl.trim())),
   );
   const selectedRunPublishable = selectedRun.data?.run.status === "validated";
+  const selectedRunRetryable = Boolean(
+    selectedRun.data &&
+      ["failed", "partial_success", "ambiguous", "manual_intervention"].includes(
+        selectedRun.data.run.status,
+      ),
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -790,6 +859,16 @@ export function LaunchpadPageClient() {
                 >
                   {requestPublish.isPending ? "Queueing…" : "Publish paused ads"}
                 </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={!selectedRunRetryable || retryFailed.isPending}
+                  onClick={retrySelectedRun}
+                  className="gap-1.5"
+                >
+                  <RotateCcw className="size-3" />
+                  {retryFailed.isPending ? "Reconciling…" : "Retry failed only"}
+                </Button>
               </div>
               <dl className="grid gap-2 text-xs">
                 <div className="flex justify-between gap-3">
@@ -799,6 +878,10 @@ export function LaunchpadPageClient() {
                 <div className="flex justify-between gap-3">
                   <dt className="text-muted-foreground">Items</dt>
                   <dd>{selectedRun.data.items.length}</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted-foreground">Retry count</dt>
+                  <dd>{selectedRun.data.run.retryCount ?? 0}</dd>
                 </div>
                 <div className="flex justify-between gap-3">
                   <dt className="text-muted-foreground">Run ID</dt>
@@ -812,6 +895,12 @@ export function LaunchpadPageClient() {
                 <div className="space-y-1.5">
                   {selectedRun.data.items.map((item) => {
                     const details = [
+                      item.errorCategory
+                        ? {
+                            label: "Classification",
+                            value: statusLabel(item.errorCategory),
+                          }
+                        : null,
                       item.errorCode
                         ? {
                             label: "Error",
@@ -824,6 +913,12 @@ export function LaunchpadPageClient() {
                         ? {
                             label: "Reconciliation",
                             value: statusLabel(item.reconciliationStatus),
+                          }
+                        : null,
+                      item.retryCount
+                        ? {
+                            label: "Retries",
+                            value: String(item.retryCount),
                           }
                         : null,
                       item.manualInterventionReason
@@ -851,9 +946,22 @@ export function LaunchpadPageClient() {
                           <span className="truncate font-medium">
                             {item.position}. {item.requestedAdName ?? item.creativeId}
                           </span>
-                          <Badge variant="outline" className="shrink-0 capitalize">
-                            {statusLabel(item.status)}
-                          </Badge>
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            <Badge variant="outline" className="capitalize">
+                              {statusLabel(item.status)}
+                            </Badge>
+                            {!["success", "skipped", "cancelled"].includes(item.status) ? (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 px-2 text-[11px]"
+                                disabled={markManualIntervention.isPending}
+                                onClick={() => markItemForManualIntervention(item.id)}
+                              >
+                                <Wrench className="mr-1 size-3" /> Manual
+                              </Button>
+                            ) : null}
+                          </div>
                         </div>
                         {details.length > 0 ? (
                           <dl className="mt-2 grid gap-1 text-[11px] text-muted-foreground">
@@ -876,7 +984,26 @@ export function LaunchpadPageClient() {
             <pre className="max-h-96 overflow-auto rounded-lg border bg-muted/30 p-3 text-[11px] leading-relaxed text-muted-foreground">
               {formatJson({
                 manifest: selectedRun.data.run.manifest,
+                retry: {
+                  count: selectedRun.data.run.retryCount ?? 0,
+                  lastRequestedAt: selectedRun.data.run.lastRetryRequestedAt,
+                },
                 itemPayloads: selectedRun.data.items.map((item) => item.payload),
+                itemDiagnostics: selectedRun.data.items.map((item) => ({
+                  id: item.id,
+                  status: item.status,
+                  errorCategory: item.errorCategory,
+                  errorCode: item.errorCode,
+                  errorMessage: item.errorMessage,
+                  errorDetails: item.errorDetails,
+                  reconciliationStatus: item.reconciliationStatus,
+                  manualInterventionReason: item.manualInterventionReason,
+                  retryCount: item.retryCount ?? 0,
+                  lastRetryRequestedAt: item.lastRetryRequestedAt,
+                  externalMetaAdId: item.externalMetaAdId,
+                  externalMetaCreativeId: item.externalMetaCreativeId,
+                  localAdId: item.localAdId,
+                })),
               })}
             </pre>
           </div>
