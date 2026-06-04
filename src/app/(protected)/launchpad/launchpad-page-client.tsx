@@ -1,15 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Archive,
+  CalendarClock,
   CheckCircle2,
+  ExternalLink,
   FileImage,
   Fingerprint,
+  Link2,
+  ListChecks,
   LockKeyhole,
   Plus,
+  RadioTower,
   RotateCcw,
   ShieldCheck,
   Target,
@@ -18,7 +24,23 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { LAUNCHPAD_MAX_ITEMS, metaCtaValues } from "@/lib/launchpad-constants";
+import {
+  buildLaunchpadLocalAdHref,
+  buildMetaAdsManagerAdUrl,
+  canShowLaunchpadManualInterventionAction,
+  canShowLaunchpadRetryAction,
+  formatLaunchpadStatusLabel,
+  getLaunchpadItemDiagnostics,
+  getLaunchpadItemManifestSummary,
+  getLaunchpadPerformanceSyncReadiness,
+  getLaunchpadRunAggregateResult,
+  getLaunchpadStatusBreakdown,
+  summarizeLaunchpadRunStatuses,
+  type LaunchpadRunDetailItem,
+  type LaunchpadRunDetailRun,
+} from "@/lib/launchpad-run-detail";
 import { useTRPC } from "@/lib/trpc/client";
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -72,6 +94,564 @@ type LaunchpadDraftItem = {
   destinationUrl: string;
   cta: string;
 };
+
+type LaunchpadRunDetailData = {
+  run: LaunchpadRunDetailRun & {
+    manifest?: unknown;
+    errorDetails?: unknown;
+  };
+  items: LaunchpadRunDetailItem[];
+};
+
+type Tone = "neutral" | "warning" | "danger" | "success";
+
+function toneClasses(tone: Tone) {
+  switch (tone) {
+    case "success":
+      return "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300";
+    case "warning":
+      return "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300";
+    case "danger":
+      return "border-destructive/30 bg-destructive/10 text-destructive";
+    default:
+      return "border-border bg-muted/25 text-muted-foreground";
+  }
+}
+
+function statusBadgeClasses(status: string) {
+  if (["success", "reconciled"].includes(status)) {
+    return "border-emerald-200 text-emerald-700 dark:border-emerald-900/60 dark:text-emerald-300";
+  }
+  if (["failed", "terminal", "mismatched"].includes(status)) {
+    return "border-destructive/30 text-destructive";
+  }
+  if (["ambiguous", "manual_intervention", "retryable", "pending", "checking"].includes(status)) {
+    return "border-amber-200 text-amber-700 dark:border-amber-900/60 dark:text-amber-300";
+  }
+  if (["queued", "publishing"].includes(status)) {
+    return "border-blue-200 text-blue-700 dark:border-blue-900/60 dark:text-blue-300";
+  }
+  return "";
+}
+
+function metaStatusClasses(status: string | null) {
+  if (!status) return "border-border text-muted-foreground";
+  const normalized = status.toUpperCase();
+  if (["PAUSED", "ACTIVE"].includes(normalized)) {
+    return "border-emerald-200 text-emerald-700 dark:border-emerald-900/60 dark:text-emerald-300";
+  }
+  if (["REJECTED", "DISAPPROVED", "WITH_ISSUES"].includes(normalized)) {
+    return "border-destructive/30 text-destructive";
+  }
+  if (["PENDING_REVIEW", "IN_PROCESS", "PENDING", "PROCESSING"].includes(normalized)) {
+    return "border-amber-200 text-amber-700 dark:border-amber-900/60 dark:text-amber-300";
+  }
+  return "border-border text-muted-foreground";
+}
+
+function formatTimestamp(value: Date | string | null | undefined) {
+  if (!value) return "—";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleString();
+}
+
+function compactId(value: string | null | undefined, head = 8, tail = 6) {
+  if (!value) return "—";
+  if (value.length <= head + tail + 1) return value;
+  return `${value.slice(0, head)}…${value.slice(-tail)}`;
+}
+
+function DetailRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <dt className="shrink-0 text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 text-right">{children}</dd>
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string | null | undefined }) {
+  const value = status ?? "unknown";
+  return (
+    <Badge variant="outline" className={cn("capitalize", statusBadgeClasses(value))}>
+      {formatLaunchpadStatusLabel(value)}
+    </Badge>
+  );
+}
+
+function MetaStatusBadge({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | null | undefined;
+}) {
+  return (
+    <div className="rounded-lg border bg-background/70 p-2">
+      <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
+      <Badge
+        variant="outline"
+        className={cn("mt-1 font-mono text-[11px]", metaStatusClasses(value ?? null))}
+      >
+        {value ?? "not synced"}
+      </Badge>
+    </div>
+  );
+}
+
+function RunTimeline({ run }: { run: LaunchpadRunDetailData["run"] }) {
+  const events = [
+    ["Created", run.createdAt],
+    ["Validated", run.validatedAt],
+    ["Queued", run.queuedAt],
+    ["Started", run.startedAt],
+    ["Completed", run.completedAt],
+    ["Last retry", run.lastRetryRequestedAt],
+  ] as const;
+
+  return (
+    <div className="rounded-xl border bg-muted/15 p-3">
+      <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+        <CalendarClock className="size-4 text-primary" /> Run timeline
+      </div>
+      <dl className="grid gap-1.5 text-xs">
+        {events.map(([label, value]) => (
+          <DetailRow key={label} label={label}>
+            <span className="tabular-nums text-muted-foreground">
+              {formatTimestamp(value)}
+            </span>
+          </DetailRow>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+function LaunchpadRunDetailPanel({
+  data,
+  isPublishing,
+  isRetrying,
+  isMarkingManual,
+  onPublish,
+  onRetry,
+  onMarkManual,
+}: {
+  data: LaunchpadRunDetailData;
+  isPublishing: boolean;
+  isRetrying: boolean;
+  isMarkingManual: boolean;
+  onPublish: () => void;
+  onRetry: () => void;
+  onMarkManual: (itemId: string) => void;
+}) {
+  const { run, items } = data;
+  const aggregate = getLaunchpadRunAggregateResult(run, items);
+  const statusCounts = summarizeLaunchpadRunStatuses(items);
+  const canPublish = run.status === "validated";
+  const canRetry = canShowLaunchpadRetryAction(run, items);
+
+  return (
+    <div className="space-y-4 p-4">
+      <div className={cn("rounded-2xl border p-4", toneClasses(aggregate.tone))}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusBadge status={run.status} />
+              <Badge variant="secondary" className="capitalize">
+                {run.mode ?? "validation"}
+              </Badge>
+              {run.reconciliationStatus ? (
+                <Badge variant="outline" className={cn("capitalize", statusBadgeClasses(run.reconciliationStatus))}>
+                  reconciliation {formatLaunchpadStatusLabel(run.reconciliationStatus)}
+                </Badge>
+              ) : null}
+            </div>
+            <div>
+              <h3 className="text-base font-semibold text-foreground">
+                {aggregate.label}
+              </h3>
+              <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+                {aggregate.detail}
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {canPublish ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={isPublishing}
+                onClick={onPublish}
+              >
+                {isPublishing ? "Queueing…" : "Publish paused ads"}
+              </Button>
+            ) : null}
+            {canRetry ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={isRetrying}
+                onClick={onRetry}
+                className="gap-1.5"
+              >
+                <RotateCcw className="size-3" />
+                {isRetrying ? "Reconciling…" : "Retry failed only"}
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-[1fr_1fr_1fr]">
+        <div className="rounded-xl border bg-muted/15 p-3">
+          <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+            <Target className="size-4 text-primary" /> Destination
+          </div>
+          <dl className="grid gap-1.5 text-xs">
+            <DetailRow label="Account Meta ID">
+              <code className="font-mono">{run.actorAccountMetaId ?? "—"}</code>
+            </DetailRow>
+            <DetailRow label="Facebook Page">
+              <code className="font-mono">{run.actorPageId ?? "—"}</code>
+            </DetailRow>
+            <DetailRow label="Instagram actor">
+              <code className="font-mono">{run.actorInstagramId ?? "—"}</code>
+            </DetailRow>
+            <DetailRow label="Ad set Meta ID">
+              <code className="font-mono">{run.destinationAdSetMetaId ?? "—"}</code>
+            </DetailRow>
+            <DetailRow label="Requested Meta status">
+              <span className="font-mono">{run.requestedStatus ?? "PAUSED"}</span>
+            </DetailRow>
+          </dl>
+        </div>
+
+        <div className="rounded-xl border bg-muted/15 p-3">
+          <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+            <ListChecks className="size-4 text-primary" /> Audit
+          </div>
+          <dl className="grid gap-1.5 text-xs">
+            <DetailRow label="Run ID">
+              <code className="font-mono" title={run.id}>{compactId(run.id)}</code>
+            </DetailRow>
+            <DetailRow label="Manifest hash">
+              <code className="font-mono" title={run.manifestHash ?? undefined}>
+                {run.manifestHash ? shortHash(run.manifestHash) : "—"}
+              </code>
+            </DetailRow>
+            <DetailRow label="Actor">
+              <span className="capitalize">
+                {run.requestedByRole ?? "unknown"} · {run.requestedByPrincipalType ?? "unknown"}
+              </span>
+            </DetailRow>
+            <DetailRow label="User ID">
+              <code className="font-mono" title={run.requestedByUserId ?? undefined}>
+                {compactId(run.requestedByUserId)}
+              </code>
+            </DetailRow>
+            <DetailRow label="Live env at validation">
+              {run.livePublishEnabledAtValidation ? (
+                <Badge>Enabled</Badge>
+              ) : (
+                <Badge variant="secondary">Disabled</Badge>
+              )}
+            </DetailRow>
+          </dl>
+        </div>
+
+        <RunTimeline run={run} />
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {Object.entries(statusCounts).map(([status, count]) => (
+          <div key={status} className="rounded-xl border bg-card p-3">
+            <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              {formatLaunchpadStatusLabel(status)}
+            </p>
+            <p className="mt-1 text-2xl font-semibold tabular-nums">{count}</p>
+          </div>
+        ))}
+        {Object.keys(statusCounts).length === 0 ? (
+          <div className="rounded-xl border bg-card p-3 text-sm text-muted-foreground">
+            No persisted items found for this run.
+          </div>
+        ) : null}
+      </div>
+
+      {run.errorCode || run.errorMessage || run.manualInterventionReason ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+          <p className="font-medium">Run-level diagnostic</p>
+          <p className="mt-1">
+            {run.errorCode ? `${run.errorCode}: ` : null}{run.errorMessage ?? run.manualInterventionReason}
+          </p>
+        </div>
+      ) : null}
+
+      <div className="space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold">Publish item detail</h3>
+          <p className="text-xs text-muted-foreground">
+            Manifest intent, local linkage, raw Meta status, and sync readiness are shown as separate concerns.
+          </p>
+        </div>
+        {items.map((item) => (
+          <LaunchpadItemDetailCard
+            key={item.id}
+            item={item}
+            accountMetaId={run.actorAccountMetaId}
+            isMarkingManual={isMarkingManual}
+            onMarkManual={onMarkManual}
+          />
+        ))}
+      </div>
+
+      <details className="rounded-xl border bg-muted/15 p-3">
+        <summary className="cursor-pointer text-sm font-medium">
+          Raw manifest and diagnostics JSON
+        </summary>
+        <pre className="mt-3 max-h-96 overflow-auto rounded-lg border bg-background/70 p-3 text-[11px] leading-relaxed text-muted-foreground">
+          {formatJson({
+            manifest: run.manifest,
+            retry: {
+              count: run.retryCount ?? 0,
+              lastRequestedAt: run.lastRetryRequestedAt,
+            },
+            itemPayloads: items.map((item) => item.payload),
+            itemDiagnostics: items.map((item) => ({
+              id: item.id,
+              status: item.status,
+              errorCategory: item.errorCategory,
+              errorCode: item.errorCode,
+              errorMessage: item.errorMessage,
+              errorDetails: item.errorDetails,
+              reconciliationStatus: item.reconciliationStatus,
+              manualInterventionReason: item.manualInterventionReason,
+              retryCount: item.retryCount ?? 0,
+              lastRetryRequestedAt: item.lastRetryRequestedAt,
+              externalMetaAdId: item.externalMetaAdId,
+              externalMetaCreativeId: item.externalMetaCreativeId,
+              localAdId: item.localAdId,
+              localAd: item.localAd,
+            })),
+          })}
+        </pre>
+      </details>
+    </div>
+  );
+}
+
+function LaunchpadItemDetailCard({
+  item,
+  accountMetaId,
+  isMarkingManual,
+  onMarkManual,
+}: {
+  item: LaunchpadRunDetailItem;
+  accountMetaId?: string | null;
+  isMarkingManual: boolean;
+  onMarkManual: (itemId: string) => void;
+}) {
+  const manifest = getLaunchpadItemManifestSummary(item);
+  const statuses = getLaunchpadStatusBreakdown(item);
+  const diagnostics = getLaunchpadItemDiagnostics(item);
+  const syncReadiness = getLaunchpadPerformanceSyncReadiness(item);
+  const adsManagerUrl = buildMetaAdsManagerAdUrl({
+    accountMetaId,
+    adMetaId: item.externalMetaAdId,
+  });
+  const localAdHref = buildLaunchpadLocalAdHref(item);
+  const showManualAction = canShowLaunchpadManualInterventionAction(item);
+
+  return (
+    <article className="rounded-2xl border bg-card p-4 shadow-sm">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0 space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge status={item.status} />
+            <Badge variant="secondary">Item {item.position ?? "—"}</Badge>
+            {item.reconciliationStatus ? (
+              <Badge variant="outline" className={cn("capitalize", statusBadgeClasses(item.reconciliationStatus))}>
+                {formatLaunchpadStatusLabel(item.reconciliationStatus)}
+              </Badge>
+            ) : null}
+          </div>
+          <h4 className="truncate text-base font-semibold">
+            {manifest.adName ?? item.requestedAdName ?? item.id}
+          </h4>
+          <p className="text-xs text-muted-foreground">
+            {manifest.creativeName ?? manifest.creativeId ?? "Unknown creative"}
+            {manifest.creativeFormat ? ` · ${manifest.creativeFormat}` : null}
+          </p>
+        </div>
+        {showManualAction ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={isMarkingManual}
+            onClick={() => onMarkManual(item.id)}
+          >
+            <Wrench className="size-3" /> Manual intervention
+          </Button>
+        ) : null}
+      </div>
+
+      <div className="mt-4 grid gap-3 xl:grid-cols-[1.1fr_0.9fr]">
+        <div className="space-y-3">
+          <div className="rounded-xl border bg-muted/15 p-3">
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Manifest summary
+            </p>
+            <dl className="grid gap-1.5 text-xs">
+              <DetailRow label="Generated / overridden ad name">
+                <span className="break-words">{manifest.adName ?? "—"}</span>
+              </DetailRow>
+              <DetailRow label="Final URL">
+                {manifest.finalUrl ? (
+                  <a
+                    href={manifest.finalUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex max-w-sm items-center justify-end gap-1 text-primary hover:underline"
+                  >
+                    <span className="truncate">{manifest.finalUrl}</span>
+                    <ExternalLink className="size-3 shrink-0" />
+                  </a>
+                ) : (
+                  "—"
+                )}
+              </DetailRow>
+              <DetailRow label="CTA">
+                <span className="font-mono">{manifest.cta ?? "—"}</span>
+              </DetailRow>
+              <DetailRow label="Headline">
+                <span className="break-words">{manifest.headline ?? "—"}</span>
+              </DetailRow>
+              <DetailRow label="Primary text">
+                <span className="line-clamp-2 max-w-sm whitespace-pre-wrap text-right">
+                  {manifest.primaryText ?? "—"}
+                </span>
+              </DetailRow>
+              <DetailRow label="Requested Meta status">
+                <span className="font-mono">{manifest.requestedStatus ?? "PAUSED"}</span>
+              </DetailRow>
+            </dl>
+          </div>
+
+          <div className="rounded-xl border bg-muted/15 p-3">
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Linkage
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="rounded-lg border bg-background/70 p-2">
+                <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Local ad
+                </p>
+                <p className="mt-1 font-mono text-xs">{item.localAdId ?? "not created"}</p>
+                {localAdHref ? (
+                  <Button asChild size="xs" variant="outline" className="mt-2">
+                    <Link href={localAdHref}>
+                      <Link2 className="size-3" /> Open local ad
+                    </Link>
+                  </Button>
+                ) : null}
+              </div>
+              <div className="rounded-lg border bg-background/70 p-2">
+                <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Meta ad
+                </p>
+                <p className="mt-1 font-mono text-xs">{item.externalMetaAdId ?? "not created"}</p>
+                {adsManagerUrl ? (
+                  <Button asChild size="xs" variant="outline" className="mt-2">
+                    <a href={adsManagerUrl} target="_blank" rel="noopener noreferrer">
+                      <ExternalLink className="size-3" /> Ads Manager
+                    </a>
+                  </Button>
+                ) : null}
+              </div>
+              <div className="rounded-lg border bg-background/70 p-2 sm:col-span-2">
+                <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Meta creative ID
+                </p>
+                <p className="mt-1 font-mono text-xs">
+                  {item.externalMetaCreativeId ?? "not created"}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div className="rounded-xl border bg-muted/15 p-3">
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Status separation
+            </p>
+            <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-1 2xl:grid-cols-3">
+              <div className="rounded-lg border bg-background/70 p-2">
+                <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Local Adsolute status
+                </p>
+                <Badge variant="outline" className="mt-1 capitalize">
+                  {statuses.local.label}
+                </Badge>
+              </div>
+              <MetaStatusBadge label="Meta configured" value={statuses.meta.configured} />
+              <MetaStatusBadge label="Meta effective / review" value={statuses.meta.effective} />
+            </div>
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Local paused status stays separate from Meta review, rejection, effective, or with-issues states.
+            </p>
+          </div>
+
+          <div className={cn("rounded-xl border p-3", toneClasses(syncReadiness.tone))}>
+            <div className="flex items-start gap-2">
+              <RadioTower className="mt-0.5 size-4 shrink-0" />
+              <div>
+                <p className="text-sm font-medium">{syncReadiness.label}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {syncReadiness.message}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {diagnostics.length > 0 ? (
+            <div className="rounded-xl border bg-muted/15 p-3">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Error and reconciliation context
+              </p>
+              <dl className="space-y-2 text-xs">
+                {diagnostics.map((diagnostic) => (
+                  <div
+                    key={`${diagnostic.label}-${diagnostic.value}`}
+                    className={cn("rounded-lg border p-2", toneClasses(diagnostic.tone))}
+                  >
+                    <dt className="font-medium">{diagnostic.label}</dt>
+                    <dd className="mt-1 break-words text-muted-foreground">
+                      {diagnostic.value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed bg-muted/10 p-3 text-xs text-muted-foreground">
+              No item-level errors recorded.
+            </div>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
 
 export function LaunchpadPageClient() {
   const trpc = useTRPC();
@@ -329,13 +909,6 @@ export function LaunchpadPageClient() {
     destinationReady &&
       launchItems.length > 0 &&
       (defaultDestinationUrl.trim() || launchItems.every((item) => item.destinationUrl.trim())),
-  );
-  const selectedRunPublishable = selectedRun.data?.run.status === "validated";
-  const selectedRunRetryable = Boolean(
-    selectedRun.data &&
-      ["failed", "partial_success", "ambiguous", "manual_intervention"].includes(
-        selectedRun.data.run.status,
-      ),
   );
 
   return (
@@ -830,10 +1403,10 @@ export function LaunchpadPageClient() {
 
       <div className="rounded-xl border bg-card">
         <div className="border-b px-4 py-3">
-          <h2 className="text-sm font-semibold">Frozen manifest / payload preview</h2>
+          <h2 className="text-sm font-semibold">Launchpad run detail</h2>
           <p className="text-xs text-muted-foreground">
-            Select a run to inspect the manifest and item payload stored for
-            dry-run promotion. Access tokens are never included.
+            Open a run to inspect destination context, audit history, item IDs,
+            raw Meta status, errors, local linkage, and post-sync readiness.
           </p>
         </div>
         {selectedRun.isLoading ? (
@@ -842,171 +1415,15 @@ export function LaunchpadPageClient() {
             <Skeleton className="h-40 w-full" />
           </div>
         ) : selectedRun.data ? (
-          <div className="grid gap-4 p-4 lg:grid-cols-[0.8fr_1.2fr]">
-            <div className="space-y-3 text-sm">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant={selectedRun.data.run.status === "failed" ? "destructive" : "outline"} className="capitalize">
-                  {statusLabel(selectedRun.data.run.status)}
-                </Badge>
-                <code className="text-xs text-muted-foreground">
-                  {shortHash(selectedRun.data.run.manifestHash)}
-                </code>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={!selectedRunPublishable || requestPublish.isPending}
-                  onClick={publishSelectedRun}
-                >
-                  {requestPublish.isPending ? "Queueing…" : "Publish paused ads"}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={!selectedRunRetryable || retryFailed.isPending}
-                  onClick={retrySelectedRun}
-                  className="gap-1.5"
-                >
-                  <RotateCcw className="size-3" />
-                  {retryFailed.isPending ? "Reconciling…" : "Retry failed only"}
-                </Button>
-              </div>
-              <dl className="grid gap-2 text-xs">
-                <div className="flex justify-between gap-3">
-                  <dt className="text-muted-foreground">Requested status</dt>
-                  <dd>{selectedRun.data.run.requestedStatus}</dd>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <dt className="text-muted-foreground">Items</dt>
-                  <dd>{selectedRun.data.items.length}</dd>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <dt className="text-muted-foreground">Retry count</dt>
-                  <dd>{selectedRun.data.run.retryCount ?? 0}</dd>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <dt className="text-muted-foreground">Run ID</dt>
-                  <dd className="max-w-48 truncate font-mono">{selectedRun.data.run.id}</dd>
-                </div>
-              </dl>
-              <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Publish item outcomes
-                </p>
-                <div className="space-y-1.5">
-                  {selectedRun.data.items.map((item) => {
-                    const details = [
-                      item.errorCategory
-                        ? {
-                            label: "Classification",
-                            value: statusLabel(item.errorCategory),
-                          }
-                        : null,
-                      item.errorCode
-                        ? {
-                            label: "Error",
-                            value: item.errorMessage
-                              ? `${item.errorCode}: ${item.errorMessage}`
-                              : item.errorCode,
-                          }
-                        : null,
-                      item.reconciliationStatus && item.reconciliationStatus !== "not_required"
-                        ? {
-                            label: "Reconciliation",
-                            value: statusLabel(item.reconciliationStatus),
-                          }
-                        : null,
-                      item.retryCount
-                        ? {
-                            label: "Retries",
-                            value: String(item.retryCount),
-                          }
-                        : null,
-                      item.manualInterventionReason
-                        ? {
-                            label: "Manual intervention",
-                            value: item.manualInterventionReason,
-                          }
-                        : null,
-                      item.externalMetaAdId
-                        ? { label: "Meta ad", value: item.externalMetaAdId }
-                        : null,
-                      item.externalMetaCreativeId
-                        ? { label: "Meta creative", value: item.externalMetaCreativeId }
-                        : null,
-                      item.localAdId
-                        ? { label: "Local ad", value: item.localAdId }
-                        : null,
-                    ].filter((detail): detail is { label: string; value: string } =>
-                      Boolean(detail?.value),
-                    );
-
-                    return (
-                      <div key={item.id} className="rounded-md border bg-background/60 p-2 text-xs">
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="truncate font-medium">
-                            {item.position}. {item.requestedAdName ?? item.creativeId}
-                          </span>
-                          <div className="flex shrink-0 items-center gap-1.5">
-                            <Badge variant="outline" className="capitalize">
-                              {statusLabel(item.status)}
-                            </Badge>
-                            {!["success", "skipped", "cancelled"].includes(item.status) ? (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-6 px-2 text-[11px]"
-                                disabled={markManualIntervention.isPending}
-                                onClick={() => markItemForManualIntervention(item.id)}
-                              >
-                                <Wrench className="mr-1 size-3" /> Manual
-                              </Button>
-                            ) : null}
-                          </div>
-                        </div>
-                        {details.length > 0 ? (
-                          <dl className="mt-2 grid gap-1 text-[11px] text-muted-foreground">
-                            {details.map((detail) => (
-                              <div key={detail.label} className="flex justify-between gap-3">
-                                <dt className="shrink-0">{detail.label}</dt>
-                                <dd className="truncate text-right font-mono">
-                                  {detail.value}
-                                </dd>
-                              </div>
-                            ))}
-                          </dl>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-            <pre className="max-h-96 overflow-auto rounded-lg border bg-muted/30 p-3 text-[11px] leading-relaxed text-muted-foreground">
-              {formatJson({
-                manifest: selectedRun.data.run.manifest,
-                retry: {
-                  count: selectedRun.data.run.retryCount ?? 0,
-                  lastRequestedAt: selectedRun.data.run.lastRetryRequestedAt,
-                },
-                itemPayloads: selectedRun.data.items.map((item) => item.payload),
-                itemDiagnostics: selectedRun.data.items.map((item) => ({
-                  id: item.id,
-                  status: item.status,
-                  errorCategory: item.errorCategory,
-                  errorCode: item.errorCode,
-                  errorMessage: item.errorMessage,
-                  errorDetails: item.errorDetails,
-                  reconciliationStatus: item.reconciliationStatus,
-                  manualInterventionReason: item.manualInterventionReason,
-                  retryCount: item.retryCount ?? 0,
-                  lastRetryRequestedAt: item.lastRetryRequestedAt,
-                  externalMetaAdId: item.externalMetaAdId,
-                  externalMetaCreativeId: item.externalMetaCreativeId,
-                  localAdId: item.localAdId,
-                })),
-              })}
-            </pre>
-          </div>
+          <LaunchpadRunDetailPanel
+            data={selectedRun.data}
+            isPublishing={requestPublish.isPending}
+            isRetrying={retryFailed.isPending}
+            isMarkingManual={markManualIntervention.isPending}
+            onPublish={publishSelectedRun}
+            onRetry={retrySelectedRun}
+            onMarkManual={markItemForManualIntervention}
+          />
         ) : (
           <div className="p-4 text-sm text-muted-foreground">
             Generate a dry run or choose one from the table below.
@@ -1049,7 +1466,7 @@ export function LaunchpadPageClient() {
                 <TableHead>Manifest hash</TableHead>
                 <TableHead>Live env at validation</TableHead>
                 <TableHead>Created</TableHead>
-                <TableHead className="text-right">Preview</TableHead>
+                <TableHead className="text-right">Run detail</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -1086,7 +1503,7 @@ export function LaunchpadPageClient() {
                       size="sm"
                       onClick={() => setSelectedRunId(run.id)}
                     >
-                      Inspect
+                      Open detail
                     </Button>
                   </TableCell>
                 </TableRow>

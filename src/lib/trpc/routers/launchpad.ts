@@ -1349,9 +1349,27 @@ export const launchpadRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Launchpad run not found" });
       }
 
-      const items = await db
-        .select()
+      const itemRows = await db
+        .select({
+          item: launchpadPublishItems,
+          localAd: {
+            id: ads.id,
+            name: ads.name,
+            status: ads.status,
+            metaId: ads.metaId,
+            destinationUrl: ads.destinationUrl,
+            rawMetaConfiguredStatus: ads.rawMetaConfiguredStatus,
+            rawMetaEffectiveStatus: ads.rawMetaEffectiveStatus,
+          },
+        })
         .from(launchpadPublishItems)
+        .leftJoin(
+          ads,
+          and(
+            eq(launchpadPublishItems.localAdId, ads.id),
+            eq(ads.organizationId, ctx.organizationId),
+          ),
+        )
         .where(
           and(
             eq(launchpadPublishItems.runId, run.id),
@@ -1359,6 +1377,11 @@ export const launchpadRouter = router({
           ),
         )
         .orderBy(launchpadPublishItems.position);
+
+      const items = itemRows.map((row) => ({
+        ...row.item,
+        localAd: row.localAd?.id ? row.localAd : null,
+      }));
 
       return { run, items };
     }),
