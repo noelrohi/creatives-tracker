@@ -125,6 +125,20 @@ function formatJson(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+}
+
+function asIssueList(value: unknown): Array<{ code?: string; message?: string }> {
+  return Array.isArray(value) ? value.filter((item) => typeof item === "object" && item !== null) as Array<{ code?: string; message?: string }> : [];
+}
+
+function displayValue(value: unknown) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return JSON.stringify(value);
+}
+
 function urlHasLaunchpadRequirements(value: string) {
   if (!value.trim()) return false;
   try {
@@ -1362,6 +1376,13 @@ export function LaunchpadPageClient() {
   const selectedSourceTemplate = sourceTemplates.data?.find(
     (template) => template.id === selectedSourceTemplateId,
   );
+  const selectedManifest = asRecord(selectedRun.data?.run.manifest);
+  const selectedManifestTracking = asRecord(selectedManifest.tracking);
+  const selectedManifestValidation = asRecord(selectedManifest.validation);
+  const selectedManifestBudget = asRecord(selectedManifest.budget);
+  const selectedManifestBlockers = asIssueList(selectedManifestValidation.blockers);
+  const selectedManifestWarnings = asIssueList(selectedManifestValidation.warnings);
+
   const destinationContext = useQuery({
     ...trpc.launchpad.destinationContext.queryOptions({
       accountId: selectedAccountId || "__no_account_selected__",
@@ -2172,12 +2193,47 @@ export function LaunchpadPageClient() {
                     </div>
                     <div className="rounded-lg border p-3 text-sm">
                       <p className="font-medium">Tracking</p>
-                      <p className="mt-1 break-all text-muted-foreground">Final URL and UTMs are shown in the plan. Missing required UTMs are appended automatically.</p>
+                      <dl className="mt-2 grid gap-1 text-xs text-muted-foreground">
+                        <DetailRow label="Final URL"><span className="break-all">{displayValue(selectedManifestTracking.finalUrl)}</span></DetailRow>
+                        <DetailRow label="Domain">{displayValue(selectedManifestTracking.destinationDomain)}</DetailRow>
+                        <DetailRow label="Objective">{displayValue(selectedManifestTracking.objective)}</DetailRow>
+                        <DetailRow label="Optimization">{displayValue(selectedManifestTracking.optimizationGoal)}</DetailRow>
+                        <DetailRow label="Billing">{displayValue(selectedManifestTracking.billingEvent)}</DetailRow>
+                        <DetailRow label="Conversion">{displayValue(selectedManifestTracking.conversionEvent)}</DetailRow>
+                        <DetailRow label="Attribution">{displayValue(selectedManifestTracking.attributionSetting)}</DetailRow>
+                      </dl>
                     </div>
                     <div className="rounded-lg border p-3 text-sm">
-                      <p className="font-medium">Identity and source inspection</p>
-                      <p className="mt-1 text-muted-foreground">The manifest freezes account defaults plus fresh Meta objective, optimization, billing, promoted object, and attribution fields when available.</p>
+                      <p className="font-medium">Validation</p>
+                      <div className="mt-2 space-y-2 text-xs">
+                        {selectedManifestBlockers.length > 0 ? (
+                          <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-destructive">
+                            <p className="font-medium">Blockers</p>
+                            <ul className="mt-1 list-disc pl-4">
+                              {selectedManifestBlockers.map((issue, index) => (
+                                <li key={`${issue.code ?? "blocker"}-${index}`}>{issue.message ?? issue.code}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : <p className="text-emerald-700 dark:text-emerald-300">No blockers in this plan.</p>}
+                        {selectedManifestWarnings.length > 0 ? (
+                          <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
+                            <p className="font-medium">Warnings</p>
+                            <ul className="mt-1 list-disc pl-4">
+                              {selectedManifestWarnings.map((issue, index) => (
+                                <li key={`${issue.code ?? "warning"}-${index}`}>{issue.message ?? issue.code}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
+                  </div>
+                  <div className="rounded-lg border p-3 text-sm">
+                    <p className="font-medium">Budget guardrails</p>
+                    <p className="mt-1 text-muted-foreground">
+                      Daily budget: {displayValue(selectedManifestBudget.dailyBudgetMinorUnits)} minor units. Source budget and spend caps are not copied.
+                    </p>
                   </div>
                   <details className="rounded-lg border bg-muted/20">
                     <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground">Technical manifest</summary>

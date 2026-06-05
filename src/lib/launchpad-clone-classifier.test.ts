@@ -91,6 +91,43 @@ describe("Launchpad clone classifier", () => {
     );
   });
 
+  it("blocks unsupported source settings from fresh inspection", () => {
+    const result = classifyLaunchpadClone({
+      sourceTemplate: template({ readiness: { status: "ready", blockers: [], warnings: [] } }),
+      creatives: [{ id: "creative-1", name: "Static", format: "static", assetUrl: "https://cdn.example.com/a.png" }],
+      requestedStatus: "PAUSED",
+      sourceInspection: inspection({
+        campaign: {
+          objective: "APP_INSTALLS",
+          buying_type: "AUCTION",
+          daily_budget: "1000",
+          spend_cap: "5000",
+          special_ad_categories: ["CREDIT"],
+        },
+        adSet: {
+          lifetime_budget: "2000",
+          dynamic_creative: true,
+          optimization_goal: "OFFSITE_CONVERSIONS",
+          billing_event: "IMPRESSIONS",
+          promoted_object: { product_set_id: "ps_1" },
+          targeting: { publisher_platforms: ["facebook", "audience_network"] },
+        },
+      }),
+    });
+
+    expect(result.status).toBe("blocked");
+    expect(result.blockers.map((issue) => issue.code)).toEqual(expect.arrayContaining([
+      "UNSUPPORTED_OBJECTIVE",
+      "CAMPAIGN_BUDGET_UNSUPPORTED",
+      "CAMPAIGN_SPEND_CAP_UNSUPPORTED",
+      "SPECIAL_AD_CATEGORY_UNSUPPORTED",
+      "LIFETIME_BUDGET_UNSUPPORTED",
+      "DYNAMIC_CREATIVE_UNSUPPORTED",
+      "CATALOG_PROMOTED_OBJECT_UNSUPPORTED",
+      "UNSUPPORTED_PLACEMENTS",
+    ]));
+  });
+
   it("blocks duplicate, unsupported, and missing-media creatives", () => {
     const result = classifyLaunchpadClone({
       sourceTemplate: template({ readiness: { status: "ready", blockers: [], warnings: [] } }),

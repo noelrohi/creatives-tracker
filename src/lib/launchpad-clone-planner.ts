@@ -170,6 +170,35 @@ export function buildLaunchpadCloneDryRun(input: LaunchpadClonePlannerInput) {
       message: "Enter an explicit daily budget. Launchpad never copies source budget or spend caps.",
       field: "dailyBudgetMinorUnits",
     });
+  } else {
+    if (input.launch.dailyBudgetMinorUnits < 100) {
+      blockers.push({
+        code: "DAILY_BUDGET_BELOW_MINIMUM",
+        message: "Daily budget must be at least 1.00 in the account currency.",
+        field: "dailyBudgetMinorUnits",
+      });
+    }
+    if (input.launch.dailyBudgetMinorUnits > 100000) {
+      blockers.push({
+        code: "DAILY_BUDGET_ABOVE_MAXIMUM",
+        message: "Daily budget is above the Milestone 1 safety limit of 1,000.00.",
+        field: "dailyBudgetMinorUnits",
+      });
+    }
+    if (input.launch.dailyBudgetMinorUnits >= 50000) {
+      warnings.push({
+        code: "DAILY_BUDGET_HIGH_WARNING",
+        message: "This is a high daily budget. Confirm with a media buyer before activation in Meta.",
+        field: "dailyBudgetMinorUnits",
+      });
+    }
+    if (input.creatives.length > 0 && input.launch.dailyBudgetMinorUnits / input.creatives.length < 500) {
+      warnings.push({
+        code: "LOW_BUDGET_PER_CREATIVE_WARNING",
+        message: "Budget may be too low for the number of selected creatives.",
+        field: "dailyBudgetMinorUnits",
+      });
+    }
   }
 
   const requestedCta = normalizedText(input.launch.defaultCta);
@@ -239,7 +268,14 @@ export function buildLaunchpadCloneDryRun(input: LaunchpadClonePlannerInput) {
     plannedAds,
     copiedSettings: classification.copiedSettings,
     notCopiedSettings: classification.notCopiedSettings,
-    budget: plannedAdSet.budget,
+    budget: {
+      ...plannedAdSet.budget,
+      guardrails: {
+        minDailyBudgetMinorUnits: 100,
+        maxDailyBudgetMinorUnits: 100000,
+        highBudgetWarningMinorUnits: 50000,
+      },
+    },
     tracking: {
       objective: input.sourceInspection?.campaign?.objective ?? null,
       optimizationGoal: input.sourceInspection?.adSet?.optimization_goal ?? null,
