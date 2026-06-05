@@ -8,6 +8,7 @@ import {
   LAUNCHPAD_MAX_ITEMS,
   PAUSED_META_STATUS,
   launchpadSupportedCreativeFormats,
+  metaCtaValues,
   launchpadVideoCreativeFormats,
 } from "@/lib/launchpad-constants";
 import {
@@ -23,6 +24,7 @@ import {
   assertLockedHashStable,
   computeRunAggregateStatus,
   createLaunchpadRunDraft,
+  hashLaunchpadPayload,
   summarizeLaunchpadValidationIssues,
   type LaunchpadItemPayload,
   type LaunchpadRunDraft,
@@ -37,7 +39,13 @@ import {
   uploadMetaImageByUrl,
   uploadMetaVideoByUrl,
 } from "@/lib/launchpad-meta-publish";
+import { buildLaunchpadCloneDryRun } from "@/lib/launchpad-clone-planner";
 import { buildLaunchpadPlannerOutput } from "@/lib/launchpad-planner";
+import {
+  LaunchpadSourceTemplateError,
+  getApprovedLaunchpadSourceTemplateOrThrow,
+  listApprovedLaunchpadSourceTemplates,
+} from "@/lib/launchpad-source-templates";
 import { ads } from "@/schema/ad";
 import { adAccounts } from "@/schema/account";
 import { adCreatives } from "@/schema/ad-creative";
@@ -95,6 +103,34 @@ const launchpadDestinationAdSetSchema = z.object({
 const launchpadDestinationContextSchema = z.object({
   account: launchpadDestinationAccountSchema,
   adSet: launchpadDestinationAdSetSchema,
+});
+
+const createCloneDryRunInputSchema = z.object({
+  idempotencyKey: z.string().trim().min(8).max(160).optional(),
+  sourceTemplateId: z.string().trim().min(1),
+  launchName: z.string().trim().min(1),
+  destinationUrl: z.string().trim().min(1),
+  defaultPrimaryText: z.string().optional(),
+  defaultHeadline: z.string().optional(),
+  defaultCta: z.enum(metaCtaValues).optional(),
+  creativeIds: z.array(z.string().trim().min(1)).min(1).max(LAUNCHPAD_MAX_ITEMS),
+}).superRefine((input, ctx) => {
+  const firstIndexByCreativeId = new Map<string, number>();
+
+  input.creativeIds.forEach((creativeId, index) => {
+    const firstIndex = firstIndexByCreativeId.get(creativeId);
+    if (firstIndex !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["creativeIds", index],
+        message: "Launchpad plans cannot include the same creative more than once",
+        params: { firstIndex, duplicateIndex: index },
+      });
+      return;
+    }
+
+    firstIndexByCreativeId.set(creativeId, index);
+  });
 });
 
 const createValidationRunInputSchema = z.object({
@@ -162,6 +198,14 @@ function asTrpcError(error: unknown): never {
   }
 
   if (error instanceof LaunchpadDestinationError) {
+    throw new TRPCError({
+      code: error.code.endsWith("NOT_FOUND") ? "NOT_FOUND" : "PRECONDITION_FAILED",
+      message: error.message,
+      cause: error,
+    });
+  }
+
+  if (error instanceof LaunchpadSourceTemplateError) {
     throw new TRPCError({
       code: error.code.endsWith("NOT_FOUND") ? "NOT_FOUND" : "PRECONDITION_FAILED",
       message: error.message,
@@ -275,10 +319,47 @@ async function findExistingMetaAdConflicts(
     .limit(5);
 }
 
+type LaunchpadReplayCandidate = {
+  idempotencyKey: string;
+  dedupeKey: string;
+  manifestHash: string;
+  mode: string;
+};
+
+function assertReplayCompatible(
+  existing: LaunchpadRunRow,
+  candidate: LaunchpadReplayCandidate,
+  source: "idempotency" | "dedupe",
+) {
+  if (
+    existing.manifestHash !== candidate.manifestHash ||
+    existing.mode !== candidate.mode
+  ) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        source === "idempotency"
+          ? "Launchpad idempotency key was replayed with a different manifest or mode"
+          : "Launchpad dedupe key matched a different manifest or mode",
+      cause: {
+        existingRunId: existing.id,
+        existing: {
+          manifestHash: existing.manifestHash,
+          mode: existing.mode,
+        },
+        requested: {
+          manifestHash: candidate.manifestHash,
+          mode: candidate.mode,
+        },
+      },
+    });
+  }
+}
+
 async function findExistingRunForReplay(
   client: LaunchpadReader,
   organizationId: string,
-  draft: LaunchpadRunDraft,
+  candidate: LaunchpadReplayCandidate,
 ) {
   const [sameIdempotencyRun] = await client
     .select()
@@ -286,20 +367,13 @@ async function findExistingRunForReplay(
     .where(
       and(
         eq(launchpadPublishRuns.organizationId, organizationId),
-        eq(launchpadPublishRuns.idempotencyKey, draft.idempotencyKey),
+        eq(launchpadPublishRuns.idempotencyKey, candidate.idempotencyKey),
       ),
     )
     .limit(1);
 
   if (sameIdempotencyRun) {
-    if (sameIdempotencyRun.manifestHash !== draft.manifestHash) {
-      throw new TRPCError({
-        code: "PRECONDITION_FAILED",
-        message:
-          "Launchpad idempotency key was replayed with a different manifest",
-      });
-    }
-
+    assertReplayCompatible(sameIdempotencyRun, candidate, "idempotency");
     return sameIdempotencyRun;
   }
 
@@ -309,10 +383,14 @@ async function findExistingRunForReplay(
     .where(
       and(
         eq(launchpadPublishRuns.organizationId, organizationId),
-        eq(launchpadPublishRuns.dedupeKey, draft.dedupeKey),
+        eq(launchpadPublishRuns.dedupeKey, candidate.dedupeKey),
       ),
     )
     .limit(1);
+
+  if (sameDedupeRun) {
+    assertReplayCompatible(sameDedupeRun, candidate, "dedupe");
+  }
 
   return sameDedupeRun;
 }
@@ -375,6 +453,26 @@ type PublishFailureInput = {
 function manifestSafety(run: LaunchpadRunRow) {
   const manifest = run.manifest as { safety?: Record<string, unknown> } | null;
   return manifest?.safety ?? {};
+}
+
+function assertRunModePublishable(run: Pick<LaunchpadRunRow, "mode" | "manifest">) {
+  const manifest = run.manifest as {
+    kind?: unknown;
+    launchMode?: unknown;
+    mode?: unknown;
+  } | null;
+
+  if (
+    run.mode === "clone_setup_validation" ||
+    manifest?.mode === "clone_setup_validation" ||
+    manifest?.launchMode === "clone_setup" ||
+    manifest?.kind === "creative_launchpad.clone_setup_manifest"
+  ) {
+    throw new LaunchpadLedgerError(
+      "CLONE_SETUP_DRY_RUN_NOT_PUBLISHABLE",
+      "Launchpad clone setup dry-runs are validation previews only and cannot be promoted to live publishing",
+    );
+  }
 }
 
 function isTerminalRunStatus(status: string) {
@@ -503,6 +601,7 @@ function assertSupportedPublishPayload(payload: LaunchpadItemPayload) {
 }
 
 function assertRunReadyForPublish(run: LaunchpadRunRow) {
+  assertRunModePublishable(run);
   assertLockedHashStable({
     label: "manifest",
     lockedHash: run.manifestHash,
@@ -1311,6 +1410,201 @@ async function refreshRunAggregateStatus(
 }
 
 export const launchpadRouter = router({
+  listSourceTemplates: launchpadAdminProcedure
+    .meta(openApiQueryMeta("launchpad", "listSourceTemplates"))
+    .query(async ({ ctx }) => {
+      return listApprovedLaunchpadSourceTemplates(db, ctx.organizationId);
+    }),
+
+  createCloneDryRun: launchpadAdminProcedure
+    .meta(openApiMutationMeta("launchpad", "createCloneDryRun"))
+    .input(createCloneDryRunInputSchema)
+    .mutation(async ({ input, ctx }) => {
+      return db.transaction(async (tx) => {
+        const sourceTemplate = await (async () => {
+          try {
+            return await getApprovedLaunchpadSourceTemplateOrThrow(
+              tx,
+              ctx.organizationId,
+              input.sourceTemplateId,
+            );
+          } catch (error) {
+            asTrpcError(error);
+          }
+        })();
+
+        const creatives = [];
+        for (const creativeId of input.creativeIds) {
+          creatives.push(await loadSingleLaunchpadCreative(tx, ctx.organizationId, creativeId));
+        }
+
+        const dryRun = buildLaunchpadCloneDryRun({
+          organizationId: ctx.organizationId,
+          requestedBy: {
+            userId: ctx.userId,
+            principalType: ctx.principalType,
+            orgRole: ctx.orgRole,
+          },
+          sourceTemplate,
+          launch: {
+            launchName: input.launchName,
+            destinationUrl: input.destinationUrl,
+            defaultPrimaryText: input.defaultPrimaryText,
+            defaultHeadline: input.defaultHeadline,
+            defaultCta: input.defaultCta,
+          },
+          creatives,
+          idempotencyKey: input.idempotencyKey,
+        });
+
+        const cloneMode = "clone_setup_validation";
+        const idempotencyKey = input.idempotencyKey ?? hashLaunchpadPayload({
+          kind: "launchpad.clone_setup.dry_run.idempotency.v2",
+          organizationId: ctx.organizationId,
+          mode: cloneMode,
+          manifestHash: dryRun.manifestHash,
+        });
+        const dedupeKey = hashLaunchpadPayload({
+          kind: "launchpad.clone_setup.dry_run.dedupe.v2",
+          organizationId: ctx.organizationId,
+          mode: cloneMode,
+          manifestHash: dryRun.manifestHash,
+        });
+        const replayCandidate = {
+          idempotencyKey,
+          dedupeKey,
+          manifestHash: dryRun.manifestHash,
+          mode: cloneMode,
+        };
+
+        const existing = await findExistingRunForReplay(
+          tx,
+          ctx.organizationId,
+          replayCandidate,
+        );
+        if (existing) {
+          return existing;
+        }
+
+        const now = new Date();
+        const runError = dryRun.status === "failed"
+          ? summarizeLaunchpadValidationIssues(dryRun.issues)
+          : null;
+        const [run] = await tx
+          .insert(launchpadPublishRuns)
+          .values({
+            organizationId: ctx.organizationId,
+            status: dryRun.status,
+            mode: cloneMode,
+            requestedStatus: PAUSED_META_STATUS,
+            itemCount: dryRun.manifest.plannedAds.length,
+            maxItemCap: LAUNCHPAD_MAX_ITEMS,
+            manifest: dryRun.manifest,
+            manifestHash: dryRun.manifestHash,
+            idempotencyKey,
+            dedupeKey,
+            requestedByUserId: ctx.userId,
+            requestedByPrincipalType: ctx.principalType,
+            requestedByRole: ctx.orgRole,
+            actorAccountId: sourceTemplate.account?.id ?? null,
+            actorAccountMetaId: sourceTemplate.account?.metaAccountId ?? null,
+            actorPageId: sourceTemplate.account?.defaultFacebookPageId ?? null,
+            actorInstagramId: sourceTemplate.account?.defaultInstagramActorId ?? null,
+            livePublishEnabledAtValidation: false,
+            reconciliationStatus: "not_required",
+            ...(runError
+              ? {
+                  errorCategory: runError.errorCategory,
+                  errorCode: runError.errorCode,
+                  errorMessage: runError.errorMessage,
+                  errorDetails: runError.errorDetails,
+                  completedAt: now,
+                }
+              : { validatedAt: now }),
+          })
+          .onConflictDoNothing()
+          .returning();
+
+        if (!run) {
+          const replayed = await findExistingRunForReplay(
+            tx,
+            ctx.organizationId,
+            replayCandidate,
+          );
+
+          if (replayed) {
+            return replayed;
+          }
+
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "Launchpad clone dry-run conflicted but could not be reloaded",
+          });
+        }
+
+        if (dryRun.manifest.plannedAds.length > 0) {
+          const itemRows = dryRun.manifest.plannedAds.map((plannedAd) => ({
+            runId: run.id,
+            organizationId: ctx.organizationId,
+            position: plannedAd.position,
+            status: dryRun.status,
+            requestedStatus: PAUSED_META_STATUS,
+            creativeId: plannedAd.creative.id,
+            accountId: sourceTemplate.account?.id ?? null,
+            actorPageId: sourceTemplate.account?.defaultFacebookPageId ?? null,
+            actorInstagramId: sourceTemplate.account?.defaultInstagramActorId ?? null,
+            payload: plannedAd as unknown as Record<string, unknown>,
+            payloadHash: plannedAd.payloadHash,
+            idempotencyKey: hashLaunchpadPayload({
+              kind: "launchpad.clone_setup.dry_run.item.idempotency.v2",
+              organizationId: ctx.organizationId,
+              mode: cloneMode,
+              manifestHash: dryRun.manifestHash,
+              plannedKey: plannedAd.plannedKey,
+              payloadHash: plannedAd.payloadHash,
+            }),
+            dedupeKey: hashLaunchpadPayload({
+              kind: "launchpad.clone_setup.dry_run.item.dedupe.v2",
+              organizationId: ctx.organizationId,
+              mode: cloneMode,
+              manifestHash: dryRun.manifestHash,
+              plannedKey: plannedAd.plannedKey,
+              payloadHash: plannedAd.payloadHash,
+            }),
+            requestedAdName: plannedAd.name,
+            createdByUserId: ctx.userId,
+            createdByPrincipalType: ctx.principalType,
+            createdByRole: ctx.orgRole,
+            reconciliationStatus: "not_required" as const,
+            ...(dryRun.status === "failed" && runError
+              ? {
+                  errorCategory: runError.errorCategory,
+                  errorCode: runError.errorCode,
+                  errorMessage: runError.errorMessage,
+                  errorDetails: runError.errorDetails,
+                  completedAt: now,
+                }
+              : { validatedAt: now }),
+          }));
+          const insertedItems = await tx
+            .insert(launchpadPublishItems)
+            .values(itemRows)
+            .onConflictDoNothing()
+            .returning({ id: launchpadPublishItems.id });
+
+          if (insertedItems.length !== itemRows.length) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                "Launchpad item idempotency or dedupe key collides with an existing item",
+            });
+          }
+        }
+
+        return run;
+      });
+    }),
+
   destinationAccounts: launchpadAdminProcedure
     .meta(openApiQueryMeta("launchpad", "destinationAccounts"))
     .output(z.array(launchpadDestinationAccountSchema))
@@ -1561,10 +1855,16 @@ export const launchpadRouter = router({
           }
         })();
 
+        const replayCandidate = {
+          idempotencyKey: draft.idempotencyKey,
+          dedupeKey: draft.dedupeKey,
+          manifestHash: draft.manifestHash,
+          mode: "validation",
+        };
         const existingRun = await findExistingRunForReplay(
           tx,
           ctx.organizationId,
-          draft,
+          replayCandidate,
         );
         if (existingRun) {
           return existingRun;
@@ -1616,7 +1916,7 @@ export const launchpadRouter = router({
           const existing = await findExistingRunForReplay(
             tx,
             ctx.organizationId,
-            draft,
+            replayCandidate,
           );
 
           if (existing) {
@@ -1701,6 +2001,7 @@ export const launchpadRouter = router({
       );
 
       try {
+        assertRunModePublishable(run);
         assertLockedHashStable({
           label: "manifest",
           lockedHash: run.manifestHash,

@@ -67,6 +67,7 @@ export function runLaunchpadDryRunSmoke(argv: string[] = []) {
           name: "Smoke Campaign",
           metaId: "cmp_smoke",
           status: "active",
+          accountId: "smoke-account",
         },
       },
       issues:

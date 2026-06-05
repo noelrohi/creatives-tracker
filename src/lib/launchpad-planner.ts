@@ -6,6 +6,7 @@ import {
   metaCtaValues,
   type MetaCallToAction,
 } from "@/lib/launchpad-constants";
+import { parseLaunchpadUrlPreview } from "@/lib/launchpad-url";
 import type {
   LaunchpadManifestItemInput,
   LaunchpadOrgRole,
@@ -20,11 +21,6 @@ import type {
 
 export const DEFAULT_LAUNCHPAD_NAMING_TEMPLATE =
   "Launchpad / {{creative.name}} / {{adSet.name}}";
-
-export const REQUIRED_LAUNCHPAD_UTM_PARAMETERS = [
-  "utm_source",
-  "utm_medium",
-] as const;
 
 export type LaunchpadPlannerCreative = {
   id: string;
@@ -76,18 +72,6 @@ export type LaunchpadPlannerOutput = {
   normalizedManifest: Record<string, unknown>;
   runDraftInput: LaunchpadRunDraftInput;
   issues: LaunchpadValidationIssue[];
-};
-
-type UrlPreview = {
-  defaultUrl: string | null;
-  overrideUrl: string | null;
-  finalUrl: string | null;
-  source: "item_override" | "batch_default" | "none";
-  protocol: string | null;
-  isHttps: boolean;
-  requiredUtmParameters: readonly string[];
-  utmParameters: Record<string, string>;
-  missingRequiredUtmParameters: string[];
 };
 
 function normalizedText(value: string | null | undefined) {
@@ -219,80 +203,6 @@ function resolveCta(rawCta?: string | null): {
       details: { cta: requested, allowedValues: metaCtaValues },
     } satisfies LaunchpadValidationIssue,
   };
-}
-
-function parseUrlPreview(input: LaunchpadPlannerInput) {
-  const defaultUrl = normalizedText(input.launch.defaultDestinationUrl);
-  const overrideUrl = normalizedText(input.launch.destinationUrlOverride);
-  const finalUrl = overrideUrl ?? defaultUrl;
-  const source = overrideUrl ? "item_override" : defaultUrl ? "batch_default" : "none";
-  const issues: LaunchpadValidationIssue[] = [];
-  const preview: UrlPreview = {
-    defaultUrl,
-    overrideUrl,
-    finalUrl,
-    source,
-    protocol: null,
-    isHttps: false,
-    requiredUtmParameters: REQUIRED_LAUNCHPAD_UTM_PARAMETERS,
-    utmParameters: {},
-    missingRequiredUtmParameters: [...REQUIRED_LAUNCHPAD_UTM_PARAMETERS],
-  };
-
-  if (!finalUrl) {
-    issues.push({
-      code: "DESTINATION_URL_REQUIRED",
-      message: "A Launchpad item requires a destination URL",
-      field: "destinationUrl",
-    });
-    return { preview, issues };
-  }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(finalUrl);
-  } catch {
-    issues.push({
-      code: "INVALID_DESTINATION_URL",
-      message: "Destination URL must be a valid HTTPS URL",
-      field: "destinationUrl",
-      details: { destinationUrl: finalUrl },
-    });
-    return { preview, issues };
-  }
-
-  preview.protocol = parsed.protocol;
-  preview.isHttps = parsed.protocol === "https:";
-  preview.utmParameters = Object.fromEntries(
-    Array.from(parsed.searchParams.entries()).filter(([key]) => key.startsWith("utm_")),
-  );
-  preview.missingRequiredUtmParameters = REQUIRED_LAUNCHPAD_UTM_PARAMETERS.filter(
-    (param) => !normalizedText(parsed.searchParams.get(param)),
-  );
-
-  if (!preview.isHttps) {
-    issues.push({
-      code: "INVALID_DESTINATION_URL",
-      message: "Destination URL must use HTTPS",
-      field: "destinationUrl",
-      details: { destinationUrl: finalUrl, protocol: parsed.protocol },
-    });
-  }
-
-  if (preview.missingRequiredUtmParameters.length > 0) {
-    issues.push({
-      code: "MISSING_REQUIRED_UTM_PARAMETERS",
-      message: "Destination URL is missing required UTM parameters",
-      field: "destinationUrl",
-      details: {
-        destinationUrl: finalUrl,
-        requiredUtmParameters: REQUIRED_LAUNCHPAD_UTM_PARAMETERS,
-        missingRequiredUtmParameters: preview.missingRequiredUtmParameters,
-      },
-    });
-  }
-
-  return { preview, issues };
 }
 
 function buildTargetPreview(input: LaunchpadPlannerInput) {
@@ -590,7 +500,10 @@ export function buildLaunchpadPlannerOutput(
   const adName = resolveAdName(input);
   const headline = resolveHeadline(input.creative, input.launch.headline);
   const cta = resolveCta(input.launch.cta);
-  const url = parseUrlPreview(input);
+  const url = parseLaunchpadUrlPreview({
+    defaultUrl: input.launch.defaultDestinationUrl,
+    overrideUrl: input.launch.destinationUrlOverride,
+  });
   const primaryText = normalizedText(input.launch.primaryText ?? input.launch.caption);
   const caption = normalizedText(input.launch.caption ?? input.launch.primaryText);
   const destinationIssues = (input.destination.issues ?? []).map(

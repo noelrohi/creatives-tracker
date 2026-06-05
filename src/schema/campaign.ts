@@ -1,4 +1,6 @@
+import { relations } from "drizzle-orm";
 import { pgTable, text, timestamp, index } from "drizzle-orm/pg-core";
+import { adAccounts } from "./account";
 import { objectiveEnum, statusEnum } from "./enums";
 
 export const campaigns = pgTable(
@@ -10,6 +12,9 @@ export const campaigns = pgTable(
     name: text("name").notNull().default("Untitled Campaign"),
     objective: objectiveEnum("objective"),
     organizationId: text("organization_id"),
+    accountId: text("account_id").references(() => adAccounts.id, {
+      onDelete: "set null",
+    }),
     status: statusEnum("status").notNull().default("active"),
     metaId: text("meta_id").unique(),
     notes: text("notes"),
@@ -19,5 +24,15 @@ export const campaigns = pgTable(
       .$onUpdate(() => new Date())
       .notNull(),
   },
-  (table) => [index("campaign_organization_id_idx").on(table.organizationId)],
+  (table) => [
+    index("campaign_organization_id_idx").on(table.organizationId),
+    index("campaign_account_id_idx").on(table.accountId),
+  ],
 );
+
+export const campaignRelations = relations(campaigns, ({ one }) => ({
+  account: one(adAccounts, {
+    fields: [campaigns.accountId],
+    references: [adAccounts.id],
+  }),
+}));
