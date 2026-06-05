@@ -3,7 +3,9 @@ import {
   buildLaunchpadLocalAdHref,
   buildMetaAdsManagerAdUrl,
   canShowLaunchpadManualInterventionAction,
+  canShowLaunchpadPublishAction,
   canShowLaunchpadRetryAction,
+  isLaunchpadCloneSetupRun,
   getLaunchpadItemDiagnostics,
   getLaunchpadItemManifestSummary,
   getLaunchpadPerformanceSyncReadiness,
@@ -206,6 +208,35 @@ describe("Launchpad run detail presentation", () => {
         adMetaId: "23800000000000000",
       }),
     ).toBeNull();
+  });
+
+  it("shows publish only for legacy validated publishable runs", () => {
+    expect(canShowLaunchpadPublishAction(run({ status: "validated", mode: null }))).toBe(true);
+    expect(canShowLaunchpadPublishAction(run({ status: "validated", mode: "validation" }))).toBe(true);
+    expect(canShowLaunchpadPublishAction(run({ status: "failed", mode: "validation" }))).toBe(false);
+  });
+
+  it("hides publish for clone setup validation runs and manifests", () => {
+    expect(isLaunchpadCloneSetupRun(run({ mode: "clone_setup_validation" }))).toBe(true);
+    expect(canShowLaunchpadPublishAction(run({ status: "validated", mode: "clone_setup_validation" }))).toBe(false);
+    expect(
+      canShowLaunchpadPublishAction(
+        run({ status: "validated", manifest: { launchMode: "clone_setup" } }),
+      ),
+    ).toBe(false);
+    expect(
+      canShowLaunchpadPublishAction(
+        run({
+          status: "validated",
+          manifest: { kind: "creative_launchpad.clone_setup_manifest" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      canShowLaunchpadPublishAction(
+        run({ status: "validated", manifest: { mode: "clone_setup_validation" } }),
+      ),
+    ).toBe(false);
   });
 
   it("shows retry only for run states with retry or reconciliation candidates", () => {

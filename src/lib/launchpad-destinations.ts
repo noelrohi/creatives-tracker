@@ -15,6 +15,7 @@ export type LaunchpadDestinationErrorCode =
   | "FACEBOOK_PAGE_ID_REQUIRED"
   | "AD_SET_ACCOUNT_LINK_REQUIRED"
   | "ACCOUNT_AD_SET_MISMATCH"
+  | "CAMPAIGN_ACCOUNT_MISMATCH"
   | "AD_SET_META_ID_REQUIRED";
 
 export type LaunchpadAccountReadinessReason =
@@ -56,6 +57,7 @@ type AdSetContextRow = {
   campaignName: string | null;
   campaignMetaId: string | null;
   campaignStatus: string | null;
+  campaignAccountId: string | null;
 };
 
 function normalizedText(value: string | null | undefined) {
@@ -96,6 +98,7 @@ function publicAdSet(row: AdSetContextRow) {
       name: row.campaignName,
       metaId: row.campaignMetaId,
       status: row.campaignStatus,
+      accountId: row.campaignAccountId,
     },
   };
 }
@@ -178,6 +181,7 @@ async function getAdSetContext(
       campaignName: campaigns.name,
       campaignMetaId: campaigns.metaId,
       campaignStatus: campaigns.status,
+      campaignAccountId: campaigns.accountId,
     })
     .from(adSets)
     .leftJoin(
@@ -234,6 +238,7 @@ export async function listEligibleLaunchpadAdSets(
       campaignName: campaigns.name,
       campaignMetaId: campaigns.metaId,
       campaignStatus: campaigns.status,
+      campaignAccountId: campaigns.accountId,
     })
     .from(adSets)
     .leftJoin(
@@ -339,6 +344,23 @@ export async function inspectLaunchpadDestinationForDryRun(
     });
   }
 
+  if (
+    adSet.campaignAccountId &&
+    adSet.accountId &&
+    adSet.campaignAccountId !== adSet.accountId
+  ) {
+    issues.push({
+      code: "CAMPAIGN_ACCOUNT_MISMATCH",
+      message: "The selected campaign and ad set appear to belong to different Meta ad accounts",
+      field: "adSetId",
+      details: {
+        adSetId,
+        adSetAccountId: adSet.accountId,
+        campaignAccountId: adSet.campaignAccountId,
+      },
+    });
+  }
+
   if (!adSet.metaId) {
     issues.push({
       code: "AD_SET_META_ID_REQUIRED",
@@ -423,6 +445,22 @@ export async function assertEligibleLaunchpadDestination(
       "ACCOUNT_AD_SET_MISMATCH",
       "The selected Meta ad set does not belong to the selected Meta ad account",
       { accountId: account.id, adSetId, adSetAccountId: adSet.accountId },
+    );
+  }
+
+  if (
+    adSet.campaignAccountId &&
+    adSet.accountId &&
+    adSet.campaignAccountId !== adSet.accountId
+  ) {
+    throw new LaunchpadDestinationError(
+      "CAMPAIGN_ACCOUNT_MISMATCH",
+      "The selected campaign and ad set appear to belong to different Meta ad accounts",
+      {
+        adSetId,
+        adSetAccountId: adSet.accountId,
+        campaignAccountId: adSet.campaignAccountId,
+      },
     );
   }
 

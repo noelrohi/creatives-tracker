@@ -33,6 +33,7 @@ function destination(overrides: Record<string, unknown> = {}) {
         name: "Campaign Alpha",
         metaId: "cmp_123",
         status: "active",
+        accountId: "account-1",
       },
     },
     ...overrides,

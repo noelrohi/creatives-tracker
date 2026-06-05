@@ -1,7 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createLaunchpadRunDraft } from "@/lib/launchpad-ledger";
+import type { MetaCallToAction } from "@/lib/launchpad-constants";
+import {
+  createLaunchpadRunDraft,
+  hashLaunchpadPayload,
+} from "@/lib/launchpad-ledger";
 import { getOpenApiProcedures } from "@/lib/trpc/openapi";
 import { ads } from "@/schema/ad";
+import { adSets } from "@/schema/ad-set";
+import { campaigns } from "@/schema/campaign";
+import {
+  launchpadPublishItems,
+  launchpadPublishRuns,
+} from "@/schema/launchpad";
 import {
   createApiKeyCaller,
   createMockCaller,
@@ -175,6 +185,53 @@ function videoCreative(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function approvedSourceTemplateRow(overrides: Record<string, unknown> = {}) {
+  const now = new Date("2026-01-01T00:00:00.000Z");
+  return {
+    id: "source-template-1",
+    organizationId: "test-org-id",
+    accountLinkConfigured: true,
+    accountId: "account-1",
+    sourceCampaignLinkConfigured: true,
+    sourceCampaignId: "campaign-1",
+    sourceCampaignMetaId: "cmp_123",
+    sourceAdSetLinkConfigured: true,
+    sourceAdSetId: "ad-set-1",
+    sourceAdSetMetaId: "23800000000000000",
+    label: "Approved prospecting template",
+    notes: "Safe paused-copy template",
+    status: "approved",
+    approvedByUserId: "approver-1",
+    approvedAt: now,
+    lastValidatedAt: now,
+    expiresAt: null,
+    metadata: { source: "router-test" },
+    createdAt: now,
+    updatedAt: now,
+    accountName: "Main Meta Account",
+    accountMetaAccountId: "act_123",
+    accountHasMetaAccessToken: true,
+    accountDefaultFacebookPageId: "page-123",
+    accountDefaultInstagramActorId: "ig-123",
+    campaignName: "Campaign Alpha",
+    campaignMetaId: "cmp_123",
+    campaignStatus: "active",
+    campaignAccountId: "account-1",
+    adSetName: "Prospecting / Static tests",
+    adSetMetaId: "23800000000000000",
+    adSetStatus: "active",
+    adSetAccountId: "account-1",
+    adSetCampaignId: "campaign-1",
+    adSetDailyBudget: "2500",
+    adSetCostCap: null,
+    adSetTargetingMethod: ["broad"],
+    adSetGeos: ["US"],
+    adSetPlacements: ["advantage_plus"],
+    adSetDemographics: "18-55",
+    ...overrides,
+  };
+}
+
 type CreateValidationRunTestInput = {
   idempotencyKey?: string;
   actor?: {
@@ -216,6 +273,34 @@ function baseCreateValidationInput(
         primaryText: "Router dry-run primary text",
       },
     ],
+    ...overrides,
+  };
+}
+
+type CreateCloneDryRunTestInput = {
+  idempotencyKey?: string;
+  sourceTemplateId: string;
+  launchName: string;
+  destinationUrl: string;
+  defaultPrimaryText?: string;
+  defaultHeadline?: string;
+  defaultCta?: MetaCallToAction;
+  creativeIds: string[];
+};
+
+function baseCreateCloneDryRunInput(
+  overrides: Partial<CreateCloneDryRunTestInput> = {},
+): CreateCloneDryRunTestInput {
+  return {
+    idempotencyKey: "router-clone-dry-run-key",
+    sourceTemplateId: "source-template-1",
+    launchName: "Router Clone Launch",
+    destinationUrl:
+      "https://example.com/clone?utm_source=meta&utm_medium=paid_social",
+    defaultPrimaryText: "Router clone primary text",
+    defaultHeadline: "Router clone headline",
+    defaultCta: "LEARN_MORE",
+    creativeIds: ["creative-1"],
     ...overrides,
   };
 }
@@ -283,6 +368,7 @@ function persistedValidatedRun(overrides: Record<string, unknown> = {}) {
     id: "run-1",
     organizationId: "test-org-id",
     status: "validated",
+    mode: "validation",
     requestedStatus: "PAUSED",
     itemCount: draft.items.length,
     maxItemCap: 25,
@@ -300,6 +386,31 @@ function persistedValidatedRun(overrides: Record<string, unknown> = {}) {
     destinationAdSetMetaId: "23800000000000000",
     ...overrides,
   };
+}
+
+function persistedCloneSetupRun(overrides: Record<string, unknown> = {}) {
+  const manifest = {
+    version: 2,
+    kind: "creative_launchpad.clone_setup_manifest",
+    launchMode: "clone_setup",
+    safety: {
+      dryRunOnly: true,
+      campaignCreationAllowed: false,
+      adSetCreationAllowed: false,
+      adCreationAllowed: false,
+      metaWritesAllowed: false,
+    },
+  };
+
+  return persistedValidatedRun({
+    id: "clone-run-1",
+    mode: "clone_setup_validation",
+    destinationAdSetId: null,
+    destinationAdSetMetaId: null,
+    manifest,
+    manifestHash: hashLaunchpadPayload(manifest),
+    ...overrides,
+  });
 }
 
 function persistedValidatedItem(overrides: Record<string, unknown> = {}) {
@@ -785,11 +896,254 @@ describe("launchpad destination selection", () => {
   });
 });
 
+describe("launchpad v2 source templates", () => {
+  it("lists approved source templates without exposing account tokens", async () => {
+    dbMocks.selectQueue = [
+      [
+        approvedSourceTemplateRow({
+          accountHasMetaAccessToken: true,
+          metaAccessToken: "secret-token-that-should-not-leak",
+        }),
+      ],
+    ];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    const result = await adminCaller.launchpad.listSourceTemplates();
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: "source-template-1",
+        label: "Approved prospecting template",
+        account: expect.objectContaining({
+          id: "account-1",
+          metaAccountId: "act_123",
+          hasMetaAccessToken: true,
+        }),
+        readiness: expect.objectContaining({ status: "ready" }),
+      }),
+    ]);
+    expect(JSON.stringify(result)).not.toContain("secret-token");
+  });
+});
+
+describe("launchpad v2 clone dry-run", () => {
+  it("persists a clone setup validation run and ledger items only", async () => {
+    dbMocks.selectQueue = [
+      [approvedSourceTemplateRow()],
+      [staticCreative()],
+      [],
+      [],
+    ];
+    dbMocks.insertReturningQueue = [[{ id: "clone-run-new" }], [{ id: "clone-item-new" }]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    const result = await adminCaller.launchpad.createCloneDryRun(
+      baseCreateCloneDryRunInput(),
+    );
+
+    expect(result).toEqual({ id: "clone-run-new" });
+    expect(triggerMocks.trigger).not.toHaveBeenCalled();
+    expect(triggerMocks.createPublicToken).not.toHaveBeenCalled();
+    expect(dbMocks.updateValues).toEqual([]);
+    expect(dbMocks.insertTables).toEqual([
+      launchpadPublishRuns,
+      launchpadPublishItems,
+    ]);
+    expect(dbMocks.insertTables).not.toContain(campaigns);
+    expect(dbMocks.insertTables).not.toContain(adSets);
+    expect(dbMocks.insertTables).not.toContain(ads);
+    expect(dbMocks.insertValues[0]).toMatchObject({
+      organizationId: "test-org-id",
+      status: "validated",
+      mode: "clone_setup_validation",
+      requestedStatus: "PAUSED",
+      itemCount: 1,
+      actorAccountId: "account-1",
+      actorAccountMetaId: "act_123",
+      actorPageId: "page-123",
+      actorInstagramId: "ig-123",
+      livePublishEnabledAtValidation: false,
+      reconciliationStatus: "not_required",
+    });
+    expect(dbMocks.insertValues[0]).not.toHaveProperty("destinationAdSetId");
+    expect(dbMocks.insertValues[1]).toEqual([
+      expect.objectContaining({
+        organizationId: "test-org-id",
+        status: "validated",
+        requestedStatus: "PAUSED",
+        creativeId: "creative-1",
+        accountId: "account-1",
+        actorPageId: "page-123",
+        actorInstagramId: "ig-123",
+        reconciliationStatus: "not_required",
+      }),
+    ]);
+    expect(dbMocks.insertValues[0]).toMatchObject({
+      dedupeKey: hashLaunchpadPayload({
+        kind: "launchpad.clone_setup.dry_run.dedupe.v2",
+        organizationId: "test-org-id",
+        mode: "clone_setup_validation",
+        manifestHash: (dbMocks.insertValues[0] as { manifestHash: string }).manifestHash,
+      }),
+    });
+  });
+
+  it("rejects wrong-org source templates before persistence", async () => {
+    dbMocks.selectQueue = [[]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createCloneDryRun(
+        baseCreateCloneDryRunInput({ sourceTemplateId: "foreign-template" }),
+      ),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: expect.stringContaining("source template"),
+    });
+    expect(dbMocks.insertValues).toEqual([]);
+    expect(triggerMocks.trigger).not.toHaveBeenCalled();
+  });
+
+  it("rejects wrong-org creatives before persistence", async () => {
+    dbMocks.selectQueue = [[approvedSourceTemplateRow()], []];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createCloneDryRun(
+        baseCreateCloneDryRunInput({ creativeIds: ["foreign-creative"] }),
+      ),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: expect.stringContaining("Creative"),
+    });
+    expect(dbMocks.insertValues).toEqual([]);
+    expect(triggerMocks.trigger).not.toHaveBeenCalled();
+  });
+
+  it("persists same-org failed business validation dry-runs", async () => {
+    dbMocks.selectQueue = [
+      [approvedSourceTemplateRow()],
+      [staticCreative()],
+      [],
+      [],
+    ];
+    dbMocks.insertReturningQueue = [[{ id: "clone-run-failed" }], [{ id: "clone-item-failed" }]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createCloneDryRun(
+        baseCreateCloneDryRunInput({ destinationUrl: "http://example.com" }),
+      ),
+    ).resolves.toEqual({ id: "clone-run-failed" });
+
+    expect(dbMocks.insertValues[0]).toMatchObject({
+      status: "failed",
+      mode: "clone_setup_validation",
+      errorCategory: "terminal",
+      errorCode: "LAUNCHPAD_VALIDATION_FAILED",
+    });
+    expect(JSON.stringify(dbMocks.insertValues[0])).toEqual(
+      expect.stringContaining("INVALID_DESTINATION_URL"),
+    );
+    expect(dbMocks.insertValues[1]).toEqual([
+      expect.objectContaining({
+        status: "failed",
+        errorCategory: "terminal",
+        errorCode: "LAUNCHPAD_VALIDATION_FAILED",
+      }),
+    ]);
+    expect(triggerMocks.trigger).not.toHaveBeenCalled();
+  });
+
+  it("persists mismatched same-org template accounts as sanitized failed dry-runs", async () => {
+    dbMocks.selectQueue = [
+      [
+        approvedSourceTemplateRow({
+          campaignAccountId: "foreign-account",
+          adSetAccountId: "foreign-account",
+        }),
+      ],
+      [staticCreative()],
+      [],
+      [],
+    ];
+    dbMocks.insertReturningQueue = [[{ id: "clone-run-sanitized" }], [{ id: "clone-item-sanitized" }]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createCloneDryRun(baseCreateCloneDryRunInput()),
+    ).resolves.toEqual({ id: "clone-run-sanitized" });
+
+    const serialized = JSON.stringify(dbMocks.insertValues);
+    expect(serialized).toContain("SOURCE_TEMPLATE_CAMPAIGN_ACCOUNT_MISMATCH");
+    expect(serialized).toContain("SOURCE_TEMPLATE_AD_SET_ACCOUNT_MISMATCH");
+    expect(serialized).not.toContain("foreign-account");
+    expect(dbMocks.insertValues[0]).toMatchObject({ status: "failed" });
+  });
+
+  it("rejects clone dry-run idempotency replay with a different manifest", async () => {
+    dbMocks.selectQueue = [
+      [approvedSourceTemplateRow()],
+      [staticCreative()],
+      [
+        persistedCloneSetupRun({
+          idempotencyKey: "router-clone-dry-run-key",
+          manifestHash: "different-manifest-hash",
+        }),
+      ],
+    ];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createCloneDryRun(
+        baseCreateCloneDryRunInput({ defaultHeadline: "Changed headline" }),
+      ),
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("different manifest or mode"),
+    });
+    expect(dbMocks.insertValues).toEqual([]);
+  });
+
+  it("rejects invalid clone CTAs at the router boundary", async () => {
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createCloneDryRun(
+        baseCreateCloneDryRunInput({ defaultCta: "NOT_A_META_CTA" } as never),
+      ),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(dbMocks.selectQueue).toEqual([]);
+    expect(dbMocks.insertValues).toEqual([]);
+  });
+
+  it("does not promote clone setup validation runs to live publishing", async () => {
+    process.env.ADSOLUTE_META_PUBLISH_ENABLED = "true";
+    dbMocks.selectQueue = [[persistedCloneSetupRun()]];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.requestLivePublish({
+        runId: "clone-run-1",
+        confirmation: "PUBLISH_PAUSED_META_ADS",
+      }),
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("validation previews only"),
+    });
+    expect(triggerMocks.trigger).not.toHaveBeenCalled();
+    expect(dbMocks.updateValues).toEqual([]);
+  });
+});
+
 describe("launchpad router safety", () => {
   it("blocks ordinary members from the Launchpad ledger surface", async () => {
     const memberCaller = createMockCaller({ role: "member" });
 
     await expect(memberCaller.launchpad.list()).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await expect(memberCaller.launchpad.listSourceTemplates()).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
     await expect(
@@ -799,6 +1153,9 @@ describe("launchpad router safety", () => {
         destination: { adSetId: "ad-set-1" },
         items: [{ creativeId: "creative-1", adName: "Member demo" }],
       }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      memberCaller.launchpad.createCloneDryRun(baseCreateCloneDryRunInput()),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
@@ -1300,6 +1657,7 @@ describe("launchpad router ledger persistence", () => {
         idempotencyKey: "router-idempotency-key",
         dedupeKey: "different-dedupe",
         manifestHash: "different-manifest-hash",
+        mode: "validation",
       },
     ]);
     const adminCaller = createMockCaller({ role: "admin" });
@@ -1316,7 +1674,7 @@ describe("launchpad router ledger persistence", () => {
     });
   });
 
-  it("reselects and returns an existing run after a dedupe conflict", async () => {
+  it("rejects dedupe-key matches with a different manifest", async () => {
     process.env.ADSOLUTE_META_PUBLISH_ENABLED = "false";
     const draft = createLaunchpadRunDraft(baseRunInput());
     const existing = {
@@ -1324,6 +1682,7 @@ describe("launchpad router ledger persistence", () => {
       idempotencyKey: "someone-elses-idempotency-key",
       dedupeKey: draft.dedupeKey,
       manifestHash: "older-order-or-audit-specific-manifest",
+      mode: "validation",
     };
     enqueueDryRunPlanningRows();
     dbMocks.selectQueue.push([], [existing]);
@@ -1335,7 +1694,10 @@ describe("launchpad router ledger persistence", () => {
         destination: { adSetId: "ad-set-1" },
         items: baseRunInput().items,
       }),
-    ).resolves.toEqual(existing);
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("different manifest or mode"),
+    });
   });
 
   it("rejects item-level idempotency/dedupe conflicts before persistence", async () => {

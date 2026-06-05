@@ -31,6 +31,7 @@ import {
   buildLaunchpadLocalAdHref,
   buildMetaAdsManagerAdUrl,
   canShowLaunchpadManualInterventionAction,
+  canShowLaunchpadPublishAction,
   canShowLaunchpadRetryAction,
   formatLaunchpadStatusLabel,
   getLaunchpadItemDiagnostics,
@@ -316,7 +317,7 @@ function LaunchpadRunDetailPanel({
   const { run, items } = data;
   const aggregate = getLaunchpadRunAggregateResult(run, items);
   const statusCounts = summarizeLaunchpadRunStatuses(items);
-  const canPublish = run.status === "validated";
+  const canPublish = canShowLaunchpadPublishAction(run);
   const canRetry = canShowLaunchpadRetryAction(run, items);
 
   return (
@@ -1176,7 +1177,7 @@ function LaunchpadRunInspector({
   const { run, items } = data;
   const aggregate = getLaunchpadRunAggregateResult(run, items);
   const statusCounts = summarizeLaunchpadRunStatuses(items);
-  const canPublish = run.status === "validated";
+  const canPublish = canShowLaunchpadPublishAction(run);
   const canRetry = canShowLaunchpadRetryAction(run, items);
 
   return (
@@ -1510,6 +1511,11 @@ export function LaunchpadPageClient() {
   function publishSelectedRun() {
     if (!selectedRun.data?.run.id) {
       toast.error("Select a validated Launchpad run first.");
+      return;
+    }
+
+    if (!canShowLaunchpadPublishAction(selectedRun.data.run)) {
+      toast.error("Clone setup dry-runs are validation previews only and cannot be published.");
       return;
     }
 

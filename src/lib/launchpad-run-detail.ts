@@ -51,6 +51,7 @@ export type LaunchpadRunDetailRun = {
   mode?: string | null;
   requestedStatus?: string | null;
   itemCount?: number | null;
+  manifest?: unknown;
   manifestHash?: string | null;
   actorAccountId?: string | null;
   actorAccountMetaId?: string | null;
@@ -137,9 +138,13 @@ const manualInterventionItemStatuses = new Set([
   "manual_intervention",
 ]);
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
 function asPayload(value: unknown): LaunchpadPayloadPreview {
-  if (!value || typeof value !== "object") return {};
-  return value as LaunchpadPayloadPreview;
+  return (asRecord(value) ?? {}) as LaunchpadPayloadPreview;
 }
 
 function normalizedText(value: string | null | undefined) {
@@ -310,6 +315,27 @@ export function buildLaunchpadLocalAdHref(item: LaunchpadRunDetailItem) {
   const creativeId = getLaunchpadItemManifestSummary(item).creativeId;
   if (!item.localAdId || !creativeId) return null;
   return `/creatives/${encodeURIComponent(creativeId)}?tab=ads`;
+}
+
+export function isLaunchpadCloneSetupRun(
+  run: Pick<LaunchpadRunDetailRun, "mode" | "manifest"> | null | undefined,
+) {
+  if (!run) return false;
+  const manifest = asRecord(run.manifest);
+
+  return Boolean(
+    run.mode === "clone_setup_validation" ||
+      manifest?.mode === "clone_setup_validation" ||
+      manifest?.launchMode === "clone_setup" ||
+      manifest?.kind === "creative_launchpad.clone_setup_manifest",
+  );
+}
+
+export function canShowLaunchpadPublishAction(
+  run: LaunchpadRunDetailRun | null | undefined,
+) {
+  if (!run || run.status !== "validated") return false;
+  return !isLaunchpadCloneSetupRun(run);
 }
 
 export function canShowLaunchpadRetryAction(
