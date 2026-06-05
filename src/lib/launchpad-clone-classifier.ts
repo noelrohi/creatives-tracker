@@ -4,6 +4,7 @@ import {
   launchpadVideoCreativeFormats,
 } from "@/lib/launchpad-constants";
 import type { LaunchpadValidationIssue } from "@/lib/launchpad-ledger";
+import type { LaunchpadFreshSourceInspection } from "@/lib/launchpad-meta-source-inspection";
 import type { LaunchpadSourceTemplate } from "@/lib/launchpad-source-templates";
 
 export type LaunchpadCloneCreativeInput = {
@@ -19,6 +20,7 @@ export type LaunchpadCloneClassifierInput = {
   creatives: LaunchpadCloneCreativeInput[];
   destinationUrl?: string | null;
   requestedStatus?: string;
+  sourceInspection?: LaunchpadFreshSourceInspection | null;
 };
 
 export type LaunchpadCloneClassification = {
@@ -52,6 +54,42 @@ export function classifyLaunchpadClone(
 
   blockers.push(...templateReadiness.blockers);
   warnings.push(...templateReadiness.warnings);
+
+  if (!input.sourceInspection || input.sourceInspection.status !== "available") {
+    blockers.push(...(input.sourceInspection?.blockers.length
+      ? input.sourceInspection.blockers
+      : [{
+          code: "FRESH_SOURCE_INSPECTION_UNAVAILABLE",
+          message: "Launchpad needs a fresh Meta source inspection before it can create a dry-run plan.",
+          field: "sourceTemplateId",
+        }]));
+  } else {
+    const campaign = input.sourceInspection.campaign ?? {};
+    const adSet = input.sourceInspection.adSet ?? {};
+    const targeting = typeof adSet.targeting === "object" && adSet.targeting ? adSet.targeting as Record<string, unknown> : {};
+
+    const promotedObject = typeof adSet.promoted_object === "object" && adSet.promoted_object ? adSet.promoted_object as Record<string, unknown> : null;
+    const objective = typeof campaign.objective === "string" ? campaign.objective : null;
+    const supportedObjectives = ["OUTCOME_SALES", "CONVERSIONS", "LINK_CLICKS", "TRAFFIC"];
+
+    if (campaign.buying_type && campaign.buying_type !== "AUCTION") blockers.push({ code: "UNSUPPORTED_BUYING_TYPE", message: "Only AUCTION source campaigns are supported in Launchpad M1.", field: "sourceCampaignId", details: { buyingType: campaign.buying_type } });
+    if (objective && !supportedObjectives.includes(objective)) blockers.push({ code: "UNSUPPORTED_OBJECTIVE", message: "This source campaign objective is not supported by the first Launchpad clone flow.", field: "sourceCampaignId", details: { objective, supportedObjectives } });
+    if (campaign.daily_budget || campaign.lifetime_budget) blockers.push({ code: "CAMPAIGN_BUDGET_UNSUPPORTED", message: "Campaign budget optimization/source campaign budgets are not supported for clone dry-runs.", field: "sourceCampaignId" });
+    if (campaign.spend_cap) blockers.push({ code: "CAMPAIGN_SPEND_CAP_UNSUPPORTED", message: "Source campaign spend caps are not copied and require manual review.", field: "sourceCampaignId" });
+    if (Array.isArray(campaign.special_ad_categories) && campaign.special_ad_categories.length > 0) blockers.push({ code: "SPECIAL_AD_CATEGORY_UNSUPPORTED", message: "Special ad category source campaigns require manual media-buyer review.", field: "sourceCampaignId" });
+    if (adSet.lifetime_budget) blockers.push({ code: "LIFETIME_BUDGET_UNSUPPORTED", message: "Lifetime-budget ad sets are not supported. Enter an explicit daily budget instead.", field: "sourceAdSetId" });
+    if (adSet.dynamic_creative === true) blockers.push({ code: "DYNAMIC_CREATIVE_UNSUPPORTED", message: "Dynamic creative source ad sets are not supported in Launchpad M1.", field: "sourceAdSetId" });
+    if (!promotedObject) blockers.push({ code: "PROMOTED_OBJECT_REQUIRED", message: "Source ad set promoted object/pixel tracking could not be read.", field: "sourceAdSetId" });
+    if (promotedObject?.product_set_id || promotedObject?.product_catalog_id) blockers.push({ code: "CATALOG_PROMOTED_OBJECT_UNSUPPORTED", message: "Catalog/product-set promoted objects are not supported in Launchpad M1.", field: "sourceAdSetId" });
+    if (!adSet.optimization_goal) blockers.push({ code: "OPTIMIZATION_GOAL_REQUIRED", message: "Source ad set optimization goal could not be read.", field: "sourceAdSetId" });
+    if (!adSet.billing_event) blockers.push({ code: "BILLING_EVENT_REQUIRED", message: "Source ad set billing event could not be read.", field: "sourceAdSetId" });
+    if (targeting.publisher_platforms && !Array.isArray(targeting.publisher_platforms)) blockers.push({ code: "PLACEMENTS_UNREADABLE", message: "Source placements could not be read safely.", field: "sourceAdSetId" });
+    if (Array.isArray(targeting.publisher_platforms)) {
+      const supportedPlatforms = new Set(["facebook", "instagram"]);
+      const unsupportedPlatforms = targeting.publisher_platforms.filter((platform) => typeof platform === "string" && !supportedPlatforms.has(platform));
+      if (unsupportedPlatforms.length > 0) blockers.push({ code: "UNSUPPORTED_PLACEMENTS", message: "This source uses placements outside the first Launchpad supported profile.", field: "sourceAdSetId", details: { unsupportedPlatforms } });
+    }
+  }
 
   if (input.requestedStatus && input.requestedStatus !== PAUSED_META_STATUS) {
     blockers.push({
@@ -117,7 +155,7 @@ export function classifyLaunchpadClone(
   }
 
   const copiedSettings = [
-    { key: "campaign_objective", label: "Campaign objective/type", source: "source campaign" },
+    { key: "campaign_objective", label: "Campaign objective/type", source: "fresh Meta source inspection" },
     { key: "audience", label: "Audience", source: "source ad set" },
     { key: "placements", label: "Placements", source: "source ad set" },
     { key: "identity", label: "Facebook Page / Instagram identity", source: "ad account defaults" },
@@ -125,8 +163,7 @@ export function classifyLaunchpadClone(
 
   const notCopiedSettings = [
     { key: "active_status", label: "Active status", reason: "Launchpad creates everything paused." },
-    { key: "budget", label: "Source budget and spend caps", reason: "Milestone 1 requires an explicit launch budget in the follow-up UI slice." },
-    { key: "tracking", label: "Pixel/conversion tracking", reason: "Fresh Meta tracking inspection is tracked in the follow-up M1 issue." },
+    { key: "budget", label: "Source budget and spend caps", reason: "Milestone 1 requires an explicit launch budget." },
     { key: "historical_performance", label: "Historical performance", reason: "Performance is not copied into new Meta objects." },
     { key: "learning", label: "Meta learning state", reason: "New campaigns/ad sets start fresh in Meta." },
   ];

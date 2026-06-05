@@ -125,6 +125,33 @@ function formatJson(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+}
+
+function asIssueList(value: unknown): Array<{ code?: string; message?: string }> {
+  return Array.isArray(value) ? value.filter((item) => typeof item === "object" && item !== null) as Array<{ code?: string; message?: string }> : [];
+}
+
+function asSettingsList(value: unknown): Array<{ key?: string; label?: string; source?: string; reason?: string }> {
+  return Array.isArray(value) ? value.filter((item) => typeof item === "object" && item !== null) as Array<{ key?: string; label?: string; source?: string; reason?: string }> : [];
+}
+
+function formatMinorUnits(value: unknown, currency: unknown) {
+  if (typeof value !== "number") return "Explicit budget required";
+  const amount = value / 100;
+  const currencyCode = typeof currency === "string" && currency ? currency : undefined;
+  return currencyCode
+    ? new Intl.NumberFormat(undefined, { style: "currency", currency: currencyCode }).format(amount)
+    : `${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/day`;
+}
+
+function displayValue(value: unknown) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return JSON.stringify(value);
+}
+
 function urlHasLaunchpadRequirements(value: string) {
   if (!value.trim()) return false;
   try {
@@ -162,7 +189,7 @@ type ReadinessChecklistItem = {
   ready: boolean;
 };
 
-type LaunchpadStep = "destination" | "creatives" | "defaults" | "runs";
+type LaunchpadStep = "destination" | "creatives" | "defaults" | "preview" | "runs";
 
 type Tone = "neutral" | "warning" | "danger" | "success";
 
@@ -1311,6 +1338,9 @@ export function LaunchpadPageClient() {
   const queryClient = useQueryClient();
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [selectedAdSetId, setSelectedAdSetId] = useState("");
+  const [selectedSourceTemplateId, setSelectedSourceTemplateId] = useState("");
+  const [launchName, setLaunchName] = useState("");
+  const [dailyBudget, setDailyBudget] = useState("");
   const [selectedCreativeId, setSelectedCreativeId] = useState("");
   const [launchItems, setLaunchItems] = useState<LaunchpadDraftItem[]>([]);
   const [defaultPrimaryText, setDefaultPrimaryText] = useState("");
@@ -1322,6 +1352,7 @@ export function LaunchpadPageClient() {
 
   const runs = useQuery(trpc.launchpad.list.queryOptions({ limit: 50 }));
   const creatives = useQuery(trpc.adCreative.list.queryOptions());
+  const sourceTemplates = useQuery(trpc.launchpad.listSourceTemplates.queryOptions());
   const launchpadCreatives = (creatives.data ?? []).filter((creative) =>
     isSupportedLaunchpadFormat(creative.format),
   );
@@ -1355,6 +1386,19 @@ export function LaunchpadPageClient() {
   const selectedCreative = launchpadCreatives.find(
     (creative) => creative.id === selectedCreativeId,
   );
+  const selectedSourceTemplate = sourceTemplates.data?.find(
+    (template) => template.id === selectedSourceTemplateId,
+  );
+  const selectedManifest = asRecord(selectedRun.data?.run.manifest);
+  const selectedManifestTracking = asRecord(selectedManifest.tracking);
+  const selectedManifestValidation = asRecord(selectedManifest.validation);
+  const selectedManifestBudget = asRecord(selectedManifest.budget);
+  const selectedManifestIdentity = asRecord(selectedManifest.identity);
+  const selectedManifestCopiedSettings = asSettingsList(selectedManifest.copiedSettings);
+  const selectedManifestNotCopiedSettings = asSettingsList(selectedManifest.notCopiedSettings);
+  const selectedManifestBlockers = asIssueList(selectedManifestValidation.blockers);
+  const selectedManifestWarnings = asIssueList(selectedManifestValidation.warnings);
+
   const destinationContext = useQuery({
     ...trpc.launchpad.destinationContext.queryOptions({
       accountId: selectedAccountId || "__no_account_selected__",
@@ -1363,12 +1407,13 @@ export function LaunchpadPageClient() {
     enabled: Boolean(selectedAccountId && selectedAdSetId),
   });
 
-  const createRun = useMutation(
-    trpc.launchpad.createValidationRun.mutationOptions({
+  const createCloneRun = useMutation(
+    trpc.launchpad.createCloneDryRun.mutationOptions({
       onSuccess: (run) => {
         queryClient.invalidateQueries({ queryKey: trpc.launchpad.list.queryKey() });
         if (run?.id) setSelectedRunId(run.id);
-        toast.success("Launchpad dry-run manifest recorded");
+        setActiveStep("preview");
+        toast.success("Launch Plan preview recorded");
       },
       onError: (error) => toast.error(error.message),
     }),
@@ -1472,8 +1517,8 @@ export function LaunchpadPageClient() {
   }
 
   function createDryRun() {
-    if (!selectedAccountId || !selectedAdSetId) {
-      toast.error("Select an eligible Meta destination first.");
+    if (!selectedSourceTemplateId) {
+      toast.error("Pick an approved source template first.");
       return;
     }
 
@@ -1482,29 +1527,21 @@ export function LaunchpadPageClient() {
       return;
     }
 
-    const everyItemHasUrl = launchItems.every((item) => item.destinationUrl.trim());
-    if (!defaultDestinationUrl.trim() && !everyItemHasUrl) {
-      toast.error("Provide a batch URL or URL overrides for every item.");
+    const budget = Math.round(Number(dailyBudget) * 100);
+    if (!launchName.trim() || !Number.isFinite(budget) || budget <= 0 || !defaultDestinationUrl.trim()) {
+      toast.error("Enter a launch name, explicit daily budget, and destination URL.");
       return;
     }
 
-    createRun.mutate({
-      idempotencyKey: `dry_run_${crypto.randomUUID()}`,
-      actor: { accountId: selectedAccountId },
-      destination: { adSetId: selectedAdSetId },
-      defaultDestinationUrl: defaultDestinationUrl.trim() || undefined,
+    createCloneRun.mutate({
+      idempotencyKey: `clone_dry_run_${crypto.randomUUID()}`,
+      sourceTemplateId: selectedSourceTemplateId,
+      launchName: launchName.trim(),
+      dailyBudgetMinorUnits: budget,
+      destinationUrl: defaultDestinationUrl.trim(),
       defaultPrimaryText: defaultPrimaryText.trim() || undefined,
-      defaultCta: cta,
-      namingTemplate: namingTemplate.trim() || undefined,
-      items: launchItems.map((item) => ({
-        creativeId: item.creativeId,
-        adName: item.adName.trim() || undefined,
-        primaryText: item.primaryText.trim() || undefined,
-        headline: item.headline.trim() || undefined,
-        destinationUrl: item.destinationUrl.trim() || undefined,
-        cta: item.cta.trim() || undefined,
-        requestedStatus: "PAUSED" as const,
-      })),
+      defaultCta: cta as (typeof metaCtaValues)[number],
+      creativeIds: launchItems.map((item) => item.creativeId),
     });
   }
 
@@ -1564,13 +1601,15 @@ export function LaunchpadPageClient() {
     });
   }
 
-  const destinationReady = Boolean(selectedAccountId && selectedAdSetId);
+  const destinationReady = Boolean(
+    selectedSourceTemplateId && selectedSourceTemplate?.readiness.status === "ready",
+  );
   const hasDefaultDestinationUrl = Boolean(defaultDestinationUrl.trim());
   const everyItemHasUrl = Boolean(
     launchItems.length > 0 &&
       launchItems.every((item) => item.destinationUrl.trim()),
   );
-  const urlCoverageReady = Boolean(hasDefaultDestinationUrl || everyItemHasUrl);
+  const urlCoverageReady = hasDefaultDestinationUrl;
   const defaultUrlLooksValid = urlHasLaunchpadRequirements(defaultDestinationUrl);
   const urlReadinessDetail = hasDefaultDestinationUrl
     ? defaultUrlLooksValid
@@ -1581,18 +1620,14 @@ export function LaunchpadPageClient() {
       : "Add a batch URL or item URLs";
   const readinessItems: ReadinessChecklistItem[] = [
     {
-      label: "Account",
-      detail: selectedAccount?.canPublish
-        ? selectedAccount.name
-        : selectedAccount
-          ? "Setup incomplete"
-          : "Select a publish-ready account",
-      ready: Boolean(selectedAccountId && selectedAccount?.canPublish),
+      label: "Source template",
+      detail: selectedSourceTemplate?.label ?? "Pick an approved source campaign/ad set",
+      ready: destinationReady,
     },
     {
-      label: "Ad set",
-      detail: selectedAdSet?.name ?? "Select an eligible synced ad set",
-      ready: Boolean(selectedAdSetId),
+      label: "Launch inputs",
+      detail: launchName.trim() && dailyBudget ? "Name and budget entered" : "Name and explicit daily budget required",
+      ready: Boolean(launchName.trim() && Number(dailyBudget) > 0),
     },
     {
       label: `Creatives ${launchItems.length}/${LAUNCHPAD_MAX_ITEMS}`,
@@ -1612,6 +1647,8 @@ export function LaunchpadPageClient() {
   ];
   const dryRunReady = Boolean(
     destinationReady &&
+      launchName.trim() &&
+      Number(dailyBudget) > 0 &&
       launchItems.length > 0 &&
       urlCoverageReady,
   );
@@ -1619,7 +1656,7 @@ export function LaunchpadPageClient() {
     {
       id: "destination" as const,
       label: "Destination",
-      detail: destinationReady ? "Selected" : "Account and ad set",
+      detail: destinationReady ? "Selected" : "Source template",
       ready: destinationReady,
     },
     {
@@ -1633,6 +1670,12 @@ export function LaunchpadPageClient() {
       label: "Defaults",
       detail: urlCoverageReady ? "URL covered" : "URL required",
       ready: urlCoverageReady,
+    },
+    {
+      id: "preview" as const,
+      label: "Preview",
+      detail: selectedRun.data?.run.mode === "clone_setup_validation" ? "Launch Plan" : "Generate plan",
+      ready: selectedRun.data?.run.mode === "clone_setup_validation",
     },
     {
       id: "runs" as const,
@@ -1658,11 +1701,11 @@ export function LaunchpadPageClient() {
           <Button
             size="sm"
             onClick={createDryRun}
-            disabled={createRun.isPending || !dryRunReady}
+            disabled={createCloneRun.isPending || !dryRunReady}
             className="gap-1.5 lg:ml-auto"
           >
             <Plus className="size-3.5" />
-            {createRun.isPending ? "Recording…" : "Generate batch dry run"}
+            {createCloneRun.isPending ? "Recording…" : "Generate Launch Plan"}
           </Button>
         </div>
         <div className="space-y-2">
@@ -1689,7 +1732,7 @@ export function LaunchpadPageClient() {
               <div>
                 <div className="flex items-center gap-2">
                   <Target className="size-4 text-primary" />
-                  <h2 className="text-sm font-semibold">Publishing destination</h2>
+                  <h2 className="text-sm font-semibold">Source setup</h2>
                 </div>
               </div>
               {destinationContext.data ? (
@@ -1701,7 +1744,44 @@ export function LaunchpadPageClient() {
                 </Badge>
               ) : null}
             </div>
-            <div className="grid gap-4 p-4 lg:grid-cols-[0.8fr_0.8fr_1.4fr]">
+            <div className="space-y-4 p-4">
+              <div className="space-y-2">
+                <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Approved source template
+                </label>
+                <Select
+                  value={selectedSourceTemplateId}
+                  onValueChange={setSelectedSourceTemplateId}
+                  disabled={sourceTemplates.isLoading}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select source campaign/ad set…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {sourceTemplates.data?.map((template) => (
+                      <SelectItem key={template.id} value={template.id}>
+                        <span>{template.label}</span>
+                        <span className="ml-2 text-xs text-muted-foreground">
+                          {template.sourceCampaign?.name} / {template.sourceAdSet?.name}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {selectedSourceTemplate ? (
+                  <div className="rounded-lg border bg-muted/25 p-3 text-xs text-muted-foreground">
+                    <div className="font-medium text-foreground">{selectedSourceTemplate.account?.name ?? "Meta account"}</div>
+                    <div>Campaign: {selectedSourceTemplate.sourceCampaign?.name ?? "—"}</div>
+                    <div>Ad set: {selectedSourceTemplate.sourceAdSet?.name ?? "—"}</div>
+                    {selectedSourceTemplate.readiness.status !== "ready" ? (
+                      <div className="mt-2 text-amber-600 dark:text-amber-300">
+                        This template needs review before Launchpad can use it.
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+              <div className="hidden">
               <div className="space-y-2">
                 <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   Account
@@ -1865,6 +1945,7 @@ export function LaunchpadPageClient() {
                   </p>
                 )}
               </div>
+              </div>
             </div>
           </section>
           ) : null}
@@ -1969,6 +2050,32 @@ export function LaunchpadPageClient() {
               <h2 className="text-sm font-semibold">Batch defaults</h2>
             </div>
             <div className="grid gap-4 p-4 lg:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="launchName" className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Launch name
+                </Label>
+                <Input
+                  id="launchName"
+                  value={launchName}
+                  onChange={(event) => setLaunchName(event.target.value)}
+                  placeholder="June hook test"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="dailyBudget" className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Daily budget
+                </Label>
+                <Input
+                  id="dailyBudget"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={dailyBudget}
+                  onChange={(event) => setDailyBudget(event.target.value)}
+                  placeholder="50"
+                />
+                <p className="text-xs text-muted-foreground">Required. Source budget and spend caps are not copied.</p>
+              </div>
               <div className="space-y-2 lg:col-span-2">
                 <Label
                   htmlFor="defaultPrimaryText"
@@ -1992,7 +2099,7 @@ export function LaunchpadPageClient() {
                   htmlFor="defaultUrl"
                   className="text-xs uppercase tracking-wide text-muted-foreground"
                 >
-                  Batch default URL
+                  Destination URL
                 </Label>
                 <Input
                   id="defaultUrl"
@@ -2010,7 +2117,7 @@ export function LaunchpadPageClient() {
                       : "text-muted-foreground",
                   )}
                 >
-                  HTTPS + utm_source + utm_medium
+                  HTTPS required. Missing utm_source/utm_medium will be appended in the Launch Plan.
                 </p>
               </div>
 
@@ -2059,6 +2166,116 @@ export function LaunchpadPageClient() {
               <span>
                 Cap <code className="text-foreground">{LAUNCHPAD_MAX_ITEMS}</code>
               </span>
+            </div>
+          </section>
+          ) : null}
+
+          {activeStep === "preview" ? (
+          <section className="rounded-xl border bg-card">
+            <div className="flex flex-col gap-2 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-sm font-semibold">Launch Plan preview</h2>
+                <p className="text-xs text-muted-foreground">
+                  Dry-run only. No publish CTA is available for Launchpad v2 Milestone 1.
+                </p>
+              </div>
+              <Badge variant="outline">No Meta writes</Badge>
+            </div>
+            <div className="space-y-4 p-4">
+              {selectedRun.data?.run.manifest ? (
+                <>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div className="rounded-lg border bg-muted/25 p-3 text-sm">
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">Status</p>
+                      <StatusBadge status={selectedRun.data.run.status} />
+                    </div>
+                    <div className="rounded-lg border bg-muted/25 p-3 text-sm">
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">Budget</p>
+                      <p className="font-medium">{formatMinorUnits(selectedManifestBudget.dailyBudgetMinorUnits, selectedManifestBudget.currency)}</p>
+                    </div>
+                    <div className="rounded-lg border bg-muted/25 p-3 text-sm">
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">Safety</p>
+                      <p className="font-medium">Paused plan · dry-run only</p>
+                    </div>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="rounded-lg border p-3 text-sm">
+                      <p className="font-medium">What will be cloned</p>
+                      <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+                        {selectedManifestCopiedSettings.map((setting) => (
+                          <li key={setting.key ?? setting.label}>{setting.label ?? setting.key} <span className="text-muted-foreground/80">from {setting.source ?? "source setup"}</span></li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="rounded-lg border p-3 text-sm">
+                      <p className="font-medium">What will not be copied</p>
+                      <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+                        {selectedManifestNotCopiedSettings.map((setting) => (
+                          <li key={setting.key ?? setting.label}>{setting.label ?? setting.key}: {setting.reason ?? "Not copied"}</li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="rounded-lg border p-3 text-sm">
+                      <p className="font-medium">Tracking</p>
+                      <dl className="mt-2 grid gap-1 text-xs text-muted-foreground">
+                        <DetailRow label="Final URL"><span className="break-all">{displayValue(selectedManifestTracking.finalUrl)}</span></DetailRow>
+                        <DetailRow label="Domain">{displayValue(selectedManifestTracking.destinationDomain)}</DetailRow>
+                        <DetailRow label="Objective">{displayValue(selectedManifestTracking.objective)}</DetailRow>
+                        <DetailRow label="Optimization">{displayValue(selectedManifestTracking.optimizationGoal)}</DetailRow>
+                        <DetailRow label="Billing">{displayValue(selectedManifestTracking.billingEvent)}</DetailRow>
+                        <DetailRow label="Pixel / promoted object"><span className="break-all">{displayValue(selectedManifestTracking.promotedObject)}</span></DetailRow>
+                        <DetailRow label="Conversion">{displayValue(selectedManifestTracking.conversionEvent)}</DetailRow>
+                        <DetailRow label="Attribution">{displayValue(selectedManifestTracking.attributionSetting)}</DetailRow>
+                      </dl>
+                    </div>
+                    <div className="rounded-lg border p-3 text-sm">
+                      <p className="font-medium">Validation</p>
+                      <div className="mt-2 space-y-2 text-xs">
+                        {selectedManifestBlockers.length > 0 ? (
+                          <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-destructive">
+                            <p className="font-medium">Blockers</p>
+                            <ul className="mt-1 list-disc pl-4">
+                              {selectedManifestBlockers.map((issue, index) => (
+                                <li key={`${issue.code ?? "blocker"}-${index}`}>{issue.message ?? issue.code}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : <p className="text-emerald-700 dark:text-emerald-300">No blockers in this plan.</p>}
+                        {selectedManifestWarnings.length > 0 ? (
+                          <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
+                            <p className="font-medium">Warnings</p>
+                            <ul className="mt-1 list-disc pl-4">
+                              {selectedManifestWarnings.map((issue, index) => (
+                                <li key={`${issue.code ?? "warning"}-${index}`}>{issue.message ?? issue.code}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border p-3 text-sm">
+                    <p className="font-medium">Budget and identity</p>
+                    <dl className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                      <DetailRow label="Daily budget">{formatMinorUnits(selectedManifestBudget.dailyBudgetMinorUnits, selectedManifestBudget.currency)}</DetailRow>
+                      <DetailRow label="Currency">{displayValue(selectedManifestBudget.currency)}</DetailRow>
+                      <DetailRow label="Facebook Page"><code>{displayValue(selectedManifestIdentity.facebookPageId)}</code></DetailRow>
+                      <DetailRow label="Instagram actor"><code>{displayValue(selectedManifestIdentity.instagramActorId)}</code></DetailRow>
+                    </dl>
+                    <p className="mt-2 text-xs text-muted-foreground">Source budget and spend caps are not copied.</p>
+                  </div>
+                  <details className="rounded-lg border bg-muted/20">
+                    <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground">Technical manifest</summary>
+                    <pre className="max-h-[520px] overflow-auto border-t p-3 text-xs">
+                      {formatJson(selectedRun.data.run.manifest)}
+                    </pre>
+                  </details>
+                </>
+              ) : (
+                <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
+                  Generate a Launch Plan to inspect planned campaign, ad set, ads, tracking, identity, warnings, and blockers.
+                </div>
+              )}
             </div>
           </section>
           ) : null}
