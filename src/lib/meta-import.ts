@@ -804,13 +804,24 @@ export async function importMetaRows(input: {
     }
   }
 
-  const existingCampaignByMetaId = new Map<string, { id: string; name: string; metaId: string | null }>();
+  type ExistingCampaignRow = {
+    id: string;
+    name: string;
+    metaId: string | null;
+    accountId: string | null;
+  };
+  const existingCampaignByMetaId = new Map<string, ExistingCampaignRow>();
   const campaignMetaIds = [...campaignInfoMap.values()]
     .map((campaign) => campaign.metaId)
     .filter(Boolean) as string[];
   if (campaignMetaIds.length > 0) {
     const existingCampaignRows = await db
-      .select({ id: campaigns.id, name: campaigns.name, metaId: campaigns.metaId })
+      .select({
+        id: campaigns.id,
+        name: campaigns.name,
+        metaId: campaigns.metaId,
+        accountId: campaigns.accountId,
+      })
       .from(campaigns)
       .where(
         and(
@@ -826,10 +837,15 @@ export async function importMetaRows(input: {
   const campaignNamesWithoutMeta = [...campaignInfoMap.values()]
     .filter((campaign) => !campaign.metaId)
     .map((campaign) => campaign.name);
-  const existingCampaignByName = new Map<string, { id: string; name: string; metaId: string | null }>();
+  const existingCampaignByName = new Map<string, ExistingCampaignRow>();
   if (campaignNamesWithoutMeta.length > 0) {
     const existingCampaignRows = await db
-      .select({ id: campaigns.id, name: campaigns.name, metaId: campaigns.metaId })
+      .select({
+        id: campaigns.id,
+        name: campaigns.name,
+        metaId: campaigns.metaId,
+        accountId: campaigns.accountId,
+      })
       .from(campaigns)
       .where(
         and(
@@ -851,11 +867,14 @@ export async function importMetaRows(input: {
     if (existing) {
       campaignIdByKey.set(key, existing.id);
       const needsUpdate =
-        existing.name !== campaign.name || (campaign.metaId && existing.metaId !== campaign.metaId);
+        existing.name !== campaign.name ||
+        (campaign.metaId && existing.metaId !== campaign.metaId) ||
+        (knownAccountId && existing.accountId !== knownAccountId);
       if (needsUpdate) {
         await db.update(campaigns).set({
           name: campaign.name,
           ...(campaign.metaId ? { metaId: campaign.metaId } : {}),
+          ...(knownAccountId ? { accountId: knownAccountId } : {}),
         }).where(
           and(
             eq(campaigns.id, existing.id),
@@ -875,6 +894,7 @@ export async function importMetaRows(input: {
         batch.map((campaign) => ({
           name: campaign.name,
           metaId: campaign.metaId,
+          accountId: knownAccountId,
           organizationId: input.organizationId,
         })),
       ).returning({ id: campaigns.id, name: campaigns.name, metaId: campaigns.metaId });

@@ -43,7 +43,7 @@ import { buildLaunchpadCloneDryRun } from "@/lib/launchpad-clone-planner";
 import { buildLaunchpadPlannerOutput } from "@/lib/launchpad-planner";
 import {
   LaunchpadSourceTemplateError,
-  getLaunchpadSourceTemplate,
+  getApprovedLaunchpadSourceTemplateOrThrow,
   listApprovedLaunchpadSourceTemplates,
 } from "@/lib/launchpad-source-templates";
 import { ads } from "@/schema/ad";
@@ -1423,18 +1423,11 @@ export const launchpadRouter = router({
       return db.transaction(async (tx) => {
         const sourceTemplate = await (async () => {
           try {
-            const template = await getLaunchpadSourceTemplate(
+            return await getApprovedLaunchpadSourceTemplateOrThrow(
               tx,
               ctx.organizationId,
               input.sourceTemplateId,
             );
-            if (!template) {
-              throw new LaunchpadSourceTemplateError(
-                "SOURCE_TEMPLATE_NOT_FOUND",
-                "Launchpad source template does not exist in this organization",
-              );
-            }
-            return template;
           } catch (error) {
             asTrpcError(error);
           }

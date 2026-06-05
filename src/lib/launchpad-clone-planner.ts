@@ -76,9 +76,9 @@ export function buildLaunchpadCloneDryRun(input: LaunchpadClonePlannerInput) {
     sourceAdSetMetaId: input.sourceTemplate.sourceAdSet?.metaId ?? null,
     sourceAdSetName,
     budget: {
-      dailyBudget: input.sourceTemplate.sourceAdSet?.dailyBudget ?? null,
-      costCap: input.sourceTemplate.sourceAdSet?.costCap ?? null,
-      source: "source_ad_set",
+      dailyBudget: null,
+      costCap: null,
+      source: "explicit_budget_required",
     },
     targetingSummary: {
       targetingMethod: input.sourceTemplate.sourceAdSet?.targetingMethod ?? null,

@@ -277,7 +277,7 @@ function toPublicSourceTemplate(row: SourceTemplateRow) {
     approvedAt: row.approvedAt,
     lastValidatedAt: row.lastValidatedAt,
     expiresAt: row.expiresAt,
-    metadata: row.metadata,
+    metadata: {},
     account: row.accountId ? {
       id: row.accountId,
       name: row.accountName,

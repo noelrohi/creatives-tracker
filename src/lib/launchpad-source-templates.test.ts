@@ -154,6 +154,22 @@ describe("Launchpad source templates", () => {
     expect(JSON.stringify(template)).not.toContain("foreign-account");
   });
 
+  it("does not expose arbitrary source template metadata", async () => {
+    const reader = createReader([
+      sourceTemplateRow({
+        metadata: { note: "ok", accessToken: "secret-token" },
+      }),
+    ]);
+
+    const [template] = await listApprovedLaunchpadSourceTemplates(
+      reader.client as never,
+      "test-org-id",
+    );
+
+    expect(template?.metadata).toEqual({});
+    expect(JSON.stringify(template)).not.toContain("secret-token");
+  });
+
   it("uses joined org-owned Meta IDs and blocks raw template Meta ID mismatches", async () => {
     const reader = createReader([
       sourceTemplateRow({

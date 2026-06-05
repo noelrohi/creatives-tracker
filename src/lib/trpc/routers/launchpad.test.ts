@@ -1055,7 +1055,7 @@ describe("launchpad v2 clone dry-run", () => {
     expect(triggerMocks.trigger).not.toHaveBeenCalled();
   });
 
-  it("persists mismatched same-org template accounts as sanitized failed dry-runs", async () => {
+  it("rejects unready source templates before clone dry-run persistence", async () => {
     dbMocks.selectQueue = [
       [
         approvedSourceTemplateRow({
@@ -1063,22 +1063,19 @@ describe("launchpad v2 clone dry-run", () => {
           adSetAccountId: "foreign-account",
         }),
       ],
-      [staticCreative()],
-      [],
-      [],
     ];
-    dbMocks.insertReturningQueue = [[{ id: "clone-run-sanitized" }], [{ id: "clone-item-sanitized" }]];
     const adminCaller = createMockCaller({ role: "admin" });
 
     await expect(
       adminCaller.launchpad.createCloneDryRun(baseCreateCloneDryRunInput()),
-    ).resolves.toEqual({ id: "clone-run-sanitized" });
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("different ad account"),
+    });
 
-    const serialized = JSON.stringify(dbMocks.insertValues);
-    expect(serialized).toContain("SOURCE_TEMPLATE_CAMPAIGN_ACCOUNT_MISMATCH");
-    expect(serialized).toContain("SOURCE_TEMPLATE_AD_SET_ACCOUNT_MISMATCH");
-    expect(serialized).not.toContain("foreign-account");
-    expect(dbMocks.insertValues[0]).toMatchObject({ status: "failed" });
+    expect(JSON.stringify(dbMocks.insertValues)).not.toContain("foreign-account");
+    expect(dbMocks.insertValues).toEqual([]);
+    expect(triggerMocks.trigger).not.toHaveBeenCalled();
   });
 
   it("rejects clone dry-run idempotency replay with a different manifest", async () => {

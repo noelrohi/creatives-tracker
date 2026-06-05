@@ -1,9 +1,34 @@
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { eq, and, desc } from "drizzle-orm";
 import { router, orgProcedure, orgWriteProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
+import { adAccounts } from "@/schema/account";
 import { campaigns } from "@/schema/campaign";
+
+async function assertAccountBelongsToOrg(
+  accountId: string,
+  organizationId: string,
+) {
+  const [account] = await db
+    .select({ id: adAccounts.id })
+    .from(adAccounts)
+    .where(
+      and(
+        eq(adAccounts.id, accountId),
+        eq(adAccounts.organizationId, organizationId),
+      ),
+    )
+    .limit(1);
+
+  if (!account) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Ad account does not exist in this organization",
+    });
+  }
+}
 
 export const campaignRouter = router({
   list: orgProcedure.meta(openApiQueryMeta("campaign", "list")).query(async ({ ctx }) => {
@@ -33,13 +58,22 @@ export const campaignRouter = router({
 
   create: orgWriteProcedure
     .meta(openApiMutationMeta("campaign", "create"))
-    .input(z.object({ name: z.string().optional(), metaId: z.string().optional() }).optional())
+    .input(z.object({
+      name: z.string().optional(),
+      metaId: z.string().optional(),
+      accountId: z.string().optional(),
+    }).optional())
     .mutation(async ({ input, ctx }) => {
+      if (input?.accountId) {
+        await assertAccountBelongsToOrg(input.accountId, ctx.organizationId);
+      }
+
       const [campaign] = await db
         .insert(campaigns)
         .values({
           name: input?.name ?? "Untitled Campaign",
           metaId: input?.metaId,
+          accountId: input?.accountId,
           organizationId: ctx.organizationId,
         })
         .returning();
@@ -58,11 +92,16 @@ export const campaignRouter = router({
           .optional(),
         status: z.enum(["active", "paused", "archived"]).optional(),
         metaId: z.string().nullable().optional(),
+        accountId: z.string().nullable().optional(),
         notes: z.string().nullable().optional(),
       }),
     )
     .mutation(async ({ input, ctx }) => {
       const { id, ...data } = input;
+      if (data.accountId) {
+        await assertAccountBelongsToOrg(data.accountId, ctx.organizationId);
+      }
+
       const [campaign] = await db
         .update(campaigns)
         .set(data)
@@ -96,6 +135,7 @@ export const campaignRouter = router({
           name: `Copy of ${source.name}`,
           objective: source.objective,
           status: source.status,
+          accountId: source.accountId,
           notes: source.notes,
           organizationId: ctx.organizationId,
         })
@@ -110,12 +150,18 @@ export const campaignRouter = router({
         rows: z.array(
           z.object({
             name: z.string(),
+            accountId: z.string().optional(),
           }),
         ),
       }),
     )
     .mutation(async ({ input, ctx }) => {
       const results: { id: string; name: string }[] = [];
+      const accountIds = Array.from(new Set(input.rows.map((row) => row.accountId).filter((value): value is string => Boolean(value))));
+      for (const accountId of accountIds) {
+        await assertAccountBelongsToOrg(accountId, ctx.organizationId);
+      }
+
       for (const row of input.rows) {
         const [existing] = await db
           .select({ id: campaigns.id })
@@ -127,6 +173,17 @@ export const campaignRouter = router({
             ),
           );
         if (existing) {
+          if (row.accountId) {
+            await db
+              .update(campaigns)
+              .set({ accountId: row.accountId })
+              .where(
+                and(
+                  eq(campaigns.id, existing.id),
+                  eq(campaigns.organizationId, ctx.organizationId),
+                ),
+              );
+          }
           results.push({ id: existing.id, name: row.name });
           continue;
         }
@@ -134,6 +191,7 @@ export const campaignRouter = router({
           .insert(campaigns)
           .values({
             name: row.name,
+            accountId: row.accountId,
             organizationId: ctx.organizationId,
           })
           .returning();

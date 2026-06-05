@@ -75,7 +75,14 @@ describe("Launchpad clone dry-run planner", () => {
       launchMode: "clone_setup",
       requestedStatus: "PAUSED",
       plannedCampaign: { requestedStatus: "PAUSED" },
-      plannedAdSet: { requestedStatus: "PAUSED" },
+      plannedAdSet: {
+        requestedStatus: "PAUSED",
+        budget: {
+          dailyBudget: null,
+          costCap: null,
+          source: "explicit_budget_required",
+        },
+      },
       safety: {
         dryRunOnly: true,
         metaWritesAllowed: false,
