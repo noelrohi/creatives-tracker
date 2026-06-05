@@ -65,6 +65,11 @@ describe("Launchpad clone classifier", () => {
     expect(result.requiresCampaignClone).toBe(true);
     expect(result.requiresAdSetClone).toBe(true);
     expect(result.blockers).toEqual([]);
+    expect(result.copiedSettings.map((setting) => setting.key)).not.toContain("tracking");
+    expect(result.copiedSettings.map((setting) => setting.key)).not.toContain("budget_style");
+    expect(result.notCopiedSettings.map((setting) => setting.key)).toEqual(
+      expect.arrayContaining(["tracking", "budget"]),
+    );
   });
 
   it("blocks duplicate, unsupported, and missing-media creatives", () => {

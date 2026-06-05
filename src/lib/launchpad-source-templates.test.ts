@@ -210,4 +210,20 @@ describe("Launchpad source templates", () => {
     );
     expect(JSON.stringify(template)).not.toContain("other-campaign");
   });
+
+  it("redacts source budget fields from public template output", async () => {
+    const reader = createReader([
+      sourceTemplateRow({ adSetDailyBudget: "9999", adSetCostCap: "1234" }),
+    ]);
+
+    const [template] = await listApprovedLaunchpadSourceTemplates(
+      reader.client as never,
+      "test-org-id",
+    );
+
+    expect(template?.sourceAdSet?.dailyBudget).toBeNull();
+    expect(template?.sourceAdSet?.costCap).toBeNull();
+    expect(JSON.stringify(template)).not.toContain("9999");
+    expect(JSON.stringify(template)).not.toContain("1234");
+  });
 });

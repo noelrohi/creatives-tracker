@@ -1078,6 +1078,23 @@ describe("launchpad v2 clone dry-run", () => {
     expect(triggerMocks.trigger).not.toHaveBeenCalled();
   });
 
+  it("rejects warning-state source templates before clone dry-run persistence", async () => {
+    dbMocks.selectQueue = [
+      [approvedSourceTemplateRow({ lastValidatedAt: null })],
+    ];
+    const adminCaller = createMockCaller({ role: "admin" });
+
+    await expect(
+      adminCaller.launchpad.createCloneDryRun(baseCreateCloneDryRunInput()),
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("recently validated"),
+    });
+
+    expect(dbMocks.insertValues).toEqual([]);
+    expect(triggerMocks.trigger).not.toHaveBeenCalled();
+  });
+
   it("rejects clone dry-run idempotency replay with a different manifest", async () => {
     dbMocks.selectQueue = [
       [approvedSourceTemplateRow()],

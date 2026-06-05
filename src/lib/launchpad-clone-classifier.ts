@@ -118,15 +118,15 @@ export function classifyLaunchpadClone(
 
   const copiedSettings = [
     { key: "campaign_objective", label: "Campaign objective/type", source: "source campaign" },
-    { key: "budget_style", label: "Budget style", source: "source ad set" },
     { key: "audience", label: "Audience", source: "source ad set" },
     { key: "placements", label: "Placements", source: "source ad set" },
-    { key: "tracking", label: "Pixel/conversion tracking", source: "source ad set" },
     { key: "identity", label: "Facebook Page / Instagram identity", source: "ad account defaults" },
   ];
 
   const notCopiedSettings = [
     { key: "active_status", label: "Active status", reason: "Launchpad creates everything paused." },
+    { key: "budget", label: "Source budget and spend caps", reason: "Milestone 1 requires an explicit launch budget in the follow-up UI slice." },
+    { key: "tracking", label: "Pixel/conversion tracking", reason: "Fresh Meta tracking inspection is tracked in the follow-up M1 issue." },
     { key: "historical_performance", label: "Historical performance", reason: "Performance is not copied into new Meta objects." },
     { key: "learning", label: "Meta learning state", reason: "New campaigns/ad sets start fresh in Meta." },
   ];

@@ -299,8 +299,8 @@ function toPublicSourceTemplate(row: SourceTemplateRow) {
       metaId: row.adSetMetaId,
       status: row.adSetStatus,
       accountId: sameTemplateAccountId(row, row.adSetAccountId),
-      dailyBudget: row.adSetDailyBudget,
-      costCap: row.adSetCostCap,
+      dailyBudget: null,
+      costCap: null,
       targetingMethod: row.adSetTargetingMethod,
       geos: row.adSetGeos,
       placements: row.adSetPlacements,
@@ -449,10 +449,11 @@ export async function getApprovedLaunchpadSourceTemplateOrThrow(
     );
   }
 
-  if (template.readiness.blockers.length > 0) {
+  if (template.readiness.status !== "ready") {
+    const firstIssue = template.readiness.blockers[0] ?? template.readiness.warnings[0];
     throw new LaunchpadSourceTemplateError(
       "SOURCE_TEMPLATE_NOT_READY",
-      template.readiness.blockers[0]?.message ?? "Launchpad source template is not ready",
+      firstIssue?.message ?? "Launchpad source template is not ready",
     );
   }
 

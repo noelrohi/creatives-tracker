@@ -91,9 +91,11 @@ describe("Launchpad clone dry-run planner", () => {
     });
     expect(result.manifest.plannedAds).toHaveLength(2);
     expect(result.manifest.plannedAds.every((ad) => ad.requestedStatus === "PAUSED")).toBe(true);
+    expect(result.manifest.sourceSnapshot.adSet?.dailyBudget).toBeNull();
     expect(result.manifestHash).toHaveLength(64);
     expect(result.sourceTemplateHash).toHaveLength(64);
     expect(result.clonePlanHash).toHaveLength(64);
+    expect(JSON.stringify(result.manifest)).not.toContain('"50"');
   });
 
   it("keeps hashes stable for equivalent inputs and changes when launch details change", () => {

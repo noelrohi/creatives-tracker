@@ -161,6 +161,13 @@ export function buildLaunchpadCloneDryRun(input: LaunchpadClonePlannerInput) {
       ? "passed_with_warnings"
       : "passed";
 
+  const sourceAdSetSnapshot = input.sourceTemplate.sourceAdSet
+    ? {
+        ...input.sourceTemplate.sourceAdSet,
+        dailyBudget: null,
+        costCap: null,
+      }
+    : null;
   const sourceSnapshot = {
     template: {
       id: input.sourceTemplate.id,
@@ -172,7 +179,7 @@ export function buildLaunchpadCloneDryRun(input: LaunchpadClonePlannerInput) {
     },
     account: input.sourceTemplate.account,
     campaign: input.sourceTemplate.sourceCampaign,
-    adSet: input.sourceTemplate.sourceAdSet,
+    adSet: sourceAdSetSnapshot,
   };
   const clonePlan = {
     classification: classification.status,
