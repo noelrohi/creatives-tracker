@@ -163,6 +163,30 @@ describe("Launchpad clone dry-run planner", () => {
       "INVALID_CTA",
     );
 
+    const lowBudget = buildLaunchpadCloneDryRun(input({
+      launch: {
+        launchName: "Low Budget",
+        destinationUrl: "https://example.com/products?utm_source=meta&utm_medium=paid_social",
+        dailyBudgetMinorUnits: 50,
+      },
+    }));
+    expect(lowBudget.status).toBe("failed");
+    expect(lowBudget.manifest.validation.blockers.map((issue) => issue.code)).toContain(
+      "DAILY_BUDGET_BELOW_MINIMUM",
+    );
+
+    const highBudget = buildLaunchpadCloneDryRun(input({
+      launch: {
+        launchName: "High Budget",
+        destinationUrl: "https://example.com/products?utm_source=meta&utm_medium=paid_social",
+        dailyBudgetMinorUnits: 50000,
+      },
+    }));
+    expect(highBudget.status).toBe("validated");
+    expect(highBudget.manifest.validation.warnings.map((issue) => issue.code)).toContain(
+      "DAILY_BUDGET_HIGH_WARNING",
+    );
+
     const missingBudget = buildLaunchpadCloneDryRun(input({
       launch: {
         launchName: "No Budget",

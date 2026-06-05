@@ -133,6 +133,19 @@ function asIssueList(value: unknown): Array<{ code?: string; message?: string }>
   return Array.isArray(value) ? value.filter((item) => typeof item === "object" && item !== null) as Array<{ code?: string; message?: string }> : [];
 }
 
+function asSettingsList(value: unknown): Array<{ key?: string; label?: string; source?: string; reason?: string }> {
+  return Array.isArray(value) ? value.filter((item) => typeof item === "object" && item !== null) as Array<{ key?: string; label?: string; source?: string; reason?: string }> : [];
+}
+
+function formatMinorUnits(value: unknown, currency: unknown) {
+  if (typeof value !== "number") return "Explicit budget required";
+  const amount = value / 100;
+  const currencyCode = typeof currency === "string" && currency ? currency : undefined;
+  return currencyCode
+    ? new Intl.NumberFormat(undefined, { style: "currency", currency: currencyCode }).format(amount)
+    : `${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/day`;
+}
+
 function displayValue(value: unknown) {
   if (value === null || value === undefined || value === "") return "—";
   if (typeof value === "string" || typeof value === "number") return String(value);
@@ -1380,6 +1393,9 @@ export function LaunchpadPageClient() {
   const selectedManifestTracking = asRecord(selectedManifest.tracking);
   const selectedManifestValidation = asRecord(selectedManifest.validation);
   const selectedManifestBudget = asRecord(selectedManifest.budget);
+  const selectedManifestIdentity = asRecord(selectedManifest.identity);
+  const selectedManifestCopiedSettings = asSettingsList(selectedManifest.copiedSettings);
+  const selectedManifestNotCopiedSettings = asSettingsList(selectedManifest.notCopiedSettings);
   const selectedManifestBlockers = asIssueList(selectedManifestValidation.blockers);
   const selectedManifestWarnings = asIssueList(selectedManifestValidation.warnings);
 
@@ -2175,7 +2191,7 @@ export function LaunchpadPageClient() {
                     </div>
                     <div className="rounded-lg border bg-muted/25 p-3 text-sm">
                       <p className="text-xs uppercase tracking-wide text-muted-foreground">Budget</p>
-                      <p className="font-medium">{dailyBudget ? `$${dailyBudget}/day` : "Explicit budget required"}</p>
+                      <p className="font-medium">{formatMinorUnits(selectedManifestBudget.dailyBudgetMinorUnits, selectedManifestBudget.currency)}</p>
                     </div>
                     <div className="rounded-lg border bg-muted/25 p-3 text-sm">
                       <p className="text-xs uppercase tracking-wide text-muted-foreground">Safety</p>
@@ -2184,12 +2200,20 @@ export function LaunchpadPageClient() {
                   </div>
                   <div className="grid gap-3 md:grid-cols-2">
                     <div className="rounded-lg border p-3 text-sm">
-                      <p className="font-medium">What will be planned</p>
-                      <p className="mt-1 text-muted-foreground">A new paused campaign, one paused ad set cloned from the approved source setup, and one paused ad per selected creative.</p>
+                      <p className="font-medium">What will be cloned</p>
+                      <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+                        {selectedManifestCopiedSettings.map((setting) => (
+                          <li key={setting.key ?? setting.label}>{setting.label ?? setting.key} <span className="text-muted-foreground/80">from {setting.source ?? "source setup"}</span></li>
+                        ))}
+                      </ul>
                     </div>
                     <div className="rounded-lg border p-3 text-sm">
                       <p className="font-medium">What will not be copied</p>
-                      <p className="mt-1 text-muted-foreground">Source budget, spend caps, active status, historical performance, and learning state are not copied.</p>
+                      <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+                        {selectedManifestNotCopiedSettings.map((setting) => (
+                          <li key={setting.key ?? setting.label}>{setting.label ?? setting.key}: {setting.reason ?? "Not copied"}</li>
+                        ))}
+                      </ul>
                     </div>
                     <div className="rounded-lg border p-3 text-sm">
                       <p className="font-medium">Tracking</p>
@@ -2199,6 +2223,7 @@ export function LaunchpadPageClient() {
                         <DetailRow label="Objective">{displayValue(selectedManifestTracking.objective)}</DetailRow>
                         <DetailRow label="Optimization">{displayValue(selectedManifestTracking.optimizationGoal)}</DetailRow>
                         <DetailRow label="Billing">{displayValue(selectedManifestTracking.billingEvent)}</DetailRow>
+                        <DetailRow label="Pixel / promoted object"><span className="break-all">{displayValue(selectedManifestTracking.promotedObject)}</span></DetailRow>
                         <DetailRow label="Conversion">{displayValue(selectedManifestTracking.conversionEvent)}</DetailRow>
                         <DetailRow label="Attribution">{displayValue(selectedManifestTracking.attributionSetting)}</DetailRow>
                       </dl>
@@ -2230,10 +2255,14 @@ export function LaunchpadPageClient() {
                     </div>
                   </div>
                   <div className="rounded-lg border p-3 text-sm">
-                    <p className="font-medium">Budget guardrails</p>
-                    <p className="mt-1 text-muted-foreground">
-                      Daily budget: {displayValue(selectedManifestBudget.dailyBudgetMinorUnits)} minor units. Source budget and spend caps are not copied.
-                    </p>
+                    <p className="font-medium">Budget and identity</p>
+                    <dl className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                      <DetailRow label="Daily budget">{formatMinorUnits(selectedManifestBudget.dailyBudgetMinorUnits, selectedManifestBudget.currency)}</DetailRow>
+                      <DetailRow label="Currency">{displayValue(selectedManifestBudget.currency)}</DetailRow>
+                      <DetailRow label="Facebook Page"><code>{displayValue(selectedManifestIdentity.facebookPageId)}</code></DetailRow>
+                      <DetailRow label="Instagram actor"><code>{displayValue(selectedManifestIdentity.instagramActorId)}</code></DetailRow>
+                    </dl>
+                    <p className="mt-2 text-xs text-muted-foreground">Source budget and spend caps are not copied.</p>
                   </div>
                   <details className="rounded-lg border bg-muted/20">
                     <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground">Technical manifest</summary>
