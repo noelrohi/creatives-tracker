@@ -27,11 +27,24 @@ export function normalizeLaunchpadUrlText(value: string | null | undefined) {
   return trimmed ? trimmed : null;
 }
 
+function normalizeRequiredUtms(parsed: URL, requiredUtmParameters: readonly string[]) {
+  const defaults: Record<string, string> = {
+    utm_source: "meta",
+    utm_medium: "paid_social",
+  };
+
+  for (const param of requiredUtmParameters) {
+    const value = normalizeLaunchpadUrlText(parsed.searchParams.get(param));
+    if (!value) parsed.searchParams.set(param, defaults[param] ?? "adsolute");
+  }
+}
+
 export function parseLaunchpadUrlPreview(input: {
   defaultUrl?: string | null;
   overrideUrl?: string | null;
   field?: string;
   requiredUtmParameters?: readonly string[];
+  normalizeMissingUtms?: boolean;
 }): LaunchpadUrlPreviewResult {
   const defaultUrl = normalizeLaunchpadUrlText(input.defaultUrl);
   const overrideUrl = normalizeLaunchpadUrlText(input.overrideUrl);
@@ -74,6 +87,14 @@ export function parseLaunchpadUrlPreview(input: {
     return { preview, issues };
   }
 
+  const missingBeforeNormalization = requiredUtmParameters.filter(
+    (param) => !normalizeLaunchpadUrlText(parsed.searchParams.get(param)),
+  );
+  if (input.normalizeMissingUtms) {
+    normalizeRequiredUtms(parsed, requiredUtmParameters);
+  }
+
+  preview.finalUrl = parsed.toString();
   preview.protocol = parsed.protocol;
   preview.isHttps = parsed.protocol === "https:";
   preview.utmParameters = Object.fromEntries(
@@ -92,15 +113,20 @@ export function parseLaunchpadUrlPreview(input: {
     });
   }
 
-  if (preview.missingRequiredUtmParameters.length > 0) {
+  if (missingBeforeNormalization.length > 0) {
     issues.push({
-      code: "MISSING_REQUIRED_UTM_PARAMETERS",
-      message: "Destination URL is missing required UTM parameters",
+      code: input.normalizeMissingUtms
+        ? "REQUIRED_UTM_PARAMETERS_NORMALIZED"
+        : "MISSING_REQUIRED_UTM_PARAMETERS",
+      message: input.normalizeMissingUtms
+        ? "Missing required UTM parameters were appended automatically"
+        : "Destination URL is missing required UTM parameters",
       field,
       details: {
         destinationUrl: finalUrl,
+        finalUrl: preview.finalUrl,
         requiredUtmParameters,
-        missingRequiredUtmParameters: preview.missingRequiredUtmParameters,
+        missingRequiredUtmParameters: missingBeforeNormalization,
       },
     });
   }

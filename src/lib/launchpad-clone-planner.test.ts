@@ -52,6 +52,7 @@ function input(overrides: Partial<LaunchpadClonePlannerInput> = {}): LaunchpadCl
     launch: {
       launchName: "June Hook Test",
       destinationUrl: "https://example.com/products?utm_source=meta&utm_medium=paid_social",
+      dailyBudgetMinorUnits: 5000,
       defaultPrimaryText: "Try the new hook.",
       defaultHeadline: "New drop",
       defaultCta: "SHOP_NOW",
@@ -78,9 +79,11 @@ describe("Launchpad clone dry-run planner", () => {
       plannedAdSet: {
         requestedStatus: "PAUSED",
         budget: {
-          dailyBudget: null,
-          costCap: null,
-          source: "explicit_budget_required",
+          dailyBudgetMinorUnits: 5000,
+          currency: null,
+          source: "user_input",
+          sourceDailyBudgetCopied: false,
+          sourceSpendCapCopied: false,
         },
       },
       safety: {
@@ -105,6 +108,7 @@ describe("Launchpad clone dry-run planner", () => {
       launch: {
         launchName: "Different Test",
         destinationUrl: "https://example.com/products?utm_source=meta&utm_medium=paid_social",
+        dailyBudgetMinorUnits: 5000,
       },
     }));
 
@@ -112,24 +116,28 @@ describe("Launchpad clone dry-run planner", () => {
     expect(changed.manifestHash).not.toBe(first.manifestHash);
   });
 
-  it("keeps missing UTMs as warnings but blocks invalid URLs and CTAs", () => {
+  it("normalizes missing UTMs as warnings but blocks invalid URLs, CTAs, and missing budget", () => {
     const missingUtm = buildLaunchpadCloneDryRun(input({
-      launch: { launchName: "Missing UTM", destinationUrl: "https://example.com/products" },
+      launch: { launchName: "Missing UTM", destinationUrl: "https://example.com/products", dailyBudgetMinorUnits: 5000 },
     }));
     const invalid = buildLaunchpadCloneDryRun(input({
-      launch: { launchName: "Bad URL", destinationUrl: "http://example.com/products" },
+      launch: { launchName: "Bad URL", destinationUrl: "http://example.com/products", dailyBudgetMinorUnits: 5000 },
     }));
     const invalidCta = buildLaunchpadCloneDryRun(input({
       launch: {
         launchName: "Bad CTA",
         destinationUrl: "https://example.com/products?utm_source=meta&utm_medium=paid_social",
+        dailyBudgetMinorUnits: 5000,
         defaultCta: "NOT_A_CTA",
       },
     }));
 
     expect(missingUtm.status).toBe("validated");
     expect(missingUtm.manifest.validation.warnings.map((issue) => issue.code)).toContain(
-      "MISSING_REQUIRED_UTM_PARAMETERS",
+      "REQUIRED_UTM_PARAMETERS_NORMALIZED",
+    );
+    expect(missingUtm.manifest.tracking.finalUrl).toBe(
+      "https://example.com/products?utm_source=meta&utm_medium=paid_social",
     );
     expect(invalid.status).toBe("failed");
     expect(invalid.manifest.validation.blockers.map((issue) => issue.code)).toContain(
@@ -138,6 +146,17 @@ describe("Launchpad clone dry-run planner", () => {
     expect(invalidCta.status).toBe("failed");
     expect(invalidCta.manifest.validation.blockers.map((issue) => issue.code)).toContain(
       "INVALID_CTA",
+    );
+
+    const missingBudget = buildLaunchpadCloneDryRun(input({
+      launch: {
+        launchName: "No Budget",
+        destinationUrl: "https://example.com/products?utm_source=meta&utm_medium=paid_social",
+      },
+    }));
+    expect(missingBudget.status).toBe("failed");
+    expect(missingBudget.manifest.validation.blockers.map((issue) => issue.code)).toContain(
+      "DAILY_BUDGET_REQUIRED",
     );
   });
 });

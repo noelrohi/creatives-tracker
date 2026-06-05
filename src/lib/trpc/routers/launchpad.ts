@@ -109,6 +109,7 @@ const createCloneDryRunInputSchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(160).optional(),
   sourceTemplateId: z.string().trim().min(1),
   launchName: z.string().trim().min(1),
+  dailyBudgetMinorUnits: z.number().int().positive(),
   destinationUrl: z.string().trim().min(1),
   defaultPrimaryText: z.string().optional(),
   defaultHeadline: z.string().optional(),
@@ -1449,6 +1450,7 @@ export const launchpadRouter = router({
           launch: {
             launchName: input.launchName,
             destinationUrl: input.destinationUrl,
+            dailyBudgetMinorUnits: input.dailyBudgetMinorUnits,
             defaultPrimaryText: input.defaultPrimaryText,
             defaultHeadline: input.defaultHeadline,
             defaultCta: input.defaultCta,

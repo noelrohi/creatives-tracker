@@ -282,6 +282,7 @@ type CreateCloneDryRunTestInput = {
   sourceTemplateId: string;
   launchName: string;
   destinationUrl: string;
+  dailyBudgetMinorUnits: number;
   defaultPrimaryText?: string;
   defaultHeadline?: string;
   defaultCta?: MetaCallToAction;
@@ -297,6 +298,7 @@ function baseCreateCloneDryRunInput(
     launchName: "Router Clone Launch",
     destinationUrl:
       "https://example.com/clone?utm_source=meta&utm_medium=paid_social",
+    dailyBudgetMinorUnits: 5000,
     defaultPrimaryText: "Router clone primary text",
     defaultHeadline: "Router clone headline",
     defaultCta: "LEARN_MORE",

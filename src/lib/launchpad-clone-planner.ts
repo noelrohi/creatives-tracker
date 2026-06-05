@@ -16,6 +16,7 @@ export type LaunchpadClonePlannerInput = {
   launch: {
     launchName: string;
     destinationUrl: string;
+    dailyBudgetMinorUnits?: number | null;
     defaultPrimaryText?: string | null;
     defaultHeadline?: string | null;
     defaultCta?: string | null;
@@ -43,8 +44,20 @@ function resolveCta(value: string | null | undefined): MetaCallToAction {
   return normalized;
 }
 
+function hostnameFromUrl(value: string | null | undefined) {
+  if (!value) return null;
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return null;
+  }
+}
+
 export function buildLaunchpadCloneDryRun(input: LaunchpadClonePlannerInput) {
-  const url = parseLaunchpadUrlPreview({ defaultUrl: input.launch.destinationUrl });
+  const url = parseLaunchpadUrlPreview({
+    defaultUrl: input.launch.destinationUrl,
+    normalizeMissingUtms: true,
+  });
   const classification = classifyLaunchpadClone({
     sourceTemplate: input.sourceTemplate,
     creatives: input.creatives,
@@ -76,9 +89,11 @@ export function buildLaunchpadCloneDryRun(input: LaunchpadClonePlannerInput) {
     sourceAdSetMetaId: input.sourceTemplate.sourceAdSet?.metaId ?? null,
     sourceAdSetName,
     budget: {
-      dailyBudget: null,
-      costCap: null,
-      source: "explicit_budget_required",
+      dailyBudgetMinorUnits: input.launch.dailyBudgetMinorUnits ?? null,
+      currency: null,
+      source: "user_input",
+      sourceDailyBudgetCopied: false,
+      sourceSpendCapCopied: false,
     },
     targetingSummary: {
       targetingMethod: input.sourceTemplate.sourceAdSet?.targetingMethod ?? null,
@@ -131,11 +146,11 @@ export function buildLaunchpadCloneDryRun(input: LaunchpadClonePlannerInput) {
 
   const blockers = [
     ...classification.blockers,
-    ...url.issues.filter((issue) => issue.code !== "MISSING_REQUIRED_UTM_PARAMETERS"),
+    ...url.issues.filter((issue) => issue.code === "INVALID_DESTINATION_URL"),
   ];
   const warnings = [
     ...classification.warnings,
-    ...url.issues.filter((issue) => issue.code === "MISSING_REQUIRED_UTM_PARAMETERS"),
+    ...url.issues.filter((issue) => issue.code !== "INVALID_DESTINATION_URL"),
   ];
 
   if (!normalizedText(input.launch.launchName)) {
@@ -143,6 +158,14 @@ export function buildLaunchpadCloneDryRun(input: LaunchpadClonePlannerInput) {
       code: "LAUNCH_NAME_REQUIRED",
       message: "Enter a launch name so the planned Meta objects are easy to find.",
       field: "launchName",
+    });
+  }
+
+  if (!input.launch.dailyBudgetMinorUnits || input.launch.dailyBudgetMinorUnits <= 0) {
+    blockers.push({
+      code: "DAILY_BUDGET_REQUIRED",
+      message: "Enter an explicit daily budget. Launchpad never copies source budget or spend caps.",
+      field: "dailyBudgetMinorUnits",
     });
   }
 
@@ -166,6 +189,7 @@ export function buildLaunchpadCloneDryRun(input: LaunchpadClonePlannerInput) {
         ...input.sourceTemplate.sourceAdSet,
         dailyBudget: null,
         costCap: null,
+        spendCap: null,
       }
     : null;
   const sourceSnapshot = {
@@ -206,10 +230,12 @@ export function buildLaunchpadCloneDryRun(input: LaunchpadClonePlannerInput) {
     budget: plannedAdSet.budget,
     tracking: {
       finalUrl: url.preview.finalUrl,
+      destinationDomain: hostnameFromUrl(url.preview.finalUrl),
       utmSummary: {
         required: url.preview.requiredUtmParameters,
         present: Object.keys(url.preview.utmParameters),
         missing: url.preview.missingRequiredUtmParameters,
+        normalized: warnings.some((issue) => issue.code === "REQUIRED_UTM_PARAMETERS_NORMALIZED"),
       },
     },
     identity: {
