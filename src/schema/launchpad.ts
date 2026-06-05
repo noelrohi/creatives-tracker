@@ -16,11 +16,13 @@ import {
   launchpadPrincipalTypes,
   launchpadReconciliationStatuses,
   launchpadRunStatuses,
+  launchpadSourceTemplateStatuses,
 } from "../lib/launchpad-constants";
 import { adAccounts } from "./account";
 import { ads } from "./ad";
 import { adCreatives } from "./ad-creative";
 import { adSets } from "./ad-set";
+import { campaigns } from "./campaign";
 
 export const launchpadRunStatusEnum = pgEnum(
   "launchpad_run_status",
@@ -45,6 +47,64 @@ export const launchpadReconciliationStatusEnum = pgEnum(
 export const launchpadPrincipalTypeEnum = pgEnum(
   "launchpad_principal_type",
   launchpadPrincipalTypes,
+);
+
+export const launchpadSourceTemplateStatusEnum = pgEnum(
+  "launchpad_source_template_status",
+  launchpadSourceTemplateStatuses,
+);
+
+export const launchpadSourceTemplates = pgTable(
+  "launchpad_source_template",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    organizationId: text("organization_id").notNull(),
+    accountId: text("account_id").references(() => adAccounts.id, {
+      onDelete: "set null",
+    }),
+    sourceCampaignId: text("source_campaign_id").references(() => campaigns.id, {
+      onDelete: "set null",
+    }),
+    sourceCampaignMetaId: text("source_campaign_meta_id").notNull(),
+    sourceAdSetId: text("source_ad_set_id").references(() => adSets.id, {
+      onDelete: "set null",
+    }),
+    sourceAdSetMetaId: text("source_ad_set_meta_id").notNull(),
+    label: text("label").notNull(),
+    notes: text("notes"),
+    status: launchpadSourceTemplateStatusEnum("status")
+      .notNull()
+      .default("needs_review"),
+    approvedByUserId: text("approved_by_user_id"),
+    approvedAt: timestamp("approved_at"),
+    lastValidatedAt: timestamp("last_validated_at"),
+    expiresAt: timestamp("expires_at"),
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("launchpad_source_template_org_status_idx").on(
+      table.organizationId,
+      table.status,
+    ),
+    index("launchpad_source_template_account_idx").on(table.accountId),
+    index("launchpad_source_template_source_campaign_idx").on(
+      table.sourceCampaignId,
+    ),
+    index("launchpad_source_template_source_ad_set_idx").on(
+      table.sourceAdSetId,
+    ),
+    index("launchpad_source_template_expires_at_idx").on(table.expiresAt),
+  ],
 );
 
 export const launchpadPublishRuns = pgTable(
@@ -239,6 +299,24 @@ export const launchpadPublishItems = pgTable(
       table.dedupeKey,
     ),
   ],
+);
+
+export const launchpadSourceTemplateRelations = relations(
+  launchpadSourceTemplates,
+  ({ one }) => ({
+    account: one(adAccounts, {
+      fields: [launchpadSourceTemplates.accountId],
+      references: [adAccounts.id],
+    }),
+    sourceCampaign: one(campaigns, {
+      fields: [launchpadSourceTemplates.sourceCampaignId],
+      references: [campaigns.id],
+    }),
+    sourceAdSet: one(adSets, {
+      fields: [launchpadSourceTemplates.sourceAdSetId],
+      references: [adSets.id],
+    }),
+  }),
 );
 
 export const launchpadPublishRunRelations = relations(

@@ -70,6 +70,15 @@ export const launchpadPrincipalTypes = [
 
 export type LaunchpadPrincipalType = (typeof launchpadPrincipalTypes)[number];
 
+export const launchpadSourceTemplateStatuses = [
+  "approved",
+  "disabled",
+  "needs_review",
+] as const;
+
+export type LaunchpadSourceTemplateStatus =
+  (typeof launchpadSourceTemplateStatuses)[number];
+
 export const metaCtaValues = [
   "SHOP_NOW",
   "LEARN_MORE",
