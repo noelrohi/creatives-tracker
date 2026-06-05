@@ -1,6 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { classifyLaunchpadClone } from "@/lib/launchpad-clone-classifier";
+import type { LaunchpadFreshSourceInspection } from "@/lib/launchpad-meta-source-inspection";
 import type { LaunchpadSourceTemplate } from "@/lib/launchpad-source-templates";
+
+function inspection(overrides: Partial<LaunchpadFreshSourceInspection> = {}): LaunchpadFreshSourceInspection {
+  return {
+    status: "available",
+    inspectedAt: "2026-01-01T00:00:00.000Z",
+    isFresh: true,
+    campaign: { objective: "OUTCOME_SALES", buying_type: "AUCTION" },
+    adSet: {
+      optimization_goal: "OFFSITE_CONVERSIONS",
+      billing_event: "IMPRESSIONS",
+      promoted_object: { pixel_id: "pixel-1", custom_event_type: "PURCHASE" },
+    },
+    blockers: [],
+    warnings: [],
+    ...overrides,
+  };
+}
 
 function template(overrides: Partial<LaunchpadSourceTemplate> = {}): LaunchpadSourceTemplate {
   return {
@@ -59,6 +77,7 @@ describe("Launchpad clone classifier", () => {
       sourceTemplate: template(),
       creatives: [{ id: "creative-1", name: "Static", format: "static", assetUrl: "https://cdn.example.com/a.png" }],
       requestedStatus: "PAUSED",
+      sourceInspection: inspection(),
     });
 
     expect(result.status).toBe("eligible_with_warning");
@@ -68,7 +87,7 @@ describe("Launchpad clone classifier", () => {
     expect(result.copiedSettings.map((setting) => setting.key)).not.toContain("tracking");
     expect(result.copiedSettings.map((setting) => setting.key)).not.toContain("budget_style");
     expect(result.notCopiedSettings.map((setting) => setting.key)).toEqual(
-      expect.arrayContaining(["tracking", "budget"]),
+      expect.arrayContaining(["budget"]),
     );
   });
 
@@ -81,6 +100,7 @@ describe("Launchpad clone classifier", () => {
         { id: "creative-2", name: "Carousel", format: "carousel", assetUrl: "https://cdn.example.com/a.png" },
       ],
       requestedStatus: "ACTIVE",
+      sourceInspection: inspection(),
     });
 
     expect(result.status).toBe("blocked");

@@ -2,6 +2,7 @@ import { PAUSED_META_STATUS, DEFAULT_META_CTA, metaCtaValues, type MetaCallToAct
 import { classifyLaunchpadClone, type LaunchpadCloneCreativeInput } from "@/lib/launchpad-clone-classifier";
 import { hashLaunchpadPayload, type LaunchpadOrgRole } from "@/lib/launchpad-ledger";
 import type { LaunchpadPrincipalType } from "@/lib/launchpad-constants";
+import type { LaunchpadFreshSourceInspection } from "@/lib/launchpad-meta-source-inspection";
 import type { LaunchpadSourceTemplate } from "@/lib/launchpad-source-templates";
 import { parseLaunchpadUrlPreview } from "@/lib/launchpad-url";
 
@@ -13,6 +14,7 @@ export type LaunchpadClonePlannerInput = {
     orgRole: LaunchpadOrgRole;
   };
   sourceTemplate: LaunchpadSourceTemplate;
+  sourceInspection?: LaunchpadFreshSourceInspection | null;
   launch: {
     launchName: string;
     destinationUrl: string;
@@ -63,6 +65,7 @@ export function buildLaunchpadCloneDryRun(input: LaunchpadClonePlannerInput) {
     creatives: input.creatives,
     destinationUrl: input.launch.destinationUrl,
     requestedStatus: PAUSED_META_STATUS,
+    sourceInspection: input.sourceInspection,
   });
 
   const launchName = sanitizeNamePart(input.launch.launchName);
@@ -204,6 +207,15 @@ export function buildLaunchpadCloneDryRun(input: LaunchpadClonePlannerInput) {
     account: input.sourceTemplate.account,
     campaign: input.sourceTemplate.sourceCampaign,
     adSet: sourceAdSetSnapshot,
+    freshMetaInspection: input.sourceInspection
+      ? {
+          status: input.sourceInspection.status,
+          inspectedAt: input.sourceInspection.inspectedAt,
+          isFresh: input.sourceInspection.isFresh,
+          campaign: input.sourceInspection.campaign,
+          adSet: input.sourceInspection.adSet,
+        }
+      : null,
   };
   const clonePlan = {
     classification: classification.status,
@@ -229,6 +241,15 @@ export function buildLaunchpadCloneDryRun(input: LaunchpadClonePlannerInput) {
     notCopiedSettings: classification.notCopiedSettings,
     budget: plannedAdSet.budget,
     tracking: {
+      objective: input.sourceInspection?.campaign?.objective ?? null,
+      optimizationGoal: input.sourceInspection?.adSet?.optimization_goal ?? null,
+      billingEvent: input.sourceInspection?.adSet?.billing_event ?? null,
+      promotedObject: input.sourceInspection?.adSet?.promoted_object ?? null,
+      conversionEvent: typeof input.sourceInspection?.adSet?.promoted_object === "object" && input.sourceInspection.adSet.promoted_object
+        ? (input.sourceInspection.adSet.promoted_object as Record<string, unknown>).custom_event_type ?? null
+        : null,
+      attributionSetting: input.sourceInspection?.adSet?.attribution_setting ?? null,
+      attributionSpec: input.sourceInspection?.adSet?.attribution_spec ?? null,
       finalUrl: url.preview.finalUrl,
       destinationDomain: hostnameFromUrl(url.preview.finalUrl),
       utmSummary: {

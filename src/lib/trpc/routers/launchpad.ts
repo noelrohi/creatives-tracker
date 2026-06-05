@@ -40,6 +40,7 @@ import {
   uploadMetaVideoByUrl,
 } from "@/lib/launchpad-meta-publish";
 import { buildLaunchpadCloneDryRun } from "@/lib/launchpad-clone-planner";
+import { inspectLaunchpadMetaSource } from "@/lib/launchpad-meta-source-inspection";
 import { buildLaunchpadPlannerOutput } from "@/lib/launchpad-planner";
 import {
   LaunchpadSourceTemplateError,
@@ -1434,6 +1435,25 @@ export const launchpadRouter = router({
           }
         })();
 
+        const accountTokenRow = sourceTemplate.account?.id && process.env.NODE_ENV !== "test"
+          ? await tx
+              .select({ metaAccessToken: adAccounts.metaAccessToken })
+              .from(adAccounts)
+              .where(
+                and(
+                  eq(adAccounts.id, sourceTemplate.account.id),
+                  eq(adAccounts.organizationId, ctx.organizationId),
+                ),
+              )
+              .limit(1)
+              .then((rows) => rows[0] ?? null)
+          : null;
+        const sourceInspection = await inspectLaunchpadMetaSource({
+          accessToken: accountTokenRow?.metaAccessToken,
+          sourceCampaignMetaId: sourceTemplate.sourceCampaign?.metaId,
+          sourceAdSetMetaId: sourceTemplate.sourceAdSet?.metaId,
+        });
+
         const creatives = [];
         for (const creativeId of input.creativeIds) {
           creatives.push(await loadSingleLaunchpadCreative(tx, ctx.organizationId, creativeId));
@@ -1447,6 +1467,7 @@ export const launchpadRouter = router({
             orgRole: ctx.orgRole,
           },
           sourceTemplate,
+          sourceInspection,
           launch: {
             launchName: input.launchName,
             destinationUrl: input.destinationUrl,

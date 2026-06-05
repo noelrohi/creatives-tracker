@@ -6,6 +6,21 @@ function input(overrides: Partial<LaunchpadClonePlannerInput> = {}): LaunchpadCl
   return {
     organizationId: "org-1",
     requestedBy: { userId: "user-1", principalType: "session", orgRole: "admin" },
+    sourceInspection: {
+      status: "available",
+      inspectedAt: "2026-01-01T00:00:00.000Z",
+      isFresh: true,
+      campaign: { id: "cmp_1", objective: "OUTCOME_SALES", buying_type: "AUCTION" },
+      adSet: {
+        id: "as_1",
+        optimization_goal: "OFFSITE_CONVERSIONS",
+        billing_event: "IMPRESSIONS",
+        promoted_object: { pixel_id: "pixel-1", custom_event_type: "PURCHASE" },
+        attribution_setting: "7d_click",
+      },
+      blockers: [],
+      warnings: [],
+    },
     sourceTemplate: {
       id: "template-1",
       organizationId: "org-1",

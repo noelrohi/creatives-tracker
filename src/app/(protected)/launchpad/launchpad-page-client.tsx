@@ -1695,7 +1695,7 @@ export function LaunchpadPageClient() {
               <div>
                 <div className="flex items-center gap-2">
                   <Target className="size-4 text-primary" />
-                  <h2 className="text-sm font-semibold">Publishing destination</h2>
+                  <h2 className="text-sm font-semibold">Source setup</h2>
                 </div>
               </div>
               {destinationContext.data ? (
@@ -1744,7 +1744,7 @@ export function LaunchpadPageClient() {
                   </div>
                 ) : null}
               </div>
-              <div className="grid gap-4 lg:grid-cols-[0.8fr_0.8fr_1.4fr]">
+              <div className="hidden">
               <div className="space-y-2">
                 <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   Account
@@ -2161,9 +2161,30 @@ export function LaunchpadPageClient() {
                       <p className="font-medium">Paused plan · dry-run only</p>
                     </div>
                   </div>
-                  <pre className="max-h-[520px] overflow-auto rounded-lg border bg-muted/30 p-3 text-xs">
-                    {formatJson(selectedRun.data.run.manifest)}
-                  </pre>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="rounded-lg border p-3 text-sm">
+                      <p className="font-medium">What will be planned</p>
+                      <p className="mt-1 text-muted-foreground">A new paused campaign, one paused ad set cloned from the approved source setup, and one paused ad per selected creative.</p>
+                    </div>
+                    <div className="rounded-lg border p-3 text-sm">
+                      <p className="font-medium">What will not be copied</p>
+                      <p className="mt-1 text-muted-foreground">Source budget, spend caps, active status, historical performance, and learning state are not copied.</p>
+                    </div>
+                    <div className="rounded-lg border p-3 text-sm">
+                      <p className="font-medium">Tracking</p>
+                      <p className="mt-1 break-all text-muted-foreground">Final URL and UTMs are shown in the plan. Missing required UTMs are appended automatically.</p>
+                    </div>
+                    <div className="rounded-lg border p-3 text-sm">
+                      <p className="font-medium">Identity and source inspection</p>
+                      <p className="mt-1 text-muted-foreground">The manifest freezes account defaults plus fresh Meta objective, optimization, billing, promoted object, and attribution fields when available.</p>
+                    </div>
+                  </div>
+                  <details className="rounded-lg border bg-muted/20">
+                    <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground">Technical manifest</summary>
+                    <pre className="max-h-[520px] overflow-auto border-t p-3 text-xs">
+                      {formatJson(selectedRun.data.run.manifest)}
+                    </pre>
+                  </details>
                 </>
               ) : (
                 <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
