@@ -123,24 +123,26 @@ export default function DashboardPage() {
     }),
   );
 
-  const dailyPerf = useQuery(
-    trpc.adCreative.getDailyPortfolioPerformance.queryOptions({
+  const dailyPerf = useQuery({
+    ...trpc.adCreative.getDailyPortfolioPerformance.queryOptions({
       from: fromValue,
       to: toValue,
       accountId: selectedAccountId,
       teamId: selectedTeamId,
     }),
-  );
+    enabled: tab === "charts",
+  });
 
-  const demographic = useQuery(
-    trpc.performanceLog.demographicBreakdown.queryOptions({
+  const demographic = useQuery({
+    ...trpc.performanceLog.demographicBreakdown.queryOptions({
       dimension: dimension as "age" | "gender" | "country" | "device",
       from: fromValue,
       to: toValue,
       accountId: selectedAccountId,
       teamId: selectedTeamId,
     }),
-  );
+    enabled: tab === "demographics",
+  });
 
   const portfolio = stats.data?.portfolio;
   const topPerformers = stats.data?.topPerformers ?? [];

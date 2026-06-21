@@ -609,6 +609,13 @@ export default function CreativesPage() {
   const teamsQuery = useQuery(trpc.team.list.queryOptions());
   const metaAccountId = accountsQuery.data?.find((a) => a.id === accountId)?.metaAccountId
     ?? accountsQuery.data?.[0]?.metaAccountId ?? "";
+  const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>({
+    angle: false,
+    awarenessLevel: false,
+    format: false,
+    health: false,
+    avgCpa: false,
+  });
 
   const creatives = useQuery(
     trpc.adCreative.list.queryOptions({
@@ -620,19 +627,13 @@ export default function CreativesPage() {
       teamId: teamId || undefined,
       from: fromValue,
       to: toValue,
+      includeHealth: Boolean(healthFilter) || columnVisibility.health === true,
     }),
   );
 
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [rowSelection, setRowSelection] = useState<Record<string, boolean>>({});
-  const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>({
-    angle: false,
-    awarenessLevel: false,
-    format: false,
-    health: false,
-    avgCpa: false,
-  });
 
   const deleteMutation = useMutation({
     ...trpc.adCreative.delete.mutationOptions(),
