@@ -148,6 +148,10 @@ export default function DashboardPage() {
   const topPerformers = stats.data?.topPerformers ?? [];
   const bottomPerformers = stats.data?.bottomPerformers ?? [];
   const survivingCreatives = stats.data?.survivingCreatives ?? [];
+  const dailyPerfLogs = dailyPerf.data ?? [];
+  const hasDailyPerfData = dailyPerfLogs.length > 1;
+  const isDailyPerfLoading =
+    !hasDailyPerfData && (dailyPerf.isLoading || dailyPerf.isFetching || !dailyPerf.isFetched);
 
   const baseCreativesParams = new URLSearchParams();
   baseCreativesParams.set("from", fromValue);
@@ -332,9 +336,13 @@ export default function DashboardPage() {
         </TabsContent>
 
         <TabsContent value="charts" className="pt-4">
-          {dailyPerf.data && dailyPerf.data.length > 1 ? (
+          {isDailyPerfLoading ? (
             <div className="rounded-lg border border-border px-4 py-3">
-              <PerformanceChart logs={dailyPerf.data as Array<typeof dailyPerf.data[number] & Record<string, unknown>>} />
+              <Skeleton className="h-[300px] w-full rounded-lg" />
+            </div>
+          ) : hasDailyPerfData ? (
+            <div className="rounded-lg border border-border px-4 py-3">
+              <PerformanceChart logs={dailyPerfLogs as Array<typeof dailyPerfLogs[number] & Record<string, unknown>>} />
             </div>
           ) : (
             <div className="rounded-lg border border-dashed border-border/40 px-4 py-12 text-center">

@@ -27,17 +27,22 @@ function enumerateDateRange(from: string, to: string): string[] {
   return dates;
 }
 
-const dashboardAnalyticsInputSchema = z
-  .object({
-    days: z.number().int().min(1).max(90).default(7),
-    from: z.string().optional(),
-    to: z.string().optional(),
-    accountId: z.string().optional(),
-    campaignIds: z.array(z.string()).optional(),
-    adSetIds: z.array(z.string()).optional(),
-    statuses: z.array(z.enum(["active", "paused", "archived"])).optional(),
-    ownership: z.enum(["ours", "theirs"]).optional(),
-    teamId: z.string().optional(),
+const dashboardAnalyticsFilterSchema = z.object({
+  days: z.number().int().min(1).max(90).default(7),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  accountId: z.string().optional(),
+  campaignIds: z.array(z.string()).optional(),
+  adSetIds: z.array(z.string()).optional(),
+  statuses: z.array(z.enum(["active", "paused", "archived"])).optional(),
+  ownership: z.enum(["ours", "theirs"]).optional(),
+  teamId: z.string().optional(),
+});
+
+const dashboardAnalyticsInputSchema = dashboardAnalyticsFilterSchema.optional();
+const dashboardStatsInputSchema = dashboardAnalyticsFilterSchema
+  .extend({
+    includePortfolio: z.boolean().optional(),
   })
   .optional();
 
@@ -543,7 +548,6 @@ export const adCreativeRouter = router({
     }),
 
   portfolioSummary: orgProcedure
-    .meta(openApiQueryMeta("adCreative", "portfolioSummary"))
     .input(dashboardAnalyticsInputSchema)
     .query(async ({ input, ctx }) => {
       const filters = buildDashboardAnalyticsFilters(input, ctx.organizationId);
@@ -553,7 +557,7 @@ export const adCreativeRouter = router({
 
   dashboardStats: orgProcedure
     .meta(openApiQueryMeta("adCreative", "dashboardStats"))
-    .input(dashboardAnalyticsInputSchema)
+    .input(dashboardStatsInputSchema)
     .query(async ({ input, ctx }) => {
       const filters = buildDashboardAnalyticsFilters(input, ctx.organizationId);
       const {
@@ -566,13 +570,27 @@ export const adCreativeRouter = router({
         statusFilter,
         dateFilter,
       } = filters;
-      const portfolio = await fetchPortfolioRow(filters);
+      const includePortfolio = input?.includePortfolio !== false;
+      const portfolio = includePortfolio
+        ? await fetchPortfolioRow(filters)
+        : undefined;
 
       // "Fair shot" floor: an ad needs to have spent ~one portfolio CPA before
       // we can confidently call it dead. Floor at $50 in case portfolio CPA is
       // unusually low (e.g. low-priced product or sparse data).
       const portfolioCpaNum = portfolio?.portfolio_cpa != null ? parseFloat(portfolio.portfolio_cpa) : null;
       const fairShotSpend = Math.max(50, portfolioCpaNum && Number.isFinite(portfolioCpaNum) ? portfolioCpaNum : 50);
+      const fairShotSpendSql = includePortfolio ? sql`${fairShotSpend}` : sql`pw.fair_shot_spend`;
+      const portfolioWindowCte = includePortfolio
+        ? sql``
+        : sql`
+        portfolio_window AS (
+          SELECT
+            greatest(50, coalesce(sum(spend) / nullif(sum(conversions), 0), 50)) AS fair_shot_spend
+          FROM ad_window
+        ),
+      `;
+      const portfolioWindowJoin = includePortfolio ? sql`` : sql`CROSS JOIN portfolio_window pw`;
 
       type CreativeRow = {
         id: string;
@@ -716,21 +734,23 @@ export const adCreativeRouter = router({
             ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter}
           GROUP BY ad.id, ad.meta_id, ad.ad_creative_id, ad.status, ast.status, ald.running_days
         ),
+        ${portfolioWindowCte}
         bleeder AS (
           SELECT
-            *,
+            aw.*,
             CASE
-              WHEN spend >= ${fairShotSpend} AND running_days >= 5 THEN 'pause_now'
-              WHEN spend >= ${fairShotSpend} OR running_days >= 7 THEN 'watch'
+              WHEN aw.spend >= ${fairShotSpendSql} AND aw.running_days >= 5 THEN 'pause_now'
+              WHEN aw.spend >= ${fairShotSpendSql} OR aw.running_days >= 7 THEN 'watch'
               ELSE 'cooking'
             END AS tier
-          FROM ad_window
-          WHERE status = 'active'
+          FROM ad_window aw
+          ${portfolioWindowJoin}
+          WHERE aw.status = 'active'
             AND (
-              coalesce(conversions, 0) = 0
-              OR (roas IS NOT NULL AND roas < 1.0)
+              coalesce(aw.conversions, 0) = 0
+              OR (aw.roas IS NOT NULL AND aw.roas < 1.0)
             )
-            AND spend >= 25
+            AND aw.spend >= 25
         ),
         actionable AS (
           SELECT * FROM bleeder WHERE tier IN ('pause_now', 'watch')

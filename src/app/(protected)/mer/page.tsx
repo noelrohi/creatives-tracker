@@ -83,14 +83,16 @@ export default function MerPage() {
     const frame = requestAnimationFrame(() => setLoadSecondary(true));
     return () => cancelAnimationFrame(frame);
   }, []);
+  const canLoadSecondaryStats = loadSecondary && !portfolioSummary.isPending;
   const secondaryStats = useQuery({
     ...trpc.adCreative.dashboardStats.queryOptions({
       from: fromValue,
       to: toValue,
       teamId: selectedTeamId,
       accountId: selectedAccountId,
+      includePortfolio: false,
     }),
-    enabled: loadSecondary,
+    enabled: canLoadSecondaryStats,
   });
 
   const dailyPerf = useQuery(
@@ -353,7 +355,7 @@ export default function MerPage() {
         title="Needs Attention"
         icon={<AlertTriangle className="size-3.5 text-red-400" />}
         rows={bottomPerformers}
-        isLoading={!loadSecondary || secondaryStats.isLoading}
+        isLoading={!canLoadSecondaryStats || secondaryStats.isLoading}
         emptyMessage="No underperformers detected"
         viewAllHref="/creatives?health=critical"
         canManageData={canManageData}
