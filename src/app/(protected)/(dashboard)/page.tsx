@@ -123,29 +123,35 @@ export default function DashboardPage() {
     }),
   );
 
-  const dailyPerf = useQuery(
-    trpc.adCreative.getDailyPortfolioPerformance.queryOptions({
+  const dailyPerf = useQuery({
+    ...trpc.adCreative.getDailyPortfolioPerformance.queryOptions({
       from: fromValue,
       to: toValue,
       accountId: selectedAccountId,
       teamId: selectedTeamId,
     }),
-  );
+    enabled: tab === "charts",
+  });
 
-  const demographic = useQuery(
-    trpc.performanceLog.demographicBreakdown.queryOptions({
+  const demographic = useQuery({
+    ...trpc.performanceLog.demographicBreakdown.queryOptions({
       dimension: dimension as "age" | "gender" | "country" | "device",
       from: fromValue,
       to: toValue,
       accountId: selectedAccountId,
       teamId: selectedTeamId,
     }),
-  );
+    enabled: tab === "demographics",
+  });
 
   const portfolio = stats.data?.portfolio;
   const topPerformers = stats.data?.topPerformers ?? [];
   const bottomPerformers = stats.data?.bottomPerformers ?? [];
   const survivingCreatives = stats.data?.survivingCreatives ?? [];
+  const dailyPerfLogs = dailyPerf.data ?? [];
+  const hasDailyPerfData = dailyPerfLogs.length > 1;
+  const isDailyPerfLoading =
+    !hasDailyPerfData && (dailyPerf.isLoading || dailyPerf.isFetching || !dailyPerf.isFetched);
 
   const baseCreativesParams = new URLSearchParams();
   baseCreativesParams.set("from", fromValue);
@@ -330,9 +336,13 @@ export default function DashboardPage() {
         </TabsContent>
 
         <TabsContent value="charts" className="pt-4">
-          {dailyPerf.data && dailyPerf.data.length > 1 ? (
+          {isDailyPerfLoading ? (
             <div className="rounded-lg border border-border px-4 py-3">
-              <PerformanceChart logs={dailyPerf.data as Array<typeof dailyPerf.data[number] & Record<string, unknown>>} />
+              <Skeleton className="h-[300px] w-full rounded-lg" />
+            </div>
+          ) : hasDailyPerfData ? (
+            <div className="rounded-lg border border-border px-4 py-3">
+              <PerformanceChart logs={dailyPerfLogs as Array<typeof dailyPerfLogs[number] & Record<string, unknown>>} />
             </div>
           ) : (
             <div className="rounded-lg border border-dashed border-border/40 px-4 py-12 text-center">

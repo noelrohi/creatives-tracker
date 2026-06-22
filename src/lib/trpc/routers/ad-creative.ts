@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { eq, ne, or, isNull, desc, ilike, and, inArray, sql, type SQL } from "drizzle-orm";
+import { eq, ne, or, isNull, desc, and, inArray, sql, type SQL } from "drizzle-orm";
 import { router, orgProcedure, orgWriteProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
@@ -12,9 +12,128 @@ import { adSets } from "@/schema/ad-set";
 import { fetchMetaCreativePreview, fetchMetaAdPreviewUrl } from "@/lib/meta-creative-assets";
 import { importMetaRows } from "@/lib/meta-import";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
-import { computeCreativeHealthByCreativeId } from "@/lib/creative-health-rollup";
+import { computeCreativeHealthByCreativeId, type CreativeRollup } from "@/lib/creative-health-rollup";
 import { fetchAgentExportRows } from "@/lib/ad-export";
 import { effectiveAdActiveSql, effectiveAdStatusSql } from "@/lib/effective-ad-status";
+
+function enumerateDateRange(from: string, to: string): string[] {
+  const dates: string[] = [];
+  const current = new Date(`${from}T00:00:00.000Z`);
+  const end = new Date(`${to}T00:00:00.000Z`);
+  while (current <= end) {
+    dates.push(current.toISOString().slice(0, 10));
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+  return dates;
+}
+
+const dashboardAnalyticsFilterSchema = z.object({
+  days: z.number().int().min(1).max(90).default(7),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  accountId: z.string().optional(),
+  campaignIds: z.array(z.string()).optional(),
+  adSetIds: z.array(z.string()).optional(),
+  statuses: z.array(z.enum(["active", "paused", "archived"])).optional(),
+  ownership: z.enum(["ours", "theirs"]).optional(),
+  teamId: z.string().optional(),
+});
+
+const dashboardAnalyticsInputSchema = dashboardAnalyticsFilterSchema.optional();
+const dashboardStatsInputSchema = dashboardAnalyticsFilterSchema
+  .extend({
+    includePortfolio: z.boolean().optional(),
+  })
+  .optional();
+
+type DashboardAnalyticsInput = z.infer<typeof dashboardAnalyticsInputSchema>;
+
+type PortfolioRow = {
+  total_spend: string | null;
+  total_purchase_value: string | null;
+  portfolio_roas: string | null;
+  portfolio_cpa: string | null;
+  portfolio_ctr: string | null;
+  total_conversions: string | null;
+};
+
+function buildDashboardAnalyticsFilters(input: DashboardAnalyticsInput, organizationId: string) {
+  const days = input?.days ?? 7;
+  const accountFilter = input?.accountId
+    ? sql`AND ad.account_id = ${input.accountId}`
+    : sql``;
+  const ownershipFilter = input?.ownership
+    ? input.ownership === "theirs"
+      ? sql`AND (ac.ownership IS NULL OR ac.ownership != 'ours')`
+      : sql`AND ac.ownership = ${input.ownership}`
+    : sql``;
+  const teamFilter = input?.teamId
+    ? sql`AND ac.team_id = ${input.teamId}`
+    : sql``;
+  const basePl = basePerformanceLogFilter("pl");
+  const campaignFilter = input?.campaignIds?.length
+    ? sql`AND ad.ad_set_id IN (SELECT ast.id FROM ad_set ast WHERE ast.campaign_id IN (${sql.join(input.campaignIds.map((id) => sql`${id}`), sql`, `)}))`
+    : sql``;
+  const adSetFilter = input?.adSetIds?.length
+    ? sql`AND ad.ad_set_id IN (${sql.join(input.adSetIds.map((id) => sql`${id}`), sql`, `)})`
+    : sql``;
+  const statusFilter = input?.statuses?.length
+    ? sql`AND ${effectiveAdStatusSql(sql`ad.status`, sql`ast.status`)} IN (${sql.join(input.statuses.map((s) => sql`${s}`), sql`, `)})`
+    : sql``;
+
+  const dateFilter = input?.from && input?.to
+    ? sql`pl.date_start <= ${input.to}::date AND pl.date_end >= ${input.from}::date`
+    : sql`pl.date_start <= current_date AND pl.date_end >= current_date - ${days}::int`;
+
+  return {
+    accountFilter,
+    ownershipFilter,
+    teamFilter,
+    basePl,
+    campaignFilter,
+    adSetFilter,
+    statusFilter,
+    dateFilter,
+    organizationId,
+  };
+}
+
+async function fetchPortfolioRow(filters: ReturnType<typeof buildDashboardAnalyticsFilters>) {
+  const portfolioResult = await db.execute(sql`
+    SELECT
+      sum(pl.spend)::text as total_spend,
+      sum(pl.purchase_value)::text as total_purchase_value,
+      (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text as portfolio_roas,
+      (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as portfolio_cpa,
+      avg(pl.ctr)::text as portfolio_ctr,
+      sum(pl.conversions)::text as total_conversions
+    FROM performance_log pl
+    JOIN ad ON ad.id = pl.ad_id
+    LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
+    JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+    WHERE ${filters.dateFilter}
+      AND ${filters.basePl}
+      AND ad.organization_id = ${filters.organizationId}
+      ${filters.accountFilter}
+      ${filters.campaignFilter}
+      ${filters.adSetFilter}
+      ${filters.statusFilter}
+      ${filters.ownershipFilter}
+      ${filters.teamFilter}
+  `);
+  return (portfolioResult.rows as PortfolioRow[])[0];
+}
+
+function mapPortfolioRow(portfolio: PortfolioRow | undefined) {
+  return {
+    totalSpend: portfolio?.total_spend ?? null,
+    totalRevenue: portfolio?.total_purchase_value ?? null,
+    roas: portfolio?.portfolio_roas ?? null,
+    cpa: portfolio?.portfolio_cpa ?? null,
+    ctr: portfolio?.portfolio_ctr ?? null,
+    conversions: portfolio?.total_conversions ?? null,
+  };
+}
 
 export const adCreativeRouter = router({
   list: orgProcedure
@@ -42,233 +161,279 @@ export const adCreativeRouter = router({
           untaggedOnly: z.boolean().optional(),
           from: z.string().optional(),
           to: z.string().optional(),
+          includeHealth: z.boolean().optional(),
         })
         .optional(),
     )
     .query(async ({ input, ctx }) => {
-      const conditions: SQL[] = [eq(adCreatives.organizationId, ctx.organizationId)];
+      const includeHealth = input?.includeHealth ?? true;
+      const conditions: SQL[] = [sql`ac.organization_id = ${ctx.organizationId}`];
       if (input?.format) {
-        conditions.push(eq(adCreatives.format, input.format));
+        conditions.push(sql`ac.format = ${input.format}`);
       }
       if (input?.awarenessLevel) {
-        conditions.push(
-          eq(adCreatives.awarenessLevel, input.awarenessLevel),
-        );
+        conditions.push(sql`ac.awareness_level = ${input.awarenessLevel}`);
       }
       if (input?.search) {
-        conditions.push(ilike(adCreatives.name, `%${input.search}%`));
+        conditions.push(sql`ac.name ILIKE ${`%${input.search}%`}`);
       }
       if (input?.accountId) {
-        conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = "ad_creative"."id" AND ad.account_id = ${input.accountId})`);
+        conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = ac.id AND ad.account_id = ${input.accountId})`);
       }
       if (input?.adSetIds?.length) {
         const placeholders = input.adSetIds.map((id) => sql`${id}`);
         const inList = sql.join(placeholders, sql`, `);
-        conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = "ad_creative"."id" AND ad.ad_set_id IN (${inList}))`);
+        conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = ac.id AND ad.ad_set_id IN (${inList}))`);
       }
       if (input?.ownership) {
         if (input.ownership === "theirs") {
-          conditions.push(or(ne(adCreatives.ownership, "ours"), isNull(adCreatives.ownership))!);
+          conditions.push(sql`(ac.ownership IS NULL OR ac.ownership != 'ours')`);
         } else {
-          conditions.push(eq(adCreatives.ownership, input.ownership));
+          conditions.push(sql`ac.ownership = ${input.ownership}`);
         }
       }
       if (input?.teamId === "none") {
-        conditions.push(isNull(adCreatives.teamId));
+        conditions.push(sql`ac.team_id IS NULL`);
       } else if (input?.teamId) {
-        conditions.push(eq(adCreatives.teamId, input.teamId));
+        conditions.push(sql`ac.team_id = ${input.teamId}`);
       }
       if (input?.untaggedOnly) {
-        conditions.push(sql`(${adCreatives.format} IS NULL AND ${adCreatives.angle} IS NULL AND ${adCreatives.awarenessLevel} IS NULL)`);
+        conditions.push(sql`(ac.format IS NULL AND ac.angle IS NULL AND ac.awareness_level IS NULL)`);
       }
 
       const { from, to } = input ?? {};
       const plBase = basePerformanceLogFilter("pl");
-      const pl2Base = basePerformanceLogFilter("pl2");
-      const win = from && to
-        ? sql`AND pl.date_start >= ${from}::date AND pl.date_start <= ${to}::date AND ${plBase}`
-        : sql`AND ${plBase}`;
-      const win2 = from && to
-        ? sql`AND pl2.date_start >= ${from}::date AND pl2.date_start <= ${to}::date AND ${pl2Base}`
-        : sql`AND ${pl2Base}`;
+      const plWindowFilter = from && to
+        ? sql`pl.date_start >= ${from}::date AND pl.date_start <= ${to}::date AND ${plBase}`
+        : plBase;
       const dateFilterForRollup = from && to
         ? sql`pl.date_start >= ${from}::date AND pl.date_start <= ${to}::date`
         : undefined;
 
-      const rows = await db
-        .select({
-          id: adCreatives.id,
-          name: adCreatives.name,
-          assetUrl: adCreatives.assetUrl,
-          videoUrl: adCreatives.videoUrl,
-          destinationUrl: sql<string | null>`(
-            SELECT ad.destination_url FROM ad
-            WHERE ad.ad_creative_id = "ad_creative"."id"
-              AND ad.destination_url IS NOT NULL
-            ORDER BY ad.updated_at DESC NULLS LAST, ad.created_at DESC
-            LIMIT 1
-          )`.as("destination_url"),
-          format: adCreatives.format,
-          angle: adCreatives.angle,
-          persona: adCreatives.persona,
-          awarenessLevel: adCreatives.awarenessLevel,
-          hook: adCreatives.hook,
-          tone: adCreatives.tone,
-          cta: adCreatives.cta,
-          ownership: adCreatives.ownership,
-          teamId: adCreatives.teamId,
-          notes: adCreatives.notes,
-          createdAt: adCreatives.createdAt,
-          updatedAt: adCreatives.updatedAt,
-          totalSpend: sql<string | null>`(
-            SELECT sum(pl.spend) FROM performance_log pl
-            JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
-          )`.as("total_spend"),
-          avgRoas: sql<string | null>`(
-            SELECT coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0)
-            FROM performance_log pl
-            JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
-          )`.as("avg_roas"),
-          totalConversions: sql<number | null>`(
-            SELECT sum(pl.conversions) FROM performance_log pl
-            JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
-          )`.as("total_conversions"),
-          adStatus: sql<string | null>`(
-            SELECT ${effectiveAdStatusSql(sql`ad.status`, sql`ast.status`)}
-            FROM ad
-            LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
-            WHERE ad.ad_creative_id = "ad_creative"."id"
-            ORDER BY ${effectiveAdActiveSql(sql`ad.status`, sql`ast.status`)} DESC
-            LIMIT 1
-          )`.as("ad_status"),
-          metaAdId: sql<string | null>`(
-            SELECT ad.meta_id FROM ad
-            WHERE ad.ad_creative_id = "ad_creative"."id"
-            LIMIT 1
-          )`.as("meta_ad_id"),
-          avgCpa: sql<string | null>`(
-            SELECT coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0)
-            FROM performance_log pl
-            JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
-          )`.as("avg_cpa"),
-          avgCtr: sql<string | null>`(
-            SELECT avg(pl.ctr)
-            FROM performance_log pl
-            JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
-          )`.as("avg_ctr"),
-          metaCampaignId: sql<string | null>`(
-            SELECT c.meta_id FROM ad
-            JOIN ad_set ast ON ast.id = ad.ad_set_id
-            JOIN campaign c ON c.id = ast.campaign_id
-            WHERE ad.ad_creative_id = "ad_creative"."id"
-            LIMIT 1
-          )`.as("meta_campaign_id"),
-          metaAdSetId: sql<string | null>`(
-            SELECT ast.meta_id FROM ad
-            JOIN ad_set ast ON ast.id = ad.ad_set_id
-            WHERE ad.ad_creative_id = "ad_creative"."id"
-            LIMIT 1
-          )`.as("meta_ad_set_id"),
-          accountName: sql<string | null>`(
-            SELECT acc.name FROM ad
-            JOIN ad_account acc ON acc.id = ad.account_id
-            WHERE ad.ad_creative_id = "ad_creative"."id"
-            LIMIT 1
-          )`.as("account_name"),
-          // Trend metrics for health computation
-          recentCtr: sql<string | null>`(
-            SELECT coalesce(sum(pl.ctr * pl.impressions), 0) / nullif(sum(pl.impressions), 0)
-            FROM performance_log pl
-            JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
-              AND pl.date_start > (
-                SELECT max(pl2.date_end) - 3
-                FROM performance_log pl2 JOIN ad a2 ON a2.id = pl2.ad_id
-                WHERE a2.ad_creative_id = "ad_creative"."id" ${win2}
-              )
-          )`.as("recent_ctr"),
-          recentCpc: sql<string | null>`(
-            SELECT avg(pl.cpc)
-            FROM performance_log pl
-            JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
-              AND pl.date_start > (
-                SELECT max(pl2.date_end) - 3
-                FROM performance_log pl2 JOIN ad a2 ON a2.id = pl2.ad_id
-                WHERE a2.ad_creative_id = "ad_creative"."id" ${win2}
-              )
-          )`.as("recent_cpc"),
-          avgCpc: sql<string | null>`(
-            SELECT avg(pl.cpc)
-            FROM performance_log pl
-            JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
-          )`.as("avg_cpc"),
-          avgFrequency: sql<string | null>`(
-            SELECT avg(pl.frequency)
-            FROM performance_log pl
-            JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
-          )`.as("avg_frequency"),
-          recentHookRate: sql<string | null>`(
-            SELECT sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0)
-            FROM performance_log pl
-            JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
-              AND pl.date_start > (
-                SELECT max(pl2.date_end) - 3
-                FROM performance_log pl2 JOIN ad a2 ON a2.id = pl2.ad_id
-                WHERE a2.ad_creative_id = "ad_creative"."id" ${win2}
-              )
-          )`.as("recent_hook_rate"),
-          priorHookRate: sql<string | null>`(
-            SELECT sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0)
-            FROM performance_log pl
-            JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
-              AND pl.date_end <= (
-                SELECT max(pl2.date_end) - 3
-                FROM performance_log pl2 JOIN ad a2 ON a2.id = pl2.ad_id
-                WHERE a2.ad_creative_id = "ad_creative"."id" ${win2}
-              )
-          )`.as("prior_hook_rate"),
-          recentCpa: sql<string | null>`(
-            SELECT coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0)
-            FROM performance_log pl
-            JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
-              AND pl.date_start > (
-                SELECT max(pl2.date_end) - 3
-                FROM performance_log pl2 JOIN ad a2 ON a2.id = pl2.ad_id
-                WHERE a2.ad_creative_id = "ad_creative"."id" ${win2}
-              )
-          )`.as("recent_cpa"),
-          thumbstopRatio: sql<string | null>`(
-            SELECT sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0)
-            FROM performance_log pl
-            JOIN ad ON ad.id = pl.ad_id
-            WHERE ad.ad_creative_id = "ad_creative"."id" ${win}
-          )`.as("thumbstop_ratio"),
-        })
-        .from(adCreatives)
-        .where(conditions.length > 0 ? and(...conditions) : undefined)
-        .orderBy(desc(adCreatives.createdAt));
+      type ListRow = {
+        id: string;
+        name: string;
+        asset_url: string | null;
+        video_url: string | null;
+        destination_url: string | null;
+        format: string | null;
+        angle: string | null;
+        persona: string | null;
+        awareness_level: string | null;
+        hook: string | null;
+        tone: string[] | null;
+        cta: string | null;
+        ownership: string | null;
+        team_id: string | null;
+        notes: string | null;
+        created_at: Date;
+        updated_at: Date;
+        total_spend: string | null;
+        avg_roas: string | null;
+        total_conversions: number | string | null;
+        ad_status: string | null;
+        meta_ad_id: string | null;
+        avg_cpa: string | null;
+        avg_ctr: string | null;
+        meta_campaign_id: string | null;
+        meta_ad_set_id: string | null;
+        account_name: string | null;
+        recent_ctr: string | null;
+        recent_cpc: string | null;
+        avg_cpc: string | null;
+        avg_frequency: string | null;
+        recent_hook_rate: string | null;
+        prior_hook_rate: string | null;
+        recent_cpa: string | null;
+        thumbstop_ratio: string | null;
+      };
 
-      const healthByCreative = await computeCreativeHealthByCreativeId({
-        organizationId: ctx.organizationId,
-        creativeIds: rows.map((r) => r.id),
-        dateFilter: dateFilterForRollup,
-      });
+      const result = await db.execute(sql`
+        WITH filtered_creatives AS (
+          SELECT
+            ac.id,
+            ac.name,
+            ac.asset_url,
+            ac.video_url,
+            ac.format,
+            ac.angle,
+            ac.persona,
+            ac.awareness_level,
+            ac.hook,
+            ac.tone,
+            ac.cta,
+            ac.ownership,
+            ac.team_id,
+            ac.notes,
+            ac.created_at,
+            ac.updated_at
+          FROM ad_creative ac
+          WHERE ${sql.join(conditions, sql` AND `)}
+        ),
+        window_perf AS (
+          SELECT
+            ad.ad_creative_id,
+            sum(pl.spend)::text AS total_spend,
+            (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text AS avg_roas,
+            sum(pl.conversions) AS total_conversions,
+            (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text AS avg_cpa,
+            avg(pl.ctr)::text AS avg_ctr,
+            avg(pl.cpc)::text AS avg_cpc,
+            avg(pl.frequency)::text AS avg_frequency,
+            (sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0))::text AS thumbstop_ratio
+          FROM filtered_creatives fc
+          JOIN ad ON ad.ad_creative_id = fc.id
+          JOIN performance_log pl ON pl.ad_id = ad.id
+          WHERE ${plWindowFilter}
+          GROUP BY ad.ad_creative_id
+        ),
+        recent_cutoff AS (
+          SELECT
+            ad.ad_creative_id,
+            max(pl.date_end) - 3 AS cutoff
+          FROM filtered_creatives fc
+          JOIN ad ON ad.ad_creative_id = fc.id
+          JOIN performance_log pl ON pl.ad_id = ad.id
+          WHERE ${plWindowFilter}
+          GROUP BY ad.ad_creative_id
+        ),
+        recent_perf AS (
+          SELECT
+            ad.ad_creative_id,
+            (coalesce(sum(pl.ctr * pl.impressions), 0) / nullif(sum(pl.impressions), 0))::text AS recent_ctr,
+            avg(pl.cpc)::text AS recent_cpc,
+            (sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0))::text AS recent_hook_rate,
+            (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text AS recent_cpa
+          FROM recent_cutoff rc
+          JOIN ad ON ad.ad_creative_id = rc.ad_creative_id
+          JOIN performance_log pl ON pl.ad_id = ad.id
+          WHERE ${plWindowFilter}
+            AND pl.date_start > rc.cutoff
+          GROUP BY ad.ad_creative_id
+        ),
+        prior_perf AS (
+          SELECT
+            ad.ad_creative_id,
+            (sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0))::text AS prior_hook_rate
+          FROM recent_cutoff rc
+          JOIN ad ON ad.ad_creative_id = rc.ad_creative_id
+          JOIN performance_log pl ON pl.ad_id = ad.id
+          WHERE ${plWindowFilter}
+            AND pl.date_end <= rc.cutoff
+          GROUP BY ad.ad_creative_id
+        ),
+        latest_ad AS (
+          SELECT DISTINCT ON (ad.ad_creative_id)
+            ad.ad_creative_id,
+            ad.destination_url,
+            ${effectiveAdStatusSql(sql`ad.status`, sql`ast.status`)} AS ad_status,
+            ad.meta_id AS meta_ad_id,
+            c.meta_id AS meta_campaign_id,
+            ast.meta_id AS meta_ad_set_id,
+            acc.name AS account_name
+          FROM filtered_creatives fc
+          JOIN ad ON ad.ad_creative_id = fc.id
+          LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
+          LEFT JOIN campaign c ON c.id = ast.campaign_id
+          LEFT JOIN ad_account acc ON acc.id = ad.account_id
+          ORDER BY
+            ad.ad_creative_id,
+            ${effectiveAdActiveSql(sql`ad.status`, sql`ast.status`)} DESC,
+            (ad.destination_url IS NOT NULL) DESC,
+            ad.updated_at DESC NULLS LAST,
+            ad.created_at DESC
+        )
+        SELECT
+          fc.id,
+          fc.name,
+          fc.asset_url,
+          fc.video_url,
+          latest_ad.destination_url,
+          fc.format,
+          fc.angle,
+          fc.persona,
+          fc.awareness_level,
+          fc.hook,
+          fc.tone,
+          fc.cta,
+          fc.ownership,
+          fc.team_id,
+          fc.notes,
+          fc.created_at,
+          fc.updated_at,
+          window_perf.total_spend,
+          window_perf.avg_roas,
+          window_perf.total_conversions,
+          latest_ad.ad_status,
+          latest_ad.meta_ad_id,
+          window_perf.avg_cpa,
+          window_perf.avg_ctr,
+          latest_ad.meta_campaign_id,
+          latest_ad.meta_ad_set_id,
+          latest_ad.account_name,
+          recent_perf.recent_ctr,
+          recent_perf.recent_cpc,
+          window_perf.avg_cpc,
+          window_perf.avg_frequency,
+          recent_perf.recent_hook_rate,
+          prior_perf.prior_hook_rate,
+          recent_perf.recent_cpa,
+          window_perf.thumbstop_ratio
+        FROM filtered_creatives fc
+        LEFT JOIN window_perf ON window_perf.ad_creative_id = fc.id
+        LEFT JOIN recent_perf ON recent_perf.ad_creative_id = fc.id
+        LEFT JOIN prior_perf ON prior_perf.ad_creative_id = fc.id
+        LEFT JOIN latest_ad ON latest_ad.ad_creative_id = fc.id
+        ORDER BY fc.created_at DESC
+      `);
+      const rows = result.rows as ListRow[];
+
+      const healthByCreative = includeHealth
+        ? await computeCreativeHealthByCreativeId({
+            organizationId: ctx.organizationId,
+            creativeIds: rows.map((r) => r.id),
+            dateFilter: dateFilterForRollup,
+          })
+        : new Map<string, CreativeRollup>();
 
       return rows.map((r) => {
         const rollup = healthByCreative.get(r.id);
         return {
-          ...r,
+          id: r.id,
+          name: r.name,
+          assetUrl: r.asset_url,
+          videoUrl: r.video_url,
+          destinationUrl: r.destination_url,
+          format: r.format,
+          angle: r.angle,
+          persona: r.persona,
+          awarenessLevel: r.awareness_level,
+          hook: r.hook,
+          tone: r.tone,
+          cta: r.cta,
+          ownership: r.ownership,
+          teamId: r.team_id,
+          notes: r.notes,
+          createdAt: r.created_at,
+          updatedAt: r.updated_at,
+          totalSpend: r.total_spend,
+          avgRoas: r.avg_roas,
+          totalConversions: r.total_conversions,
+          adStatus: r.ad_status,
+          metaAdId: r.meta_ad_id,
+          avgCpa: r.avg_cpa,
+          avgCtr: r.avg_ctr,
+          metaCampaignId: r.meta_campaign_id,
+          metaAdSetId: r.meta_ad_set_id,
+          accountName: r.account_name,
+          recentCtr: r.recent_ctr,
+          recentCpc: r.recent_cpc,
+          avgCpc: r.avg_cpc,
+          avgFrequency: r.avg_frequency,
+          recentHookRate: r.recent_hook_rate,
+          priorHookRate: r.prior_hook_rate,
+          recentCpa: r.recent_cpa,
+          thumbstopRatio: r.thumbstop_ratio,
           health: rollup?.health ?? null,
           healthReasons: rollup?.reasons ?? [],
         };
@@ -382,81 +547,50 @@ export const adCreativeRouter = router({
         .orderBy(desc(performanceLogs.dateStart), ads.name);
     }),
 
+  portfolioSummary: orgProcedure
+    .input(dashboardAnalyticsInputSchema)
+    .query(async ({ input, ctx }) => {
+      const filters = buildDashboardAnalyticsFilters(input, ctx.organizationId);
+      const portfolio = await fetchPortfolioRow(filters);
+      return mapPortfolioRow(portfolio);
+    }),
+
   dashboardStats: orgProcedure
     .meta(openApiQueryMeta("adCreative", "dashboardStats"))
-    .input(
-      z
-        .object({
-          days: z.number().int().min(1).max(90).default(7),
-          from: z.string().optional(),
-          to: z.string().optional(),
-          accountId: z.string().optional(),
-          campaignIds: z.array(z.string()).optional(),
-          adSetIds: z.array(z.string()).optional(),
-          statuses: z.array(z.enum(["active", "paused", "archived"])).optional(),
-          ownership: z.enum(["ours", "theirs"]).optional(),
-          teamId: z.string().optional(),
-        })
-        .optional(),
-    )
+    .input(dashboardStatsInputSchema)
     .query(async ({ input, ctx }) => {
-      const days = input?.days ?? 7;
-      const accountFilter = input?.accountId
-        ? sql`AND ad.account_id = ${input.accountId}`
-        : sql``;
-      const ownershipFilter = input?.ownership
-        ? input.ownership === "theirs"
-          ? sql`AND (ac.ownership IS NULL OR ac.ownership != 'ours')`
-          : sql`AND ac.ownership = ${input.ownership}`
-        : sql``;
-      const teamFilter = input?.teamId
-        ? sql`AND ac.team_id = ${input.teamId}`
-        : sql``;
-      const basePl = basePerformanceLogFilter("pl");
-      const campaignFilter = input?.campaignIds?.length
-        ? sql`AND ad.ad_set_id IN (SELECT ast.id FROM ad_set ast WHERE ast.campaign_id IN (${sql.join(input.campaignIds.map((id) => sql`${id}`), sql`, `)}))`
-        : sql``;
-      const adSetFilter = input?.adSetIds?.length
-        ? sql`AND ad.ad_set_id IN (${sql.join(input.adSetIds.map((id) => sql`${id}`), sql`, `)})`
-        : sql``;
-      const statusFilter = input?.statuses?.length
-        ? sql`AND ${effectiveAdStatusSql(sql`ad.status`, sql`ast.status`)} IN (${sql.join(input.statuses.map((s) => sql`${s}`), sql`, `)})`
-        : sql``;
-
-      const dateFilter = input?.from && input?.to
-        ? sql`pl.date_start <= ${input.to}::date AND pl.date_end >= ${input.from}::date`
-        : sql`pl.date_start <= current_date AND pl.date_end >= current_date - ${days}::int`;
-
-      type PortfolioRow = {
-        total_spend: string | null;
-        total_purchase_value: string | null;
-        portfolio_roas: string | null;
-        portfolio_cpa: string | null;
-        portfolio_ctr: string | null;
-        total_conversions: string | null;
-      };
-      // Portfolio KPIs
-      const portfolioResult = await db.execute(sql`
-        SELECT
-          sum(pl.spend)::text as total_spend,
-          sum(pl.purchase_value)::text as total_purchase_value,
-          (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text as portfolio_roas,
-          (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as portfolio_cpa,
-          avg(pl.ctr)::text as portfolio_ctr,
-          sum(pl.conversions)::text as total_conversions
-        FROM performance_log pl
-        JOIN ad ON ad.id = pl.ad_id
-        LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
-        JOIN ad_creative ac ON ac.id = ad.ad_creative_id
-        WHERE ${dateFilter} AND ${basePl} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter} ${teamFilter}
-      `);
-      const portfolio = (portfolioResult.rows as PortfolioRow[])[0];
+      const filters = buildDashboardAnalyticsFilters(input, ctx.organizationId);
+      const {
+        accountFilter,
+        ownershipFilter,
+        teamFilter,
+        basePl,
+        campaignFilter,
+        adSetFilter,
+        statusFilter,
+        dateFilter,
+      } = filters;
+      const includePortfolio = input?.includePortfolio !== false;
+      const portfolio = includePortfolio
+        ? await fetchPortfolioRow(filters)
+        : undefined;
 
       // "Fair shot" floor: an ad needs to have spent ~one portfolio CPA before
       // we can confidently call it dead. Floor at $50 in case portfolio CPA is
       // unusually low (e.g. low-priced product or sparse data).
       const portfolioCpaNum = portfolio?.portfolio_cpa != null ? parseFloat(portfolio.portfolio_cpa) : null;
       const fairShotSpend = Math.max(50, portfolioCpaNum && Number.isFinite(portfolioCpaNum) ? portfolioCpaNum : 50);
+      const fairShotSpendSql = includePortfolio ? sql`${fairShotSpend}` : sql`pw.fair_shot_spend`;
+      const portfolioWindowCte = includePortfolio
+        ? sql``
+        : sql`
+        portfolio_window AS (
+          SELECT
+            greatest(50, coalesce(sum(spend) / nullif(sum(conversions), 0), 50)) AS fair_shot_spend
+          FROM ad_window
+        ),
+      `;
+      const portfolioWindowJoin = includePortfolio ? sql`` : sql`CROSS JOIN portfolio_window pw`;
 
       type CreativeRow = {
         id: string;
@@ -600,21 +734,23 @@ export const adCreativeRouter = router({
             ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter}
           GROUP BY ad.id, ad.meta_id, ad.ad_creative_id, ad.status, ast.status, ald.running_days
         ),
+        ${portfolioWindowCte}
         bleeder AS (
           SELECT
-            *,
+            aw.*,
             CASE
-              WHEN spend >= ${fairShotSpend} AND running_days >= 5 THEN 'pause_now'
-              WHEN spend >= ${fairShotSpend} OR running_days >= 7 THEN 'watch'
+              WHEN aw.spend >= ${fairShotSpendSql} AND aw.running_days >= 5 THEN 'pause_now'
+              WHEN aw.spend >= ${fairShotSpendSql} OR aw.running_days >= 7 THEN 'watch'
               ELSE 'cooking'
             END AS tier
-          FROM ad_window
-          WHERE status = 'active'
+          FROM ad_window aw
+          ${portfolioWindowJoin}
+          WHERE aw.status = 'active'
             AND (
-              coalesce(conversions, 0) = 0
-              OR (roas IS NOT NULL AND roas < 1.0)
+              coalesce(aw.conversions, 0) = 0
+              OR (aw.roas IS NOT NULL AND aw.roas < 1.0)
             )
-            AND spend >= 25
+            AND aw.spend >= 25
         ),
         actionable AS (
           SELECT * FROM bleeder WHERE tier IN ('pause_now', 'watch')
@@ -686,14 +822,7 @@ export const adCreativeRouter = router({
       });
 
       return {
-        portfolio: {
-          totalSpend: portfolio?.total_spend ?? null,
-          totalRevenue: portfolio?.total_purchase_value ?? null,
-          roas: portfolio?.portfolio_roas ?? null,
-          cpa: portfolio?.portfolio_cpa ?? null,
-          ctr: portfolio?.portfolio_ctr ?? null,
-          conversions: portfolio?.total_conversions ?? null,
-        },
+        portfolio: mapPortfolioRow(portfolio),
         topPerformers: topPerformers.map((r) => ({
           id: r.id,
           name: r.name,
@@ -889,47 +1018,50 @@ export const adCreativeRouter = router({
       };
 
       const result = await db.execute(sql`
-        WITH days AS (
-          SELECT generate_series(${fromStr}::date, ${toStr}::date, '1 day'::interval)::date AS day
-        ),
-        daily AS (
-          SELECT
-            d.day,
-            sum(pl.spend / GREATEST((pl.date_end - pl.date_start + 1), 1)) AS spend,
-            sum(pl.purchase_value / GREATEST((pl.date_end - pl.date_start + 1), 1)) AS purchase_value,
-            sum(pl.conversions::numeric / GREATEST((pl.date_end - pl.date_start + 1), 1)) AS conversions,
-            sum(pl.impressions::numeric / GREATEST((pl.date_end - pl.date_start + 1), 1)) AS impressions,
-            sum(pl.reach::numeric / GREATEST((pl.date_end - pl.date_start + 1), 1)) AS reach,
-            sum(pl.ctr * pl.impressions / GREATEST((pl.date_end - pl.date_start + 1), 1)) AS ctr_weighted,
-            sum(pl.link_clicks::numeric / GREATEST((pl.date_end - pl.date_start + 1), 1)) AS link_clicks
-          FROM days d
-          JOIN performance_log pl ON d.day BETWEEN pl.date_start AND pl.date_end
-          JOIN ad ON ad.id = pl.ad_id
-          JOIN ad_creative ac ON ac.id = ad.ad_creative_id
-          WHERE ad.organization_id = ${ctx.organizationId}
-            AND ${basePl}
-            ${accountFilter} ${ownershipFilter} ${teamFilter}
-          GROUP BY d.day
-        )
         SELECT
-          d.day::text as date_start,
-          d.day::text as date_end,
-          COALESCE(daily.spend, 0)::text as spend,
-          COALESCE(daily.purchase_value, 0)::text as purchase_value,
-          (COALESCE(daily.purchase_value, 0) / nullif(daily.spend, 0))::text as roas,
-          (COALESCE(daily.spend, 0) / nullif(daily.conversions, 0))::text as cpa,
-          (COALESCE(daily.ctr_weighted, 0) / nullif(daily.impressions, 0))::text as ctr,
-          COALESCE(daily.conversions, 0)::int as conversions,
-          COALESCE(daily.impressions, 0)::int as impressions,
-          COALESCE(daily.reach, 0)::int as reach,
-          (CASE WHEN daily.impressions > 0 THEN (daily.spend / daily.impressions) * 1000 ELSE NULL END)::text as cpm,
-          COALESCE(daily.link_clicks, 0)::int as link_clicks
-        FROM days d
-        LEFT JOIN daily ON daily.day = d.day
-        ORDER BY d.day
+          pl.date_start::text as date_start,
+          pl.date_start::text as date_end,
+          COALESCE(sum(pl.spend), 0)::text as spend,
+          COALESCE(sum(pl.purchase_value), 0)::text as purchase_value,
+          (COALESCE(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text as roas,
+          (COALESCE(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as cpa,
+          (COALESCE(sum(pl.ctr * pl.impressions), 0) / nullif(sum(pl.impressions), 0))::text as ctr,
+          COALESCE(sum(pl.conversions), 0)::int as conversions,
+          COALESCE(sum(pl.impressions), 0)::int as impressions,
+          COALESCE(sum(pl.reach), 0)::int as reach,
+          (CASE WHEN sum(pl.impressions) > 0 THEN (sum(pl.spend) / sum(pl.impressions)) * 1000 ELSE NULL END)::text as cpm,
+          COALESCE(sum(pl.link_clicks), 0)::int as link_clicks
+        FROM performance_log pl
+        JOIN ad ON ad.id = pl.ad_id
+        JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+        WHERE pl.date_start >= ${fromStr}::date
+          AND pl.date_start <= ${toStr}::date
+          AND ad.organization_id = ${ctx.organizationId}
+          AND ${basePl}
+          ${accountFilter} ${ownershipFilter} ${teamFilter}
+        GROUP BY pl.date_start
+        ORDER BY pl.date_start
       `);
 
-      const rows = result.rows as DailyRow[];
+      const rowsByDate = new Map(
+        (result.rows as DailyRow[]).map((row) => [row.date_start, row]),
+      );
+      const rows = enumerateDateRange(fromStr, toStr).map((date) => (
+        rowsByDate.get(date) ?? {
+          date_start: date,
+          date_end: date,
+          spend: "0",
+          purchase_value: "0",
+          roas: null,
+          cpa: null,
+          ctr: null,
+          conversions: 0,
+          impressions: 0,
+          reach: 0,
+          cpm: null,
+          link_clicks: 0,
+        }
+      ));
       let lastWithSpend = -1;
       for (let i = rows.length - 1; i >= 0; i--) {
         const s = rows[i].spend ? parseFloat(rows[i].spend!) : 0;
@@ -1029,18 +1161,19 @@ export const adCreativeRouter = router({
         daily_per_account AS (
           SELECT
             ad.account_id,
-            d.day,
-            sum(pl.spend / GREATEST((pl.date_end - pl.date_start + 1), 1)) AS spend,
-            sum(pl.purchase_value / GREATEST((pl.date_end - pl.date_start + 1), 1)) AS revenue
-          FROM days d
-          JOIN performance_log pl ON d.day BETWEEN pl.date_start AND pl.date_end
+            pl.date_start::date AS day,
+            sum(pl.spend) AS spend,
+            sum(pl.purchase_value) AS revenue
+          FROM performance_log pl
           JOIN ad ON ad.id = pl.ad_id
           JOIN ad_creative ac ON ac.id = ad.ad_creative_id
-          WHERE ad.organization_id = ${ctx.organizationId}
+          WHERE pl.date_start >= ${input.from}::date
+            AND pl.date_start <= ${input.to}::date
+            AND ad.organization_id = ${ctx.organizationId}
             AND ${basePl}
             ${teamFilter}
             ${accountFilterAd}
-          GROUP BY ad.account_id, d.day
+          GROUP BY ad.account_id, pl.date_start
         ),
         sparkline_rows AS (
           SELECT

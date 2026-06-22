@@ -16,6 +16,12 @@
       "sourceType": "github",
       "computedHash": "063a0e6448123cd359ad0044cc46b0e490cc7964d45ef4bb9fd842bd2ffbca67"
     },
+    "improve": {
+      "source": "shadcn/improve",
+      "sourceType": "github",
+      "skillPath": "skills/improve/SKILL.md",
+      "computedHash": "39a9358732dcff385e9e4d3e60b4547856f834e54a58b35e455aa9bd49928c13"
+    },
     "inngest-durable-functions": {
       "source": "inngest/inngest-skills",
       "sourceType": "github",

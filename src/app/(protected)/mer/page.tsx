@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { subDays } from "date-fns";
 import { useQueryState, parseAsString } from "nuqs";
 import { AlertTriangle, ChevronRight } from "lucide-react";
@@ -68,14 +69,31 @@ export default function MerPage() {
   const teamsQuery = useQuery(trpc.team.list.queryOptions());
   const accountsQuery = useQuery(trpc.adAccount.list.queryOptions());
 
-  const stats = useQuery(
-    trpc.adCreative.dashboardStats.queryOptions({
+  const portfolioSummary = useQuery(
+    trpc.adCreative.portfolioSummary.queryOptions({
       from: fromValue,
       to: toValue,
       teamId: selectedTeamId,
       accountId: selectedAccountId,
     }),
   );
+
+  const [loadSecondary, setLoadSecondary] = useState(false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setLoadSecondary(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  const canLoadSecondaryStats = loadSecondary && !portfolioSummary.isPending;
+  const secondaryStats = useQuery({
+    ...trpc.adCreative.dashboardStats.queryOptions({
+      from: fromValue,
+      to: toValue,
+      teamId: selectedTeamId,
+      accountId: selectedAccountId,
+      includePortfolio: false,
+    }),
+    enabled: canLoadSecondaryStats,
+  });
 
   const dailyPerf = useQuery(
     trpc.adCreative.getDailyPortfolioPerformance.queryOptions({
@@ -95,8 +113,8 @@ export default function MerPage() {
     }),
   );
 
-  const portfolio = stats.data?.portfolio;
-  const bottomPerformers = stats.data?.bottomPerformers ?? [];
+  const portfolio = portfolioSummary.data;
+  const bottomPerformers = secondaryStats.data?.bottomPerformers ?? [];
 
   const sparks = (() => {
     const rows = dailyPerf.data ?? [];
@@ -219,14 +237,14 @@ export default function MerPage() {
                     {kpi.label}
                   </span>
                   <div className="flex items-baseline gap-2">
-                    {stats.isLoading ? (
+                    {portfolioSummary.isLoading ? (
                       <Skeleton className="h-6 w-20" />
                     ) : (
                       <span className="text-[22px] font-semibold tabular-nums leading-none tracking-tight">
                         {kpi.value}
                       </span>
                     )}
-                    {kpi.delta != null && !stats.isLoading && (
+                    {kpi.delta != null && !portfolioSummary.isLoading && (
                       <span
                         className={`text-[11px] tabular-nums leading-none ${
                           isGood ? "text-emerald-500" : "text-red-400"
@@ -337,7 +355,7 @@ export default function MerPage() {
         title="Needs Attention"
         icon={<AlertTriangle className="size-3.5 text-red-400" />}
         rows={bottomPerformers}
-        isLoading={stats.isLoading}
+        isLoading={!canLoadSecondaryStats || secondaryStats.isLoading}
         emptyMessage="No underperformers detected"
         viewAllHref="/creatives?health=critical"
         canManageData={canManageData}
