@@ -1,6 +1,6 @@
 import { generateText, Output } from "ai";
 import { z } from "zod";
-import { openrouter } from "@/lib/ai";
+import { openai } from "@/lib/ai";
 import type {
   CreativeVariantCopy,
   CreativeVariantPerformanceSnapshot,
@@ -15,7 +15,7 @@ import {
 export { STATIC_CREATIVE_FORMAT, isStaticCreativeFormat, isWinnerCandidate };
 
 export const CREATIVE_VARIANT_PROMPT_VERSION = "static-winner-variant-v1";
-export const DEFAULT_CREATIVE_VARIANT_MODEL = "openai/gpt-4.1-mini";
+export const DEFAULT_CREATIVE_VARIANT_MODEL = "gpt-4.1-mini";
 
 const nonEmptyString = z.string().trim().min(1);
 
@@ -48,7 +48,7 @@ export function getCreativeVariantModel() {
 }
 
 export function hasCreativeVariantAiConfig() {
-  return Boolean(process.env.OPENROUTER_API_KEY);
+  return Boolean(process.env.OPENAI_API_KEY);
 }
 
 export function normalizeGeneratedVariants(input: unknown): CreativeVariantCopy[] {
@@ -132,7 +132,7 @@ export async function generateCreativeVariants(input: {
 }) {
   const model = getCreativeVariantModel();
   const { output } = await generateText({
-    model: openrouter(model),
+    model: openai(model),
     output: Output.object({
       schema: generatedVariantBatchSchema,
       name: "winner_variants",

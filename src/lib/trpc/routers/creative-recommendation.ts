@@ -66,7 +66,7 @@ export const creativeRecommendationRouter = router({
       if (!hasCreativeVariantAiConfig()) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
-          message: "OPENROUTER_API_KEY is required to generate variants.",
+          message: "OPENAI_API_KEY is required to generate variants.",
         });
       }
 
