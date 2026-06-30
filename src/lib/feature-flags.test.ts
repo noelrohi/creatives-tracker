@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isLaunchpadEnabled } from "@/lib/feature-flags";
+import { getFeatureFlags, isLaunchpadEnabled } from "@/lib/feature-flags";
 
 describe("feature flags", () => {
   it("keeps Launchpad disabled by default", () => {
@@ -13,5 +13,14 @@ describe("feature flags", () => {
     expect(isLaunchpadEnabled({ ADSOLUTE_LAUNCHPAD_ENABLED: "true" })).toBe(
       true,
     );
+  });
+
+  it("returns a centralized feature map for gated navigation and routes", () => {
+    expect(
+      getFeatureFlags({
+        ADSOLUTE_LAUNCHPAD_ENABLED: "true",
+        ADSOLUTE_RECOMMENDATIONS_ENABLED: "true",
+      }),
+    ).toEqual({ launchpad: true, recommendations: true });
   });
 });

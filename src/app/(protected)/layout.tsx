@@ -2,7 +2,7 @@ import Script from "next/script";
 import { AppSidebar } from "@/components/app-sidebar";
 import { BreadcrumbsProvider, HeaderBreadcrumbs } from "@/components/breadcrumbs";
 import { ImportStatusBanner } from "@/components/import-status-banner";
-import { isLaunchpadEnabled } from "@/lib/feature-flags";
+import { getFeatureFlags } from "@/lib/feature-flags";
 import { OrgGuard } from "@/components/org-guard";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Separator } from "@/components/ui/separator";
@@ -20,7 +20,7 @@ export default function DashboardLayout({
   return (
     <OrgGuard>
       <SidebarProvider>
-        <AppSidebar launchpadEnabled={isLaunchpadEnabled()} />
+        <AppSidebar featureFlags={getFeatureFlags()} />
         <SidebarInset className="h-svh md:peer-data-[variant=inset]:h-[calc(100svh-1rem)]">
           <BreadcrumbsProvider>
             <ImportStatusBanner />

@@ -1279,8 +1279,18 @@ export const adCreativeRouter = router({
 
   getAdPreviewUrl: orgProcedure
     .meta(openApiQueryMeta("adCreative", "getAdPreviewUrl"))
-    .input(z.object({ id: z.string() }))
+    .input(z.object({ id: z.string(), adId: z.string().optional() }))
     .query(async ({ input, ctx }) => {
+      const conditions: SQL[] = [
+        eq(ads.adCreativeId, input.id),
+        eq(ads.organizationId, ctx.organizationId),
+        sql`${ads.metaId} IS NOT NULL`,
+        sql`${adAccounts.metaAccessToken} IS NOT NULL`,
+      ];
+      if (input.adId) {
+        conditions.push(eq(ads.id, input.adId));
+      }
+
       const [linkedMetaAd] = await db
         .select({
           metaAdId: ads.metaId,
@@ -1288,14 +1298,7 @@ export const adCreativeRouter = router({
         })
         .from(ads)
         .innerJoin(adAccounts, eq(ads.accountId, adAccounts.id))
-        .where(
-          and(
-            eq(ads.adCreativeId, input.id),
-            eq(ads.organizationId, ctx.organizationId),
-            sql`${ads.metaId} IS NOT NULL`,
-            sql`${adAccounts.metaAccessToken} IS NOT NULL`,
-          ),
-        )
+        .where(and(...conditions))
         .limit(1);
 
       if (!linkedMetaAd?.metaAdId || !linkedMetaAd.metaAccessToken) {

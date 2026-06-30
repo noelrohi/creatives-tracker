@@ -14,6 +14,7 @@ import { teamRouter } from "./team";
 import { metaSyncRouter } from "./meta-sync";
 import { triggerRouter } from "./trigger";
 import { launchpadRouter } from "./launchpad";
+import { creativeRecommendationRouter } from "./creative-recommendation";
 
 export const appRouter = router({
   adCreative: adCreativeRouter,
@@ -31,6 +32,7 @@ export const appRouter = router({
   metaSync: metaSyncRouter,
   trigger: triggerRouter,
   launchpad: launchpadRouter,
+  creativeRecommendation: creativeRecommendationRouter,
 });
 
 export type AppRouter = typeof appRouter;

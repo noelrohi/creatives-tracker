@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ComponentType } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -48,6 +48,7 @@ import {
   LogOut,
   Upload,
   Image,
+  Sparkles,
   Rocket,
   Settings,
   TrendingUp,
@@ -66,23 +67,31 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DeleteOrganizationDialog } from "@/components/delete-organization-dialog";
+import type { FeatureFlagMap, FeatureFlag } from "@/lib/feature-flags";
 
 const dashboardSubItems = [
   { label: "Overview", href: "/", icon: LayoutDashboard },
   { label: "MER", href: "/mer", icon: TrendingUp },
 ];
 
-const navItems = [
+const navItems: Array<{
+  label: string;
+  href: string;
+  icon: ComponentType;
+  badge?: string;
+  featureFlag?: FeatureFlag;
+}> = [
   { label: "Creatives", href: "/creatives", icon: Image },
-  { label: "Launchpad", href: "/launchpad", icon: Rocket, badge: "Beta" },
+  { label: "Recommendations", href: "/recommendations", icon: Sparkles, badge: "Beta", featureFlag: "recommendations" },
+  { label: "Launchpad", href: "/launchpad", icon: Rocket, badge: "Beta", featureFlag: "launchpad" },
   { label: "Teams", href: "/teams", icon: Users },
   { label: "Accounts", href: "/accounts", icon: Settings },
 ];
 
 export function AppSidebar({
-  launchpadEnabled = false,
+  featureFlags,
 }: {
-  launchpadEnabled?: boolean;
+  featureFlags: FeatureFlagMap;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -123,9 +132,9 @@ export function AppSidebar({
       ? currentUserRole
       : null,
   );
-  const featureNavItems = launchpadEnabled
-    ? navItems
-    : navItems.filter((item) => item.href !== "/launchpad");
+  const featureNavItems = navItems.filter(
+    (item) => !item.featureFlag || featureFlags[item.featureFlag],
+  );
   const visibleNavItems = isPrivileged
     ? featureNavItems
     : featureNavItems.filter((item) => item.href !== "/accounts");

@@ -17,6 +17,12 @@ import { ads } from "@/schema/ad";
 import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
 import { performanceLogs } from "@/schema/performance-log";
+import {
+  creativeFormatMergeSql,
+  mergeCreativeFormat,
+  normalizeIncomingCreativeFormat,
+  type CreativeFormat,
+} from "@/lib/creative-recommendation-policy";
 
 export type ImportMetaRow =
   Partial<BulkImportRow>
@@ -28,6 +34,29 @@ type PerformanceLogImportRow = Omit<
 >;
 
 const PERF_IMPORT_BATCH_SIZE = 1_000;
+
+type ImportedCreativeMeta = {
+  assetUrl?: string;
+  videoUrl?: string;
+  format?: CreativeFormat;
+};
+
+function mergeImportedCreativeMeta(
+  existing: ImportedCreativeMeta | undefined,
+  incoming: ImportedCreativeMeta,
+): ImportedCreativeMeta {
+  const videoUrl = existing?.videoUrl ?? incoming.videoUrl;
+
+  return {
+    assetUrl: existing?.assetUrl ?? incoming.assetUrl,
+    videoUrl,
+    format: mergeCreativeFormat({
+      existingFormat: existing?.format,
+      incomingFormat: incoming.format,
+      incomingVideoUrl: incoming.videoUrl,
+    }),
+  };
+}
 
 function normalizeName(value?: string | null) {
   return value?.trim() || undefined;
@@ -664,11 +693,7 @@ export async function enrichMetaCreativePreviews(input: {
 
   let updatedAds = 0;
   const now = new Date();
-  const creativeUpdates = new Map<string, {
-    assetUrl?: string;
-    videoUrl?: string;
-    format?: "static" | "video";
-  }>();
+  const creativeUpdates = new Map<string, ImportedCreativeMeta>();
   const touchedCreativeIds = new Set<string>();
 
   for (const adRow of adRows) {
@@ -693,29 +718,41 @@ export async function enrichMetaCreativePreviews(input: {
     if (!adRow.adCreativeId) continue;
     touchedCreativeIds.add(adRow.adCreativeId);
     if (!preview) continue;
-    const current = creativeUpdates.get(adRow.adCreativeId) ?? {};
-    creativeUpdates.set(adRow.adCreativeId, {
-      assetUrl: current.assetUrl ?? preview.assetUrl ?? undefined,
-      videoUrl: current.videoUrl ?? preview.videoUrl,
-      format: current.format ?? preview.format ?? undefined,
-    });
+    creativeUpdates.set(adRow.adCreativeId, mergeImportedCreativeMeta(
+      creativeUpdates.get(adRow.adCreativeId),
+      {
+        assetUrl: preview.assetUrl ?? undefined,
+        videoUrl: preview.videoUrl,
+        format: normalizeIncomingCreativeFormat({
+          format: preview.format,
+          videoUrl: preview.videoUrl,
+        }),
+      },
+    ));
   }
 
   let updatedCreatives = 0;
   for (const creativeId of touchedCreativeIds) {
     const preview = creativeUpdates.get(creativeId);
-    const creativeSet: Partial<typeof adCreatives.$inferInsert> = {
+    const creativeSet = {
       enrichmentAttemptedAt: now,
+      ...(preview?.assetUrl ? { assetUrl: preview.assetUrl } : {}),
+      ...(preview?.videoUrl ? { videoUrl: preview.videoUrl } : {}),
+      ...(preview?.format
+        ? {
+            format: creativeFormatMergeSql({
+              existingFormat: sql`${adCreatives.format}`,
+              incomingFormat: sql`${preview.format}`,
+              incomingVideoUrl: preview.videoUrl ? sql`${preview.videoUrl}` : undefined,
+            }),
+          }
+        : {}),
     };
-    if (preview?.assetUrl) creativeSet.assetUrl = preview.assetUrl;
-    if (preview?.videoUrl) creativeSet.videoUrl = preview.videoUrl;
-    if (preview?.format) creativeSet.format = preview.format;
 
     await db.update(adCreatives).set(creativeSet).where(
       and(
         eq(adCreatives.id, creativeId),
         eq(adCreatives.organizationId, input.organizationId),
-        sql`(${adCreatives.assetUrl} IS NULL OR ${adCreatives.videoUrl} IS NULL OR ${adCreatives.format} IS NULL)`,
       ),
     );
     updatedCreatives += 1;
@@ -1111,19 +1148,20 @@ export async function importMetaRows(input: {
   const newKeys = [...adInfoMap.keys()].filter((key) => !existingMap.has(key));
 
   const importedCreativeNames = [...new Set([...adInfoMap.values()].map((ad) => ad.name))];
-  const importedCreativeMetaByName = new Map<string, {
-    assetUrl?: string;
-    videoUrl?: string;
-    format?: "static" | "video" | "ugc" | "carousel";
-  }>();
+  const importedCreativeMetaByName = new Map<string, ImportedCreativeMeta>();
   for (const row of rows) {
     if (!row.assetUrl && !row.videoUrl && !row.format) continue;
-    const existing = importedCreativeMetaByName.get(row.name);
-    importedCreativeMetaByName.set(row.name, {
-      assetUrl: existing?.assetUrl ?? row.assetUrl,
-      videoUrl: existing?.videoUrl ?? row.videoUrl,
-      format: existing?.format ?? row.format,
-    });
+    importedCreativeMetaByName.set(row.name, mergeImportedCreativeMeta(
+      importedCreativeMetaByName.get(row.name),
+      {
+        assetUrl: row.assetUrl,
+        videoUrl: row.videoUrl,
+        format: normalizeIncomingCreativeFormat({
+          format: row.format,
+          videoUrl: row.videoUrl,
+        }),
+      },
+    ));
   }
   const creativeIdByName = new Map<string, string>();
   const createdCreatives: { id: string; name: string }[] = [];
@@ -1179,12 +1217,19 @@ export async function importMetaRows(input: {
     await db.update(adCreatives).set({
       ...(meta.assetUrl ? { assetUrl: meta.assetUrl } : {}),
       ...(meta.videoUrl ? { videoUrl: meta.videoUrl } : {}),
-      ...(meta.format ? { format: meta.format } : {}),
+      ...(meta.format
+        ? {
+            format: creativeFormatMergeSql({
+              existingFormat: sql`${adCreatives.format}`,
+              incomingFormat: sql`${meta.format}`,
+              incomingVideoUrl: meta.videoUrl ? sql`${meta.videoUrl}` : undefined,
+            }),
+          }
+        : {}),
     }).where(
       and(
         eq(adCreatives.id, creativeId),
         eq(adCreatives.organizationId, input.organizationId),
-        sql`(${adCreatives.assetUrl} IS NULL OR ${adCreatives.videoUrl} IS NULL OR ${adCreatives.format} IS NULL)`,
       ),
     );
   }

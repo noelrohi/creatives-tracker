@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import { auth } from "@/lib/auth";
 import { authenticateApiKey, getBearerToken } from "@/lib/api-keys";
 import { isPrivilegedOrgRole } from "@/lib/organization-access";
+import { isFeatureEnabled, type FeatureFlag } from "@/lib/feature-flags";
 import { getOrganizationRole } from "@/lib/server/organization-role";
 import type { OpenApiMeta } from "./openapi-meta";
 
@@ -280,9 +281,22 @@ const hasOrgOwnerSession = t.middleware(async ({ ctx, next }) => {
 export const router = t.router;
 export const createCallerFactory = t.createCallerFactory;
 export const baseProcedure = t.procedure;
+export const organizationRequired = hasOrganization;
+export const writeAccessRequired = hasWriteAccess;
 export const protectedProcedure = t.procedure.use(isAuthenticated);
 export const orgProcedure = t.procedure.use(hasOrganization);
 export const orgWriteProcedure = t.procedure.use(hasWriteAccess);
 export const orgAdminProcedure = t.procedure.use(hasOrgAdminSession);
 export const orgOwnerProcedure = t.procedure.use(hasOrgOwnerSession);
 export const internalWorkerProcedure = t.procedure.use(hasWorkerAccess);
+export const featureEnabled = (flag: FeatureFlag) =>
+  t.middleware(async ({ next }) => {
+    if (!isFeatureEnabled(flag)) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: `${flag} is not enabled.`,
+      });
+    }
+
+    return next();
+  });
