@@ -48,13 +48,12 @@ import {
   LogOut,
   Upload,
   Image,
-  Sparkles,
-  Rocket,
   Settings,
   TrendingUp,
   Users,
   Pencil,
   Plus,
+  Sparkles,
   UserPlus,
   Trash2,
 } from "lucide-react";
@@ -67,7 +66,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DeleteOrganizationDialog } from "@/components/delete-organization-dialog";
-import type { FeatureFlagMap, FeatureFlag } from "@/lib/feature-flags";
 
 const dashboardSubItems = [
   { label: "Overview", href: "/", icon: LayoutDashboard },
@@ -79,20 +77,14 @@ const navItems: Array<{
   href: string;
   icon: ComponentType;
   badge?: string;
-  featureFlag?: FeatureFlag;
 }> = [
+  { label: "Create", href: "/create", icon: Sparkles },
   { label: "Creatives", href: "/creatives", icon: Image },
-  { label: "Recommendations", href: "/recommendations", icon: Sparkles, badge: "Beta", featureFlag: "recommendations" },
-  { label: "Launchpad", href: "/launchpad", icon: Rocket, badge: "Beta", featureFlag: "launchpad" },
   { label: "Teams", href: "/teams", icon: Users },
   { label: "Accounts", href: "/accounts", icon: Settings },
 ];
 
-export function AppSidebar({
-  featureFlags,
-}: {
-  featureFlags: FeatureFlagMap;
-}) {
+export function AppSidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -132,12 +124,9 @@ export function AppSidebar({
       ? currentUserRole
       : null,
   );
-  const featureNavItems = navItems.filter(
-    (item) => !item.featureFlag || featureFlags[item.featureFlag],
-  );
   const visibleNavItems = isPrivileged
-    ? featureNavItems
-    : featureNavItems.filter((item) => item.href !== "/accounts");
+    ? navItems
+    : navItems.filter((item) => item.href !== "/accounts");
 
   async function handleSignOut() {
     await authClient.signOut();

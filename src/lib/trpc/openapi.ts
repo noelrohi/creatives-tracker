@@ -4,7 +4,6 @@ import { z, toJSONSchema, type ZodTypeAny } from "zod";
 import { createSelectSchema } from "drizzle-zod";
 import { createContext } from "./init";
 import type { OpenApiMeta, OpenApiMethod } from "./openapi-meta";
-import { isLaunchpadEnabled } from "@/lib/feature-flags";
 import { appRouter } from "./routers/_app";
 import { adCreatives } from "@/schema/ad-creative";
 import { campaigns } from "@/schema/campaign";
@@ -16,14 +15,6 @@ import { adAccounts } from "@/schema/account";
 import { apiKeys } from "@/schema/api-key";
 
 const EXCLUDED_OPENAPI_ROUTERS = new Set(["abTest"]);
-
-function isOpenApiRouterEnabled(routerName: string) {
-  if (routerName === "launchpad") {
-    return isLaunchpadEnabled();
-  }
-
-  return true;
-}
 
 const TAG_METADATA: Record<string, { name: string; description: string }> = {
   adCreative: {
@@ -57,10 +48,6 @@ const TAG_METADATA: Record<string, { name: string; description: string }> = {
   apiKey: {
     name: "API Keys",
     description: "Manage organization-scoped API keys",
-  },
-  launchpad: {
-    name: "Launchpad",
-    description: "Generate and inspect gated Creative Launchpad dry runs",
   },
 };
 
@@ -576,11 +563,7 @@ function collectOpenApiProcedures(
 export function getOpenApiProcedures() {
   return collectOpenApiProcedures(
     appRouter._def.record as Record<string, unknown>,
-  ).filter(
-    (procedure) =>
-      !EXCLUDED_OPENAPI_ROUTERS.has(procedure.routerName) &&
-      isOpenApiRouterEnabled(procedure.routerName),
-  );
+  ).filter((procedure) => !EXCLUDED_OPENAPI_ROUTERS.has(procedure.routerName));
 }
 
 export function getOpenApiProcedure(

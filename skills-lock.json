@@ -6,6 +6,12 @@
       "sourceType": "github",
       "computedHash": "a4c830509e85557b59339d8d93a4e243e9e59c686e7678854d39230e12c2a6dc"
     },
+    "codex-first": {
+      "source": "steipete/agent-scripts",
+      "sourceType": "github",
+      "skillPath": "skills/codex-first/SKILL.md",
+      "computedHash": "1ff82a567f3a6e8a112df69cd9e1fcf0435753449670aa637fd9bc2c82bdf7d5"
+    },
     "create-auth-skill": {
       "source": "better-auth/skills",
       "sourceType": "github",
