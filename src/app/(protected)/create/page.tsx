@@ -42,11 +42,6 @@ export default function CreatePage() {
             count: variables.count ?? count,
           },
         ]);
-        setBrief("");
-        setAngle(undefined);
-        setPersona(undefined);
-        setAwarenessLevel(undefined);
-        setReferences([]);
       },
       onError: (error) => toast.error(error.message),
     }),
@@ -55,15 +50,26 @@ export default function CreatePage() {
   const submit = useCallback(() => {
     const trimmed = brief.trim();
     if (!trimmed || generate.isPending) return;
-    generate.mutate({
-      brief: trimmed,
-      angle,
-      persona,
-      awarenessLevel,
-      count,
-      referenceImageUrls:
-        references.length > 0 ? references.map((ref) => ref.url) : undefined,
-    });
+    generate.mutate(
+      {
+        brief: trimmed,
+        angle,
+        persona,
+        awarenessLevel,
+        count,
+        referenceImageUrls:
+          references.length > 0 ? references.map((ref) => ref.url) : undefined,
+      },
+      {
+        onSuccess: () => {
+          setBrief("");
+          setAngle(undefined);
+          setPersona(undefined);
+          setAwarenessLevel(undefined);
+          setReferences([]);
+        },
+      },
+    );
   }, [brief, angle, persona, awarenessLevel, count, references, generate]);
 
   const applyStarter = useCallback((starter: Starter) => {
