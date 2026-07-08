@@ -12,9 +12,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import type { ComposerReference } from "./create-types";
+import type { ComposerReference } from "./studio-types";
 
-type CreateComposerProps = {
+type StudioComposerProps = {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
@@ -28,7 +28,7 @@ type CreateComposerProps = {
   autoFocus?: boolean;
 };
 
-export function CreateComposer({
+export function StudioComposer({
   value,
   onChange,
   onSubmit,
@@ -40,7 +40,7 @@ export function CreateComposer({
   onRemoveReference,
   className,
   autoFocus,
-}: CreateComposerProps) {
+}: StudioComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const canSend = value.trim().length > 0 && !pending;
 

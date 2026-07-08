@@ -1,6 +1,6 @@
 /**
  * Single source of truth for the marketing awareness-level domain, shared by
- * the /create UI, the `create` tRPC router, and the `generate-static-ads`
+ * the /studio UI, the `studio` tRPC router, and the `generate-static-ads`
  * trigger task. Mirrors the `awareness_level` pg enum in `src/schema/enums.ts`.
  */
 export const AWARENESS_LEVELS = [

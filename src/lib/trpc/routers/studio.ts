@@ -70,7 +70,7 @@ async function fetchCreativePerformanceRows(
     ) as Promise<CreativePerformanceRow[]>;
 }
 
-export const createRouter = router({
+export const studioRouter = router({
   generate: orgWriteProcedure
     .input(
       z.object({

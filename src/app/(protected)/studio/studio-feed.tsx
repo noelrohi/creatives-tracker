@@ -20,7 +20,7 @@ import type {
   generateStaticAdsTask,
   GeneratedVariant,
 } from "../../../../trigger/generate-static-ads";
-import type { Generation } from "./create-types";
+import type { Generation } from "./studio-types";
 
 function StatusChip({
   done,
@@ -133,7 +133,7 @@ function GenerationCard({
   const [savedUrls, setSavedUrls] = useState<Set<string>>(new Set());
 
   const saveMutation = useMutation(
-    trpc.create.save.mutationOptions({
+    trpc.studio.save.mutationOptions({
       onSuccess: (_data, variables) => {
         setSavedUrls((prev) => new Set(prev).add(variables.assetUrl));
         toast.success("Saved to Creatives");
@@ -229,7 +229,7 @@ function GenerationCard({
   );
 }
 
-export function CreateFeed({
+export function StudioFeed({
   generations,
   onRedo,
   redoDisabled,

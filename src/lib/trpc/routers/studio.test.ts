@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// --- Mocked DB: supports the create router's
+// --- Mocked DB: supports the studio router's
 //   select().from().innerJoin().innerJoin().where().groupBy() chain,
 // resolving groupBy() with the next queued row set. save() uses
 //   insert().values().returning().
@@ -55,7 +55,7 @@ function queueGroupBy(...rowSets: Array<Record<string, unknown>[]>) {
   dbState.groupByRows.push(...rowSets);
 }
 
-describe("create router — static-ad composer starters", () => {
+describe("studio router — static-ad composer starters", () => {
   beforeEach(() => {
     dbState.groupByRows = [];
     dbState.inserted = [];
@@ -105,7 +105,7 @@ describe("create router — static-ad composer starters", () => {
       },
     ]);
 
-    const result = await caller.create.winningAngles();
+    const result = await caller.studio.winningAngles();
 
     expect(result.map((r) => r.angle)).toEqual(["Bold offer", "Founder story"]);
 
@@ -124,7 +124,7 @@ describe("create router — static-ad composer starters", () => {
   it("winningAngles: returns [] for a fresh account with no performance data (drives the empty-state fallback)", async () => {
     const caller = createMockCaller({ role: "owner" });
     queueGroupBy([]);
-    const result = await caller.create.winningAngles();
+    const result = await caller.studio.winningAngles();
     expect(result).toEqual([]);
   });
 
@@ -157,7 +157,7 @@ describe("create router — static-ad composer starters", () => {
       },
     ]);
 
-    const result = await caller.create.topByPurchases();
+    const result = await caller.studio.topByPurchases();
 
     expect(result.map((r) => r.name)).toEqual(["Winner", "Runner up"]);
     expect(result[0].purchases).toBe(40);
@@ -168,7 +168,7 @@ describe("create router — static-ad composer starters", () => {
   it("generate: queues the Trigger.dev job with the brief + reference image and returns a run + public token", async () => {
     const caller = createMockCaller({ role: "owner" });
 
-    const result = await caller.create.generate({
+    const result = await caller.studio.generate({
       brief: "Bright summer skincare promo",
       angle: "Bold offer",
       awarenessLevel: "most_aware",
@@ -201,7 +201,7 @@ describe("create router — static-ad composer starters", () => {
   it("save: persists a generated variant as a static creative with its targeting", async () => {
     const caller = createMockCaller({ role: "owner" });
 
-    const creative = await caller.create.save({
+    const creative = await caller.studio.save({
       assetUrl: "https://cdn.test/generated-0.png",
       angle: "Bold offer",
       persona: "Deal seekers",

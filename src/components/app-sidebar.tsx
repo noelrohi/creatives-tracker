@@ -15,6 +15,7 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuBadge,
@@ -78,11 +79,17 @@ const navItems: Array<{
   icon: ComponentType;
   badge?: string;
 }> = [
-  { label: "Create", href: "/create", icon: Sparkles },
   { label: "Creatives", href: "/creatives", icon: Image },
   { label: "Teams", href: "/teams", icon: Users },
   { label: "Accounts", href: "/accounts", icon: Settings },
 ];
+
+const toolItems: Array<{
+  label: string;
+  href: string;
+  icon: ComponentType;
+  badge?: string;
+}> = [{ label: "Image Studio", href: "/studio", icon: Sparkles, badge: "Beta" }];
 
 export function AppSidebar() {
   const pathname = usePathname();
@@ -302,6 +309,10 @@ export function AppSidebar() {
                   ) : null}
                 </SidebarMenuItem>
               </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+          <SidebarGroup>
+            <SidebarGroupContent>
               <SidebarMenu>
                 <Collapsible
                   defaultOpen
@@ -343,6 +354,33 @@ export function AppSidebar() {
                   </SidebarMenuItem>
                 </Collapsible>
                 {visibleNavItems.map((item) => (
+                  <SidebarMenuItem key={item.href}>
+                    <SidebarMenuButton
+                      asChild
+                      tooltip={item.label}
+                      isActive={pathname.startsWith(item.href)}
+                      className={item.badge ? "pr-14" : undefined}
+                    >
+                      <Link href={item.href}>
+                        <item.icon />
+                        <span>{item.label}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                    {item.badge ? (
+                      <SidebarMenuBadge className="rounded-full border border-sidebar-border bg-sidebar-accent/80 px-2 text-[10px] font-semibold uppercase tracking-wide text-sidebar-accent-foreground">
+                        {item.badge}
+                      </SidebarMenuBadge>
+                    ) : null}
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+          <SidebarGroup>
+            <SidebarGroupLabel>Tools</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {toolItems.map((item) => (
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton
                       asChild

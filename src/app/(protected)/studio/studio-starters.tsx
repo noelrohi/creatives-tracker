@@ -7,7 +7,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fmtRoas, fmtNum } from "@/lib/fmt";
 import { awarenessDisplayLabel } from "@/lib/awareness";
-import type { AwarenessLevel, Starter } from "./create-types";
+import type { AwarenessLevel, Starter } from "./studio-types";
 
 // Fallback library for new / low-data accounts (no winning angles yet).
 const DEFAULT_ANGLES: Array<{ angle: string; awarenessLevel: AwarenessLevel }> = [
@@ -87,10 +87,10 @@ function ListSkeleton() {
   );
 }
 
-export function CreateStarters({ onPick }: { onPick: (starter: Starter) => void }) {
+export function StudioStarters({ onPick }: { onPick: (starter: Starter) => void }) {
   const trpc = useTRPC();
-  const anglesQuery = useQuery(trpc.create.winningAngles.queryOptions());
-  const topQuery = useQuery(trpc.create.topByPurchases.queryOptions());
+  const anglesQuery = useQuery(trpc.studio.winningAngles.queryOptions());
+  const topQuery = useQuery(trpc.studio.topByPurchases.queryOptions());
 
   const angles = anglesQuery.data ?? [];
   const top = topQuery.data ?? [];

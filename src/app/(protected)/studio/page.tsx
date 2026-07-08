@@ -4,17 +4,17 @@ import { useCallback, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useTRPC } from "@/lib/trpc/client";
-import { CreateComposer } from "./create-composer";
-import { CreateStarters } from "./create-starters";
-import { CreateFeed } from "./create-feed";
+import { StudioComposer } from "./studio-composer";
+import { StudioStarters } from "./studio-starters";
+import { StudioFeed } from "./studio-feed";
 import type {
   AwarenessLevel,
   ComposerReference,
   Generation,
   Starter,
-} from "./create-types";
+} from "./studio-types";
 
-export default function CreatePage() {
+export default function StudioPage() {
   const trpc = useTRPC();
   const [brief, setBrief] = useState("");
   const [angle, setAngle] = useState<string | undefined>(undefined);
@@ -27,7 +27,7 @@ export default function CreatePage() {
   const [generations, setGenerations] = useState<Generation[]>([]);
 
   const generate = useMutation(
-    trpc.create.generate.mutationOptions({
+    trpc.studio.generate.mutationOptions({
       onSuccess: (data, variables) => {
         setGenerations((prev) => [
           ...prev,
@@ -107,7 +107,7 @@ export default function CreatePage() {
         <h1 className="mb-6 text-center text-2xl font-semibold tracking-tight sm:text-3xl">
           What are we <span className="text-primary">launching</span> today?
         </h1>
-        <CreateComposer
+        <StudioComposer
           value={brief}
           onChange={setBrief}
           onSubmit={submit}
@@ -119,20 +119,20 @@ export default function CreatePage() {
           onRemoveReference={removeReference}
           autoFocus
         />
-        <CreateStarters onPick={applyStarter} />
+        <StudioStarters onPick={applyStarter} />
       </div>
     );
   }
 
   return (
     <div className="mx-auto flex h-full w-full max-w-2xl flex-col">
-      <CreateFeed
+      <StudioFeed
         generations={generations}
         onRedo={redo}
         redoDisabled={generate.isPending}
       />
       <div className="shrink-0 pt-2">
-        <CreateComposer
+        <StudioComposer
           value={brief}
           onChange={setBrief}
           onSubmit={submit}
