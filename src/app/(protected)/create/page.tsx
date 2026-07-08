@@ -82,6 +82,7 @@ export default function CreatePage() {
 
   const redo = useCallback(
     (generation: Generation) => {
+      if (generate.isPending) return;
       generate.mutate({
         brief: generation.brief,
         angle: generation.angle,
@@ -119,7 +120,11 @@ export default function CreatePage() {
 
   return (
     <div className="mx-auto flex h-full w-full max-w-2xl flex-col">
-      <CreateFeed generations={generations} onRedo={redo} />
+      <CreateFeed
+        generations={generations}
+        onRedo={redo}
+        redoDisabled={generate.isPending}
+      />
       <div className="shrink-0 pt-2">
         <CreateComposer
           value={brief}

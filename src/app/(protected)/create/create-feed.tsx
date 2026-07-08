@@ -120,9 +120,11 @@ function VariantTile({
 function GenerationCard({
   generation,
   onRedo,
+  redoDisabled,
 }: {
   generation: Generation;
   onRedo: (generation: Generation) => void;
+  redoDisabled: boolean;
 }) {
   const trpc = useTRPC();
   const { run } = useRealtimeRun<typeof generateStaticAdsTask>(generation.runId, {
@@ -201,7 +203,12 @@ function GenerationCard({
           <p className="text-xs text-muted-foreground">
             Couldn&apos;t generate this set.
           </p>
-          <Button size="sm" variant="outline" onClick={() => onRedo(generation)}>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={redoDisabled}
+            onClick={() => onRedo(generation)}
+          >
             <RotateCw className="size-3.5" /> Try again
           </Button>
         </div>
@@ -211,6 +218,7 @@ function GenerationCard({
             size="sm"
             variant="ghost"
             className="text-muted-foreground"
+            disabled={redoDisabled}
             onClick={() => onRedo(generation)}
           >
             <RotateCw className="size-3.5" /> More like this
@@ -224,9 +232,11 @@ function GenerationCard({
 export function CreateFeed({
   generations,
   onRedo,
+  redoDisabled,
 }: {
   generations: Generation[];
   onRedo: (generation: Generation) => void;
+  redoDisabled: boolean;
 }) {
   return (
     <MessageScrollerProvider>
@@ -238,7 +248,11 @@ export function CreateFeed({
                 key={generation.runId}
                 scrollAnchor={index === generations.length - 1}
               >
-                <GenerationCard generation={generation} onRedo={onRedo} />
+                <GenerationCard
+                  generation={generation}
+                  onRedo={onRedo}
+                  redoDisabled={redoDisabled}
+                />
               </MessageScrollerItem>
             ))}
           </MessageScrollerContent>
