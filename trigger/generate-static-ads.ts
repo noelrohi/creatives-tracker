@@ -2,30 +2,23 @@ import { experimental_generateImage as generateImage } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { logger, metadata, task, tags } from "@trigger.dev/sdk";
 import { put } from "@vercel/blob";
+import type { AwarenessLevel } from "@/lib/awareness";
 
 const GENERATION_MODEL = "gpt-image-2";
-
-const AWARENESS_LABELS = {
-  unaware: "unaware",
-  problem_aware: "problem aware",
-  solution_aware: "solution aware",
-  product_aware: "product aware",
-  most_aware: "most aware",
-} as const;
 
 export type GenerateStaticAdsPayload = {
   organizationId: string;
   brief: string;
   angle?: string;
   persona?: string;
-  awarenessLevel?: keyof typeof AWARENESS_LABELS | null;
+  awarenessLevel?: AwarenessLevel | null;
   count: number;
   referenceImageUrls?: string[];
 };
 
-type VariantStatus = "pending" | "generating" | "ready" | "failed";
+export type VariantStatus = "pending" | "generating" | "ready" | "failed";
 
-type GeneratedVariant = {
+export type GeneratedVariant = {
   index: number;
   status: VariantStatus;
   url?: string;
@@ -37,7 +30,7 @@ function buildPrompt(payload: GenerateStaticAdsPayload) {
     payload.angle ? `Angle: ${payload.angle}` : null,
     payload.persona ? `Persona: ${payload.persona}` : null,
     payload.awarenessLevel
-      ? `Awareness level: ${AWARENESS_LABELS[payload.awarenessLevel]}`
+      ? `Awareness level: ${payload.awarenessLevel.replace(/_/g, " ")}`
       : null,
   ].filter(Boolean);
 

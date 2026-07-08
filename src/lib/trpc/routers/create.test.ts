@@ -34,8 +34,12 @@ const mockDb = {
 };
 
 const triggerMock = {
-  trigger: vi.fn(async () => ({ id: "run_abc123" })),
-  createPublicToken: vi.fn(async () => "public_token_xyz"),
+  trigger: vi.fn<(...args: unknown[]) => Promise<{ id: string }>>(async () => ({
+    id: "run_abc123",
+  })),
+  createPublicToken: vi.fn<(...args: unknown[]) => Promise<string>>(
+    async () => "public_token_xyz",
+  ),
 };
 
 vi.mock("@/db", () => ({ db: mockDb }));

@@ -16,14 +16,11 @@ import {
   MessageScrollerItem,
   MessageScrollerButton,
 } from "@/components/ui/message-scroller";
-import type { generateStaticAdsTask } from "../../../../trigger/generate-static-ads";
+import type {
+  generateStaticAdsTask,
+  GeneratedVariant,
+} from "../../../../trigger/generate-static-ads";
 import type { Generation } from "./create-types";
-
-type Variant = {
-  index: number;
-  status: "pending" | "generating" | "ready" | "failed";
-  url?: string;
-};
 
 function StatusChip({
   done,
@@ -66,7 +63,7 @@ function VariantTile({
   saving,
   onSave,
 }: {
-  variant: Variant;
+  variant: GeneratedVariant;
   angle?: string;
   saved: boolean;
   saving: boolean;
@@ -143,8 +140,8 @@ function GenerationCard({
     }),
   );
 
-  const meta = (run?.metadata ?? {}) as { status?: string; variants?: Variant[] };
-  const variants: Variant[] =
+  const meta = (run?.metadata ?? {}) as { status?: string; variants?: GeneratedVariant[] };
+  const variants: GeneratedVariant[] =
     meta.variants && meta.variants.length > 0
       ? meta.variants
       : Array.from({ length: generation.count }, (_, index) => ({

@@ -7,17 +7,10 @@ import { ads } from "@/schema/ad";
 import { adCreatives } from "@/schema/ad-creative";
 import { performanceLogs } from "@/schema/performance-log";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
+import { AWARENESS_LEVELS, type AwarenessLevel } from "@/lib/awareness";
 import type { generateStaticAdsTask } from "../../../../trigger/generate-static-ads";
 
-const awarenessLevels = [
-  "unaware",
-  "problem_aware",
-  "solution_aware",
-  "product_aware",
-  "most_aware",
-] as const;
-
-const awarenessLevelSchema = z.enum(awarenessLevels);
+const awarenessLevelSchema = z.enum(AWARENESS_LEVELS);
 
 type CreativePerformanceRow = {
   creativeId: string;
@@ -179,7 +172,7 @@ export const createRouter = router({
 
         return {
           angle: group.angle,
-          awarenessLevel,
+          awarenessLevel: awarenessLevel as AwarenessLevel | null,
           adCount: group.adCount,
           roas: group.spend > 0 ? group.purchaseValue / group.spend : 0,
           spend: group.spend,
@@ -201,7 +194,7 @@ export const createRouter = router({
         name: row.name,
         angle: row.angle,
         persona: row.persona,
-        awarenessLevel: row.awarenessLevel,
+        awarenessLevel: row.awarenessLevel as AwarenessLevel | null,
         assetUrl: row.assetUrl,
         purchases: toNumber(row.purchases),
         purchaseValue: toNumber(row.purchaseValue),

@@ -1,9 +1,6 @@
-export type AwarenessLevel =
-  | "unaware"
-  | "problem_aware"
-  | "solution_aware"
-  | "product_aware"
-  | "most_aware";
+import type { AwarenessLevel } from "@/lib/awareness";
+
+export type { AwarenessLevel };
 
 export type Starter = {
   brief: string;

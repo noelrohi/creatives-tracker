@@ -6,15 +6,8 @@ import { useTRPC } from "@/lib/trpc/client";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fmtRoas, fmtNum } from "@/lib/fmt";
+import { awarenessDisplayLabel } from "@/lib/awareness";
 import type { AwarenessLevel, Starter } from "./create-types";
-
-const AWARENESS_LABELS: Record<AwarenessLevel, string> = {
-  unaware: "unaware",
-  problem_aware: "problem-aware",
-  solution_aware: "solution-aware",
-  product_aware: "product-aware",
-  most_aware: "most-aware",
-};
 
 // Fallback library for new / low-data accounts (no winning angles yet).
 const DEFAULT_ANGLES: Array<{ angle: string; awarenessLevel: AwarenessLevel }> = [
@@ -133,7 +126,7 @@ export function CreateStarters({ onPick }: { onPick: (starter: Starter) => void 
                     key={item.angle}
                     icon={<Sparkles className="size-4" />}
                     title={item.angle}
-                    meta={`${AWARENESS_LABELS[item.awarenessLevel]} · starter template`}
+                    meta={`${awarenessDisplayLabel(item.awarenessLevel)} · starter template`}
                     onClick={() =>
                       onPick({
                         brief: `Static ad using a "${item.angle}" angle.`,
@@ -159,8 +152,7 @@ export function CreateStarters({ onPick }: { onPick: (starter: Starter) => void 
                   title={`"${item.angle}"`}
                   meta={[
                     item.awarenessLevel
-                      ? AWARENESS_LABELS[item.awarenessLevel as AwarenessLevel] ??
-                        item.awarenessLevel
+                      ? awarenessDisplayLabel(item.awarenessLevel)
                       : null,
                     `${fmtNum(item.adCount)} ads live`,
                   ]
@@ -172,8 +164,7 @@ export function CreateStarters({ onPick }: { onPick: (starter: Starter) => void 
                     onPick({
                       brief: `Static ad for the "${item.angle}" angle.`,
                       angle: item.angle,
-                      awarenessLevel:
-                        (item.awarenessLevel as AwarenessLevel | null) ?? undefined,
+                      awarenessLevel: item.awarenessLevel ?? undefined,
                       imageUrl: item.assetUrl,
                     })
                   }
@@ -215,8 +206,7 @@ export function CreateStarters({ onPick }: { onPick: (starter: Starter) => void 
                       }.`,
                       angle: item.angle ?? undefined,
                       persona: item.persona ?? undefined,
-                      awarenessLevel:
-                        (item.awarenessLevel as AwarenessLevel | null) ?? undefined,
+                      awarenessLevel: item.awarenessLevel ?? undefined,
                       imageUrl: item.assetUrl,
                     })
                   }
