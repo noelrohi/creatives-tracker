@@ -1,6 +1,5 @@
 "use client";
 
-import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Trophy, Sparkles, Info } from "lucide-react";
 import { useTRPC } from "@/lib/trpc/client";
@@ -106,8 +105,6 @@ export function CreateStarters({ onPick }: { onPick: (starter: Starter) => void 
 
   const showFallback = !anglesLoading && angles.length === 0;
 
-  const fallbackStarters = useMemo(() => DEFAULT_ANGLES, []);
-
   return (
     <div className="mt-6 w-full">
       <Tabs defaultValue="angles">
@@ -131,7 +128,7 @@ export function CreateStarters({ onPick }: { onPick: (starter: Starter) => void 
           ) : showFallback ? (
             <>
               <div className="scroll-fade max-h-64 overflow-y-auto px-2">
-                {fallbackStarters.map((item) => (
+                {DEFAULT_ANGLES.map((item) => (
                   <StarterRow
                     key={item.angle}
                     icon={<Sparkles className="size-4" />}

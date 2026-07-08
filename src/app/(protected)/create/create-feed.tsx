@@ -188,7 +188,12 @@ function GenerationCard({
             saving={saveMutation.isPending}
             onSave={() =>
               variant.url &&
-              saveMutation.mutate({ assetUrl: variant.url, angle: generation.angle })
+              saveMutation.mutate({
+                assetUrl: variant.url,
+                angle: generation.angle,
+                persona: generation.persona,
+                awarenessLevel: generation.awarenessLevel,
+              })
             }
           />
         ))}

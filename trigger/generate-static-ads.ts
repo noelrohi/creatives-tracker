@@ -86,12 +86,29 @@ export const generateStaticAdsTask = task({
     setRunMetadata("generating", payload, variants);
 
     const referenceImageUrl = payload.referenceImageUrls?.[0];
-    let referenceImageBytes: Uint8Array | undefined;
+    let referenceImage: Uint8Array | undefined;
 
-    async function getReferenceImageBytes() {
-      if (!referenceImageUrl) return undefined;
-      referenceImageBytes ??= await fetchReferenceImage(referenceImageUrl);
-      return referenceImageBytes;
+    if (referenceImageUrl) {
+      try {
+        referenceImage = await fetchReferenceImage(referenceImageUrl);
+      } catch (error) {
+        logger.error("Failed to fetch reference image", {
+          organizationId: payload.organizationId,
+          runId: ctx.run.id,
+          referenceImageUrl,
+          error,
+        });
+        metadata.set(
+          "error",
+          "Couldn't load the attached reference image. Please try again.",
+        );
+        setRunMetadata("failed", payload, variants);
+        throw new Error(
+          `Failed to fetch reference image: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     }
 
     for (let i = 0; i < variants.length; i += 1) {
@@ -100,7 +117,6 @@ export const generateStaticAdsTask = task({
 
       try {
         const variantPrompt = `${prompt}\nVariant: ${i + 1} of ${variants.length}.`;
-        const referenceImage = await getReferenceImageBytes();
         const result = await generateImage({
           model: openai.image(GENERATION_MODEL),
           prompt: referenceImage
