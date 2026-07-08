@@ -10,6 +10,12 @@ export type Starter = {
   angle?: string;
   persona?: string;
   awarenessLevel?: AwarenessLevel;
+  imageUrl?: string | null;
+};
+
+export type ComposerReference = {
+  url: string;
+  label: string;
 };
 
 export type Generation = {
@@ -19,5 +25,6 @@ export type Generation = {
   angle?: string;
   persona?: string;
   awarenessLevel?: AwarenessLevel;
+  referenceImageUrls?: string[];
   count: number;
 };

@@ -20,6 +20,7 @@ export type GenerateStaticAdsPayload = {
   persona?: string;
   awarenessLevel?: keyof typeof AWARENESS_LABELS | null;
   count: number;
+  referenceImageUrls?: string[];
 };
 
 type VariantStatus = "pending" | "generating" | "ready" | "failed";
@@ -59,6 +60,16 @@ function setRunMetadata(
   metadata.set("variants", variants);
 }
 
+async function fetchReferenceImage(url: string) {
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch reference image: ${response.status} ${response.statusText}`);
+  }
+
+  return new Uint8Array(await response.arrayBuffer());
+}
+
 export const generateStaticAdsTask = task({
   id: "generate-static-ads",
   queue: { concurrencyLimit: 3 },
@@ -74,14 +85,27 @@ export const generateStaticAdsTask = task({
 
     setRunMetadata("generating", payload, variants);
 
+    const referenceImageUrl = payload.referenceImageUrls?.[0];
+    let referenceImageBytes: Uint8Array | undefined;
+
+    async function getReferenceImageBytes() {
+      if (!referenceImageUrl) return undefined;
+      referenceImageBytes ??= await fetchReferenceImage(referenceImageUrl);
+      return referenceImageBytes;
+    }
+
     for (let i = 0; i < variants.length; i += 1) {
       variants[i] = { ...variants[i], status: "generating" };
       setRunMetadata("generating", payload, variants);
 
       try {
+        const variantPrompt = `${prompt}\nVariant: ${i + 1} of ${variants.length}.`;
+        const referenceImage = await getReferenceImageBytes();
         const result = await generateImage({
           model: openai.image(GENERATION_MODEL),
-          prompt: `${prompt}\nVariant: ${i + 1} of ${variants.length}.`,
+          prompt: referenceImage
+            ? { text: variantPrompt, images: [referenceImage] }
+            : variantPrompt,
           size: "1024x1536",
         });
 

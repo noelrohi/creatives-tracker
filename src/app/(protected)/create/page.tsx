@@ -7,7 +7,12 @@ import { useTRPC } from "@/lib/trpc/client";
 import { CreateComposer } from "./create-composer";
 import { CreateStarters } from "./create-starters";
 import { CreateFeed } from "./create-feed";
-import type { AwarenessLevel, Generation, Starter } from "./create-types";
+import type {
+  AwarenessLevel,
+  ComposerReference,
+  Generation,
+  Starter,
+} from "./create-types";
 
 export default function CreatePage() {
   const trpc = useTRPC();
@@ -18,6 +23,7 @@ export default function CreatePage() {
     undefined,
   );
   const [count, setCount] = useState(3);
+  const [references, setReferences] = useState<ComposerReference[]>([]);
   const [generations, setGenerations] = useState<Generation[]>([]);
 
   const generate = useMutation(
@@ -32,6 +38,7 @@ export default function CreatePage() {
             angle: variables.angle,
             persona: variables.persona,
             awarenessLevel: variables.awarenessLevel,
+            referenceImageUrls: variables.referenceImageUrls,
             count: variables.count ?? count,
           },
         ]);
@@ -39,6 +46,7 @@ export default function CreatePage() {
         setAngle(undefined);
         setPersona(undefined);
         setAwarenessLevel(undefined);
+        setReferences([]);
       },
       onError: (error) => toast.error(error.message),
     }),
@@ -47,14 +55,29 @@ export default function CreatePage() {
   const submit = useCallback(() => {
     const trimmed = brief.trim();
     if (!trimmed || generate.isPending) return;
-    generate.mutate({ brief: trimmed, angle, persona, awarenessLevel, count });
-  }, [brief, angle, persona, awarenessLevel, count, generate]);
+    generate.mutate({
+      brief: trimmed,
+      angle,
+      persona,
+      awarenessLevel,
+      count,
+      referenceImageUrls:
+        references.length > 0 ? references.map((ref) => ref.url) : undefined,
+    });
+  }, [brief, angle, persona, awarenessLevel, count, references, generate]);
 
   const applyStarter = useCallback((starter: Starter) => {
     setBrief(starter.brief);
     setAngle(starter.angle);
     setPersona(starter.persona);
     setAwarenessLevel(starter.awarenessLevel);
+    setReferences(
+      starter.imageUrl ? [{ url: starter.imageUrl, label: "@img_1" }] : [],
+    );
+  }, []);
+
+  const removeReference = useCallback((url: string) => {
+    setReferences((prev) => prev.filter((ref) => ref.url !== url));
   }, []);
 
   const redo = useCallback(
@@ -64,6 +87,7 @@ export default function CreatePage() {
         angle: generation.angle,
         persona: generation.persona,
         awarenessLevel: generation.awarenessLevel,
+        referenceImageUrls: generation.referenceImageUrls,
         count: generation.count,
       });
     },
@@ -84,6 +108,8 @@ export default function CreatePage() {
           count={count}
           onCountChange={setCount}
           activeAngle={angle}
+          references={references}
+          onRemoveReference={removeReference}
           autoFocus
         />
         <CreateStarters onPick={applyStarter} />
@@ -103,6 +129,8 @@ export default function CreatePage() {
           count={count}
           onCountChange={setCount}
           activeAngle={angle}
+          references={references}
+          onRemoveReference={removeReference}
         />
       </div>
     </div>

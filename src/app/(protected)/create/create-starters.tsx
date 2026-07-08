@@ -177,6 +177,7 @@ export function CreateStarters({ onPick }: { onPick: (starter: Starter) => void 
                       angle: item.angle,
                       awarenessLevel:
                         (item.awarenessLevel as AwarenessLevel | null) ?? undefined,
+                      imageUrl: item.assetUrl,
                     })
                   }
                 />
@@ -219,6 +220,7 @@ export function CreateStarters({ onPick }: { onPick: (starter: Starter) => void 
                       persona: item.persona ?? undefined,
                       awarenessLevel:
                         (item.awarenessLevel as AwarenessLevel | null) ?? undefined,
+                      imageUrl: item.assetUrl,
                     })
                   }
                 />

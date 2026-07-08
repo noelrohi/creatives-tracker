@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef } from "react";
-import { ArrowUp, Loader2, Sparkles } from "lucide-react";
+import { ArrowUp, Loader2, X } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import type { ComposerReference } from "./create-types";
 
 type CreateComposerProps = {
   value: string;
@@ -21,6 +22,8 @@ type CreateComposerProps = {
   count: number;
   onCountChange: (count: number) => void;
   activeAngle?: string;
+  references?: ComposerReference[];
+  onRemoveReference?: (url: string) => void;
   className?: string;
   autoFocus?: boolean;
 };
@@ -33,6 +36,8 @@ export function CreateComposer({
   count,
   onCountChange,
   activeAngle,
+  references = [],
+  onRemoveReference,
   className,
   autoFocus,
 }: CreateComposerProps) {
@@ -60,11 +65,33 @@ export function CreateComposer({
         placeholder="Describe the static ad — angle, offer, hook…"
         className="max-h-40 min-h-[52px] resize-none border-0 bg-transparent px-4 pt-4 text-base shadow-none focus-visible:ring-0 dark:bg-transparent"
       />
+      {references.length > 0 ? (
+        <div className="flex flex-wrap gap-2 px-3 pb-1">
+          {references.map((ref) => (
+            <div
+              key={ref.url}
+              className="group/ref relative size-16 shrink-0 overflow-hidden rounded-lg border"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={ref.url} alt={ref.label} className="size-full object-cover" />
+              <span className="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/70 to-transparent px-1 pt-2 pb-0.5 text-[10px] font-medium text-white">
+                {ref.label}
+              </span>
+              {onRemoveReference ? (
+                <button
+                  type="button"
+                  aria-label={`Remove ${ref.label}`}
+                  onClick={() => onRemoveReference(ref.url)}
+                  className="absolute top-0.5 right-0.5 flex size-4 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity group-hover/ref:opacity-100"
+                >
+                  <X className="size-2.5" />
+                </button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div className="flex items-center gap-2 px-3 pb-3">
-        <Badge variant="secondary" className="gap-1">
-          <Sparkles className="size-3 text-primary" />
-          Static
-        </Badge>
         {activeAngle ? (
           <Badge variant="outline" className="max-w-[220px] truncate">
             {activeAngle}

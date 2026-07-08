@@ -86,6 +86,7 @@ export const createRouter = router({
         persona: z.string().optional(),
         awarenessLevel: awarenessLevelSchema.optional(),
         count: z.number().int().min(1).max(4).default(3),
+        referenceImageUrls: z.array(z.string().url()).max(4).optional(),
       }),
     )
     .mutation(async ({ input, ctx }) => {
@@ -98,6 +99,7 @@ export const createRouter = router({
           persona: input.persona,
           awarenessLevel: input.awarenessLevel ?? null,
           count: input.count,
+          referenceImageUrls: input.referenceImageUrls,
         },
       );
 
