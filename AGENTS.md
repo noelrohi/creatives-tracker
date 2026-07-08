@@ -21,11 +21,11 @@ Next.js 16 app using the App Router with React 19, React Compiler enabled, and T
 
 ### App Structure
 
-The app is currently dashboard-first. Main routes live under `src/app/(dashboard)/`:
-- `page.tsx` for the dashboard home
-- Feature areas for `briefs`, `compare`, `creatives`, `import`, `insights`, and `landing-pages`
+The app is currently dashboard-first. Main routes live under `src/app/(protected)/`:
+- The `(dashboard)` route group holds the dashboard home (`page.tsx`)
+- Feature areas for `creatives`, `import`, `mer`, `accounts`, and `teams`
 - `create` for the static-ad composer: a brief-driven composer that queues image generation via a Trigger.dev job and streams realtime status, with a starter list of winning angles / high-purchase creatives derived from existing ad data
-- Shared dashboard shell in `src/app/(dashboard)/layout.tsx`
+- Shared dashboard shell (sidebar, breadcrumbs, org guard) in `src/app/(protected)/layout.tsx`
 
 ### API
 
