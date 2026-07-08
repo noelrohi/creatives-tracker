@@ -24,6 +24,7 @@ Next.js 16 app using the App Router with React 19, React Compiler enabled, and T
 The app is currently dashboard-first. Main routes live under `src/app/(dashboard)/`:
 - `page.tsx` for the dashboard home
 - Feature areas for `briefs`, `compare`, `creatives`, `import`, `insights`, and `landing-pages`
+- `create` for the static-ad composer: a brief-driven composer that queues image generation via a Trigger.dev job and streams realtime status, with a starter list of winning angles / high-purchase creatives derived from existing ad data
 - Shared dashboard shell in `src/app/(dashboard)/layout.tsx`
 
 ### API
@@ -31,8 +32,9 @@ The app is currently dashboard-first. Main routes live under `src/app/(dashboard
 - tRPC route handler: `src/app/api/trpc/[trpc]/route.ts`
 - tRPC setup: `src/lib/trpc/init.ts` and `src/lib/trpc/client.ts`
 - App router composition: `src/lib/trpc/routers/_app.ts`
-- Domain routers in `src/lib/trpc/routers/` for ads, ad sets, creatives, campaigns, insights, landing pages, tags, performance logs, and AI helpers
+- Domain routers in `src/lib/trpc/routers/` for ads, ad sets, creatives, campaigns, insights, landing pages, tags, performance logs, AI helpers, and static-ad creation (`create`)
 - File upload endpoint: `src/app/api/upload/route.ts`
+- Background jobs live in `trigger/` (Trigger.dev); e.g. `generate-static-ads.ts` powers the `/create` composer
 
 ### Database
 
