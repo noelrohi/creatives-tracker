@@ -30,9 +30,15 @@ export default function CreatePage() {
             accessToken: data.publicAccessToken,
             brief: variables.brief,
             angle: variables.angle,
+            persona: variables.persona,
+            awarenessLevel: variables.awarenessLevel,
             count: variables.count ?? count,
           },
         ]);
+        setBrief("");
+        setAngle(undefined);
+        setPersona(undefined);
+        setAwarenessLevel(undefined);
       },
       onError: (error) => toast.error(error.message),
     }),
@@ -42,10 +48,6 @@ export default function CreatePage() {
     const trimmed = brief.trim();
     if (!trimmed || generate.isPending) return;
     generate.mutate({ brief: trimmed, angle, persona, awarenessLevel, count });
-    setBrief("");
-    setAngle(undefined);
-    setPersona(undefined);
-    setAwarenessLevel(undefined);
   }, [brief, angle, persona, awarenessLevel, count, generate]);
 
   const applyStarter = useCallback((starter: Starter) => {
@@ -60,6 +62,8 @@ export default function CreatePage() {
       generate.mutate({
         brief: generation.brief,
         angle: generation.angle,
+        persona: generation.persona,
+        awarenessLevel: generation.awarenessLevel,
         count: generation.count,
       });
     },

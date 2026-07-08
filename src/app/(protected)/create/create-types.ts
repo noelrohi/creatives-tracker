@@ -17,5 +17,7 @@ export type Generation = {
   accessToken: string;
   brief: string;
   angle?: string;
+  persona?: string;
+  awarenessLevel?: AwarenessLevel;
   count: number;
 };
