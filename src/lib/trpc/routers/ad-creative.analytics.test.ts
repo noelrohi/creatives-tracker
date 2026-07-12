@@ -189,6 +189,38 @@ describe("adCreative analytics procedures", () => {
         }),
       );
     });
+
+    it("scopes lifetime aggregation to the dashboard-scoped ads", async () => {
+      queueExecuteRows([], [], [], []);
+
+      const caller = createMockCaller({ role: "admin", organizationId: "org_1" });
+      await caller.adCreative.dashboardStats({
+        from: "2026-06-01",
+        to: "2026-06-07",
+        accountId: "acct_1",
+        teamId: "team_1",
+      });
+
+      const bottomSql = compileSql(mockState.executedSql[3]).replace(/\s+/g, " ").toLowerCase();
+      expect(bottomSql).toMatch(
+        /with scoped_ads as \(.+ad_lifetime_days as \(.+ad_window as \(/,
+      );
+
+      const [scopedAdsSql = "", lifetimeSql = ""] = bottomSql.split(
+        /ad_lifetime_days as|ad_window as/,
+      );
+      expect(scopedAdsSql).toContain("ad.organization_id =");
+      expect(scopedAdsSql).toContain("ad.account_id =");
+      expect(scopedAdsSql).toContain("ac.team_id =");
+      expect(lifetimeSql).toContain("from performance_log pl join scoped_ads");
+      expect(lifetimeSql).not.toContain("pl.date_start <=");
+      expect(lifetimeSql).not.toContain("pl.date_end >=");
+
+      const adWindowSql = bottomSql.split("ad_window as")[1]?.split("portfolio_window as")[0] ?? "";
+      expect(adWindowSql).toContain("from scoped_ads");
+      expect(adWindowSql).toContain("pl.date_start <=");
+      expect(adWindowSql).toContain("pl.date_end >=");
+    });
   });
 
   describe("portfolioSummary", () => {

@@ -726,8 +726,23 @@ export const adCreativeRouter = router({
         bleeder_meta_ids: (string | null)[] | null;
         tier: "pause_now" | "watch";
       };
+      const scopedAdFilters = sql`
+        ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter}
+      `;
       const bottomResult = await db.execute(sql`
-        WITH ad_lifetime_days AS (
+        WITH scoped_ads AS (
+          SELECT
+            ad.id,
+            ad.meta_id,
+            ad.ad_creative_id,
+            ${effectiveAdStatusSql(sql`ad.status`, sql`ast.status`)} AS status
+          FROM ad
+          JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+          LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
+          WHERE ad.organization_id = ${ctx.organizationId}
+            ${scopedAdFilters}
+        ),
+        ad_lifetime_days AS (
           -- Lifetime running_days, NOT window-bounded. A buyer judges an ad on
           -- its absolute age ("if I gave this 3 weeks, it's done"), not on
           -- how many days it happened to deliver inside the dashboard window.
@@ -736,30 +751,27 @@ export const adCreativeRouter = router({
             pl.ad_id,
             (max(pl.date_end)::date - min(pl.date_start)::date) AS running_days
           FROM performance_log pl
+          JOIN scoped_ads ra ON ra.id = pl.ad_id
           WHERE ${basePl}
           GROUP BY pl.ad_id
         ),
         ad_window AS (
           SELECT
-            ad.id AS ad_id,
-            ad.meta_id AS meta_ad_id,
-            ad.ad_creative_id,
-            ${effectiveAdStatusSql(sql`ad.status`, sql`ast.status`)} AS status,
+            ra.id AS ad_id,
+            ra.meta_id AS meta_ad_id,
+            ra.ad_creative_id,
+            ra.status,
             sum(pl.spend) AS spend,
             sum(pl.purchase_value) AS revenue,
             sum(pl.conversions) AS conversions,
             coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) AS roas,
             coalesce(ald.running_days, 0) AS running_days
-          FROM ad
-          JOIN performance_log pl ON pl.ad_id = ad.id
-          JOIN ad_creative ac ON ac.id = ad.ad_creative_id
-          LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
-          LEFT JOIN ad_lifetime_days ald ON ald.ad_id = ad.id
+          FROM scoped_ads ra
+          JOIN performance_log pl ON pl.ad_id = ra.id
+          LEFT JOIN ad_lifetime_days ald ON ald.ad_id = ra.id
           WHERE ${dateFilter}
             AND ${basePl}
-            AND ad.organization_id = ${ctx.organizationId}
-            ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter}
-          GROUP BY ad.id, ad.meta_id, ad.ad_creative_id, ad.status, ast.status, ald.running_days
+          GROUP BY ra.id, ra.meta_id, ra.ad_creative_id, ra.status, ald.running_days
         ),
         ${portfolioWindowCte}
         bleeder AS (
