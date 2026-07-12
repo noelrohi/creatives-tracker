@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { Loader2, TriangleAlert } from "lucide-react";
+import { Loader2, TriangleAlert } from "@/components/icons";
 import { toast } from "sonner";
 import { getUserFacingErrorMessage } from "@/lib/errors";
 import { activateFirstOrganization } from "@/lib/organization-client";

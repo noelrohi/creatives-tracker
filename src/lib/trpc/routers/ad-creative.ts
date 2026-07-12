@@ -156,12 +156,16 @@ export const adCreativeRouter = router({
           search: z.string().optional(),
           accountId: z.string().optional(),
           adSetIds: z.array(z.string()).optional(),
+          landingPageUrls: z.array(z.string()).optional(),
           ownership: z.enum(["ours", "theirs"]).optional(),
           teamId: z.string().optional(),
           untaggedOnly: z.boolean().optional(),
           from: z.string().optional(),
           to: z.string().optional(),
           includeHealth: z.boolean().optional(),
+          minRoas: z.number().finite().nonnegative().optional(),
+          minConversions: z.number().finite().nonnegative().optional(),
+          minCtr: z.number().finite().nonnegative().optional(),
         })
         .optional(),
     )
@@ -184,6 +188,10 @@ export const adCreativeRouter = router({
         const placeholders = input.adSetIds.map((id) => sql`${id}`);
         const inList = sql.join(placeholders, sql`, `);
         conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = ac.id AND ad.ad_set_id IN (${inList}))`);
+      }
+      if (input?.landingPageUrls?.length) {
+        const urls = sql.join(input.landingPageUrls.map((url) => sql`${url}`), sql`, `);
+        conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = ac.id AND ad.destination_url IN (${urls}))`);
       }
       if (input?.ownership) {
         if (input.ownership === "theirs") {
@@ -209,6 +217,10 @@ export const adCreativeRouter = router({
       const dateFilterForRollup = from && to
         ? sql`pl.date_start >= ${from}::date AND pl.date_start <= ${to}::date`
         : undefined;
+      const performanceConditions: SQL[] = [sql`TRUE`];
+      if (input?.minRoas != null) performanceConditions.push(sql`window_perf.avg_roas::numeric > ${input.minRoas}`);
+      if (input?.minConversions != null) performanceConditions.push(sql`window_perf.total_conversions::numeric > ${input.minConversions}`);
+      if (input?.minCtr != null) performanceConditions.push(sql`window_perf.avg_ctr::numeric > ${input.minCtr}`);
 
       type ListRow = {
         id: string;
@@ -384,6 +396,7 @@ export const adCreativeRouter = router({
         LEFT JOIN recent_perf ON recent_perf.ad_creative_id = fc.id
         LEFT JOIN prior_perf ON prior_perf.ad_creative_id = fc.id
         LEFT JOIN latest_ad ON latest_ad.ad_creative_id = fc.id
+        WHERE ${sql.join(performanceConditions, sql` AND `)}
         ORDER BY fc.created_at DESC
       `);
       const rows = result.rows as ListRow[];
@@ -440,6 +453,18 @@ export const adCreativeRouter = router({
       });
     }),
 
+  landingPages: orgProcedure.query(async ({ ctx }) => {
+    const result = await db.execute(sql`
+      SELECT DISTINCT destination_url
+      FROM ad
+      WHERE organization_id = ${ctx.organizationId}
+        AND destination_url IS NOT NULL
+        AND btrim(destination_url) <> ''
+      ORDER BY destination_url
+    `);
+    return (result.rows as { destination_url: string }[]).map((row) => row.destination_url);
+  }),
+
   exportAgentRows: orgProcedure
     .input(
       z.object({
@@ -447,6 +472,7 @@ export const adCreativeRouter = router({
         to: z.string(),
         accountId: z.string().optional(),
         adSetIds: z.array(z.string()).optional(),
+        landingPageUrls: z.array(z.string()).optional(),
         teamId: z.string().optional(),
         format: z.string().optional(),
         awarenessLevel: z.string().optional(),
@@ -463,6 +489,7 @@ export const adCreativeRouter = router({
         filter: {
           accountId: input.accountId ?? null,
           adSetIds: input.adSetIds ?? null,
+          landingPageUrls: input.landingPageUrls ?? null,
           teamId: input.teamId ?? null,
           format: input.format ?? null,
           awarenessLevel: input.awarenessLevel ?? null,

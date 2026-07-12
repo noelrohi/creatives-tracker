@@ -3,7 +3,7 @@
 import { useState, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { X, ChevronsUpDown } from "lucide-react";
+import { X, ChevronsUpDown } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 interface MultiSelectProps {

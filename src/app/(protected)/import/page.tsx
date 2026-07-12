@@ -5,10 +5,11 @@ import { useQuery } from "@tanstack/react-query";
 import { useQueryState, parseAsString } from "nuqs";
 import { useTRPC } from "@/lib/trpc/client";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileSpreadsheet, Cloud } from "lucide-react";
+import { FileSpreadsheet, Cloud } from "@/components/icons";
 import { CsvImportTab } from "@/components/blocks/import/csv-import-tab";
 import { MetaApiTab } from "@/components/blocks/import/meta-api-tab";
 import { InlineAccountDialog } from "@/components/blocks/import/inline-account-dialog";
+import { ImportStatusBanner } from "@/components/import-status-banner";
 import { formatDateOnly } from "@/lib/date";
 
 function defaultFrom() {
@@ -38,6 +39,8 @@ export default function ImportPage() {
           Import ad performance data from CSV reports or the Meta Marketing API.
         </p>
       </div>
+
+      <ImportStatusBanner />
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>

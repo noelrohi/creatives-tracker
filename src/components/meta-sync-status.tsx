@@ -6,7 +6,7 @@ import { useRealtimeRun, useRealtimeRunsWithTag } from "@trigger.dev/react-hooks
 import { useTRPC } from "@/lib/trpc/client";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { RefreshCw, CheckCircle2, XCircle, Clock, Loader2 } from "lucide-react";
+import { RefreshCw, CheckCircle2, XCircle, Clock, Loader2 } from "@/components/icons";
 import type { metaSyncTask } from "../../trigger/meta-sync";
 
 function RunStatusBadge({ status }: { status: string }) {

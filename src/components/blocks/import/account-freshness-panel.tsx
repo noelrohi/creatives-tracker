@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { formatDistanceToNow, parseISO, format } from "date-fns";
-import { Loader2, CloudDownload, AlertTriangle } from "lucide-react";
+import { Loader2, CloudDownload, AlertTriangle } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,

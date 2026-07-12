@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, type DragEvent } from "react";
-import { Upload, X, FileVideo } from "lucide-react";
+import { Upload, X, FileVideo } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { uploadFile } from "@/lib/upload";
 

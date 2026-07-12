@@ -50,7 +50,8 @@ import {
   UserCheck,
   ExternalLink,
   Download,
-} from "lucide-react";
+  SlidersHorizontal,
+} from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
@@ -86,6 +87,16 @@ const AWARENESS_COLORS: Record<string, string> = {
 
 function prettify(s: string | null | undefined) {
   return s ? s.replace(/_/g, " ") : null;
+}
+
+function formatLandingPage(url: string) {
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/$/, "");
+    return `${parsed.hostname}${path}${parsed.search}`;
+  } catch {
+    return url;
+  }
 }
 
 function formatDateTime(value: Date | string) {
@@ -589,6 +600,10 @@ export default function CreativesPage() {
   const [search, setSearch] = useQueryState("q", { defaultValue: "" });
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
   const [adSetIds, setAdSetIds] = useQueryState("adSet", parseAsString.withDefault(""));
+  const [landingPageUrls, setLandingPageUrls] = useState<string[]>([]);
+  const [minRoas, setMinRoas] = useState("");
+  const [minConversions, setMinConversions] = useState("");
+  const [minCtr, setMinCtr] = useState("");
   const [healthFilter, setHealthFilter] = useQueryState("health", parseAsString.withDefault(""));
   const [teamId, setTeamId] = useQueryState("team", parseAsString.withDefault(""));
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
@@ -606,6 +621,7 @@ export default function CreativesPage() {
 
   const accountsQuery = useQuery(trpc.adAccount.list.queryOptions());
   const adSetsQuery = useQuery(trpc.adSet.list.queryOptions());
+  const landingPagesQuery = useQuery(trpc.adCreative.landingPages.queryOptions());
   const teamsQuery = useQuery(trpc.team.list.queryOptions());
   const metaAccountId = accountsQuery.data?.find((a) => a.id === accountId)?.metaAccountId
     ?? accountsQuery.data?.[0]?.metaAccountId ?? "";
@@ -624,10 +640,14 @@ export default function CreativesPage() {
       search: search || undefined,
       accountId: accountId ? accountId : undefined,
       adSetIds: adSetIds ? adSetIds.split(",") : undefined,
+      landingPageUrls: landingPageUrls.length ? landingPageUrls : undefined,
       teamId: teamId || undefined,
       from: fromValue,
       to: toValue,
       includeHealth: Boolean(healthFilter) || columnVisibility.health === true,
+      minRoas: minRoas === "" ? undefined : Number(minRoas),
+      minConversions: minConversions === "" ? undefined : Number(minConversions),
+      minCtr: minCtr === "" ? undefined : Number(minCtr),
     }),
   );
 
@@ -684,6 +704,9 @@ export default function CreativesPage() {
       const count = adSetIds.split(",").filter(Boolean).length;
       labels.push({ label: "Ad sets", value: `${count} selected` });
     }
+    if (landingPageUrls.length) {
+      labels.push({ label: "Landing pages", value: landingPageUrls.length === 1 ? formatLandingPage(landingPageUrls[0]) : `${landingPageUrls.length} selected` });
+    }
     if (healthFilter) labels.push({ label: "Health", value: healthFilter });
     return labels;
   })();
@@ -726,7 +749,9 @@ export default function CreativesPage() {
       </div>
 
       {/* Filters + Actions */}
-      <div className="flex items-center gap-2 flex-wrap">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3">
+        <div className="min-w-0 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
         <div className="relative max-w-xs">
           <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/40" />
           <input
@@ -745,24 +770,6 @@ export default function CreativesPage() {
               setTo(formatDateOnly(range.to));
             }
           }}
-        />
-        <FilterPill
-          value={format ?? "all"}
-          onValueChange={(v) => setFormat(v === "all" ? null : (v as (typeof FORMATS)[number]))}
-          placeholder="Format"
-          options={[
-            { label: "All Formats", value: "all" },
-            ...FORMATS.map((f) => ({ label: f.charAt(0).toUpperCase() + f.slice(1), value: f })),
-          ]}
-        />
-        <FilterPill
-          value={awareness ?? "all"}
-          onValueChange={(v) => setAwareness(v === "all" ? null : (v as (typeof AWARENESS)[number]))}
-          placeholder="Awareness"
-          options={[
-            { label: "All Levels", value: "all" },
-            ...AWARENESS.map((a) => ({ label: prettify(a)!, value: a })),
-          ]}
         />
         {accountsQuery.data && accountsQuery.data.length > 0 && (
           <FilterPill
@@ -787,6 +794,8 @@ export default function CreativesPage() {
             ]}
           />
         )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
         {adSetsQuery.data && adSetsQuery.data.length > 0 && (
           <AdSetCombobox
             value={adSetIds ? adSetIds.split(",").filter(Boolean) : []}
@@ -794,18 +803,33 @@ export default function CreativesPage() {
             adSets={adSetsQuery.data}
           />
         )}
-        <FilterPill
-          value={healthFilter || "all"}
-          onValueChange={(v) => setHealthFilter(v === "all" ? "" : v)}
-          placeholder="Health"
-          options={[
-            { label: "All Health", value: "all" },
-            { label: "Healthy", value: "healthy" },
-            { label: "Warning", value: "warning" },
-            { label: "Critical", value: "critical" },
-          ]}
+        {landingPagesQuery.data && landingPagesQuery.data.length > 0 && (
+          <LandingPageCombobox
+            value={landingPageUrls}
+            onValueChange={setLandingPageUrls}
+            landingPages={landingPagesQuery.data}
+          />
+        )}
+        <PerformanceFilter
+          minRoas={minRoas}
+          minConversions={minConversions}
+          minCtr={minCtr}
+          onMinRoasChange={setMinRoas}
+          onMinConversionsChange={setMinConversions}
+          onMinCtrChange={setMinCtr}
         />
-        <div className="flex-1" />
+        <MoreFilters
+          format={format}
+          awareness={awareness}
+          health={healthFilter}
+          onFormatChange={(value) => setFormat(value === "all" ? null : (value as (typeof FORMATS)[number]))}
+          onAwarenessChange={(value) => setAwareness(value === "all" ? null : (value as (typeof AWARENESS)[number]))}
+          onHealthChange={(value) => setHealthFilter(value === "all" ? "" : value)}
+          onClear={() => { setFormat(null); setAwareness(null); setHealthFilter(""); }}
+        />
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center justify-end gap-2">
         <DataTableColumnToggle
           columns={tableColumns}
           visibility={columnVisibility}
@@ -828,6 +852,7 @@ export default function CreativesPage() {
             <Link href="/import"><Upload className="size-3.5" /> Import</Link>
           </Button>
         ) : null}
+        </div>
       </div>
 
       {!isReadOnly ? (
@@ -841,8 +866,8 @@ export default function CreativesPage() {
         <TableLoadingSkeleton />
       ) : total === 0 ? (
         <EmptyState
-          hasFilters={!!format || !!awareness || !!search || !!adSetIds || !!healthFilter || !!teamId}
-          onClear={() => { setFormat(null); setAwareness(null); setSearch(""); setAccountId(""); setAdSetIds(""); setTeamId(""); setHealthFilter(""); }}
+          hasFilters={!!format || !!awareness || !!search || !!accountId || !!adSetIds || landingPageUrls.length > 0 || !!minRoas || !!minConversions || !!minCtr || !!healthFilter || !!teamId}
+          onClear={() => { setFormat(null); setAwareness(null); setSearch(""); setAccountId(""); setAdSetIds(""); setLandingPageUrls([]); setMinRoas(""); setMinConversions(""); setMinCtr(""); setTeamId(""); setHealthFilter(""); }}
           onImport={!isReadOnly ? () => router.push("/import") : undefined}
           readOnly={isReadOnly}
         />
@@ -888,6 +913,7 @@ export default function CreativesPage() {
           search: search || undefined,
           accountId: accountId || undefined,
           adSetIds: adSetIds ? adSetIds.split(",") : undefined,
+          landingPageUrls: landingPageUrls.length ? landingPageUrls : undefined,
           teamId: teamId || undefined,
         }}
         filterLabels={exportFilterLabels}
@@ -957,6 +983,198 @@ function FilterPill({
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+function MoreFilters({
+  format,
+  awareness,
+  health,
+  onFormatChange,
+  onAwarenessChange,
+  onHealthChange,
+  onClear,
+}: {
+  format: string | null | undefined;
+  awareness: string | null | undefined;
+  health: string;
+  onFormatChange: (value: string) => void;
+  onAwarenessChange: (value: string) => void;
+  onHealthChange: (value: string) => void;
+  onClear: () => void;
+}) {
+  const activeCount = [format, awareness, health].filter(Boolean).length;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          className={cn("h-8 gap-1.5 border-none bg-muted/40 px-3 text-[13px] shadow-none hover:bg-muted/60", activeCount > 0 && "bg-muted/70")}
+        >
+          <SlidersHorizontal className="size-3" />
+          More filters{activeCount > 0 ? ` · ${activeCount}` : ""}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[280px] space-y-3" align="start">
+        <div>
+          <p className="text-sm font-medium">More filters</p>
+          <p className="text-xs text-muted-foreground">Narrow creatives by classification and health.</p>
+        </div>
+        <div className="grid gap-2">
+          <FilterPill
+            value={format ?? "all"}
+            onValueChange={onFormatChange}
+            placeholder="Format"
+            options={[{ label: "All Formats", value: "all" }, ...FORMATS.map((item) => ({ label: item.charAt(0).toUpperCase() + item.slice(1), value: item }))]}
+          />
+          <FilterPill
+            value={awareness ?? "all"}
+            onValueChange={onAwarenessChange}
+            placeholder="Awareness"
+            options={[{ label: "All Levels", value: "all" }, ...AWARENESS.map((item) => ({ label: prettify(item)!, value: item }))]}
+          />
+          <FilterPill
+            value={health || "all"}
+            onValueChange={onHealthChange}
+            placeholder="Health"
+            options={[
+              { label: "All Health", value: "all" },
+              { label: "Healthy", value: "healthy" },
+              { label: "Warning", value: "warning" },
+              { label: "Critical", value: "critical" },
+            ]}
+          />
+        </div>
+        {activeCount > 0 ? (
+          <Button variant="ghost" size="sm" className="h-7 w-full text-xs" onClick={onClear}>
+            Clear more filters
+          </Button>
+        ) : null}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function PerformanceFilter({
+  minRoas,
+  minConversions,
+  minCtr,
+  onMinRoasChange,
+  onMinConversionsChange,
+  onMinCtrChange,
+}: {
+  minRoas: string;
+  minConversions: string;
+  minCtr: string;
+  onMinRoasChange: (value: string) => void;
+  onMinConversionsChange: (value: string) => void;
+  onMinCtrChange: (value: string) => void;
+}) {
+  const activeCount = [minRoas, minConversions, minCtr].filter(Boolean).length;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          className={cn("h-8 gap-1.5 border-none bg-muted/40 px-3 text-[13px] shadow-none hover:bg-muted/60", activeCount > 0 && "bg-muted/70")}
+        >
+          <SlidersHorizontal className="size-3" />
+          Performance{activeCount > 0 ? ` · ${activeCount}` : ""}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[280px] space-y-3" align="start">
+        <div>
+          <p className="text-sm font-medium">Performance filters</p>
+          <p className="text-xs text-muted-foreground">All conditions apply to the selected date range.</p>
+        </div>
+        {[
+          { label: "ROAS greater than", value: minRoas, setValue: onMinRoasChange, placeholder: "1" },
+          { label: "Conversions greater than", value: minConversions, setValue: onMinConversionsChange, placeholder: "10" },
+          { label: "CTR greater than (%)", value: minCtr, setValue: onMinCtrChange, placeholder: "25" },
+        ].map((field) => (
+          <label key={field.label} className="grid grid-cols-[1fr_88px] items-center gap-3 text-xs">
+            <span>{field.label}</span>
+            <input
+              type="number"
+              min="0"
+              step="any"
+              inputMode="decimal"
+              value={field.value}
+              onChange={(event) => field.setValue(event.target.value)}
+              placeholder={field.placeholder}
+              className="h-8 rounded-md border bg-background px-2 text-right text-[13px] outline-none focus:ring-1 focus:ring-ring"
+            />
+          </label>
+        ))}
+        {activeCount > 0 ? (
+          <Button variant="ghost" size="sm" className="h-7 w-full text-xs" onClick={() => { onMinRoasChange(""); onMinConversionsChange(""); onMinCtrChange(""); }}>
+            Clear performance filters
+          </Button>
+        ) : null}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function LandingPageCombobox({
+  value,
+  onValueChange,
+  landingPages,
+}: {
+  value: string[];
+  onValueChange: (value: string[]) => void;
+  landingPages: string[];
+}) {
+  const [open, setOpen] = useState(false);
+  const label = value.length === 0
+    ? "Landing Page"
+    : value.length === 1
+      ? formatLandingPage(value[0])
+      : `${value.length} landing pages`;
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          role="combobox"
+          aria-expanded={open}
+          aria-label="Filter by landing page"
+          className="h-8 w-auto gap-1 border-none bg-muted/40 px-3 text-[13px] shadow-none hover:bg-muted/60"
+        >
+          <span className="max-w-[220px] truncate">{label}</span>
+          <ChevronsUpDown className="size-3 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[320px] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Search landing pages..." className="h-8 text-[13px]" />
+          <CommandList>
+            <CommandEmpty>No landing pages found.</CommandEmpty>
+            <CommandGroup>
+              {value.length > 0 ? (
+                <CommandItem value="__clear__" onSelect={() => onValueChange([])}>
+                  Clear selection
+                </CommandItem>
+              ) : null}
+              {landingPages.map((url) => {
+                const selected = value.includes(url);
+                return (
+                  <CommandItem
+                    key={url}
+                    value={`${formatLandingPage(url)} ${url}`}
+                    onSelect={() => onValueChange(selected ? value.filter((item) => item !== url) : [...value, url])}
+                  >
+                    <Check className={cn("mr-2 size-3.5", selected ? "opacity-100" : "opacity-0")} />
+                    <span className="truncate" title={url}>{formatLandingPage(url)}</span>
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
 

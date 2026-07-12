@@ -31,7 +31,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Copy, Loader2, Mail, MoreHorizontal, UserPlus } from "lucide-react";
+import { Copy, Loader2, Mail, MoreHorizontal, UserPlus } from "@/components/icons";
 import { toast } from "sonner";
 
 const inviteSchema = z.object({

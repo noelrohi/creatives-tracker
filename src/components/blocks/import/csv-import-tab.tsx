@@ -23,7 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Upload, FileSpreadsheet, Check, ChevronDown, ChevronUp } from "lucide-react";
+import { Upload, FileSpreadsheet, Check, ChevronDown, ChevronUp } from "@/components/icons";
 import { toast } from "sonner";
 import { getUserFacingErrorMessage } from "@/lib/errors";
 import {

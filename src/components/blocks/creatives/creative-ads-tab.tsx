@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Copy, ExternalLink, FileText, MoreHorizontal, PauseCircle } from "lucide-react";
+import { Copy, ExternalLink, FileText, MoreHorizontal, PauseCircle } from "@/components/icons";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";

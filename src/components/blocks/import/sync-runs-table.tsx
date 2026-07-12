@@ -8,7 +8,7 @@ import {
   parseISO,
   format,
 } from "date-fns";
-import { Calendar, CalendarClock, Loader2, Sparkles, User } from "lucide-react";
+import { Calendar, CalendarClock, Loader2, Sparkles, User } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,

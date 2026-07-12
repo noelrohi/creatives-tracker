@@ -38,7 +38,7 @@ import {
   Trash2,
   Ban,
   AlertTriangle,
-} from "lucide-react";
+} from "@/components/icons";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { Calendar } from "@/components/ui/calendar";

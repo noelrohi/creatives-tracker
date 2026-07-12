@@ -9,7 +9,7 @@ import {
   Target,
   TrendingDown,
   TrendingUp,
-} from "lucide-react";
+} from "@/components/icons";
 import { DataFreshnessLabel } from "@/components/blocks/dashboard/data-freshness";
 import { DateRangePicker } from "@/components/blocks/dashboard/date-range-picker";
 import { PerformanceChart } from "@/components/blocks/insights/performance-chart";

@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Trophy, Sparkles, Info } from "lucide-react";
+import { Trophy, Sparkles, Info } from "@/components/icons";
 import { useTRPC } from "@/lib/trpc/client";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";

@@ -16,7 +16,7 @@ import {
   FieldError,
   FieldDescription,
 } from "@/components/ui/field";
-import { Loader2 } from "lucide-react";
+import { Loader2 } from "@/components/icons";
 
 const signUpSchema = z.object({
   name: z.string().min(1, "Name is required."),

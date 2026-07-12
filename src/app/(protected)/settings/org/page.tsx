@@ -4,7 +4,7 @@ import { useState } from "react";
 import { authClient } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Building2, Check, Copy } from "lucide-react";
+import { Building2, Check, Copy } from "@/components/icons";
 import { toast } from "sonner";
 
 export default function OrganizationSettingsPage() {

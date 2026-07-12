@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { CirclePlus, Settings } from "lucide-react";
+import { CirclePlus, Settings } from "@/components/icons";
 
 export function NoAccountsState({
   onCreateAccount,

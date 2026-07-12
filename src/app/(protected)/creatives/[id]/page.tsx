@@ -54,7 +54,7 @@ import {
   MoreHorizontalIcon,
   PlayIcon,
   Trash2,
-} from "lucide-react";
+} from "@/components/icons";
 import { TagInput } from "@/components/tag-input";
 import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role";
 import {

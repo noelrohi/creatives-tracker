@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { ArrowUp, ImagePlus, Loader2, X } from "lucide-react";
+import { ArrowUp, ImagePlus, Loader2, X } from "@/components/icons";
 import { toast } from "sonner";
 import { Textarea } from "@/components/ui/textarea";
 import {
