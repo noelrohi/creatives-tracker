@@ -43,6 +43,7 @@ import { Label } from "@/components/ui/label";
 import { DeleteOrganizationDialog } from "@/components/delete-organization-dialog";
 import { AdsoluteMark } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { isImageStudioEnabled } from "@/lib/image-studio-enabled";
 
 const dashboardSubItems = [
   { label: "Dashboard", href: "/", icon: "solar:widget-5-linear" },
@@ -309,29 +310,31 @@ export function AppSidebar() {
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
-          <SidebarGroup>
-            <SidebarGroupLabel>Tools</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    asChild
-                    tooltip="Image Studio"
-                    isActive={pathname.startsWith("/studio")}
-                    className="pr-14"
-                  >
-                    <Link href="/studio">
-                      <Icon icon="solar:magic-stick-3-linear" className="size-4" />
-                      <span>Image Studio</span>
-                    </Link>
-                  </SidebarMenuButton>
-                  <SidebarMenuBadge className="rounded-full border border-sidebar-border bg-sidebar-accent/80 px-2 text-[10px] font-semibold uppercase tracking-wide text-sidebar-accent-foreground">
-                    Beta
-                  </SidebarMenuBadge>
-                </SidebarMenuItem>
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+          {isImageStudioEnabled() ? (
+            <SidebarGroup>
+              <SidebarGroupLabel>Tools</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      tooltip="Image Studio"
+                      isActive={pathname.startsWith("/studio")}
+                      className="pr-14"
+                    >
+                      <Link href="/studio">
+                        <Icon icon="solar:magic-stick-3-linear" className="size-4" />
+                        <span>Image Studio</span>
+                      </Link>
+                    </SidebarMenuButton>
+                    <SidebarMenuBadge className="rounded-full border border-sidebar-border bg-sidebar-accent/80 px-2 text-[10px] font-semibold uppercase tracking-wide text-sidebar-accent-foreground">
+                      Beta
+                    </SidebarMenuBadge>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          ) : null}
           {isPrivileged ? (
             <SidebarGroup>
               <SidebarGroupLabel>API</SidebarGroupLabel>

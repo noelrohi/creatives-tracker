@@ -10,9 +10,29 @@ import { performanceLogs } from "@/schema/performance-log";
 import { studioGenerations, studioVariants } from "@/schema/studio";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 import { AWARENESS_LEVELS, type AwarenessLevel } from "@/lib/awareness";
+import { isImageStudioEnabled } from "@/lib/image-studio-enabled";
 import type { generateStaticAdsTask } from "../../../../trigger/generate-static-ads";
 
 const awarenessLevelSchema = z.enum(AWARENESS_LEVELS);
+
+function requireImageStudioEnabled() {
+  if (!isImageStudioEnabled()) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Image Studio is not enabled",
+    });
+  }
+}
+
+const studioProcedure = orgProcedure.use(async ({ next }) => {
+  requireImageStudioEnabled();
+  return next();
+});
+
+const studioWriteProcedure = orgWriteProcedure.use(async ({ next }) => {
+  requireImageStudioEnabled();
+  return next();
+});
 
 type CreativePerformanceRow = {
   creativeId: string;
@@ -73,7 +93,7 @@ async function fetchCreativePerformanceRows(
 }
 
 export const studioRouter = router({
-  generate: orgWriteProcedure
+  generate: studioWriteProcedure
     .input(
       z.object({
         brief: z.string().min(1),
@@ -138,7 +158,7 @@ export const studioRouter = router({
       return { runId: handle.id, publicAccessToken, generationId: generation.id };
     }),
 
-  winningAngles: orgProcedure.query(async ({ ctx }) => {
+  winningAngles: studioProcedure.query(async ({ ctx }) => {
     const rows = await fetchCreativePerformanceRows(ctx.organizationId, [
       sql`nullif(trim(${adCreatives.angle}), '') is not null`,
     ]);
@@ -215,7 +235,7 @@ export const studioRouter = router({
       .slice(0, 8);
   }),
 
-  topByPurchases: orgProcedure.query(async ({ ctx }) => {
+  topByPurchases: studioProcedure.query(async ({ ctx }) => {
     const rows = await fetchCreativePerformanceRows(ctx.organizationId);
 
     return rows
@@ -235,7 +255,7 @@ export const studioRouter = router({
       .slice(0, 8);
   }),
 
-  generations: orgProcedure.query(async ({ ctx }) => {
+  generations: studioProcedure.query(async ({ ctx }) => {
     const generations = await db
       .select({
         id: studioGenerations.id,
@@ -294,7 +314,7 @@ export const studioRouter = router({
     }));
   }),
 
-  generation: orgProcedure
+  generation: studioProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ input, ctx }) => {
       const [generation] = await db
@@ -341,7 +361,7 @@ export const studioRouter = router({
       return { generation, variants, realtime };
     }),
 
-  save: orgWriteProcedure
+  save: studioWriteProcedure
     .input(
       z.object({
         name: z.string().optional(),
