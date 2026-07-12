@@ -239,6 +239,20 @@
       "when": 1782753900000,
       "tag": "0033_reclassify_video_creatives",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1783486515318,
+      "tag": "0034_curvy_wolverine",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1783528706559,
+      "tag": "0035_bizarre_colleen_wing",
+      "breakpoints": true
     }
   ]
 }

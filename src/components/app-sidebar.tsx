@@ -15,6 +15,7 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuBadge,
@@ -48,13 +49,12 @@ import {
   LogOut,
   Upload,
   Image,
-  Sparkles,
-  Rocket,
   Settings,
   TrendingUp,
   Users,
   Pencil,
   Plus,
+  Sparkles,
   UserPlus,
   Trash2,
 } from "lucide-react";
@@ -67,7 +67,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DeleteOrganizationDialog } from "@/components/delete-organization-dialog";
-import type { FeatureFlagMap, FeatureFlag } from "@/lib/feature-flags";
+import { isImageStudioEnabled } from "@/lib/image-studio-enabled";
 
 const dashboardSubItems = [
   { label: "Overview", href: "/", icon: LayoutDashboard },
@@ -79,20 +79,22 @@ const navItems: Array<{
   href: string;
   icon: ComponentType;
   badge?: string;
-  featureFlag?: FeatureFlag;
 }> = [
   { label: "Creatives", href: "/creatives", icon: Image },
-  { label: "Recommendations", href: "/recommendations", icon: Sparkles, badge: "Beta", featureFlag: "recommendations" },
-  { label: "Launchpad", href: "/launchpad", icon: Rocket, badge: "Beta", featureFlag: "launchpad" },
   { label: "Teams", href: "/teams", icon: Users },
   { label: "Accounts", href: "/accounts", icon: Settings },
 ];
 
-export function AppSidebar({
-  featureFlags,
-}: {
-  featureFlags: FeatureFlagMap;
-}) {
+const toolItems: Array<{
+  label: string;
+  href: string;
+  icon: ComponentType;
+  badge?: string;
+}> = isImageStudioEnabled()
+  ? [{ label: "Image Studio", href: "/studio", icon: Sparkles, badge: "Beta" }]
+  : [];
+
+export function AppSidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -132,12 +134,9 @@ export function AppSidebar({
       ? currentUserRole
       : null,
   );
-  const featureNavItems = navItems.filter(
-    (item) => !item.featureFlag || featureFlags[item.featureFlag],
-  );
   const visibleNavItems = isPrivileged
-    ? featureNavItems
-    : featureNavItems.filter((item) => item.href !== "/accounts");
+    ? navItems
+    : navItems.filter((item) => item.href !== "/accounts");
 
   async function handleSignOut() {
     await authClient.signOut();
@@ -313,6 +312,10 @@ export function AppSidebar({
                   ) : null}
                 </SidebarMenuItem>
               </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+          <SidebarGroup>
+            <SidebarGroupContent>
               <SidebarMenu>
                 <Collapsible
                   defaultOpen
@@ -376,6 +379,35 @@ export function AppSidebar({
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
+          {toolItems.length > 0 ? (
+            <SidebarGroup>
+              <SidebarGroupLabel>Tools</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {toolItems.map((item) => (
+                    <SidebarMenuItem key={item.href}>
+                      <SidebarMenuButton
+                        asChild
+                        tooltip={item.label}
+                        isActive={pathname.startsWith(item.href)}
+                        className={item.badge ? "pr-14" : undefined}
+                      >
+                        <Link href={item.href}>
+                          <item.icon />
+                          <span>{item.label}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                      {item.badge ? (
+                        <SidebarMenuBadge className="rounded-full border border-sidebar-border bg-sidebar-accent/80 px-2 text-[10px] font-semibold uppercase tracking-wide text-sidebar-accent-foreground">
+                          {item.badge}
+                        </SidebarMenuBadge>
+                      ) : null}
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          ) : null}
         </SidebarContent>
         <SidebarFooter>
           <SidebarMenu>

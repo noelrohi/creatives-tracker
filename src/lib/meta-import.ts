@@ -11,18 +11,18 @@ import {
   fetchMetaAdSetDelivery,
   getMetaAccountWithToken,
 } from "@/lib/meta-insights-sync";
+import {
+  creativeFormatMergeSql,
+  mergeCreativeFormat,
+  normalizeIncomingCreativeFormat,
+  type CreativeFormat,
+} from "@/lib/creative-format";
 import { adAccounts } from "@/schema/account";
 import { adCreatives } from "@/schema/ad-creative";
 import { ads } from "@/schema/ad";
 import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
 import { performanceLogs } from "@/schema/performance-log";
-import {
-  creativeFormatMergeSql,
-  mergeCreativeFormat,
-  normalizeIncomingCreativeFormat,
-  type CreativeFormat,
-} from "@/lib/creative-recommendation-policy";
 
 export type ImportMetaRow =
   Partial<BulkImportRow>
