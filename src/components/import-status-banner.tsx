@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role";
 import { isPrivilegedOrgRole } from "@/lib/organization-access";
 import { useTRPC } from "@/lib/trpc/client";
-import { Clock, ArrowRight } from "lucide-react";
+import { Clock, ArrowRight } from "@/components/icons";
 
 function getDataAge(lastImportedAt: Date | null): number | null {
   if (!lastImportedAt) return null;

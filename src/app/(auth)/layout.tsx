@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { usePathname } from "next/navigation";
+import { AdsoluteMark } from "@/components/logo";
 
 const taglines: Record<string, { heading: string; sub: string }> = {
   "/sign-in": {
@@ -43,21 +44,8 @@ export default function AuthLayout({
 
         <div className="relative z-10 max-w-md px-10">
           <div className="flex items-center gap-2.5 text-white">
-            <div className="flex size-8 items-center justify-center rounded-lg bg-primary">
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 16 16"
-                fill="none"
-                className="text-primary-foreground"
-              >
-                <path
-                  d="M2 12L8 3l6 9H2z"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinejoin="round"
-                />
-              </svg>
+            <div className="flex size-8 items-center justify-center rounded-lg bg-[#eae6dc]">
+              <AdsoluteMark size={18} />
             </div>
             <span className="text-[15px] font-semibold tracking-tight">
               Adsolute
@@ -78,21 +66,8 @@ export default function AuthLayout({
         <div className="flex flex-1 flex-col items-center justify-center px-6 py-12">
           {/* Mobile-only logo */}
           <div className="mb-10 flex items-center gap-2.5 lg:hidden">
-            <div className="flex size-8 items-center justify-center rounded-lg bg-primary">
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 16 16"
-                fill="none"
-                className="text-primary-foreground"
-              >
-                <path
-                  d="M2 12L8 3l6 9H2z"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinejoin="round"
-                />
-              </svg>
+            <div className="flex size-8 items-center justify-center rounded-lg bg-[#eae6dc]">
+              <AdsoluteMark size={18} />
             </div>
             <span className="text-[15px] font-semibold tracking-tight">
               Adsolute

@@ -1,6 +1,12 @@
 import Link from "next/link";
-import { ArrowRight, ImageIcon, Leaf, Sparkles, Upload, Video } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import {
+  ArrowRight,
+  ImageIcon,
+  Leaf,
+  Sparkles,
+  Upload,
+  Video,
+} from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -54,7 +60,6 @@ function BleederBadge({ row }: { row: LeaderboardRow }) {
   const className = isPauseNow
     ? "bg-red-500/15 text-red-500 dark:text-red-400"
     : "bg-amber-500/15 text-amber-600 dark:text-amber-400";
-  const label = isPauseNow ? "Pause" : "Watch";
   const singular = row.bleederAdCount === 1;
   const tooltipBody = isPauseNow
     ? `${row.bleederAdCount} of ${total} ${singular ? "ad is" : "ads are"} losing money after 5+ days. ${fmtMoney(atRisk)} lost so far — pause to stop the bleed.`
@@ -63,7 +68,7 @@ function BleederBadge({ row }: { row: LeaderboardRow }) {
     <Tooltip>
       <TooltipTrigger asChild>
         <span className={`inline-flex cursor-help items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-medium ${className}`}>
-          {label} · {row.bleederAdCount}/{total} · {fmtMoney(atRisk)}
+          {row.bleederAdCount}/{total} · {fmtMoney(atRisk)}
         </span>
       </TooltipTrigger>
       <TooltipContent side="top" className="max-w-xs">
@@ -138,6 +143,27 @@ function HealthBadge({ row }: { row: LeaderboardRow }) {
   );
 }
 
+function StatusIcon({ status }: { status: string }) {
+  const normalizedStatus = status.toLowerCase();
+  const className = normalizedStatus === "active"
+    ? "bg-emerald-500"
+    : normalizedStatus === "paused"
+      ? "bg-amber-500"
+      : "bg-muted-foreground";
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          aria-label={`Status: ${status}`}
+          className={`size-2 shrink-0 cursor-help rounded-full ${className}`}
+        />
+      </TooltipTrigger>
+      <TooltipContent side="top" className="capitalize">{status}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function MediaPreview({ row }: { row: LeaderboardRow }) {
   const href = row.videoUrl || row.assetUrl;
 
@@ -160,9 +186,13 @@ function MediaPreview({ row }: { row: LeaderboardRow }) {
       {row.assetUrl ? (
         <div className="relative size-8 overflow-hidden rounded bg-muted">
           <img src={row.assetUrl} alt="" className="size-full object-cover" />
-          {row.format === "video" && (
-            <Video className="absolute inset-0 m-auto size-3.5 text-white drop-shadow" />
-          )}
+          <span className="absolute right-0.5 top-0.5 flex size-4 items-center justify-center rounded-sm bg-black/70 text-white shadow-sm backdrop-blur-sm">
+            {row.format === "video" ? (
+              <Video className="size-2.5" />
+            ) : (
+              <ImageIcon className="size-2.5" />
+            )}
+          </span>
         </div>
       ) : (
         <div className="flex size-8 items-center justify-center rounded bg-muted">
@@ -282,12 +312,7 @@ export function LeaderboardTable({
                       >
                         {row.name}
                       </Link>
-                      {row.format && (
-                        <Badge variant="secondary" className="text-[11px] capitalize shrink-0">{row.format}</Badge>
-                      )}
-                      {row.adStatus && (
-                        <Badge variant="outline" className="text-[11px] capitalize shrink-0">{row.adStatus}</Badge>
-                      )}
+                      {row.adStatus ? <StatusIcon status={row.adStatus} /> : null}
                       {row.bleederAdCount && row.bleederAdCount > 0 ? (
                         <>
                           <BleederBadge row={row} />

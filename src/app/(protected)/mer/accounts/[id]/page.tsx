@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { subDays } from "date-fns";
 import { useQueryState, parseAsString } from "nuqs";
 import { toast } from "sonner";
-import { Database, DollarSign, ShieldCheck, Target, Trophy, TrendingUp, Wrench } from "lucide-react";
+import { Database, DollarSign, ShieldCheck, Target, Trophy, TrendingUp, Wrench } from "@/components/icons";
 import { useTRPC } from "@/lib/trpc/client";
 import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role";
 import { useBreadcrumbs } from "@/components/breadcrumbs";

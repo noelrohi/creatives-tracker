@@ -20,7 +20,7 @@ import {
   Mail,
   Shield,
   Clock,
-} from "lucide-react";
+} from "@/components/icons";
 
 type InvitationDetails = {
   id: string;

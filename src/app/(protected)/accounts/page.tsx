@@ -29,7 +29,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, MoreHorizontal, Pencil, Trash2, ExternalLink } from "lucide-react";
+import { Plus, MoreHorizontal, Pencil, Trash2, ExternalLink } from "@/components/icons";
 import { toast } from "sonner";
 
 interface AccountForm {

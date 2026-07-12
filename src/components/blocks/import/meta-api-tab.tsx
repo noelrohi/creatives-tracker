@@ -27,7 +27,7 @@ import {
   Download,
   CloudDownload,
   ChevronRight,
-} from "lucide-react";
+} from "@/components/icons";
 import { toast } from "sonner";
 import { formatDateOnly, parseDateOnly } from "@/lib/date";
 import { cn } from "@/lib/utils";

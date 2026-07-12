@@ -36,7 +36,7 @@ import {
   ChevronDown,
   ChevronUp,
   Check,
-} from "lucide-react";
+} from "@/components/icons";
 import {
   parseCSV,
   detectLevel,

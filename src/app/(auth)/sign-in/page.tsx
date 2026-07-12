@@ -12,7 +12,7 @@ import { activateFirstOrganization } from "@/lib/organization-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, FieldLabel, FieldError } from "@/components/ui/field";
-import { Loader2 } from "lucide-react";
+import { Loader2 } from "@/components/icons";
 
 const signInSchema = z.object({
   email: z.string().email("Enter a valid email address."),

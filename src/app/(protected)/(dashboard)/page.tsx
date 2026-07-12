@@ -28,7 +28,7 @@ import {
   Trophy,
   AlertTriangle,
   Shield,
-} from "lucide-react";
+} from "@/components/icons";
 import { PerformanceChart } from "@/components/blocks/insights/performance-chart";
 import { DemographicBreakdownChart } from "@/components/blocks/dashboard/demographic-chart";
 import { LeaderboardTable } from "@/components/blocks/dashboard/leaderboard-table";

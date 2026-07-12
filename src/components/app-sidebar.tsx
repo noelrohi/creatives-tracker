@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, type ComponentType } from "react";
+import { useState } from "react";
+import { Icon } from "@iconify/react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -21,15 +22,8 @@ import {
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
+  SidebarTrigger,
 } from "@/components/ui/sidebar";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -39,26 +33,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  BookOpen,
-  Building2,
-  ChevronDown,
-  ChevronRight,
-  CirclePlus,
-  Key,
-  LayoutDashboard,
-  LogOut,
-  Upload,
-  Image,
-  Settings,
-  TrendingUp,
-  Users,
-  Pencil,
-  Plus,
-  Sparkles,
-  UserPlus,
-  Trash2,
-} from "lucide-react";
-import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -67,29 +41,26 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DeleteOrganizationDialog } from "@/components/delete-organization-dialog";
+import { AdsoluteMark } from "@/components/logo";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const dashboardSubItems = [
-  { label: "Overview", href: "/", icon: LayoutDashboard },
-  { label: "MER", href: "/mer", icon: TrendingUp },
+  { label: "Dashboard", href: "/", icon: "solar:widget-5-linear" },
+  { label: "MER", href: "/mer", icon: "solar:graph-up-linear" },
 ];
 
 const navItems: Array<{
   label: string;
   href: string;
-  icon: ComponentType;
+  icon: string;
   badge?: string;
+  privileged?: boolean;
 }> = [
-  { label: "Creatives", href: "/creatives", icon: Image },
-  { label: "Teams", href: "/teams", icon: Users },
-  { label: "Accounts", href: "/accounts", icon: Settings },
+  { label: "Creatives", href: "/creatives", icon: "solar:gallery-linear" },
+  { label: "Imports", href: "/import", icon: "solar:upload-linear", privileged: true },
+  { label: "Teams", href: "/teams", icon: "solar:users-group-rounded-linear" },
+  { label: "Accounts", href: "/accounts", icon: "solar:settings-linear", privileged: true },
 ];
-
-const toolItems: Array<{
-  label: string;
-  href: string;
-  icon: ComponentType;
-  badge?: string;
-}> = [{ label: "Image Studio", href: "/studio", icon: Sparkles, badge: "Beta" }];
 
 export function AppSidebar() {
   const pathname = usePathname();
@@ -133,7 +104,7 @@ export function AppSidebar() {
   );
   const visibleNavItems = isPrivileged
     ? navItems
-    : navItems.filter((item) => item.href !== "/accounts");
+    : navItems.filter((item) => !item.privileged);
 
   async function handleSignOut() {
     await authClient.signOut();
@@ -225,10 +196,21 @@ export function AppSidebar() {
     <>
       <Sidebar variant="inset">
         <SidebarHeader>
+          <div className="group/header-row flex h-8 items-center gap-2 px-2">
+            <Link href="/" className="flex min-w-0 flex-1 items-center gap-2 group-data-[collapsible=icon]:hidden">
+              <div className="flex size-7 shrink-0 items-center justify-center">
+                <AdsoluteMark size={20} adaptive />
+              </div>
+              <span className="truncate text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
+                Adsolute
+              </span>
+            </Link>
+            <SidebarTrigger className="shrink-0 opacity-0 transition-opacity group-hover/header-row:opacity-100 focus-visible:opacity-100" />
+          </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent">
-                <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary text-sm font-semibold text-primary-foreground">
+              <button className="flex w-full items-center gap-1.5 rounded-md border border-sidebar-border bg-sidebar px-1.5 py-1 text-left shadow-xs transition-colors hover:bg-sidebar-accent">
+                <div className="flex size-6 shrink-0 items-center justify-center rounded-sm bg-primary text-xs font-semibold text-primary-foreground">
                   {activeOrg?.name?.[0]?.toUpperCase() ?? "A"}
                 </div>
                 <div className="flex flex-1 flex-col truncate">
@@ -236,7 +218,7 @@ export function AppSidebar() {
                     {activeOrg?.name ?? "Adsolute"}
                   </span>
                 </div>
-                <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+                <Icon icon="solar:alt-arrow-down-linear" className="size-4 shrink-0 text-muted-foreground" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-56">
@@ -245,7 +227,7 @@ export function AppSidebar() {
                   key={org.id}
                   onClick={() => switchOrg(org.id)}
                 >
-                  <Building2 className="mr-2 size-4" />
+                  <Icon icon="solar:buildings-2-linear" className="mr-2 size-4" />
                   <span className="truncate">{org.name}</span>
                   {org.id === activeOrg?.id && (
                     <span className="ml-auto text-xs text-muted-foreground">
@@ -256,12 +238,12 @@ export function AppSidebar() {
               ))}
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => setShowNewOrg(true)}>
-                <Plus className="mr-2 size-4" />
+                <Icon icon="solar:add-circle-linear" className="mr-2 size-4" />
                 Create organization
               </DropdownMenuItem>
               {activeOrg && isPrivileged ? (
                 <DropdownMenuItem onSelect={openRenameDialog}>
-                  <Pencil className="mr-2 size-4" />
+                  <Icon icon="solar:pen-linear" className="mr-2 size-4" />
                   Rename workspace
                 </DropdownMenuItem>
               ) : null}
@@ -270,7 +252,7 @@ export function AppSidebar() {
                   variant="destructive"
                   onSelect={() => setShowDeleteOrg(true)}
                 >
-                  <Trash2 className="mr-2 size-4" />
+                  <Icon icon="solar:trash-bin-trash-linear" className="mr-2 size-4" />
                   Delete workspace
                 </DropdownMenuItem>
               ) : null}
@@ -279,80 +261,31 @@ export function AppSidebar() {
         </SidebarHeader>
         <SidebarContent>
           <SidebarGroup>
-            <SidebarGroupContent className="flex flex-col gap-2">
+            <SidebarGroupContent>
               <SidebarMenu>
-                <SidebarMenuItem className="flex items-center gap-2">
-                  {isPrivileged ? (
-                    <>
-                      <SidebarMenuButton
-                        asChild
-                        tooltip="Import"
-                        className="min-w-8 bg-primary text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground"
-                      >
-                        <Link href="/import">
-                          <CirclePlus />
-                          <span>Import</span>
+                {dashboardSubItems.map((item) => {
+                  const isActive =
+                    item.href === "/"
+                      ? pathname === "/"
+                      : pathname === item.href || pathname.startsWith(`${item.href}/`);
+                  return (
+                    <SidebarMenuItem key={item.href}>
+                      <SidebarMenuButton asChild tooltip={item.label} isActive={isActive}>
+                        <Link href={item.href}>
+                          <Icon icon={item.icon} className="size-4" />
+                          <span>{item.label}</span>
                         </Link>
                       </SidebarMenuButton>
-                      <Button
-                        size="icon"
-                        className="size-8 group-data-[collapsible=icon]:opacity-0"
-                        variant="outline"
-                        asChild
-                      >
-                        <Link href="/import">
-                          <Upload />
-                          <span className="sr-only">Import</span>
-                        </Link>
-                      </Button>
-                    </>
-                  ) : null}
-                </SidebarMenuItem>
+                    </SidebarMenuItem>
+                  );
+                })}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
           <SidebarGroup>
+            <SidebarGroupLabel>Manage</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                <Collapsible
-                  defaultOpen
-                  className="group/collapsible"
-                >
-                  <SidebarMenuItem>
-                    <CollapsibleTrigger asChild>
-                      <SidebarMenuButton
-                        tooltip="Dashboard"
-                        isActive={
-                          pathname === "/" || pathname.startsWith("/mer")
-                        }
-                      >
-                        <LayoutDashboard />
-                        <span>Dashboard</span>
-                        <ChevronRight className="ml-auto size-4 transition-transform group-data-[state=open]/collapsible:rotate-90" />
-                      </SidebarMenuButton>
-                    </CollapsibleTrigger>
-                    <CollapsibleContent>
-                      <SidebarMenuSub>
-                        {dashboardSubItems.map((sub) => {
-                          const isActive =
-                            sub.href === "/"
-                              ? pathname === "/"
-                              : pathname === sub.href || pathname.startsWith(`${sub.href}/`);
-                          return (
-                            <SidebarMenuSubItem key={sub.href}>
-                              <SidebarMenuSubButton asChild isActive={isActive}>
-                                <Link href={sub.href}>
-                                  <sub.icon />
-                                  <span>{sub.label}</span>
-                                </Link>
-                              </SidebarMenuSubButton>
-                            </SidebarMenuSubItem>
-                          );
-                        })}
-                      </SidebarMenuSub>
-                    </CollapsibleContent>
-                  </SidebarMenuItem>
-                </Collapsible>
                 {visibleNavItems.map((item) => (
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton
@@ -362,7 +295,7 @@ export function AppSidebar() {
                       className={item.badge ? "pr-14" : undefined}
                     >
                       <Link href={item.href}>
-                        <item.icon />
+                        <Icon icon={item.icon} className="size-4" />
                         <span>{item.label}</span>
                       </Link>
                     </SidebarMenuButton>
@@ -380,53 +313,66 @@ export function AppSidebar() {
             <SidebarGroupLabel>Tools</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {toolItems.map((item) => (
-                  <SidebarMenuItem key={item.href}>
-                    <SidebarMenuButton
-                      asChild
-                      tooltip={item.label}
-                      isActive={pathname.startsWith(item.href)}
-                      className={item.badge ? "pr-14" : undefined}
-                    >
-                      <Link href={item.href}>
-                        <item.icon />
-                        <span>{item.label}</span>
-                      </Link>
-                    </SidebarMenuButton>
-                    {item.badge ? (
-                      <SidebarMenuBadge className="rounded-full border border-sidebar-border bg-sidebar-accent/80 px-2 text-[10px] font-semibold uppercase tracking-wide text-sidebar-accent-foreground">
-                        {item.badge}
-                      </SidebarMenuBadge>
-                    ) : null}
-                  </SidebarMenuItem>
-                ))}
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    tooltip="Image Studio"
+                    isActive={pathname.startsWith("/studio")}
+                    className="pr-14"
+                  >
+                    <Link href="/studio">
+                      <Icon icon="solar:magic-stick-3-linear" className="size-4" />
+                      <span>Image Studio</span>
+                    </Link>
+                  </SidebarMenuButton>
+                  <SidebarMenuBadge className="rounded-full border border-sidebar-border bg-sidebar-accent/80 px-2 text-[10px] font-semibold uppercase tracking-wide text-sidebar-accent-foreground">
+                    Beta
+                  </SidebarMenuBadge>
+                </SidebarMenuItem>
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
+          {isPrivileged ? (
+            <SidebarGroup>
+              <SidebarGroupLabel>API</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      tooltip="API Docs"
+                      isActive={pathname.startsWith("/reference")}
+                    >
+                      <Link href="/reference">
+                        <Icon icon="solar:book-2-linear" className="size-4" />
+                        <span>API Docs</span>
+                        <Icon
+                          icon="solar:arrow-right-up-linear"
+                          className="ml-auto size-3.5 text-muted-foreground"
+                        />
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          ) : null}
         </SidebarContent>
         <SidebarFooter>
           <SidebarMenu>
-            {isPrivileged ? (
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild tooltip="API Docs">
-                  <Link href="/reference">
-                    <BookOpen />
-                    <span>API Docs</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ) : null}
-            <SidebarMenuItem>
+            <SidebarMenuItem className="flex items-center">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <SidebarMenuButton tooltip={session?.user?.name ?? "User"}>
+                  <SidebarMenuButton
+                    tooltip={session?.user?.name ?? "User"}
+                    className="min-w-0 flex-1"
+                  >
                     <div className="flex size-5 items-center justify-center rounded-full bg-muted text-xs font-medium">
                       {session?.user?.name?.[0]?.toUpperCase() ?? "?"}
                     </div>
                     <span className="truncate">
                       {session?.user?.name ?? "User"}
                     </span>
-                    <ChevronDown className="ml-auto size-4" />
                   </SidebarMenuButton>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="w-56">
@@ -440,19 +386,19 @@ export function AppSidebar() {
                     <>
                       <DropdownMenuItem asChild>
                         <Link href="/settings/org">
-                          <Building2 className="mr-2 size-4" />
+                          <Icon icon="solar:buildings-2-linear" className="mr-2 size-4" />
                           Organization
                         </Link>
                       </DropdownMenuItem>
                       <DropdownMenuItem asChild>
                         <Link href="/settings/members">
-                          <UserPlus className="mr-2 size-4" />
+                          <Icon icon="solar:user-plus-linear" className="mr-2 size-4" />
                           Invite members
                         </Link>
                       </DropdownMenuItem>
                       <DropdownMenuItem asChild>
                         <Link href="/settings/api-keys">
-                          <Key className="mr-2 size-4" />
+                          <Icon icon="solar:key-linear" className="mr-2 size-4" />
                           API keys
                         </Link>
                       </DropdownMenuItem>
@@ -460,11 +406,14 @@ export function AppSidebar() {
                     </>
                   ) : null}
                   <DropdownMenuItem onClick={handleSignOut}>
-                    <LogOut className="mr-2 size-4" />
+                    <Icon icon="solar:logout-2-linear" className="mr-2 size-4" />
                     Sign out
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
+              <div className="shrink-0 group-data-[collapsible=icon]:hidden">
+                <ThemeToggle />
+              </div>
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarFooter>

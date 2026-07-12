@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Download } from "lucide-react";
+import { Download } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -20,6 +20,7 @@ export type ExportFilters = {
   to: string;
   accountId?: string;
   adSetIds?: string[];
+  landingPageUrls?: string[];
   teamId?: string;
   format?: string;
   awarenessLevel?: string;
@@ -154,6 +155,7 @@ export function ExportPreviewDialog({
       to: filters.to,
       accountId: filters.accountId,
       adSetIds: filters.adSetIds,
+      landingPageUrls: filters.landingPageUrls,
       teamId: filters.teamId,
       format: filters.format,
       awarenessLevel: filters.awarenessLevel,

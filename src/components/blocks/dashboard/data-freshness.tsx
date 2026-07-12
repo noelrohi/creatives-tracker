@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Clock, ArrowRight } from "lucide-react";
+import { Clock, ArrowRight } from "@/components/icons";
 
 interface Account {
   lastImportedAt: Date | null;

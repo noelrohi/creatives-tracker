@@ -5,10 +5,18 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { subDays } from "date-fns";
 import { useQueryState, parseAsString } from "nuqs";
-import { AlertTriangle, ChevronRight } from "lucide-react";
+import { AlertTriangle, ChevronRight, Info } from "@/components/icons";
 import { useTRPC } from "@/lib/trpc/client";
 import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -179,8 +187,33 @@ export default function MerPage() {
     <div className="flex flex-col gap-4">
       {/* Single-line header */}
       <div className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-1.5">
           <h1 className="text-base font-semibold tracking-tight">Marketing Efficiency Ratio</h1>
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label="About Marketing Efficiency Ratio"
+              >
+                <Info className="size-3.5" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-80">
+              <PopoverHeader>
+                <PopoverTitle>What is MER?</PopoverTitle>
+                <PopoverDescription>
+                  Marketing Efficiency Ratio measures how efficiently your total marketing spend generates revenue.
+                </PopoverDescription>
+              </PopoverHeader>
+              <div className="rounded-md bg-muted px-3 py-2 text-xs font-medium tabular-nums">
+                MER = total revenue ÷ total ad spend
+              </div>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                This page tracks MER over time and compares performance across teams and ad accounts. A higher ratio means more revenue for every dollar spent.
+              </p>
+            </PopoverContent>
+          </Popover>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <DateRangePicker

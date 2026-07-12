@@ -21,7 +21,7 @@ import {
   FieldError,
   FieldDescription,
 } from "@/components/ui/field";
-import { Loader2 } from "lucide-react";
+import { Loader2 } from "@/components/icons";
 import { toast } from "sonner";
 
 const schema = z.object({
