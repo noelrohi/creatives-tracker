@@ -67,6 +67,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DeleteOrganizationDialog } from "@/components/delete-organization-dialog";
+import { isImageStudioEnabled } from "@/lib/image-studio-enabled";
 
 const dashboardSubItems = [
   { label: "Overview", href: "/", icon: LayoutDashboard },
@@ -89,7 +90,9 @@ const toolItems: Array<{
   href: string;
   icon: ComponentType;
   badge?: string;
-}> = [{ label: "Image Studio", href: "/studio", icon: Sparkles, badge: "Beta" }];
+}> = isImageStudioEnabled()
+  ? [{ label: "Image Studio", href: "/studio", icon: Sparkles, badge: "Beta" }]
+  : [];
 
 export function AppSidebar() {
   const pathname = usePathname();
