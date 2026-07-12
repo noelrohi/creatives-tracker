@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Images, PenLine } from "lucide-react";
+import { Images, PenLine } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 const tabs = [

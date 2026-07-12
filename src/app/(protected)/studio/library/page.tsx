@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { CheckCircle2, CirclePlus, ImageOff, Loader2, Save } from "lucide-react";
+import { CheckCircle2, CirclePlus, ImageOff, Loader2, Save } from "@/components/icons";
 import { useTRPC } from "@/lib/trpc/client";
 import type { RouterOutputs } from "@/lib/trpc/client";
 import { Badge } from "@/components/ui/badge";

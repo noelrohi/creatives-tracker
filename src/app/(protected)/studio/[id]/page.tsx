@@ -12,7 +12,7 @@ import {
   ImageOff,
   Loader2,
   Save,
-} from "lucide-react";
+} from "@/components/icons";
 import { useTRPC } from "@/lib/trpc/client";
 import type { RouterOutputs } from "@/lib/trpc/client";
 import { Badge } from "@/components/ui/badge";

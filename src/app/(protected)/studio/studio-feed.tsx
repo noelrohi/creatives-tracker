@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useRealtimeRun } from "@trigger.dev/react-hooks";
 import { toast } from "sonner";
-import { Loader2, RotateCw, Save, ImageOff, Check, ArrowDown } from "lucide-react";
+import { Loader2, RotateCw, Save, ImageOff, Check, ArrowDown } from "@/components/icons";
 import { useTRPC } from "@/lib/trpc/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
