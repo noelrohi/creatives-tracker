@@ -1,11 +1,13 @@
 import { z } from "zod";
 import { auth as triggerAuth, tasks } from "@trigger.dev/sdk";
-import { and, eq, sql, type SQL } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
+import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { router, orgProcedure, orgWriteProcedure } from "../init";
 import { db } from "@/db";
 import { ads } from "@/schema/ad";
 import { adCreatives } from "@/schema/ad-creative";
 import { performanceLogs } from "@/schema/performance-log";
+import { studioGenerations, studioVariants } from "@/schema/studio";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 import { AWARENESS_LEVELS, type AwarenessLevel } from "@/lib/awareness";
 import type { generateStaticAdsTask } from "../../../../trigger/generate-static-ads";
@@ -83,9 +85,32 @@ export const studioRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      const [generation] = await db
+        .insert(studioGenerations)
+        .values({
+          organizationId: ctx.organizationId,
+          brief: input.brief,
+          angle: input.angle,
+          persona: input.persona,
+          awarenessLevel: input.awarenessLevel ?? null,
+          count: input.count,
+          referenceImageUrls: input.referenceImageUrls ?? null,
+        })
+        .returning();
+
+      await db.insert(studioVariants).values(
+        Array.from({ length: input.count }, (_, index) => ({
+          generationId: generation.id,
+          organizationId: ctx.organizationId,
+          index,
+          status: "pending",
+        })),
+      );
+
       const handle = await tasks.trigger<typeof generateStaticAdsTask>(
         "generate-static-ads",
         {
+          generationId: generation.id,
           organizationId: ctx.organizationId,
           brief: input.brief,
           angle: input.angle,
@@ -96,6 +121,11 @@ export const studioRouter = router({
         },
       );
 
+      await db
+        .update(studioGenerations)
+        .set({ runId: handle.id, updatedAt: new Date() })
+        .where(eq(studioGenerations.id, generation.id));
+
       const publicAccessToken = await triggerAuth.createPublicToken({
         scopes: {
           read: {
@@ -105,7 +135,7 @@ export const studioRouter = router({
         expirationTime: "1h",
       });
 
-      return { runId: handle.id, publicAccessToken };
+      return { runId: handle.id, publicAccessToken, generationId: generation.id };
     }),
 
   winningAngles: orgProcedure.query(async ({ ctx }) => {
@@ -205,6 +235,112 @@ export const studioRouter = router({
       .slice(0, 8);
   }),
 
+  generations: orgProcedure.query(async ({ ctx }) => {
+    const generations = await db
+      .select({
+        id: studioGenerations.id,
+        brief: studioGenerations.brief,
+        angle: studioGenerations.angle,
+        persona: studioGenerations.persona,
+        awarenessLevel: studioGenerations.awarenessLevel,
+        status: studioGenerations.status,
+        count: studioGenerations.count,
+        createdAt: studioGenerations.createdAt,
+      })
+      .from(studioGenerations)
+      .where(eq(studioGenerations.organizationId, ctx.organizationId))
+      .orderBy(desc(studioGenerations.createdAt))
+      .limit(50);
+
+    const generationIds = generations.map((generation) => generation.id);
+    if (generationIds.length === 0) {
+      return [];
+    }
+
+    const variants = await db
+      .select({
+        id: studioVariants.id,
+        generationId: studioVariants.generationId,
+        index: studioVariants.index,
+        status: studioVariants.status,
+        imageUrl: studioVariants.imageUrl,
+        savedCreativeId: studioVariants.savedCreativeId,
+      })
+      .from(studioVariants)
+      .where(
+        and(
+          eq(studioVariants.organizationId, ctx.organizationId),
+          inArray(studioVariants.generationId, generationIds),
+        ),
+      )
+      .orderBy(asc(studioVariants.index));
+
+    const variantsByGenerationId = new Map<string, typeof variants>();
+    for (const variant of variants) {
+      const current = variantsByGenerationId.get(variant.generationId) ?? [];
+      current.push(variant);
+      variantsByGenerationId.set(variant.generationId, current);
+    }
+
+    return generations.map((generation) => ({
+      ...generation,
+      variants: (variantsByGenerationId.get(generation.id) ?? []).map((variant) => ({
+        id: variant.id,
+        index: variant.index,
+        status: variant.status,
+        imageUrl: variant.imageUrl,
+        savedCreativeId: variant.savedCreativeId,
+      })),
+    }));
+  }),
+
+  generation: orgProcedure
+    .input(z.object({ id: z.string() }))
+    .query(async ({ input, ctx }) => {
+      const [generation] = await db
+        .select()
+        .from(studioGenerations)
+        .where(
+          and(
+            eq(studioGenerations.id, input.id),
+            eq(studioGenerations.organizationId, ctx.organizationId),
+          ),
+        )
+        .limit(1);
+
+      if (!generation) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Generation not found" });
+      }
+
+      const variants = await db
+        .select()
+        .from(studioVariants)
+        .where(
+          and(
+            eq(studioVariants.generationId, generation.id),
+            eq(studioVariants.organizationId, ctx.organizationId),
+          ),
+        )
+        .orderBy(asc(studioVariants.index));
+
+      const realtime =
+        generation.status === "generating" && generation.runId
+          ? {
+              runId: generation.runId,
+              publicAccessToken: await triggerAuth.createPublicToken({
+                scopes: {
+                  read: {
+                    runs: [generation.runId],
+                  },
+                },
+                expirationTime: "1h",
+              }),
+            }
+          : null;
+
+      return { generation, variants, realtime };
+    }),
+
   save: orgWriteProcedure
     .input(
       z.object({
@@ -213,6 +349,7 @@ export const studioRouter = router({
         angle: z.string().optional(),
         persona: z.string().optional(),
         awarenessLevel: awarenessLevelSchema.optional(),
+        variantId: z.string().optional(),
       }),
     )
     .mutation(async ({ input, ctx }) => {
@@ -228,6 +365,18 @@ export const studioRouter = router({
           organizationId: ctx.organizationId,
         })
         .returning();
+
+      if (input.variantId) {
+        await db
+          .update(studioVariants)
+          .set({ savedCreativeId: creative.id, updatedAt: new Date() })
+          .where(
+            and(
+              eq(studioVariants.id, input.variantId),
+              eq(studioVariants.organizationId, ctx.organizationId),
+            ),
+          );
+      }
 
       return creative;
     }),

@@ -78,7 +78,23 @@ export default function StudioPage() {
     setPersona(starter.persona);
     setAwarenessLevel(starter.awarenessLevel);
     setReferences(
-      starter.imageUrl ? [{ url: starter.imageUrl, label: "@img_1" }] : [],
+      starter.imageUrl
+        ? [
+            {
+              url: starter.imageUrl,
+              label: "Winning ad",
+              description: "Reference",
+            },
+          ]
+        : [],
+    );
+  }, []);
+
+  const addReference = useCallback((reference: ComposerReference) => {
+    setReferences((prev) =>
+      prev.some((ref) => ref.url === reference.url)
+        ? prev
+        : [...prev, reference].slice(0, 4),
     );
   }, []);
 
@@ -114,8 +130,8 @@ export default function StudioPage() {
           pending={generate.isPending}
           count={count}
           onCountChange={setCount}
-          activeAngle={angle}
           references={references}
+          onAddReference={addReference}
           onRemoveReference={removeReference}
           autoFocus
         />
@@ -139,8 +155,8 @@ export default function StudioPage() {
           pending={generate.isPending}
           count={count}
           onCountChange={setCount}
-          activeAngle={angle}
           references={references}
+          onAddReference={addReference}
           onRemoveReference={removeReference}
         />
       </div>

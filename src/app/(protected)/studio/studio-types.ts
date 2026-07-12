@@ -13,6 +13,7 @@ export type Starter = {
 export type ComposerReference = {
   url: string;
   label: string;
+  description?: string;
 };
 
 export type Generation = {

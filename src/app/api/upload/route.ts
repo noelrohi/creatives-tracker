@@ -43,6 +43,7 @@ export async function POST(request: Request) {
 
   const blob = await put(path, file, {
     access: "public",
+    allowOverwrite: true,
   });
 
   return Response.json({ url: blob.url });

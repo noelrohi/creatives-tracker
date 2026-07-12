@@ -1,9 +1,19 @@
 "use client";
 
-import { useRef } from "react";
-import { ArrowUp, Loader2, X } from "lucide-react";
+import { useRef, useState } from "react";
+import { ArrowUp, ImagePlus, Loader2, X } from "lucide-react";
+import { toast } from "sonner";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
+import {
+  Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentGroup,
+  AttachmentMedia,
+  AttachmentTitle,
+} from "@/components/ui/attachment";
 import {
   Select,
   SelectContent,
@@ -14,6 +24,13 @@ import {
 import { cn } from "@/lib/utils";
 import type { ComposerReference } from "./studio-types";
 
+const MAX_REFERENCES = 4;
+
+type UploadingItem = {
+  id: string;
+  name: string;
+};
+
 type StudioComposerProps = {
   value: string;
   onChange: (value: string) => void;
@@ -21,12 +38,18 @@ type StudioComposerProps = {
   pending: boolean;
   count: number;
   onCountChange: (count: number) => void;
-  activeAngle?: string;
   references?: ComposerReference[];
+  onAddReference?: (reference: ComposerReference) => void;
   onRemoveReference?: (url: string) => void;
   className?: string;
   autoFocus?: boolean;
 };
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 export function StudioComposer({
   value,
@@ -35,14 +58,60 @@ export function StudioComposer({
   pending,
   count,
   onCountChange,
-  activeAngle,
   references = [],
+  onAddReference,
   onRemoveReference,
   className,
   autoFocus,
 }: StudioComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const canSend = value.trim().length > 0 && !pending;
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploads, setUploads] = useState<UploadingItem[]>([]);
+
+  const uploading = uploads.length > 0;
+  const canSend = value.trim().length > 0 && !pending && !uploading;
+  const usedSlots = references.length + uploads.length;
+  const canAttach = onAddReference != null && usedSlots < MAX_REFERENCES;
+
+  async function handleFiles(fileList: FileList | null) {
+    if (!fileList || !onAddReference) return;
+    const files = Array.from(fileList).filter((file) =>
+      file.type.startsWith("image/"),
+    );
+    let remaining = MAX_REFERENCES - (references.length + uploads.length);
+    for (const file of files) {
+      if (remaining <= 0) {
+        toast.error(`You can attach up to ${MAX_REFERENCES} reference images.`);
+        break;
+      }
+      remaining -= 1;
+      const id = crypto.randomUUID();
+      setUploads((prev) => [...prev, { id, name: file.name }]);
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        const res = await fetch("/api/upload", { method: "POST", body: form });
+        if (!res.ok) {
+          const body = (await res.json().catch(() => null)) as {
+            error?: string;
+          } | null;
+          throw new Error(body?.error ?? "Upload failed");
+        }
+        const { url } = (await res.json()) as { url: string };
+        onAddReference({
+          url,
+          label: file.name,
+          description: formatBytes(file.size),
+        });
+      } catch (error) {
+        toast.error(
+          error instanceof Error ? error.message : "Upload failed",
+        );
+      } finally {
+        setUploads((prev) => prev.filter((item) => item.id !== id));
+      }
+    }
+  }
 
   return (
     <div
@@ -62,41 +131,84 @@ export function StudioComposer({
             if (canSend) onSubmit();
           }
         }}
+        onPaste={(event) => {
+          if (!canAttach) return;
+          const files = Array.from(event.clipboardData.files).filter((file) =>
+            file.type.startsWith("image/"),
+          );
+          if (files.length === 0) return;
+          event.preventDefault();
+          const transfer = new DataTransfer();
+          for (const file of files) transfer.items.add(file);
+          void handleFiles(transfer.files);
+        }}
         placeholder="Describe the static ad — angle, offer, hook…"
         className="max-h-40 min-h-[52px] resize-none border-0 bg-transparent px-4 pt-4 text-base shadow-none focus-visible:ring-0 dark:bg-transparent"
       />
-      {references.length > 0 ? (
-        <div className="flex flex-wrap gap-2 px-3 pb-1">
-          {references.map((ref) => (
-            <div
-              key={ref.url}
-              className="group/ref relative size-16 shrink-0 overflow-hidden rounded-lg border"
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={ref.url} alt={ref.label} className="size-full object-cover" />
-              <span className="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/70 to-transparent px-1 pt-2 pb-0.5 text-[10px] font-medium text-white">
-                {ref.label}
-              </span>
+      {references.length > 0 || uploads.length > 0 ? (
+        <AttachmentGroup className="px-3 pb-1">
+          {references.map((reference) => (
+            <Attachment key={reference.url} size="sm">
+              <AttachmentMedia variant="image">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={reference.url} alt={reference.label} />
+              </AttachmentMedia>
+              <AttachmentContent>
+                <AttachmentTitle>{reference.label}</AttachmentTitle>
+                {reference.description ? (
+                  <AttachmentDescription>
+                    {reference.description}
+                  </AttachmentDescription>
+                ) : null}
+              </AttachmentContent>
               {onRemoveReference ? (
-                <button
-                  type="button"
-                  aria-label={`Remove ${ref.label}`}
-                  onClick={() => onRemoveReference(ref.url)}
-                  className="absolute top-0.5 right-0.5 flex size-4 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity group-hover/ref:opacity-100"
-                >
-                  <X className="size-2.5" />
-                </button>
+                <AttachmentActions>
+                  <AttachmentAction
+                    aria-label={`Remove ${reference.label}`}
+                    onClick={() => onRemoveReference(reference.url)}
+                  >
+                    <X />
+                  </AttachmentAction>
+                </AttachmentActions>
               ) : null}
-            </div>
+            </Attachment>
           ))}
-        </div>
+          {uploads.map((item) => (
+            <Attachment key={item.id} size="sm" state="uploading">
+              <AttachmentMedia variant="image">
+                <ImagePlus />
+              </AttachmentMedia>
+              <AttachmentContent>
+                <AttachmentTitle>{item.name}</AttachmentTitle>
+                <AttachmentDescription>Uploading…</AttachmentDescription>
+              </AttachmentContent>
+            </Attachment>
+          ))}
+        </AttachmentGroup>
       ) : null}
       <div className="flex items-center gap-2 px-3 pb-3">
-        {activeAngle ? (
-          <Badge variant="outline" className="max-w-[220px] truncate">
-            {activeAngle}
-          </Badge>
-        ) : null}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          hidden
+          onChange={(event) => {
+            void handleFiles(event.target.files);
+            event.target.value = "";
+          }}
+        />
+        <button
+          type="button"
+          aria-label="Attach reference image"
+          disabled={!canAttach}
+          onClick={() => fileInputRef.current?.click()}
+          className={cn(
+            "flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50",
+          )}
+        >
+          <ImagePlus className="size-4" />
+        </button>
         <div className="ml-auto flex items-center gap-2">
           <Select
             value={String(count)}
@@ -125,7 +237,7 @@ export function StudioComposer({
                 : "bg-muted text-muted-foreground",
             )}
           >
-            {pending ? (
+            {pending || uploading ? (
               <Loader2 className="size-4 animate-spin" />
             ) : (
               <ArrowUp className="size-4" />

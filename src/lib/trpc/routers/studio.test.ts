@@ -3,10 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // --- Mocked DB: supports the studio router's
 //   select().from().innerJoin().innerJoin().where().groupBy() chain,
 // resolving groupBy() with the next queued row set. save() uses
-//   insert().values().returning().
+//   insert().values().returning(). generate() uses insert/update chains.
 const dbState = {
   groupByRows: [] as Array<Record<string, unknown>[]>,
-  inserted: [] as Array<Record<string, unknown>>,
+  inserted: [] as Array<Record<string, unknown> | Record<string, unknown>[]>,
+  updated: [] as Array<Record<string, unknown>>,
 };
 
 const mockDb = {
@@ -21,13 +22,31 @@ const mockDb = {
   }),
   insert: vi.fn(() => {
     const chain: Record<string, unknown> = {
-      values: vi.fn((row: Record<string, unknown>) => {
+      values: vi.fn((row: Record<string, unknown> | Record<string, unknown>[]) => {
         dbState.inserted.push(row);
         return chain;
       }),
       returning: vi.fn(async () => [
-        { id: "creative_new", ...dbState.inserted[dbState.inserted.length - 1] },
+        {
+          id: Array.isArray(dbState.inserted[dbState.inserted.length - 1])
+            ? "row_new"
+            : (dbState.inserted[dbState.inserted.length - 1] as Record<string, unknown>)
+                  .brief
+              ? "generation_new"
+              : "creative_new",
+          ...dbState.inserted[dbState.inserted.length - 1],
+        },
       ]),
+    };
+    return chain;
+  }),
+  update: vi.fn(() => {
+    const chain: Record<string, unknown> = {
+      set: vi.fn((row: Record<string, unknown>) => {
+        dbState.updated.push(row);
+        return chain;
+      }),
+      where: vi.fn(() => chain),
     };
     return chain;
   }),
@@ -59,6 +78,7 @@ describe("studio router — static-ad composer starters", () => {
   beforeEach(() => {
     dbState.groupByRows = [];
     dbState.inserted = [];
+    dbState.updated = [];
     vi.clearAllMocks();
   });
 
@@ -165,7 +185,7 @@ describe("studio router — static-ad composer starters", () => {
     console.log("topByPurchases response:\n" + JSON.stringify(result, null, 2));
   });
 
-  it("generate: queues the Trigger.dev job with the brief + reference image and returns a run + public token", async () => {
+  it("generate: persists generation scaffolding, queues the Trigger.dev job with the brief + reference image, and returns ids + public token", async () => {
     const caller = createMockCaller({ role: "owner" });
 
     const result = await caller.studio.generate({
@@ -179,11 +199,43 @@ describe("studio router — static-ad composer starters", () => {
     expect(result).toEqual({
       runId: "run_abc123",
       publicAccessToken: "public_token_xyz",
+      generationId: "generation_new",
     });
+
+    expect(dbState.inserted[0]).toMatchObject({
+      organizationId: "test-org-id",
+      brief: "Bright summer skincare promo",
+      angle: "Bold offer",
+      awarenessLevel: "most_aware",
+      count: 3,
+      referenceImageUrls: ["https://cdn.test/bold-high.png"],
+    });
+    expect(dbState.inserted[1]).toEqual([
+      {
+        generationId: "generation_new",
+        organizationId: "test-org-id",
+        index: 0,
+        status: "pending",
+      },
+      {
+        generationId: "generation_new",
+        organizationId: "test-org-id",
+        index: 1,
+        status: "pending",
+      },
+      {
+        generationId: "generation_new",
+        organizationId: "test-org-id",
+        index: 2,
+        status: "pending",
+      },
+    ]);
+    expect(dbState.updated[0]).toMatchObject({ runId: "run_abc123" });
 
     expect(triggerMock.trigger).toHaveBeenCalledWith(
       "generate-static-ads",
       expect.objectContaining({
+        generationId: "generation_new",
         organizationId: "test-org-id",
         brief: "Bright summer skincare promo",
         angle: "Bold offer",
