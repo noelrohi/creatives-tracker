@@ -13,6 +13,7 @@ const publicAdAccountSchema = z.object({
   defaultFacebookPageId: z.string().nullable(),
   defaultInstagramActorId: z.string().nullable(),
   notes: z.string().nullable(),
+  isDisabled: z.boolean(),
   lastImportedAt: z.date().nullable(),
   dataDateEnd: z.string().nullable(),
   organizationId: z.string().nullable(),
@@ -29,6 +30,7 @@ function sanitizeAccount(account: typeof adAccounts.$inferSelect) {
     defaultFacebookPageId: account.defaultFacebookPageId,
     defaultInstagramActorId: account.defaultInstagramActorId,
     notes: account.notes,
+    isDisabled: account.isDisabled,
     lastImportedAt: account.lastImportedAt,
     dataDateEnd: account.dataDateEnd,
     organizationId: account.organizationId,
@@ -41,12 +43,20 @@ function sanitizeAccount(account: typeof adAccounts.$inferSelect) {
 export const adAccountRouter = router({
   list: orgProcedure
     .meta(openApiQueryMeta("adAccount", "list"))
+    .input(z.object({ includeDisabled: z.boolean().default(false) }).optional())
     .output(z.array(publicAdAccountSchema))
-    .query(async ({ ctx }) => {
+    .query(async ({ input, ctx }) => {
       const accounts = await db
         .select()
         .from(adAccounts)
-        .where(eq(adAccounts.organizationId, ctx.organizationId))
+        .where(
+          input?.includeDisabled
+            ? eq(adAccounts.organizationId, ctx.organizationId)
+            : and(
+                eq(adAccounts.organizationId, ctx.organizationId),
+                eq(adAccounts.isDisabled, false),
+              ),
+        )
         .orderBy(desc(adAccounts.createdAt));
       return accounts.map(sanitizeAccount);
     }),
@@ -124,6 +134,7 @@ export const adAccountRouter = router({
         defaultFacebookPageId: z.string().trim().min(1).nullable().optional(),
         defaultInstagramActorId: z.string().trim().min(1).nullable().optional(),
         notes: z.string().nullable().optional(),
+        isDisabled: z.boolean().optional(),
       }),
     )
     .output(publicAdAccountSchema)

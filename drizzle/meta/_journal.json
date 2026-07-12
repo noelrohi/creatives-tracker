@@ -253,6 +253,13 @@
       "when": 1783528706559,
       "tag": "0035_bizarre_colleen_wing",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1783869310045,
+      "tag": "0036_overrated_red_hulk",
+      "breakpoints": true
     }
   ]
 }

@@ -96,6 +96,13 @@ export async function getMetaAccountWithToken(input: {
     throw new TRPCError({ code: "NOT_FOUND", message: "Account not found" });
   }
 
+  if (account.isDisabled) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "This account is disabled.",
+    });
+  }
+
   if (!account.metaAccessToken) {
     throw new TRPCError({
       code: "FORBIDDEN",

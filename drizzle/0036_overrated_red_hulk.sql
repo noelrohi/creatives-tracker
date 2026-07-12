@@ -1,0 +1,1 @@
+ALTER TABLE "ad_account" ADD COLUMN "is_disabled" boolean DEFAULT false NOT NULL;

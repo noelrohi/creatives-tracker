@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, date, index } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, date, index, boolean } from "drizzle-orm/pg-core";
 
 export const adAccounts = pgTable(
   "ad_account",
@@ -12,6 +12,7 @@ export const adAccounts = pgTable(
     defaultFacebookPageId: text("default_facebook_page_id"),
     defaultInstagramActorId: text("default_instagram_actor_id"),
     notes: text("notes"),
+    isDisabled: boolean("is_disabled").default(false).notNull(),
     lastImportedAt: timestamp("last_imported_at"),
     dataDateEnd: date("data_date_end"),
     organizationId: text("organization_id"),

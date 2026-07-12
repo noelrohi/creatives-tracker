@@ -29,7 +29,15 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, MoreHorizontal, Pencil, Trash2, ExternalLink } from "@/components/icons";
+import {
+  Ban,
+  CheckCircle2,
+  ExternalLink,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  Trash2,
+} from "@/components/icons";
 import { toast } from "sonner";
 
 interface AccountForm {
@@ -48,6 +56,7 @@ type AccountRow = {
   defaultFacebookPageId: string | null;
   defaultInstagramActorId: string | null;
   notes: string | null;
+  isDisabled: boolean;
   hasMetaAccessToken: boolean;
 };
 
@@ -55,7 +64,9 @@ export default function AccountsPage() {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
 
-  const accounts = useQuery(trpc.adAccount.list.queryOptions());
+  const accounts = useQuery(
+    trpc.adAccount.list.queryOptions({ includeDisabled: true }),
+  );
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -89,6 +100,16 @@ export default function AccountsPage() {
         queryClient.invalidateQueries({ queryKey: trpc.adAccount.list.queryKey() });
         toast.success("Account updated");
         closeDialog();
+      },
+      onError: (error) => toast.error(error.message),
+    }),
+  );
+
+  const toggleDisabledMutation = useMutation(
+    trpc.adAccount.update.mutationOptions({
+      onSuccess: (account) => {
+        queryClient.invalidateQueries({ queryKey: trpc.adAccount.list.queryKey() });
+        toast.success(account.isDisabled ? "Account disabled" : "Account enabled");
       },
       onError: (error) => toast.error(error.message),
     }),
@@ -206,6 +227,7 @@ export default function AccountsPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
+                <TableHead>Status</TableHead>
                 <TableHead>Meta Account ID</TableHead>
                 <TableHead>Publishing identity</TableHead>
                 <TableHead>Access Token</TableHead>
@@ -214,8 +236,13 @@ export default function AccountsPage() {
             </TableHeader>
             <TableBody>
               {accounts.data?.map((account) => (
-                <TableRow key={account.id}>
+                <TableRow key={account.id} className={account.isDisabled ? "opacity-60" : undefined}>
                   <TableCell className="font-medium">{account.name}</TableCell>
+                  <TableCell>
+                    <span className={account.isDisabled ? "text-[13px] text-muted-foreground" : "text-[13px] text-foreground"}>
+                      {account.isDisabled ? "Disabled" : "Active"}
+                    </span>
+                  </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1.5">
                       <code className="text-[13px] text-muted-foreground">
@@ -269,6 +296,18 @@ export default function AccountsPage() {
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem onClick={() => openEdit(account)}>
                           <Pencil /> Edit
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          disabled={toggleDisabledMutation.isPending}
+                          onClick={() =>
+                            toggleDisabledMutation.mutate({
+                              id: account.id,
+                              isDisabled: !account.isDisabled,
+                            })
+                          }
+                        >
+                          {account.isDisabled ? <CheckCircle2 /> : <Ban />}
+                          {account.isDisabled ? "Enable" : "Disable"}
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           variant="destructive"

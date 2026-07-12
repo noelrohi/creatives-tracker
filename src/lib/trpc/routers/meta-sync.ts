@@ -116,6 +116,7 @@ export const metaSyncRouter = router({
           and(
             isNotNull(adAccounts.organizationId),
             isNotNull(adAccounts.metaAccessToken),
+            eq(adAccounts.isDisabled, false),
           ),
         );
 
@@ -164,6 +165,7 @@ export const metaSyncRouter = router({
           and(
             eq(adAccounts.organizationId, ctx.organizationId),
             isNotNull(adAccounts.metaAccessToken),
+            eq(adAccounts.isDisabled, false),
           ),
         );
 
