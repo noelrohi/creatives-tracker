@@ -730,7 +730,7 @@ export const adCreativeRouter = router({
         ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter}
       `;
       const bottomResult = await db.execute(sql`
-        WITH scoped_ads AS (
+        WITH scoped_ads AS NOT MATERIALIZED (
           SELECT
             ad.id,
             ad.meta_id,
@@ -742,7 +742,7 @@ export const adCreativeRouter = router({
           WHERE ad.organization_id = ${ctx.organizationId}
             ${scopedAdFilters}
         ),
-        ad_lifetime_days AS (
+        ad_lifetime_days AS MATERIALIZED (
           -- Lifetime running_days, NOT window-bounded. A buyer judges an ad on
           -- its absolute age ("if I gave this 3 weeks, it's done"), not on
           -- how many days it happened to deliver inside the dashboard window.

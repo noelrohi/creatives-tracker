@@ -203,7 +203,7 @@ describe("adCreative analytics procedures", () => {
 
       const bottomSql = compileSql(mockState.executedSql[3]).replace(/\s+/g, " ").toLowerCase();
       expect(bottomSql).toMatch(
-        /with scoped_ads as \(.+ad_lifetime_days as \(.+ad_window as \(/,
+        /with scoped_ads as not materialized \(.+ad_lifetime_days as materialized \(.+ad_window as \(/,
       );
 
       const [scopedAdsSql = "", lifetimeSql = ""] = bottomSql.split(
