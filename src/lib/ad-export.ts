@@ -364,7 +364,7 @@ export async function fetchAgentExportRows(opts: {
     whereParts.push(sql`ast.id IN (${sql.join(filter.adSetIds.map((id) => sql`${id}`), sql`, `)})`);
   }
   if (filter?.landingPageUrls?.length) {
-    whereParts.push(sql`ad.destination_url IN (${sql.join(filter.landingPageUrls.map((url) => sql`${url}`), sql`, `)})`);
+    whereParts.push(sql`split_part(ad.destination_url, '?', 1) IN (${sql.join(filter.landingPageUrls.map((url) => sql`${url}`), sql`, `)})`);
   }
   if (filter?.ownership === "ours") whereParts.push(sql`ac.ownership = 'ours'`);
   if (filter?.ownership === "theirs") whereParts.push(sql`(ac.ownership IS NULL OR ac.ownership != 'ours')`);

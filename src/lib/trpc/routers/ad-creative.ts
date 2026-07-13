@@ -191,7 +191,7 @@ export const adCreativeRouter = router({
       }
       if (input?.landingPageUrls?.length) {
         const urls = sql.join(input.landingPageUrls.map((url) => sql`${url}`), sql`, `);
-        conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = ac.id AND ad.destination_url IN (${urls}))`);
+        conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = ac.id AND split_part(ad.destination_url, '?', 1) IN (${urls}))`);
       }
       if (input?.ownership) {
         if (input.ownership === "theirs") {
@@ -240,6 +240,7 @@ export const adCreativeRouter = router({
         notes: string | null;
         created_at: Date;
         updated_at: Date;
+        first_seen: string | null;
         total_spend: string | null;
         avg_roas: string | null;
         total_conversions: number | string | null;
@@ -281,6 +282,15 @@ export const adCreativeRouter = router({
             ac.updated_at
           FROM ad_creative ac
           WHERE ${sql.join(conditions, sql` AND `)}
+        ),
+        first_delivery AS (
+          SELECT
+            ad.ad_creative_id,
+            min(pl.date_start)::text AS first_seen
+          FROM filtered_creatives fc
+          JOIN ad ON ad.ad_creative_id = fc.id
+          JOIN performance_log pl ON pl.ad_id = ad.id
+          GROUP BY ad.ad_creative_id
         ),
         window_perf AS (
           SELECT
@@ -373,6 +383,7 @@ export const adCreativeRouter = router({
           fc.notes,
           fc.created_at,
           fc.updated_at,
+          first_delivery.first_seen,
           window_perf.total_spend,
           window_perf.avg_roas,
           window_perf.total_conversions,
@@ -392,6 +403,7 @@ export const adCreativeRouter = router({
           recent_perf.recent_cpa,
           window_perf.thumbstop_ratio
         FROM filtered_creatives fc
+        LEFT JOIN first_delivery ON first_delivery.ad_creative_id = fc.id
         LEFT JOIN window_perf ON window_perf.ad_creative_id = fc.id
         LEFT JOIN recent_perf ON recent_perf.ad_creative_id = fc.id
         LEFT JOIN prior_perf ON prior_perf.ad_creative_id = fc.id
@@ -429,6 +441,7 @@ export const adCreativeRouter = router({
           notes: r.notes,
           createdAt: r.created_at,
           updatedAt: r.updated_at,
+          firstSeen: r.first_seen,
           totalSpend: r.total_spend,
           avgRoas: r.avg_roas,
           totalConversions: r.total_conversions,
@@ -455,7 +468,7 @@ export const adCreativeRouter = router({
 
   landingPages: orgProcedure.query(async ({ ctx }) => {
     const result = await db.execute(sql`
-      SELECT DISTINCT destination_url
+      SELECT DISTINCT split_part(destination_url, '?', 1) AS destination_url
       FROM ad
       WHERE organization_id = ${ctx.organizationId}
         AND destination_url IS NOT NULL
