@@ -1,7 +1,12 @@
 "use client";
 
-import { useCallback, useState } from "react";
-import { parseAsString, parseAsStringLiteral, useQueryState } from "nuqs";
+import { useCallback } from "react";
+import {
+  parseAsNativeArrayOf,
+  parseAsString,
+  parseAsStringLiteral,
+  useQueryState,
+} from "nuqs";
 import { subDays } from "date-fns";
 import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
 import { AWARENESS, FORMATS } from "./creative-list-filters";
@@ -22,10 +27,13 @@ export function useCreativeFilters() {
   const [teamId, setTeamId] = useQueryState("team", parseAsString.withDefault(""));
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
   const [to, setTo] = useQueryState("to", parseAsString.withDefault(formatDateOnly(new Date())));
-  const [landingPageUrls, setLandingPageUrls] = useState<string[]>([]);
-  const [minRoas, setMinRoas] = useState("");
-  const [minConversions, setMinConversions] = useState("");
-  const [minCtr, setMinCtr] = useState("");
+  const [landingPageUrls, setLandingPageUrls] = useQueryState(
+    "landingPage",
+    parseAsNativeArrayOf(parseAsString).withDefault([]),
+  );
+  const [minRoas, setMinRoas] = useQueryState("minRoas", parseAsString.withDefault(""));
+  const [minConversions, setMinConversions] = useQueryState("minConversions", parseAsString.withDefault(""));
+  const [minCtr, setMinCtr] = useQueryState("minCtr", parseAsString.withDefault(""));
 
   const fromValue = isDateOnlyString(from) ? from : formatDateOnly(subDays(new Date(), 6));
   const toValue = isDateOnlyString(to) ? to : formatDateOnly(new Date());
@@ -42,7 +50,10 @@ export function useCreativeFilters() {
     setMinCtr("");
     setTeamId("");
     setHealthFilter("");
-  }, [setAccountId, setAdSetIds, setAwareness, setFormat, setHealthFilter, setSearch, setTeamId]);
+  }, [
+    setAccountId, setAdSetIds, setAwareness, setFormat, setHealthFilter,
+    setLandingPageUrls, setMinConversions, setMinCtr, setMinRoas, setSearch, setTeamId,
+  ]);
 
   const hasFilters = Boolean(
     format || awareness || search || accountId || adSetIds || landingPageUrls.length ||
