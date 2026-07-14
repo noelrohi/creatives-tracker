@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- Mocked DB: supports the studio router's
 //   select().from().innerJoin().innerJoin().where().groupBy() chain,
-// resolving groupBy() with the next queued row set. save() uses
-//   insert().values().returning(). generate() uses insert/update chains.
+// resolving groupBy() with the next queued row set. setStarred() uses
+//   update().set().where().returning(). generate() uses insert/update chains.
 const dbState = {
   groupByRows: [] as Array<Record<string, unknown>[]>,
   inserted: [] as Array<Record<string, unknown> | Record<string, unknown>[]>,
@@ -47,10 +47,17 @@ const mockDb = {
         return chain;
       }),
       where: vi.fn(() => chain),
+      returning: vi.fn(async () => [{ id: "variant_1" }]),
     };
     return chain;
   }),
 };
+
+Object.assign(mockDb, {
+  transaction: vi.fn(
+    async (callback: (tx: typeof mockDb) => Promise<unknown>) => callback(mockDb),
+  ),
+});
 
 const triggerMock = {
   trigger: vi.fn<(...args: unknown[]) => Promise<{ id: string }>>(async () => ({
@@ -80,6 +87,8 @@ describe("studio router — static-ad composer starters", () => {
     dbState.inserted = [];
     dbState.updated = [];
     vi.clearAllMocks();
+    triggerMock.trigger.mockResolvedValue({ id: "run_abc123" });
+    triggerMock.createPublicToken.mockResolvedValue("public_token_xyz");
   });
 
   it("winningAngles: aggregates per angle, ranks by ROAS, and keeps the highest-value creative's image as the thumbnail", async () => {
@@ -250,24 +259,51 @@ describe("studio router — static-ad composer starters", () => {
     );
   });
 
-  it("save: persists a generated variant as a static creative with its targeting", async () => {
+  it("generate: marks persisted scaffolding failed when Trigger enqueueing fails", async () => {
+    const caller = createMockCaller({ role: "owner" });
+    triggerMock.trigger.mockRejectedValueOnce(new Error("Trigger unavailable"));
+
+    await expect(
+      caller.studio.generate({ brief: "A launch ad", count: 2 }),
+    ).rejects.toThrow("Trigger unavailable");
+
+    expect(dbState.updated).toEqual([
+      expect.objectContaining({ status: "failed" }),
+      expect.objectContaining({ status: "failed" }),
+    ]);
+  });
+
+  it("generate: rejects non-HTTP reference image URLs before persisting", async () => {
     const caller = createMockCaller({ role: "owner" });
 
-    const creative = await caller.studio.save({
-      assetUrl: "https://cdn.test/generated-0.png",
-      angle: "Bold offer",
-      persona: "Deal seekers",
-      awarenessLevel: "most_aware",
+    await expect(
+      caller.studio.generate({
+        brief: "A launch ad",
+        referenceImageUrls: ["file:///etc/passwd"],
+      }),
+    ).rejects.toThrow("Reference images must use HTTP or HTTPS");
+
+    expect(dbState.inserted).toEqual([]);
+    expect(triggerMock.trigger).not.toHaveBeenCalled();
+  });
+
+  it("setStarred: stamps starredAt on ready variants and reports the count", async () => {
+    const caller = createMockCaller({ role: "owner" });
+
+    const result = await caller.studio.setStarred({
+      variantIds: ["variant_1"],
+      starred: true,
     });
 
-    expect(creative.id).toBe("creative_new");
-    expect(dbState.inserted[0]).toMatchObject({
-      assetUrl: "https://cdn.test/generated-0.png",
-      format: "static",
-      angle: "Bold offer",
-      persona: "Deal seekers",
-      awarenessLevel: "most_aware",
-      organizationId: "test-org-id",
-    });
+    expect(result).toEqual({ updatedCount: 1 });
+    expect(dbState.updated[0].starredAt).toBeInstanceOf(Date);
+  });
+
+  it("setStarred: clears starredAt when unstarring", async () => {
+    const caller = createMockCaller({ role: "owner" });
+
+    await caller.studio.setStarred({ variantIds: ["variant_1"], starred: false });
+
+    expect(dbState.updated[0].starredAt).toBeNull();
   });
 });

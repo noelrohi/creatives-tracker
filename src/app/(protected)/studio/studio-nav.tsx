@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Images, PenLine } from "@/components/icons";
+import { Images, PenLine, Sparkles } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 const tabs = [
   { label: "Create", href: "/studio", icon: PenLine },
+  { label: "Suggestions", href: "/studio/suggestions", icon: Sparkles },
   { label: "Library", href: "/studio/library", icon: Images },
 ];
 
@@ -18,7 +19,7 @@ export function StudioNav() {
         const isActive =
           tab.href === "/studio"
             ? pathname === "/studio"
-            : pathname.startsWith("/studio/");
+            : pathname.startsWith(tab.href);
         return (
           <Link
             key={tab.href}

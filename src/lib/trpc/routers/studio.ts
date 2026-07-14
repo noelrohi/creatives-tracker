@@ -1,19 +1,48 @@
 import { z } from "zod";
 import { auth as triggerAuth, tasks } from "@trigger.dev/sdk";
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { router, orgProcedure, orgWriteProcedure } from "../init";
 import { db } from "@/db";
-import { ads } from "@/schema/ad";
 import { adCreatives } from "@/schema/ad-creative";
-import { performanceLogs } from "@/schema/performance-log";
-import { studioGenerations, studioVariants } from "@/schema/studio";
-import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
+import {
+  studioGenerations,
+  studioSuggestions,
+  studioSuggestionVariants,
+  studioVariants,
+} from "@/schema/studio";
 import { AWARENESS_LEVELS, type AwarenessLevel } from "@/lib/awareness";
 import { isImageStudioEnabled } from "@/lib/image-studio-enabled";
-import type { generateStaticAdsTask } from "../../../../trigger/generate-static-ads";
+import { isHttpUrl } from "@/lib/remote-image";
+import { fetchCreativePerformanceRows } from "@/lib/studio-performance";
+import {
+  failStudioGeneration,
+  finalizeStudioGenerationIfSettled,
+} from "@/lib/studio-generation-status";
+import {
+  ART_DIRECTIONS,
+  buildPrompt,
+  isStudioFormat,
+  type StudioFormat,
+} from "@/lib/studio-prompt";
+import { buildSuggestionBrief } from "@/lib/studio-suggestions";
+import type {
+  generateStaticAdsTask,
+  generateStaticAdVariantTask,
+} from "../../../../trigger/generate-static-ads";
+import type { generateStudioSuggestionsTask } from "../../../../trigger/generate-studio-suggestions";
 
 const awarenessLevelSchema = z.enum(AWARENESS_LEVELS);
+const studioFormatSchema = z
+  .string()
+  .refine(isStudioFormat, "Unsupported image dimensions")
+  .transform((value) => value as StudioFormat);
+const remoteImageUrlSchema = z
+  .string()
+  .url()
+  .refine(isHttpUrl, "Reference images must use HTTP or HTTPS");
+
+const STALE_GENERATION_MS = 15 * 60 * 1000;
 
 function requireImageStudioEnabled() {
   if (!isImageStudioEnabled()) {
@@ -34,62 +63,183 @@ const studioWriteProcedure = orgWriteProcedure.use(async ({ next }) => {
   return next();
 });
 
-type CreativePerformanceRow = {
-  creativeId: string;
-  name: string;
-  angle: string | null;
-  persona: string | null;
-  awarenessLevel: string | null;
-  assetUrl: string | null;
-  spend: string | null;
-  purchases: number | null;
-  purchaseValue: string | null;
-  roas: string | null;
-};
-
 function toNumber(value: string | number | null | undefined) {
   if (value == null) return 0;
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-async function fetchCreativePerformanceRows(
-  organizationId: string,
-  extraConditions: SQL[] = [],
-) {
-  const basePl = basePerformanceLogFilter("performance_log");
-  const conditions: SQL[] = [
-    eq(adCreatives.organizationId, organizationId),
-    eq(ads.organizationId, organizationId),
-    basePl,
-    ...extraConditions,
-  ];
+type SourceCreativeSummary = {
+  id: string;
+  name: string;
+  assetUrl: string | null;
+  roas: number | null;
+};
 
-  return db
+async function fetchSourceCreatives(
+  organizationId: string,
+  creativeIds: string[],
+): Promise<Map<string, SourceCreativeSummary>> {
+  const ids = Array.from(new Set(creativeIds)).filter(Boolean);
+  if (ids.length === 0) return new Map();
+
+  const creatives = await db
     .select({
-      creativeId: adCreatives.id,
+      id: adCreatives.id,
       name: adCreatives.name,
-      angle: adCreatives.angle,
-      persona: adCreatives.persona,
-      awarenessLevel: adCreatives.awarenessLevel,
       assetUrl: adCreatives.assetUrl,
-      spend: sql<string | null>`sum(${performanceLogs.spend})::text`,
-      purchases: sql<number | null>`sum(${performanceLogs.conversions})::int`,
-      purchaseValue: sql<string | null>`sum(${performanceLogs.purchaseValue})::text`,
-      roas: sql<string | null>`coalesce(sum(${performanceLogs.purchaseValue}), 0) / nullif(sum(${performanceLogs.spend}), 0)`,
     })
     .from(adCreatives)
-    .innerJoin(ads, eq(ads.adCreativeId, adCreatives.id))
-    .innerJoin(performanceLogs, eq(performanceLogs.adId, ads.id))
-    .where(and(...conditions))
-    .groupBy(
-      adCreatives.id,
-      adCreatives.name,
-      adCreatives.angle,
-      adCreatives.persona,
-      adCreatives.awarenessLevel,
-      adCreatives.assetUrl,
-    ) as Promise<CreativePerformanceRow[]>;
+    .where(
+      and(
+        inArray(adCreatives.id, ids),
+        eq(adCreatives.organizationId, organizationId),
+      ),
+    );
+
+  const performance = await fetchCreativePerformanceRows(organizationId, [
+    inArray(adCreatives.id, ids),
+  ]);
+  const roasById = new Map(
+    performance.map((row) => [row.creativeId, toNumber(row.roas)]),
+  );
+
+  return new Map(
+    creatives.map((creative) => [
+      creative.id,
+      {
+        id: creative.id,
+        name: creative.name,
+        assetUrl: creative.assetUrl,
+        roas: roasById.get(creative.id) ?? null,
+      },
+    ]),
+  );
+}
+
+/** Flip generations stuck in "generating" (crashed runs) to failed. */
+async function reconcileStaleGenerations(
+  organizationId: string,
+  rows: { id: string; status: string; updatedAt: Date }[],
+) {
+  const cutoff = new Date(Date.now() - STALE_GENERATION_MS);
+  const staleIds = rows
+    .filter((row) => row.status === "generating" && row.updatedAt < cutoff)
+    .map((row) => row.id);
+  if (staleIds.length === 0) return staleIds;
+
+  await db
+    .update(studioGenerations)
+    .set({ status: "failed", updatedAt: new Date() })
+    .where(
+      and(
+        inArray(studioGenerations.id, staleIds),
+        eq(studioGenerations.organizationId, organizationId),
+        eq(studioGenerations.status, "generating"),
+      ),
+    );
+  await db
+    .update(studioVariants)
+    .set({ status: "failed", updatedAt: new Date() })
+    .where(
+      and(
+        inArray(studioVariants.generationId, staleIds),
+        eq(studioVariants.organizationId, organizationId),
+        inArray(studioVariants.status, ["pending", "generating"]),
+      ),
+    );
+
+  return staleIds;
+}
+
+type CreateStudioGenerationParams = {
+  brief: string;
+  angle?: string;
+  persona?: string;
+  awarenessLevel?: AwarenessLevel | null;
+  count: number;
+  format: StudioFormat;
+  referenceImageUrls?: string[];
+  sourceCreativeId?: string | null;
+};
+
+async function createStudioGeneration(
+  organizationId: string,
+  params: CreateStudioGenerationParams,
+) {
+  let sourceCreativeId: string | null = null;
+  if (params.sourceCreativeId) {
+    const [source] = await db
+      .select({ id: adCreatives.id })
+      .from(adCreatives)
+      .where(
+        and(
+          eq(adCreatives.id, params.sourceCreativeId),
+          eq(adCreatives.organizationId, organizationId),
+        ),
+      )
+      .limit(1);
+    sourceCreativeId = source?.id ?? null;
+  }
+
+  const [generation] = await db
+    .insert(studioGenerations)
+    .values({
+      organizationId,
+      brief: params.brief,
+      angle: params.angle,
+      persona: params.persona,
+      awarenessLevel: params.awarenessLevel ?? null,
+      count: params.count,
+      format: params.format,
+      referenceImageUrls: params.referenceImageUrls ?? null,
+      sourceCreativeId,
+    })
+    .returning();
+
+  await db.insert(studioVariants).values(
+    Array.from({ length: params.count }, (_, index) => ({
+      generationId: generation.id,
+      organizationId,
+      index,
+      status: "pending",
+    })),
+  );
+
+  let handle: Awaited<
+    ReturnType<typeof tasks.trigger<typeof generateStaticAdsTask>>
+  >;
+  try {
+    handle = await tasks.trigger<typeof generateStaticAdsTask>(
+      "generate-static-ads",
+      {
+        generationId: generation.id,
+        organizationId,
+        brief: params.brief,
+        angle: params.angle,
+        persona: params.persona,
+        awarenessLevel: params.awarenessLevel ?? null,
+        count: params.count,
+        format: params.format,
+        referenceImageUrls: params.referenceImageUrls,
+      },
+    );
+  } catch (error) {
+    await failStudioGeneration(generation.id, organizationId);
+    throw error;
+  }
+
+  await db
+    .update(studioGenerations)
+    .set({ runId: handle.id, updatedAt: new Date() })
+    .where(
+      and(
+        eq(studioGenerations.id, generation.id),
+        eq(studioGenerations.organizationId, organizationId),
+      ),
+    );
+
+  return { runId: handle.id, generationId: generation.id };
 }
 
 export const studioRouter = router({
@@ -101,62 +251,411 @@ export const studioRouter = router({
         persona: z.string().optional(),
         awarenessLevel: awarenessLevelSchema.optional(),
         count: z.number().int().min(1).max(4).default(3),
-        referenceImageUrls: z.array(z.string().url()).max(4).optional(),
+        format: studioFormatSchema.default("square"),
+        referenceImageUrls: z.array(remoteImageUrlSchema).max(4).optional(),
+        sourceCreativeId: z.string().optional(),
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      const [generation] = await db
-        .insert(studioGenerations)
-        .values({
-          organizationId: ctx.organizationId,
-          brief: input.brief,
-          angle: input.angle,
-          persona: input.persona,
-          awarenessLevel: input.awarenessLevel ?? null,
-          count: input.count,
-          referenceImageUrls: input.referenceImageUrls ?? null,
-        })
-        .returning();
-
-      await db.insert(studioVariants).values(
-        Array.from({ length: input.count }, (_, index) => ({
-          generationId: generation.id,
-          organizationId: ctx.organizationId,
-          index,
-          status: "pending",
-        })),
-      );
-
-      const handle = await tasks.trigger<typeof generateStaticAdsTask>(
-        "generate-static-ads",
-        {
-          generationId: generation.id,
-          organizationId: ctx.organizationId,
-          brief: input.brief,
-          angle: input.angle,
-          persona: input.persona,
-          awarenessLevel: input.awarenessLevel ?? null,
-          count: input.count,
-          referenceImageUrls: input.referenceImageUrls,
-        },
-      );
-
-      await db
-        .update(studioGenerations)
-        .set({ runId: handle.id, updatedAt: new Date() })
-        .where(eq(studioGenerations.id, generation.id));
-
+      const generation = await createStudioGeneration(ctx.organizationId, input);
       const publicAccessToken = await triggerAuth.createPublicToken({
         scopes: {
           read: {
-            runs: [handle.id],
+            runs: [generation.runId],
           },
         },
         expirationTime: "1h",
       });
 
-      return { runId: handle.id, publicAccessToken, generationId: generation.id };
+      return { ...generation, publicAccessToken };
     }),
+
+  retry: studioWriteProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      const generation = await db.transaction(async (tx) => {
+        const [claimed] = await tx
+          .update(studioGenerations)
+          .set({ status: "generating", runId: null, updatedAt: new Date() })
+          .where(
+            and(
+              eq(studioGenerations.id, input.id),
+              eq(studioGenerations.organizationId, ctx.organizationId),
+              eq(studioGenerations.status, "failed"),
+            ),
+          )
+          .returning();
+
+        if (!claimed) return null;
+
+        await tx
+          .update(studioVariants)
+          .set({
+            status: "pending",
+            imageUrl: null,
+            prompt: null,
+            starredAt: null,
+            savedCreativeId: null,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(studioVariants.generationId, claimed.id),
+              eq(studioVariants.organizationId, ctx.organizationId),
+            ),
+          );
+
+        return claimed;
+      });
+
+      if (!generation) {
+        const [existing] = await db
+          .select({ id: studioGenerations.id })
+          .from(studioGenerations)
+          .where(
+            and(
+              eq(studioGenerations.id, input.id),
+              eq(studioGenerations.organizationId, ctx.organizationId),
+            ),
+          )
+          .limit(1);
+
+        throw new TRPCError(
+          existing
+            ? { code: "CONFLICT", message: "Only failed generations can be retried" }
+            : { code: "NOT_FOUND", message: "Generation not found" },
+        );
+      }
+
+      let handle: Awaited<ReturnType<typeof tasks.trigger<typeof generateStaticAdsTask>>>;
+      try {
+        handle = await tasks.trigger<typeof generateStaticAdsTask>(
+          "generate-static-ads",
+          {
+            generationId: generation.id,
+            organizationId: ctx.organizationId,
+            brief: generation.brief,
+            angle: generation.angle ?? undefined,
+            persona: generation.persona ?? undefined,
+            awarenessLevel: generation.awarenessLevel,
+            count: generation.count,
+            format: generation.format as StudioFormat,
+            referenceImageUrls: generation.referenceImageUrls ?? undefined,
+          },
+        );
+      } catch (error) {
+        await db
+          .update(studioGenerations)
+          .set({ status: "failed", updatedAt: new Date() })
+          .where(
+            and(
+              eq(studioGenerations.id, generation.id),
+              eq(studioGenerations.organizationId, ctx.organizationId),
+              eq(studioGenerations.status, "generating"),
+            ),
+          );
+        throw error;
+      }
+
+      await db
+        .update(studioGenerations)
+        .set({ runId: handle.id, updatedAt: new Date() })
+        .where(
+          and(
+            eq(studioGenerations.id, generation.id),
+            eq(studioGenerations.organizationId, ctx.organizationId),
+          ),
+        );
+
+      return { runId: handle.id };
+    }),
+
+  suggestions: studioProcedure.query(async ({ ctx }) => {
+    const cards = await db
+      .select({
+        id: studioSuggestions.id,
+        sourceCreativeId: studioSuggestions.sourceCreativeId,
+        kind: studioSuggestions.kind,
+        title: studioSuggestions.title,
+        whyLine: studioSuggestions.whyLine,
+        angle: studioSuggestions.angle,
+        persona: studioSuggestions.persona,
+        awarenessLevel: studioSuggestions.awarenessLevel,
+        roas: studioSuggestions.roas,
+        purchases: studioSuggestions.purchases,
+        spend: studioSuggestions.spend,
+        status: studioSuggestions.status,
+        createdAt: studioSuggestions.createdAt,
+        updatedAt: studioSuggestions.updatedAt,
+      })
+      .from(studioSuggestions)
+      .where(
+        and(
+          eq(studioSuggestions.organizationId, ctx.organizationId),
+          eq(studioSuggestions.status, "active"),
+        ),
+      )
+      .orderBy(desc(studioSuggestions.createdAt));
+
+    if (cards.length === 0) {
+      return { cards: [], generatedAt: null, isRefreshing: false };
+    }
+
+    const cardIds = cards.map((card) => card.id);
+    const variants = await db
+      .select({
+        id: studioSuggestionVariants.id,
+        suggestionId: studioSuggestionVariants.suggestionId,
+        index: studioSuggestionVariants.index,
+        headline: studioSuggestionVariants.headline,
+        diffSummary: studioSuggestionVariants.diffSummary,
+        copyLine: studioSuggestionVariants.copyLine,
+        elements: studioSuggestionVariants.elements,
+        format: studioSuggestionVariants.format,
+        status: studioSuggestionVariants.status,
+        generationId: studioSuggestionVariants.generationId,
+        createdAt: studioSuggestionVariants.createdAt,
+        updatedAt: studioSuggestionVariants.updatedAt,
+      })
+      .from(studioSuggestionVariants)
+      .where(
+        and(
+          eq(studioSuggestionVariants.organizationId, ctx.organizationId),
+          inArray(studioSuggestionVariants.suggestionId, cardIds),
+        ),
+      )
+      .orderBy(asc(studioSuggestionVariants.index));
+
+    const sources = await fetchSourceCreatives(
+      ctx.organizationId,
+      cards.flatMap((card) =>
+        card.sourceCreativeId ? [card.sourceCreativeId] : [],
+      ),
+    );
+    const variantsBySuggestionId = new Map<string, typeof variants>();
+    for (const variant of variants) {
+      const current = variantsBySuggestionId.get(variant.suggestionId) ?? [];
+      current.push(variant);
+      variantsBySuggestionId.set(variant.suggestionId, current);
+    }
+
+    return {
+      cards: cards.map((card) => ({
+        ...card,
+        source: card.sourceCreativeId
+          ? (sources.get(card.sourceCreativeId) ?? null)
+          : null,
+        variants: variantsBySuggestionId.get(card.id) ?? [],
+      })),
+      generatedAt: cards[0]?.createdAt ?? null,
+      isRefreshing: false,
+    };
+  }),
+
+  refreshSuggestions: studioWriteProcedure.mutation(async ({ ctx }) => {
+    const cutoff = new Date(Date.now() - 2 * 60 * 1000);
+    const [recent] = await db
+      .select({ id: studioSuggestions.id })
+      .from(studioSuggestions)
+      .where(
+        and(
+          eq(studioSuggestions.organizationId, ctx.organizationId),
+          eq(studioSuggestions.status, "active"),
+          gte(studioSuggestions.createdAt, cutoff),
+        ),
+      )
+      .limit(1);
+
+    if (recent) return { runId: null, skipped: true as const };
+
+    const handle = await tasks.trigger<typeof generateStudioSuggestionsTask>(
+      "generate-studio-suggestions",
+      { organizationId: ctx.organizationId },
+    );
+    return { runId: handle.id, skipped: false as const };
+  }),
+
+  setSuggestionStatus: studioWriteProcedure
+    .input(
+      z.object({
+        variantId: z.string(),
+        status: z.enum(["approved", "skipped", "suggested"]),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const [updated] = await db
+        .update(studioSuggestionVariants)
+        .set({ status: input.status, updatedAt: new Date() })
+        .where(
+          and(
+            eq(studioSuggestionVariants.id, input.variantId),
+            eq(studioSuggestionVariants.organizationId, ctx.organizationId),
+            inArray(studioSuggestionVariants.status, [
+              "suggested",
+              "approved",
+              "skipped",
+            ]),
+          ),
+        )
+        .returning({
+          id: studioSuggestionVariants.id,
+          status: studioSuggestionVariants.status,
+        });
+
+      if (!updated) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Generated suggestions cannot be changed",
+        });
+      }
+      return updated;
+    }),
+
+  suggestionPrefill: studioProcedure
+    .input(z.object({ variantId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      const [variant] = await db
+        .select({
+          headline: studioSuggestionVariants.headline,
+          diffSummary: studioSuggestionVariants.diffSummary,
+          copyLine: studioSuggestionVariants.copyLine,
+          elements: studioSuggestionVariants.elements,
+          sourceCreativeId: studioSuggestions.sourceCreativeId,
+          title: studioSuggestions.title,
+          angle: studioSuggestions.angle,
+          persona: studioSuggestions.persona,
+          awarenessLevel: studioSuggestions.awarenessLevel,
+        })
+        .from(studioSuggestionVariants)
+        .innerJoin(
+          studioSuggestions,
+          eq(studioSuggestions.id, studioSuggestionVariants.suggestionId),
+        )
+        .where(
+          and(
+            eq(studioSuggestionVariants.id, input.variantId),
+            eq(studioSuggestionVariants.organizationId, ctx.organizationId),
+            eq(studioSuggestions.organizationId, ctx.organizationId),
+          ),
+        )
+        .limit(1);
+
+      if (!variant) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Suggestion not found" });
+      }
+
+      const sources = await fetchSourceCreatives(
+        ctx.organizationId,
+        variant.sourceCreativeId ? [variant.sourceCreativeId] : [],
+      );
+      const source = variant.sourceCreativeId
+        ? (sources.get(variant.sourceCreativeId) ?? null)
+        : null;
+
+      return {
+        brief: buildSuggestionBrief(
+          {
+            headline: variant.headline,
+            diffSummary: variant.diffSummary,
+            copyLine: variant.copyLine,
+            elements: variant.elements,
+          },
+          source?.name ?? variant.title,
+        ),
+        angle: variant.angle,
+        persona: variant.persona,
+        awarenessLevel: variant.awarenessLevel,
+        imageUrl: source?.assetUrl ?? null,
+        creativeId: variant.sourceCreativeId,
+      };
+    }),
+
+  generateApproved: studioWriteProcedure.mutation(async ({ ctx }) => {
+    const approved = await db
+      .select({
+        id: studioSuggestionVariants.id,
+        headline: studioSuggestionVariants.headline,
+        diffSummary: studioSuggestionVariants.diffSummary,
+        copyLine: studioSuggestionVariants.copyLine,
+        elements: studioSuggestionVariants.elements,
+        format: studioSuggestionVariants.format,
+        sourceCreativeId: studioSuggestions.sourceCreativeId,
+        title: studioSuggestions.title,
+        angle: studioSuggestions.angle,
+        persona: studioSuggestions.persona,
+        awarenessLevel: studioSuggestions.awarenessLevel,
+      })
+      .from(studioSuggestionVariants)
+      .innerJoin(
+        studioSuggestions,
+        eq(studioSuggestions.id, studioSuggestionVariants.suggestionId),
+      )
+      .where(
+        and(
+          eq(studioSuggestionVariants.organizationId, ctx.organizationId),
+          eq(studioSuggestions.organizationId, ctx.organizationId),
+          eq(studioSuggestions.status, "active"),
+          eq(studioSuggestionVariants.status, "approved"),
+          sql`${studioSuggestionVariants.generationId} is null`,
+        ),
+      )
+      .orderBy(asc(studioSuggestionVariants.index));
+
+    const sources = await fetchSourceCreatives(
+      ctx.organizationId,
+      approved.flatMap((variant) =>
+        variant.sourceCreativeId ? [variant.sourceCreativeId] : [],
+      ),
+    );
+    let queued = 0;
+    let failed = 0;
+
+    for (const variant of approved) {
+      try {
+        const source = variant.sourceCreativeId
+          ? (sources.get(variant.sourceCreativeId) ?? null)
+          : null;
+        const generation = await createStudioGeneration(ctx.organizationId, {
+          brief: buildSuggestionBrief(
+            {
+              headline: variant.headline,
+              diffSummary: variant.diffSummary,
+              copyLine: variant.copyLine,
+              elements: variant.elements,
+            },
+            source?.name ?? variant.title,
+          ),
+          angle: variant.angle ?? undefined,
+          persona: variant.persona ?? undefined,
+          awarenessLevel: variant.awarenessLevel,
+          count: 1,
+          format: isStudioFormat(variant.format) ? variant.format : "square",
+          referenceImageUrls: source?.assetUrl ? [source.assetUrl] : undefined,
+          sourceCreativeId: variant.sourceCreativeId,
+        });
+
+        await db
+          .update(studioSuggestionVariants)
+          .set({
+            status: "generated",
+            generationId: generation.generationId,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(studioSuggestionVariants.id, variant.id),
+              eq(studioSuggestionVariants.organizationId, ctx.organizationId),
+              eq(studioSuggestionVariants.status, "approved"),
+            ),
+          );
+        queued += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+
+    return { queued, failed };
+  }),
 
   winningAngles: studioProcedure.query(async ({ ctx }) => {
     const rows = await fetchCreativePerformanceRows(ctx.organizationId, [
@@ -259,13 +758,18 @@ export const studioRouter = router({
     const generations = await db
       .select({
         id: studioGenerations.id,
+        runId: studioGenerations.runId,
         brief: studioGenerations.brief,
         angle: studioGenerations.angle,
         persona: studioGenerations.persona,
         awarenessLevel: studioGenerations.awarenessLevel,
         status: studioGenerations.status,
         count: studioGenerations.count,
+        format: studioGenerations.format,
+        referenceImageUrls: studioGenerations.referenceImageUrls,
+        sourceCreativeId: studioGenerations.sourceCreativeId,
         createdAt: studioGenerations.createdAt,
+        updatedAt: studioGenerations.updatedAt,
       })
       .from(studioGenerations)
       .where(eq(studioGenerations.organizationId, ctx.organizationId))
@@ -277,6 +781,11 @@ export const studioRouter = router({
       return [];
     }
 
+    const staleIds = await reconcileStaleGenerations(ctx.organizationId, generations);
+    for (const generation of generations) {
+      if (staleIds.includes(generation.id)) generation.status = "failed";
+    }
+
     const variants = await db
       .select({
         id: studioVariants.id,
@@ -284,7 +793,7 @@ export const studioRouter = router({
         index: studioVariants.index,
         status: studioVariants.status,
         imageUrl: studioVariants.imageUrl,
-        savedCreativeId: studioVariants.savedCreativeId,
+        starredAt: studioVariants.starredAt,
       })
       .from(studioVariants)
       .where(
@@ -295,6 +804,13 @@ export const studioRouter = router({
       )
       .orderBy(asc(studioVariants.index));
 
+    const sources = await fetchSourceCreatives(
+      ctx.organizationId,
+      generations.flatMap((generation) =>
+        generation.sourceCreativeId ? [generation.sourceCreativeId] : [],
+      ),
+    );
+
     const variantsByGenerationId = new Map<string, typeof variants>();
     for (const variant of variants) {
       const current = variantsByGenerationId.get(variant.generationId) ?? [];
@@ -304,12 +820,15 @@ export const studioRouter = router({
 
     return generations.map((generation) => ({
       ...generation,
+      source: generation.sourceCreativeId
+        ? (sources.get(generation.sourceCreativeId) ?? null)
+        : null,
       variants: (variantsByGenerationId.get(generation.id) ?? []).map((variant) => ({
         id: variant.id,
         index: variant.index,
         status: variant.status,
         imageUrl: variant.imageUrl,
-        savedCreativeId: variant.savedCreativeId,
+        starredAt: variant.starredAt,
       })),
     }));
   }),
@@ -331,6 +850,9 @@ export const studioRouter = router({
       if (!generation) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Generation not found" });
       }
+
+      const staleIds = await reconcileStaleGenerations(ctx.organizationId, [generation]);
+      if (staleIds.includes(generation.id)) generation.status = "failed";
 
       const variants = await db
         .select()
@@ -358,44 +880,186 @@ export const studioRouter = router({
             }
           : null;
 
-      return { generation, variants, realtime };
+      const sources = await fetchSourceCreatives(
+        ctx.organizationId,
+        generation.sourceCreativeId ? [generation.sourceCreativeId] : [],
+      );
+
+      return {
+        generation,
+        variants,
+        realtime,
+        source: generation.sourceCreativeId
+          ? (sources.get(generation.sourceCreativeId) ?? null)
+          : null,
+      };
     }),
 
-  save: studioWriteProcedure
+  setStarred: studioWriteProcedure
     .input(
       z.object({
-        name: z.string().optional(),
-        assetUrl: z.string().url(),
-        angle: z.string().optional(),
-        persona: z.string().optional(),
-        awarenessLevel: awarenessLevelSchema.optional(),
-        variantId: z.string().optional(),
+        variantIds: z.array(z.string()).min(1).max(50),
+        starred: z.boolean(),
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      const [creative] = await db
-        .insert(adCreatives)
-        .values({
-          name: input.name ?? "Generated static ad",
-          assetUrl: input.assetUrl,
-          format: "static",
-          angle: input.angle,
-          persona: input.persona,
-          awarenessLevel: input.awarenessLevel,
-          organizationId: ctx.organizationId,
+      const updated = await db
+        .update(studioVariants)
+        .set({
+          starredAt: input.starred ? new Date() : null,
+          updatedAt: new Date(),
         })
-        .returning();
+        .where(
+          and(
+            inArray(studioVariants.id, input.variantIds),
+            eq(studioVariants.organizationId, ctx.organizationId),
+            eq(studioVariants.status, "ready"),
+          ),
+        )
+        .returning({ id: studioVariants.id });
 
-      if (input.variantId) {
-        await db
-          .update(studioVariants)
-          .set({ savedCreativeId: creative.id, updatedAt: new Date() })
+      return { updatedCount: updated.length };
+    }),
+
+  retryVariant: studioWriteProcedure
+    .input(z.object({ variantId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      const claimed = await db.transaction(async (tx) => {
+        const [variant] = await tx
+          .select({
+            id: studioVariants.id,
+            index: studioVariants.index,
+            generationId: studioVariants.generationId,
+            status: studioVariants.status,
+            brief: studioGenerations.brief,
+            angle: studioGenerations.angle,
+            persona: studioGenerations.persona,
+            awarenessLevel: studioGenerations.awarenessLevel,
+            count: studioGenerations.count,
+            format: studioGenerations.format,
+            referenceImageUrls: studioGenerations.referenceImageUrls,
+          })
+          .from(studioVariants)
+          .innerJoin(
+            studioGenerations,
+            eq(studioGenerations.id, studioVariants.generationId),
+          )
           .where(
             and(
               eq(studioVariants.id, input.variantId),
               eq(studioVariants.organizationId, ctx.organizationId),
+              eq(studioGenerations.organizationId, ctx.organizationId),
+            ),
+          )
+          .for("update");
+
+        if (!variant) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Variant not found" });
+        }
+        if (variant.status !== "failed") {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "Only failed images can be retried",
+          });
+        }
+
+        await tx
+          .update(studioVariants)
+          .set({
+            status: "pending",
+            imageUrl: null,
+            prompt: null,
+            starredAt: null,
+            savedCreativeId: null,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(studioVariants.id, variant.id),
+              eq(studioVariants.organizationId, ctx.organizationId),
             ),
           );
+
+        await tx
+          .update(studioGenerations)
+          .set({ status: "generating", updatedAt: new Date() })
+          .where(
+            and(
+              eq(studioGenerations.id, variant.generationId),
+              eq(studioGenerations.organizationId, ctx.organizationId),
+            ),
+          );
+
+        return variant;
+      });
+
+      try {
+        await tasks.trigger<typeof generateStaticAdVariantTask>(
+          "generate-static-ad-variant",
+          {
+            generationId: claimed.generationId,
+            organizationId: ctx.organizationId,
+            variantIndex: claimed.index,
+            basePrompt: buildPrompt({
+              brief: claimed.brief,
+              angle: claimed.angle,
+              persona: claimed.persona,
+              awarenessLevel: claimed.awarenessLevel,
+              format: claimed.format as StudioFormat,
+            }),
+            artDirection:
+              claimed.count > 1
+                ? ART_DIRECTIONS[claimed.index % ART_DIRECTIONS.length]
+                : null,
+            format: claimed.format as StudioFormat,
+            referenceImageUrls: claimed.referenceImageUrls ?? undefined,
+            finalizeGeneration: true,
+          },
+        );
+      } catch (error) {
+        await db
+          .update(studioVariants)
+          .set({ status: "failed", updatedAt: new Date() })
+          .where(
+            and(
+              eq(studioVariants.id, claimed.id),
+              eq(studioVariants.organizationId, ctx.organizationId),
+            ),
+          );
+
+        await finalizeStudioGenerationIfSettled(
+          claimed.generationId,
+          ctx.organizationId,
+        );
+        throw error;
+      }
+
+      return { ok: true };
+    }),
+
+  remixSource: studioProcedure
+    .input(z.object({ creativeId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      const [creative] = await db
+        .select({
+          id: adCreatives.id,
+          name: adCreatives.name,
+          assetUrl: adCreatives.assetUrl,
+          angle: adCreatives.angle,
+          persona: adCreatives.persona,
+          awarenessLevel: adCreatives.awarenessLevel,
+        })
+        .from(adCreatives)
+        .where(
+          and(
+            eq(adCreatives.id, input.creativeId),
+            eq(adCreatives.organizationId, ctx.organizationId),
+          ),
+        )
+        .limit(1);
+
+      if (!creative) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Creative not found" });
       }
 
       return creative;

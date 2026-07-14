@@ -260,6 +260,20 @@
       "when": 1783869310045,
       "tag": "0036_overrated_red_hulk",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1783918354157,
+      "tag": "0037_fast_silvermane",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1783930616499,
+      "tag": "0038_chubby_cargill",
+      "breakpoints": true
     }
   ]
 }

@@ -208,6 +208,7 @@ export function StudioStarters({ onPick }: { onPick: (starter: Starter) => void 
                       persona: item.persona ?? undefined,
                       awarenessLevel: item.awarenessLevel ?? undefined,
                       imageUrl: item.assetUrl,
+                      creativeId: item.creativeId,
                     })
                   }
                 />

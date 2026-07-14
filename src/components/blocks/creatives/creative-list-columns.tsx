@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import type { ColumnDef } from "@tanstack/react-table";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -7,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ArrowUpDown, Copy, ExternalLink, ImageIcon, MoreHorizontal, Video } from "@/components/icons";
+import { ArrowUpDown, Copy, ExternalLink, ImageIcon, MoreHorizontal, Sparkles, Video } from "@/components/icons";
 import { parseDateOnly } from "@/lib/date";
 import { cn } from "@/lib/utils";
 import type { CreativeHealth } from "@/lib/creative-health";
@@ -413,7 +414,6 @@ export const creativeColumns: ColumnDef<Creative>[] = [
       const metaAdId = row.original.metaAdId;
       const metaCampaignId = row.original.metaCampaignId;
       const metaAdSetId = row.original.metaAdSetId;
-      if (!metaAdId && !metaCampaignId && !metaAdSetId) return null;
 
       const copyToClipboard = (value: string, label: string) => {
         navigator.clipboard.writeText(value);
@@ -432,6 +432,12 @@ export const creativeColumns: ColumnDef<Creative>[] = [
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+            <DropdownMenuItem asChild>
+              <Link href={`/studio?remix=${row.original.id}`}>
+                <Sparkles className="size-3.5" />
+                Remix in Studio
+              </Link>
+            </DropdownMenuItem>
             {metaAdId && (
               <DropdownMenuItem onClick={() => copyToClipboard(metaAdId, "Ad ID")}>
                 <Copy className="size-3.5" />

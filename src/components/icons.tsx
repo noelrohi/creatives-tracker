@@ -82,6 +82,7 @@ export const ShieldCheck = createSolarIcon("shield-check");
 export const ShoppingCart = createSolarIcon("cart-large-2");
 export const SlidersHorizontal = createSolarIcon("tuning-2");
 export const Sparkles = createSolarIcon("magic-stick-3");
+export const Star = createSolarIcon("star");
 export const Target = createSolarIcon("target");
 export const Trash2 = createSolarIcon("trash-bin-trash");
 export const TrendingDown = createSolarIcon("graph-down");
