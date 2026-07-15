@@ -14,6 +14,8 @@ export type SuggestionElements = {
   brandMarks?: SuggestionElement | null;
   product?: SuggestionElement | null;
   copy?: SuggestionElement | null;
+  socialProof?: SuggestionElement | null;
+  priceFraming?: SuggestionElement | null;
 };
 
 // These schemas are sent to OpenAI structured outputs (strict mode), which
@@ -33,6 +35,8 @@ export const suggestionElementsSchema = z.object({
   brandMarks: suggestionElementSchema.nullable(),
   product: suggestionElementSchema.nullable(),
   copy: suggestionElementSchema.nullable(),
+  socialProof: suggestionElementSchema.nullable(),
+  priceFraming: suggestionElementSchema.nullable(),
 });
 
 const suggestionFormatSchema = z.enum([
@@ -46,16 +50,24 @@ const suggestionFormatSchema = z.enum([
 // Passed to generateObject with output: "array" — OpenAI strict mode rejects
 // root-level array schemas, so the SDK wraps this object schema itself.
 export const studioSuggestionCardSchema = z.object({
-  kind: z.enum(["new_hooks", "new_format", "refresh", "rebrand_swipe"]),
+  kind: z.enum([
+    "new_hooks",
+    "new_format",
+    "refresh",
+    "rebrand_swipe",
+    "extend_winner",
+  ]),
   title: z.string().min(1),
   whyLine: z.string().min(1),
   hypothesis: z.string().min(1),
   brief: z.string().min(1),
   elements: suggestionElementsSchema,
   visualStyle: z.string().min(1).nullable(),
+  hookType: z.string().min(1).nullable(),
   format: suggestionFormatSchema,
   count: z.number().int().min(3).max(4),
-  sourceOrder: z.number().int().min(1),
+  // null marks a source-less exploration card drawn from NOT TRIED LATELY.
+  sourceOrder: z.number().int().min(1).nullable(),
 });
 
 /** Shape used by the swipe vision pass. */
@@ -70,7 +82,20 @@ export const ELEMENT_LABELS: Record<keyof SuggestionElements, string> = {
   brandMarks: "brand marks",
   product: "product",
   copy: "copy",
+  socialProof: "social proof",
+  priceFraming: "price framing",
 };
+
+export function selectRotatingUntriedSwipes<T extends { id: string }>(
+  newestFirst: T[],
+) {
+  const selected = [
+    ...newestFirst.slice(0, 2),
+    ...newestFirst.slice(-2).reverse(),
+  ];
+  return Array.from(new Map(selected.map((swipe) => [swipe.id, swipe])).values())
+    .slice(0, 4);
+}
 
 export function buildElementsBrief(elements: SuggestionElements) {
   const entries = (

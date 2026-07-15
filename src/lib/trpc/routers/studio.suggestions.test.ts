@@ -1,3 +1,4 @@
+import { PgDialect } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = {
@@ -5,6 +6,8 @@ const state = {
   returning: [] as Array<Record<string, unknown>[]>,
   inserts: [] as Array<Record<string, unknown> | Record<string, unknown>[]>,
   updates: [] as Array<Record<string, unknown>>,
+  wheres: [] as unknown[],
+  orderBys: [] as unknown[][],
   generation: 0,
 };
 
@@ -22,8 +25,14 @@ function selectChain() {
     from: vi.fn(() => chain),
     innerJoin: vi.fn(() => chain),
     leftJoin: vi.fn(() => chain),
-    where: vi.fn(() => chain),
-    orderBy: vi.fn(() => chain),
+    where: vi.fn((clause: unknown) => {
+      state.wheres.push(clause);
+      return chain;
+    }),
+    orderBy: vi.fn((...clauses: unknown[]) => {
+      state.orderBys.push(clauses);
+      return chain;
+    }),
     limit: vi.fn(() => chain),
     for: vi.fn(() => chain),
     then: (resolve: (value: Record<string, unknown>[]) => unknown) =>
@@ -61,7 +70,10 @@ const mockDb = {
         state.updates.push(value);
         return chain;
       }),
-      where: vi.fn(() => chain),
+      where: vi.fn((clause: unknown) => {
+        state.wheres.push(clause);
+        return chain;
+      }),
       returning: vi.fn(async () => state.returning.shift() ?? []),
       then: (resolve: (value: unknown[]) => unknown) => Promise.resolve([]).then(resolve),
     };
@@ -133,6 +145,8 @@ describe("studio router — v2 lifecycle", () => {
     state.returning = [];
     state.inserts = [];
     state.updates = [];
+    state.wheres = [];
+    state.orderBys = [];
     state.generation = 0;
     vi.clearAllMocks();
   });
@@ -153,12 +167,37 @@ describe("studio router — v2 lifecycle", () => {
     const refreshed = await caller.studio.refreshSuggestions();
 
     expect(refreshed).toMatchObject({ expiredCount: 2, runId: "run_1" });
+    const refreshWhere = new PgDialect().sqlToQuery(
+      state.wheres.at(-1) as Parameters<PgDialect["sqlToQuery"]>[0],
+    );
+    expect(refreshWhere.sql).toContain('"evidence" is null');
     expect(state.updates).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ status: "skipped" }),
         expect.objectContaining({ status: "expired" }),
       ]),
     );
+  });
+
+  it("home exposes thin evidence cards and the recently dropped watch count", async () => {
+    const thin = suggestion({ id: "thin_1", evidence: "thin" });
+    state.selects.push(
+      [thin],
+      // recent generations
+      [],
+      // recently expired cards
+      [
+        { id: "dropped_1", evidence: "thin" },
+        { id: "expired_main", evidence: null },
+      ],
+    );
+
+    const home = await createMockCaller({ role: "owner" }).studio.home();
+
+    expect(home.cards[0].evidence).toBe("thin");
+    expect(home.droppedWatch).toBe(1);
+    // Watch-list drops are excluded so the expiry note never counts them twice.
+    expect(home.expiredCount).toBe(1);
   });
 
   it("warns on a duplicate swipe URL and archives an existing swipe", async () => {
@@ -181,6 +220,69 @@ describe("studio router — v2 lifecycle", () => {
 
     await caller.studio.archiveSwipe({ id: "swipe_1", archived: true });
     expect(state.updates.at(-1)?.archivedAt).toBeInstanceOf(Date);
+  });
+
+  it("soft-warns on a second identical image hash without blocking creation", async () => {
+    const createdAt = new Date("2026-07-14T12:00:00Z");
+    state.selects.push([], [{ id: "swipe_first", brandName: "Acme", createdAt }]);
+    const caller = createMockCaller({ role: "owner" });
+    const imageHash = "a".repeat(64);
+
+    const first = await caller.studio.createSwipe({
+      imageUrl: "https://store.public.blob.vercel-storage.com/first.png",
+      imageHash,
+    });
+    const second = await caller.studio.createSwipe({
+      imageUrl: "https://store.public.blob.vercel-storage.com/second.png",
+      imageHash,
+    });
+
+    expect(first.duplicateImage).toBeNull();
+    expect(second).toMatchObject({
+      duplicate: false,
+      duplicateImage: { id: "swipe_first", brandName: "Acme", createdAt },
+    });
+    expect(state.inserts).toHaveLength(2);
+  });
+
+  it("combines swipe filter dimensions with AND and selections within each with IN", async () => {
+    state.selects.push([], []);
+    await createMockCaller({ role: "owner" }).studio.swipes({
+      angleIds: ["angle_1", "angle_2"],
+      visualStyleIds: ["style_1"],
+      hookTypeIds: ["hook_1", "hook_2"],
+    });
+
+    const query = new PgDialect().sqlToQuery(state.wheres[0] as Parameters<PgDialect["sqlToQuery"]>[0]);
+    expect(query.sql).toContain("and");
+    expect(query.sql.match(/ in \(/g)).toHaveLength(3);
+    expect(query.params).toEqual(expect.arrayContaining([
+      "test-org-id", "angle_1", "angle_2", "style_1", "hook_1", "hook_2",
+    ]));
+  });
+
+  it("uses trigram filtering and ranked ordering for typo-tolerant swipe search", async () => {
+    state.selects.push([
+      { id: "benefit", brandName: "Benefit Cosmetics", whyItWorks: "Strong offer", angleId: null, hookTypeId: null, visualStyleId: null },
+      { id: "other", brandName: "Other", whyItWorks: "Benefit-led layout", angleId: null, hookTypeId: null, visualStyleId: null },
+    ], []);
+    const rows = await createMockCaller({ role: "owner" }).studio.swipes({ q: "benfit" });
+
+    const where = new PgDialect().sqlToQuery(state.wheres[0] as Parameters<PgDialect["sqlToQuery"]>[0]);
+    const order = new PgDialect().sqlToQuery(state.orderBys[0][0] as Parameters<PgDialect["sqlToQuery"]>[0]);
+    expect(rows.map((row) => row.id)).toEqual(["benefit", "other"]);
+    expect(where.sql).toContain(" % ");
+    expect(order.sql).toContain("GREATEST(similarity(");
+  });
+
+  it("falls back to plain ILIKE for swipe searches shorter than three characters", async () => {
+    state.selects.push([], []);
+    await createMockCaller({ role: "owner" }).studio.swipes({ q: "be" });
+
+    const where = new PgDialect().sqlToQuery(state.wheres[0] as Parameters<PgDialect["sqlToQuery"]>[0]);
+    expect(where.sql).toContain("ilike");
+    expect(where.sql).not.toContain(" % ");
+    expect(where.params).toContain("%be%");
   });
 
   it("rejects a foreign screenshot URL instead of storing an expiring asset", async () => {
@@ -310,6 +412,45 @@ describe("studio router — v2 lifecycle", () => {
       expect.arrayContaining([
         expect.objectContaining({ copyPackageId: "package_latest" }),
       ]),
+    );
+  });
+
+  it("queues an extend_winner card through the shared proven-variant path", async () => {
+    const claimed = suggestion({
+      kind: "extend_winner",
+      sourceCreativeId: "creative_1",
+      status: "approved",
+      claimedAt: new Date(),
+    });
+    state.returning.push([claimed]);
+    state.selects.push(
+      [{
+        imageUrl: "https://cdn.test/proven.png",
+        linkedCreativeId: "creative_1",
+        brief: "Original winning brief",
+        angle: "Price anchor",
+        format: "portrait",
+        copyPackageId: null,
+      }],
+      [{ id: "creative_1" }],
+    );
+
+    const result = await createMockCaller({ role: "owner" }).studio.approveSuggestion({
+      id: "suggestion_1",
+    });
+
+    expect(result).toMatchObject({ generationId: "generation_1" });
+    expect(state.inserts[0]).toMatchObject({
+      count: 3,
+      referenceImageUrls: ["https://cdn.test/proven.png"],
+      sourceCreativeId: "creative_1",
+    });
+    expect(trigger).toHaveBeenCalledWith(
+      "generate-static-ads",
+      expect.objectContaining({
+        count: 3,
+        referenceImageUrls: ["https://cdn.test/proven.png"],
+      }),
     );
   });
 

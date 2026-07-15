@@ -57,6 +57,14 @@ export const studioBrandProfiles = pgTable(
     // Accuracy notes the product photo can't carry (e.g. a shallow blind-
     // debossed wordmark); injected into every generation prompt.
     productNotes: text("product_notes"),
+    prohibitedClaims: jsonb("prohibited_claims")
+      .$type<string[]>()
+      .notNull()
+      .default([]),
+    requiredDisclaimers: jsonb("required_disclaimers")
+      .$type<string[]>()
+      .notNull()
+      .default([]),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
@@ -73,9 +81,13 @@ export const studioSwipes = pgTable(
       .$defaultFn(() => crypto.randomUUID()),
     organizationId: text("organization_id").notNull(),
     imageUrl: text("image_url").notNull(),
+    imageHash: text("image_hash"),
     sourceUrl: text("source_url"),
     brandName: text("brand_name"),
     angleId: text("angle_id").references(() => studioTaxonomyValues.id, {
+      onDelete: "set null",
+    }),
+    hookTypeId: text("hook_type_id").references(() => studioTaxonomyValues.id, {
       onDelete: "set null",
     }),
     visualStyleId: text("visual_style_id").references(
@@ -92,11 +104,16 @@ export const studioSwipes = pgTable(
   },
   (table) => [
     index("studio_swipe_organization_id_idx").on(table.organizationId),
+    index("studio_swipe_org_image_hash_idx").on(
+      table.organizationId,
+      table.imageHash,
+    ),
     uniqueIndex("studio_swipe_org_source_url_uidx").on(
       table.organizationId,
       table.sourceUrl,
     ),
     index("studio_swipe_angle_id_idx").on(table.angleId),
+    index("studio_swipe_hook_type_id_idx").on(table.hookTypeId),
     index("studio_swipe_visual_style_id_idx").on(table.visualStyleId),
   ],
 );
@@ -182,10 +199,14 @@ export const studioSuggestions = pgTable(
     whyLine: text("why_line").notNull(),
     // One-sentence single-variable test hypothesis written by the LLM.
     hypothesis: text("hypothesis"),
+    evidence: text("evidence"),
     brief: text("brief"),
     elements: jsonb("elements").$type<SuggestionElements | null>(),
     angle: text("angle"),
     angleId: text("angle_id").references(() => studioTaxonomyValues.id, {
+      onDelete: "set null",
+    }),
+    hookTypeId: text("hook_type_id").references(() => studioTaxonomyValues.id, {
       onDelete: "set null",
     }),
     visualStyleId: text("visual_style_id").references(
@@ -215,6 +236,7 @@ export const studioSuggestions = pgTable(
   (table) => [
     index("studio_suggestion_organization_id_idx").on(table.organizationId),
     index("studio_suggestion_created_at_idx").on(table.createdAt),
+    index("studio_suggestion_hook_type_id_idx").on(table.hookTypeId),
     index("studio_suggestion_status_idx").on(table.organizationId, table.status),
   ],
 );
@@ -234,6 +256,9 @@ export const studioVariants = pgTable(
     imageUrl: text("image_url"),
     prompt: text("prompt"),
     mark: text("mark"),
+    // When the current mark was set — the stable clock for the trailing
+    // 90-day Good/Bad tallies (updatedAt moves on publish/link too).
+    markedAt: timestamp("marked_at"),
     publishedAt: timestamp("published_at"),
     // The live ad creative this published variant became — closes the loop
     // from studio output to real market performance.

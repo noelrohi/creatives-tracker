@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { auth as triggerAuth, tasks } from "@trigger.dev/sdk";
 import { TRPCError, type TRPCRouterRecord } from "@trpc/server";
-import { and, asc, desc, eq, ilike, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { adCreatives } from "@/schema/ad-creative";
 import {
@@ -9,7 +9,9 @@ import {
   studioGenerations,
   studioVariants,
 } from "@/schema/studio";
+import { studioAdNameId, studioAdNameSlug } from "@/lib/studio-ad-name";
 import { getStudioBrandProfile } from "@/lib/studio-brand";
+import { fetchStudioMarketTopVariants } from "@/lib/studio-market";
 import {
   fetchCreativePerformanceRows,
   toNullableNumber,
@@ -29,6 +31,7 @@ import type {
 } from "../../../../trigger/generate-static-ads";
 import {
   createStudioGeneration,
+  extendStudioWinner,
   fetchSourceCreatives,
   generationInput,
   markSchema,
@@ -70,6 +73,7 @@ export const studioGenerationProcedures = {
             imageUrl: null,
             prompt: null,
             mark: null,
+            markedAt: null,
             publishedAt: null,
             moderationReason: null,
             updatedAt: new Date(),
@@ -141,11 +145,51 @@ export const studioGenerationProcedures = {
         .where(eq(studioCopyPackages.organizationId, ctx.organizationId)),
     ]);
     const packageById = new Map(packages.map((pkg) => [pkg.id, pkg]));
-    const sources = await fetchSourceCreatives(
-      ctx.organizationId,
-      generations.flatMap((generation) =>
-        generation.sourceCreativeId ? [generation.sourceCreativeId] : [],
+    const linkedCreativeIds = Array.from(
+      new Set(
+        variants.flatMap((variant) =>
+          variant.linkedCreativeId ? [variant.linkedCreativeId] : [],
+        ),
       ),
+    );
+    const [sources, linkedCreatives, linkedPerformance] = await Promise.all([
+      fetchSourceCreatives(
+        ctx.organizationId,
+        generations.flatMap((generation) =>
+          generation.sourceCreativeId ? [generation.sourceCreativeId] : [],
+        ),
+      ),
+      linkedCreativeIds.length
+        ? db
+            .select({ id: adCreatives.id, name: adCreatives.name })
+            .from(adCreatives)
+            .where(
+              and(
+                eq(adCreatives.organizationId, ctx.organizationId),
+                inArray(adCreatives.id, linkedCreativeIds),
+              ),
+            )
+        : [],
+      linkedCreativeIds.length
+        ? fetchCreativePerformanceRows(ctx.organizationId, [
+            inArray(adCreatives.id, linkedCreativeIds),
+          ])
+        : [],
+    ]);
+    const linkedPerformanceById = new Map(
+      linkedPerformance.map((row) => [
+        row.creativeId,
+        { roas: toNullableNumber(row.roas) },
+      ]),
+    );
+    const linkedCreativeById = new Map(
+      linkedCreatives.map((creative) => [
+        creative.id,
+        {
+          ...creative,
+          roas: linkedPerformanceById.get(creative.id)?.roas ?? null,
+        },
+      ]),
     );
     const variantsByGenerationId = new Map<string, typeof variants>();
     for (const variant of variants) {
@@ -163,9 +207,16 @@ export const studioGenerationProcedures = {
         copyPackage: variant.copyPackageId
           ? packageById.get(variant.copyPackageId) ?? null
           : null,
+        linkedCreative: variant.linkedCreativeId
+          ? linkedCreativeById.get(variant.linkedCreativeId) ?? null
+          : null,
       })),
     }));
   }),
+
+  marketTopVariants: studioProcedure.query(({ ctx }) =>
+    fetchStudioMarketTopVariants(ctx.organizationId),
+  ),
 
   generation: studioProcedure
     .input(z.object({ id: z.string() }))
@@ -282,11 +333,36 @@ export const studioGenerationProcedures = {
   linkCandidates: studioProcedure
     .input(
       z.object({
+        variantId: z.string().optional(),
         search: z.string().trim().max(80).optional(),
         publishedAfter: z.string().optional(),
       }),
     )
     .query(async ({ input, ctx }) => {
+      const [variant] = input.variantId
+        ? await db
+            .select({
+              id: studioVariants.id,
+              angle: studioGenerations.angle,
+            })
+            .from(studioVariants)
+            .innerJoin(
+              studioGenerations,
+              eq(studioGenerations.id, studioVariants.generationId),
+            )
+            .where(
+              and(
+                eq(studioVariants.id, input.variantId),
+                eq(studioVariants.organizationId, ctx.organizationId),
+                eq(studioGenerations.organizationId, ctx.organizationId),
+              ),
+            )
+            .limit(1)
+        : [];
+      if (input.variantId && !variant) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Image not found" });
+      }
+
       const parsedPublishedAfter = input.publishedAfter
         ? new Date(input.publishedAfter)
         : null;
@@ -294,9 +370,17 @@ export const studioGenerationProcedures = {
         parsedPublishedAfter && !Number.isNaN(parsedPublishedAfter.getTime())
           ? parsedPublishedAfter
           : null;
+      const idSlice = input.variantId ? studioAdNameId(input.variantId) : null;
+      const angleSlug = studioAdNameSlug(variant?.angle ?? "") || null;
       const conditions = [eq(adCreatives.organizationId, ctx.organizationId)];
       if (input.search) {
-        conditions.push(ilike(adCreatives.name, `%${input.search}%`));
+        conditions.push(
+          or(
+            idSlice ? ilike(adCreatives.name, `%${idSlice}%`) : undefined,
+            angleSlug ? ilike(adCreatives.name, `%${angleSlug}%`) : undefined,
+            ilike(adCreatives.name, `%${input.search}%`),
+          )!,
+        );
       }
       const creatives = await db
         .select({
@@ -309,12 +393,18 @@ export const studioGenerationProcedures = {
         .from(adCreatives)
         .where(and(...conditions))
         .orderBy(
+          sql`case
+            when ${idSlice}::text is not null and ${adCreatives.name} ilike ${`%${idSlice ?? ""}%`} then 0
+            when ${angleSlug}::text is not null and ${adCreatives.name} ilike ${`%${angleSlug ?? ""}%`} then 1
+            when ${input.search ?? null}::text is not null and ${adCreatives.name} ilike ${`%${input.search ?? ""}%`} then 2
+            else 3
+          end`,
           ...(publishedAfter
             ? [
                 sql`case when ${adCreatives.format} = 'static' and ${adCreatives.createdAt} >= ${publishedAfter} then 0 else 1 end`,
-                desc(adCreatives.createdAt),
               ]
-            : [desc(adCreatives.createdAt)]),
+            : []),
+          desc(adCreatives.createdAt),
         )
         .limit(30);
       if (creatives.length === 0) return [];
@@ -331,11 +421,28 @@ export const studioGenerationProcedures = {
           },
         ]),
       );
-      return creatives.map((creative) => ({
-        ...creative,
-        roas: performanceById.get(creative.id)?.roas ?? null,
-        spend: performanceById.get(creative.id)?.spend ?? null,
-      }));
+      const ranked = creatives.map((creative) => {
+        const name = creative.name.toLowerCase();
+        const matchReason = idSlice && name.includes(idSlice)
+          ? "template" as const
+          : angleSlug && name.includes(angleSlug)
+            ? "angle" as const
+            : input.search && name.includes(input.search.toLowerCase())
+              ? "fuzzy" as const
+              : "recent" as const;
+        return {
+          ...creative,
+          matchReason,
+          roas: performanceById.get(creative.id)?.roas ?? null,
+          spend: performanceById.get(creative.id)?.spend ?? null,
+        };
+      });
+      const rank = { template: 0, angle: 1, fuzzy: 2, recent: 3 } as const;
+      return ranked.sort(
+        (a, b) =>
+          rank[a.matchReason] - rank[b.matchReason] ||
+          b.createdAt.getTime() - a.createdAt.getTime(),
+      );
     }),
 
   linkVariantToCreative: studioWriteProcedure
@@ -391,6 +498,92 @@ export const studioGenerationProcedures = {
       return { ok: true };
     }),
 
+  publishAndLink: studioWriteProcedure
+    .input(
+      z.object({
+        variantId: z.string(),
+        creativeId: z.string().nullable(),
+      }),
+    )
+    .mutation(async ({ input, ctx }) =>
+      db.transaction(async (tx) => {
+        const [variant] = await tx
+          .select({
+            id: studioVariants.id,
+            publishedAt: studioVariants.publishedAt,
+          })
+          .from(studioVariants)
+          .where(
+            and(
+              eq(studioVariants.id, input.variantId),
+              eq(studioVariants.organizationId, ctx.organizationId),
+              eq(studioVariants.status, "ready"),
+              eq(studioVariants.mark, "good"),
+            ),
+          )
+          .for("update")
+          .limit(1);
+        if (!variant) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "Only Good images can be published",
+          });
+        }
+        if (input.creativeId) {
+          const [creative] = await tx
+            .select({ id: adCreatives.id })
+            .from(adCreatives)
+            .where(
+              and(
+                eq(adCreatives.id, input.creativeId),
+                eq(adCreatives.organizationId, ctx.organizationId),
+              ),
+            )
+            .limit(1);
+          if (!creative) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Creative not found",
+            });
+          }
+        }
+        const [published] = await tx
+          .update(studioVariants)
+          .set({
+            publishedAt: variant.publishedAt ?? new Date(),
+            linkedCreativeId: input.creativeId ?? undefined,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(studioVariants.id, variant.id),
+              eq(studioVariants.organizationId, ctx.organizationId),
+              eq(studioVariants.status, "ready"),
+              eq(studioVariants.mark, "good"),
+            ),
+          )
+          .returning({
+            id: studioVariants.id,
+            publishedAt: studioVariants.publishedAt,
+            linkedCreativeId: studioVariants.linkedCreativeId,
+          });
+        if (!published) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "Image changed while publishing",
+          });
+        }
+        return published;
+      }),
+    ),
+
+  extendVariant: studioWriteProcedure
+    .input(z.object({ variantId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      const generation = await extendStudioWinner(ctx.organizationId, input);
+      return { generationId: generation.generationId };
+    }),
+
   setVariantMark: studioWriteProcedure
     .input(z.object({ variantId: z.string(), mark: markSchema.nullable() }))
     .mutation(async ({ input, ctx }) => {
@@ -398,6 +591,7 @@ export const studioGenerationProcedures = {
         .update(studioVariants)
         .set({
           mark: input.mark,
+          markedAt: input.mark ? new Date() : null,
           publishedAt: input.mark === "good" ? undefined : null,
           updatedAt: new Date(),
         })
@@ -482,6 +676,7 @@ export const studioGenerationProcedures = {
             imageUrl: null,
             prompt: null,
             mark: null,
+            markedAt: null,
             publishedAt: null,
             moderationReason: null,
             retryWithoutImageAt: input.withoutReferenceImage ? new Date() : undefined,

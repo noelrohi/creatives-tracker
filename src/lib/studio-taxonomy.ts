@@ -17,6 +17,15 @@ export const STUDIO_STYLE_SEEDS = [
   "native/screenshot",
 ] as const;
 
+export const STUDIO_HOOK_TYPE_SEEDS = [
+  "question",
+  "callout",
+  "stat",
+  "testimonial quote",
+  "price anchor",
+  "curiosity",
+] as const;
+
 export function studioSlug(value: string) {
   return value
     .normalize("NFKD")

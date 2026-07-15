@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { tasks } from "@trigger.dev/sdk";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { orgProcedure, orgWriteProcedure } from "../init";
 import { db } from "@/db";
 import { adCreatives } from "@/schema/ad-creative";
@@ -29,7 +29,12 @@ import {
   type StudioFormat,
 } from "@/lib/studio-prompt";
 import { buildElementsBrief } from "@/lib/studio-suggestions";
-import { STUDIO_ANGLE_SEEDS, STUDIO_STYLE_SEEDS, studioSlug } from "@/lib/studio-taxonomy";
+import {
+  STUDIO_ANGLE_SEEDS,
+  STUDIO_HOOK_TYPE_SEEDS,
+  STUDIO_STYLE_SEEDS,
+  studioSlug,
+} from "@/lib/studio-taxonomy";
 import type { generateStaticAdsTask } from "../../../../trigger/generate-static-ads";
 
 export const awarenessLevelSchema = z.enum(AWARENESS_LEVELS);
@@ -46,7 +51,11 @@ export const persistedSwipeImageUrlSchema = remoteImageUrlSchema.refine((value) 
   return hostname === "blob.vercel-storage.com" ||
     hostname.endsWith(".blob.vercel-storage.com");
 }, "Swipe screenshots must be uploaded before saving");
-export const taxonomyKindSchema = z.enum(["angle", "visual_style"]);
+export const taxonomyKindSchema = z.enum([
+  "angle",
+  "visual_style",
+  "hook_type",
+]);
 export const markSchema = z.enum(["good", "bad"]);
 const STALE_GENERATION_MS = 15 * 60 * 1000;
 
@@ -84,7 +93,7 @@ export function normalizeOptionalUrl(value?: string | null) {
 export async function requireTaxonomyValue(
   organizationId: string,
   id: string | null | undefined,
-  kind: "angle" | "visual_style",
+  kind: "angle" | "visual_style" | "hook_type",
 ) {
   if (!id) return;
   const [value] = await db
@@ -102,7 +111,12 @@ export async function requireTaxonomyValue(
   if (!value) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: kind === "angle" ? "Invalid angle tag" : "Invalid visual-style tag",
+      message:
+        kind === "angle"
+          ? "Invalid angle tag"
+          : kind === "visual_style"
+            ? "Invalid visual-style tag"
+            : "Invalid hook-type tag",
     });
   }
 }
@@ -349,6 +363,72 @@ export async function createStudioGeneration(
   }
 }
 
+export const EXTEND_WINNER_BRIEF =
+  "Make 3 more like this proven winner — keep what works, vary one element per variant.";
+
+export async function extendStudioWinner(
+  organizationId: string,
+  input: { variantId?: string; creativeId?: string },
+) {
+  if (!input.variantId && !input.creativeId) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Winner source is required" });
+  }
+  const [source] = await db
+    .select({
+      imageUrl: studioVariants.imageUrl,
+      linkedCreativeId: studioVariants.linkedCreativeId,
+      brief: studioGenerations.brief,
+      angle: studioGenerations.angle,
+      format: studioGenerations.format,
+      copyPackageId: studioGenerations.copyPackageId,
+    })
+    .from(studioVariants)
+    .innerJoin(
+      studioGenerations,
+      eq(studioGenerations.id, studioVariants.generationId),
+    )
+    .where(
+      and(
+        eq(studioVariants.organizationId, organizationId),
+        eq(studioGenerations.organizationId, organizationId),
+        or(
+          input.variantId
+            ? eq(studioVariants.id, input.variantId)
+            : undefined,
+          input.creativeId
+            ? eq(studioVariants.linkedCreativeId, input.creativeId)
+            : undefined,
+        ),
+      ),
+    )
+    .orderBy(desc(studioVariants.createdAt))
+    .limit(1);
+  if (!source) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Image not found" });
+  }
+  if (!source.linkedCreativeId) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "Link this image to a live ad before extending it",
+    });
+  }
+  if (!source.imageUrl) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "This image is not ready to extend",
+    });
+  }
+  return createStudioGeneration(organizationId, {
+    brief: [EXTEND_WINNER_BRIEF, source.brief].join("\n"),
+    angle: source.angle ?? undefined,
+    count: 3,
+    format: isStudioFormat(source.format) ? source.format : "square",
+    referenceImageUrls: [source.imageUrl],
+    sourceCreativeId: source.linkedCreativeId,
+    copyPackageId: source.copyPackageId,
+  });
+}
+
 export async function latestPackageForAngle(
   organizationId: string,
   angleId: string | null,
@@ -375,6 +455,22 @@ export async function queueClaimedSuggestion(
   copyPackageOverride?: string | null,
   referenceImageOverride?: string[],
 ) {
+  if (suggestion.kind === "extend_winner" && suggestion.sourceCreativeId) {
+    const generation = await extendStudioWinner(organizationId, {
+      creativeId: suggestion.sourceCreativeId,
+    });
+    await db
+      .update(studioSuggestions)
+      .set({ generationId: generation.generationId, updatedAt: new Date() })
+      .where(
+        and(
+          eq(studioSuggestions.id, suggestion.id),
+          eq(studioSuggestions.organizationId, organizationId),
+          isNull(studioSuggestions.generationId),
+        ),
+      );
+    return generation;
+  }
   const sourceMap = await fetchSourceCreatives(
     organizationId,
     suggestion.sourceCreativeId ? [suggestion.sourceCreativeId] : [],
@@ -419,6 +515,7 @@ export async function queueClaimedSuggestion(
             sourceBrandName: swipe.brandName,
           }),
         elements: swipe.elements ?? suggestion.elements,
+        brand,
       })
     : baseBrief;
   const referenceImageUrls =
@@ -476,6 +573,7 @@ export async function seedTaxonomy(organizationId: string) {
   const rows = [
     ...STUDIO_ANGLE_SEEDS.map((name) => ({ kind: "angle", name })),
     ...STUDIO_STYLE_SEEDS.map((name) => ({ kind: "visual_style", name })),
+    ...STUDIO_HOOK_TYPE_SEEDS.map((name) => ({ kind: "hook_type", name })),
   ].map((value) => ({
     organizationId,
     kind: value.kind,

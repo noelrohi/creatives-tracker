@@ -15,6 +15,7 @@ import {
   artDirectionFor,
   buildPrompt,
   buildPromptRewrite,
+  classifyPromptClaims,
   studioSizeFor,
   variantPromptFor,
   type StudioFormat,
@@ -44,6 +45,7 @@ async function rewriteVariantPrompts(
   format: StudioFormat,
   hasReferenceImages: boolean,
   brand: StudioBrandProfile | null,
+  claimsRetryInstruction?: string,
 ): Promise<string[] | null> {
   try {
     const { system, prompt } = buildPromptRewrite({
@@ -61,7 +63,12 @@ async function rewriteVariantPrompts(
     // real reference layout instead of an invented one; product photo last.
     const content: Array<
       { type: "text"; text: string } | { type: "image"; image: URL }
-    > = [{ type: "text", text: prompt }];
+    > = [{
+      type: "text",
+      text: claimsRetryInstruction
+        ? `${prompt}\n\nREWRITE RETRY\n${claimsRetryInstruction}`
+        : prompt,
+    }];
     for (const url of (payload.referenceImageUrls ?? []).slice(0, 3)) {
       content.push({ type: "image", image: new URL(url) });
     }
@@ -121,6 +128,9 @@ export type GenerateStaticAdVariantPayload = {
 };
 
 export type VariantStatus = "pending" | "generating" | "ready" | "failed";
+export type StudioModerationReason =
+  | ReturnType<typeof moderationReasonFromError>
+  | "claims";
 
 export type GeneratedVariant = {
   index: number;
@@ -279,7 +289,7 @@ export const generateStaticAdVariantTask = task({
       status: VariantStatus;
       imageUrl?: string | null;
       prompt?: string;
-      moderationReason?: string | null;
+      moderationReason?: StudioModerationReason;
     }) =>
       persistStudioUpdate(
         `mark variant ${values.status}`,
@@ -438,32 +448,104 @@ export const generateStaticAdsTask = task({
         ? [...layoutReferenceUrls, brand.productImageUrl]
         : payload.referenceImageUrls;
 
-    const rewrittenPrompts = await rewriteVariantPrompts(
+    let rewrittenPrompts = await rewriteVariantPrompts(
       payload,
       format,
       hasReferenceImages,
       brand,
     );
     const fallbackPrompt = buildPrompt({ ...payload, format, brand });
+    let finalPrompts = Array.from(
+      { length: payload.count },
+      (_, index) => rewrittenPrompts?.[index] ?? fallbackPrompt,
+    );
+    const prohibitedClaims = brand?.prohibitedClaims ?? [];
+    const initialClaimsCheck = classifyPromptClaims({
+      prompts: finalPrompts,
+      prohibitedClaims,
+      retried: false,
+    });
+    if (initialClaimsCheck.action === "retry") {
+      rewrittenPrompts = await rewriteVariantPrompts(
+        payload,
+        format,
+        hasReferenceImages,
+        brand,
+        initialClaimsCheck.retryInstruction,
+      );
+      finalPrompts = Array.from(
+        { length: payload.count },
+        (_, index) => rewrittenPrompts?.[index] ?? finalPrompts[index],
+      );
+    }
+    const claimsFailures = new Set<number>();
+    for (const [index, prompt] of finalPrompts.entries()) {
+      if (
+        classifyPromptClaims({
+          prompts: [prompt],
+          prohibitedClaims,
+          retried: initialClaimsCheck.action === "retry",
+        }).action === "claims"
+      ) {
+        claimsFailures.add(index);
+      }
+    }
 
     try {
-      const batch = await generateStaticAdVariantTask.batchTriggerAndWait(
-        variants.map((variant) => ({
-          payload: {
+      for (const index of claimsFailures) {
+        await persistStudioUpdate(
+          "mark claims-blocked variant failed",
+          () =>
+            db
+              .update(studioVariants)
+              .set({
+                status: "failed",
+                prompt: finalPrompts[index],
+                moderationReason: "claims",
+                updatedAt: new Date(),
+              })
+              .where(
+                and(
+                  eq(studioVariants.generationId, payload.generationId),
+                  eq(studioVariants.organizationId, payload.organizationId),
+                  eq(studioVariants.index, index),
+                ),
+              ),
+          {
             generationId: payload.generationId,
             organizationId: payload.organizationId,
-            variantIndex: variant.index,
-            basePrompt: rewrittenPrompts?.[variant.index] ?? fallbackPrompt,
-            artDirection: rewrittenPrompts
-              ? null
-              : artDirectionFor(variant.index, payload.count, hasReferenceImages),
-            format,
-            referenceImageUrls,
-          } satisfies GenerateStaticAdVariantPayload,
-        })),
+            runId: ctx.run.id,
+            variantIndex: index,
+          },
+        );
+        variants[index] = { index, status: "failed" };
+      }
+      const safeVariants = variants.filter(
+        (variant) => !claimsFailures.has(variant.index),
       );
+      const batch = safeVariants.length > 0
+        ? await generateStaticAdVariantTask.batchTriggerAndWait(
+            safeVariants.map((variant) => ({
+              payload: {
+                generationId: payload.generationId,
+                organizationId: payload.organizationId,
+                variantIndex: variant.index,
+                basePrompt: finalPrompts[variant.index],
+                artDirection: rewrittenPrompts
+                  ? null
+                  : artDirectionFor(
+                      variant.index,
+                      payload.count,
+                      hasReferenceImages,
+                    ),
+                format,
+                referenceImageUrls,
+              } satisfies GenerateStaticAdVariantPayload,
+            })),
+          )
+        : null;
 
-      for (const run of batch.runs) {
+      for (const run of batch?.runs ?? []) {
         if (run.ok) {
           variants[run.output.index] = {
             index: run.output.index,
