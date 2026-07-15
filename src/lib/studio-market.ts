@@ -30,6 +30,7 @@ export type StudioMarketResult = {
 export type StudioMarketTopVariant = {
   variantId: string;
   imageUrl: string;
+  creativeId: string;
   creativeName: string;
   roas: number | null;
   purchases: number | null;
@@ -167,6 +168,7 @@ export async function fetchStudioMarketTopVariants(
       return [{
         variantId: variant.variantId,
         imageUrl: variant.imageUrl,
+        creativeId: variant.creativeId,
         creativeName: variant.creativeName,
         roas: toNullableNumber(metrics.roas),
         purchases: toNullableNumber(metrics.purchases),

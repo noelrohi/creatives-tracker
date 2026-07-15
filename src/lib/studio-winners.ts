@@ -2,10 +2,13 @@ export const WINNER_WINDOW_DAYS = 28;
 export const WINNER_TREND_SPLIT_DAYS = 14;
 export const WINNER_MIN_SPEND = 100;
 export const WINNER_MIN_PURCHASES = 3;
+export const WINNER_CONFIDENT_PURCHASES = 10;
 export const WINNER_LIMIT = 4;
 export const WINNER_MAX_PER_ANGLE = 2;
 
 export type WinnerTrend = "rising" | "stable" | "declining" | "paused";
+export type WinnerEvidence = "thin" | null;
+export type WatchListAction = "keep" | "promote" | "drop";
 
 export type ScoredStudioWinner<T> = T & { score: number };
 
@@ -87,6 +90,19 @@ export function selectStudioWinners<T extends StudioWinnerCandidate>(
   }
 
   return winners;
+}
+
+export function classifyWinnerEvidence(purchases: number): WinnerEvidence {
+  return purchases < WINNER_CONFIDENT_PURCHASES ? "thin" : null;
+}
+
+export function classifyWatchListAction(input: {
+  purchases: number;
+  trend: WinnerTrend;
+}): WatchListAction {
+  if (input.purchases >= WINNER_CONFIDENT_PURCHASES) return "promote";
+  if (input.trend === "declining" || input.trend === "paused") return "drop";
+  return "keep";
 }
 
 export function classifyTrend(input: {

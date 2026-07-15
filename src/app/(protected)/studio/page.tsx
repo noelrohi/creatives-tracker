@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import {
   ArrowRight,
   Check,
+  ChevronDown,
   FileVideo,
   Images,
   Loader2,
@@ -95,6 +96,7 @@ const KIND_STYLES: Record<string, { label: string; className: string }> = {
   new_format: { label: "Try a new format", className: "text-emerald-500" },
   refresh: { label: "Refresh this winner", className: "text-amber-500" },
   rebrand_swipe: { label: "Rebrand a swipe", className: "text-violet-500" },
+  extend_winner: { label: "Extend a proven winner", className: "text-teal-500" },
 };
 
 function elementLabel(key: string) {
@@ -114,7 +116,47 @@ function moderationMessage(reason: string | null) {
 }
 
 type HomeCard = RouterOutputs["studio"]["home"]["cards"][number];
+type HomeCardV21 = HomeCard & { evidence: "thin" | null };
 type LibraryItem = RouterOutputs["studio"]["home"]["library"][number];
+
+function WatchThumb({ card }: { card: HomeCardV21 }) {
+  const previewUrl = card.swipe?.imageUrl ?? card.source?.assetUrl;
+  const previewIsVideo = isVideoFile(previewUrl);
+  return (
+    <div className="size-12 shrink-0 overflow-hidden rounded-md bg-muted text-muted-foreground">
+      {previewUrl ? (
+        previewIsVideo ? (
+          <video
+            src={previewUrl}
+            muted
+            playsInline
+            preload="metadata"
+            className="size-full object-cover"
+          />
+        ) : (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={previewUrl} alt="" className="size-full object-cover" />
+        )
+      ) : (
+        <span className="flex size-full items-center justify-center">
+          <Sparkles className="size-4" />
+        </span>
+      )}
+    </div>
+  );
+}
+
+function watchStatLine(card: HomeCardV21) {
+  const numericRoas = card.roas == null ? null : Number(card.roas);
+  const roas = numericRoas != null && Number.isFinite(numericRoas)
+    ? numericRoas.toFixed(1)
+    : "—";
+  const numericSpend = card.spend == null ? null : Number(card.spend);
+  const spend = numericSpend != null && Number.isFinite(numericSpend)
+    ? numericSpend.toLocaleString(undefined, { maximumFractionDigits: 2 })
+    : card.spend ?? "—";
+  return `${roas}x off just ${card.purchases ?? "—"} purchases ($${spend}) — waiting for more data. Re-checked at Monday's refresh.`;
+}
 
 function TodoCard({
   card,
@@ -416,6 +458,7 @@ function StudioHomeContent() {
   const [compose, setCompose] = useQueryState("compose");
   const [editId, setEditId] = useQueryState("edit");
   const [remixId, setRemixId] = useQueryState("remix");
+  const [watchOpen, setWatchOpen] = useState(false);
   const homeKey = trpc.studio.home.queryKey();
   const home = useQuery({ ...trpc.studio.home.queryOptions(), refetchInterval: 8000 });
   const packages = useQuery(trpc.studio.copyPackages.queryOptions());
@@ -514,14 +557,29 @@ function StudioHomeContent() {
     return <div className="mx-auto grid w-full max-w-5xl gap-8 lg:grid-cols-[1fr_360px]"><div className="space-y-3">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-40 rounded-xl" />)}</div><Skeleton className="h-80 rounded-xl" /></div>;
   }
 
-  const cards = home.data?.cards ?? [];
+  const cards = (home.data?.cards ?? []) as HomeCardV21[];
   const remixing = remixId != null ? remixSource.data : undefined;
-  const proposed = cards.filter((card) => card.status === "proposed");
-  const done = cards.filter((card) => card.status !== "proposed");
-  const total = cards.length;
+  const proposed = cards.filter(
+    (card) => card.status === "proposed" && card.evidence !== "thin",
+  );
+  const done = cards.filter(
+    (card) => card.status !== "proposed" && card.evidence !== "thin",
+  );
+  const watching = cards.filter(
+    (card) => card.status === "proposed" && card.evidence === "thin",
+  );
+  const queuedWatching = cards.filter(
+    (card) => card.status === "approved" && card.evidence === "thin",
+  );
+  const watchRows = [...watching, ...queuedWatching];
+  const total = proposed.length + done.length;
   const actioned = done.length;
   const editing = cards.find((card) => card.id === editId);
   const isColdStart = total === 0;
+  const expiredCount = home.data?.expiredCount ?? 0;
+  const droppedWatch = (
+    home.data as (typeof home.data & { droppedWatch?: number }) | undefined
+  )?.droppedWatch ?? 0;
 
   function submitScratch(value: StudioDialogValue) {
     generate.mutate({
@@ -565,9 +623,15 @@ function StudioHomeContent() {
             </div>
           </header>
 
-          {(home.data?.expiredCount ?? 0) > 0 ? (
+          {expiredCount > 0 || droppedWatch > 0 ? (
             <p className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
-              Last week: {home.data?.expiredCount} unactioned suggestion{home.data?.expiredCount === 1 ? "" : "s"} expired.
+              {expiredCount > 0 ? (
+                <>Last week: {expiredCount} unactioned suggestion{expiredCount === 1 ? "" : "s"} expired.</>
+              ) : null}
+              {expiredCount > 0 && droppedWatch > 0 ? " · " : null}
+              {droppedWatch > 0 ? (
+                <>{droppedWatch} watch-list item{droppedWatch === 1 ? "" : "s"} dropped (source declining)</>
+              ) : null}
             </p>
           ) : null}
 
@@ -637,6 +701,80 @@ function StudioHomeContent() {
                   </div>
                 ))}
               </div>
+            </section>
+          ) : null}
+
+          {watchRows.length > 0 ? (
+            <section className="rounded-xl border border-dashed">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+                onClick={() => setWatchOpen((open) => !open)}
+                aria-expanded={watchOpen}
+              >
+                <span className="text-sm font-medium text-muted-foreground">
+                  Worth watching — thin evidence ({watchRows.length})
+                </span>
+                <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                  not in this week&apos;s count
+                  <ChevronDown
+                    className={cn(
+                      "size-4 transition-transform",
+                      watchOpen && "rotate-180",
+                    )}
+                  />
+                </span>
+              </button>
+              {watchOpen ? (
+                <div className="divide-y border-t">
+                  {watchRows.map((card) => {
+                    const approving =
+                      approve.isPending && approve.variables?.id === card.id;
+                    const dismissing =
+                      setStatus.isPending &&
+                      setStatus.variables?.suggestionId === card.id;
+                    const queued = card.status !== "proposed";
+                    return (
+                      <div key={card.id} className="flex items-center gap-3 px-4 py-3">
+                        <WatchThumb card={card} />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium">{card.title}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {watchStatLine(card)}
+                          </p>
+                        </div>
+                        {queued ? (
+                          <span className="shrink-0 text-xs font-medium text-emerald-600">
+                            Queued ✓
+                          </span>
+                        ) : (
+                          <div className="flex shrink-0 gap-1.5">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs"
+                              disabled={approving || dismissing}
+                              onClick={() => approve.mutate({ id: card.id })}
+                            >
+                              {approving ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                              Propose anyway
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 text-xs text-muted-foreground"
+                              disabled={approving || dismissing}
+                              onClick={() => setStatus.mutate({ suggestionId: card.id, status: "skipped" })}
+                            >
+                              Dismiss
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
             </section>
           ) : null}
         </main>

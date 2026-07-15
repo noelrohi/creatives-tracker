@@ -70,7 +70,10 @@ const mockDb = {
         state.updates.push(value);
         return chain;
       }),
-      where: vi.fn(() => chain),
+      where: vi.fn((clause: unknown) => {
+        state.wheres.push(clause);
+        return chain;
+      }),
       returning: vi.fn(async () => state.returning.shift() ?? []),
       then: (resolve: (value: unknown[]) => unknown) => Promise.resolve([]).then(resolve),
     };
@@ -164,12 +167,36 @@ describe("studio router — v2 lifecycle", () => {
     const refreshed = await caller.studio.refreshSuggestions();
 
     expect(refreshed).toMatchObject({ expiredCount: 2, runId: "run_1" });
+    const refreshWhere = new PgDialect().sqlToQuery(
+      state.wheres.at(-1) as Parameters<PgDialect["sqlToQuery"]>[0],
+    );
+    expect(refreshWhere.sql).toContain('"evidence" is null');
     expect(state.updates).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ status: "skipped" }),
         expect.objectContaining({ status: "expired" }),
       ]),
     );
+  });
+
+  it("home exposes thin evidence cards and the recently dropped watch count", async () => {
+    const thin = suggestion({ id: "thin_1", evidence: "thin" });
+    state.selects.push(
+      [thin],
+      // recent generations
+      [],
+      // recently expired cards
+      [
+        { id: "dropped_1", evidence: "thin" },
+        { id: "expired_main", evidence: null },
+      ],
+    );
+
+    const home = await createMockCaller({ role: "owner" }).studio.home();
+
+    expect(home.cards[0].evidence).toBe("thin");
+    expect(home.droppedWatch).toBe(1);
+    expect(home.expiredCount).toBe(2);
   });
 
   it("warns on a duplicate swipe URL and archives an existing swipe", async () => {
@@ -384,6 +411,45 @@ describe("studio router — v2 lifecycle", () => {
       expect.arrayContaining([
         expect.objectContaining({ copyPackageId: "package_latest" }),
       ]),
+    );
+  });
+
+  it("queues an extend_winner card through the shared proven-variant path", async () => {
+    const claimed = suggestion({
+      kind: "extend_winner",
+      sourceCreativeId: "creative_1",
+      status: "approved",
+      claimedAt: new Date(),
+    });
+    state.returning.push([claimed]);
+    state.selects.push(
+      [{
+        imageUrl: "https://cdn.test/proven.png",
+        linkedCreativeId: "creative_1",
+        brief: "Original winning brief",
+        angle: "Price anchor",
+        format: "portrait",
+        copyPackageId: null,
+      }],
+      [{ id: "creative_1" }],
+    );
+
+    const result = await createMockCaller({ role: "owner" }).studio.approveSuggestion({
+      id: "suggestion_1",
+    });
+
+    expect(result).toMatchObject({ generationId: "generation_1" });
+    expect(state.inserts[0]).toMatchObject({
+      count: 3,
+      referenceImageUrls: ["https://cdn.test/proven.png"],
+      sourceCreativeId: "creative_1",
+    });
+    expect(trigger).toHaveBeenCalledWith(
+      "generate-static-ads",
+      expect.objectContaining({
+        count: 3,
+        referenceImageUrls: ["https://cdn.test/proven.png"],
+      }),
     );
   });
 

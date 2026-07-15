@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyTrend,
+  classifyWatchListAction,
+  classifyWinnerEvidence,
   selectStudioWinners,
   WINNER_MAX_PER_ANGLE,
 } from "@/lib/studio-winners";
@@ -96,6 +98,28 @@ describe("selectStudioWinners", () => {
 
     expect(winners[0].id).toBe("scaled-moderate-roas");
     expect(winners[0].score).toBeGreaterThan(winners[1].score);
+  });
+});
+
+describe("winner evidence", () => {
+  it("classifies 9 purchases as thin and 10 as confident", () => {
+    expect(classifyWinnerEvidence(9)).toBe("thin");
+    expect(classifyWinnerEvidence(10)).toBeNull();
+  });
+
+  it("keeps, promotes, or drops thin cards from current market evidence", () => {
+    expect(classifyWatchListAction({ purchases: 9, trend: "stable" })).toBe(
+      "keep",
+    );
+    expect(classifyWatchListAction({ purchases: 10, trend: "declining" })).toBe(
+      "promote",
+    );
+    expect(classifyWatchListAction({ purchases: 9, trend: "declining" })).toBe(
+      "drop",
+    );
+    expect(classifyWatchListAction({ purchases: 9, trend: "paused" })).toBe(
+      "drop",
+    );
   });
 });
 

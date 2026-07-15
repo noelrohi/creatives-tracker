@@ -50,7 +50,13 @@ const suggestionFormatSchema = z.enum([
 // Passed to generateObject with output: "array" — OpenAI strict mode rejects
 // root-level array schemas, so the SDK wraps this object schema itself.
 export const studioSuggestionCardSchema = z.object({
-  kind: z.enum(["new_hooks", "new_format", "refresh", "rebrand_swipe"]),
+  kind: z.enum([
+    "new_hooks",
+    "new_format",
+    "refresh",
+    "rebrand_swipe",
+    "extend_winner",
+  ]),
   title: z.string().min(1),
   whyLine: z.string().min(1),
   hypothesis: z.string().min(1),
@@ -77,6 +83,17 @@ export const ELEMENT_LABELS: Record<keyof SuggestionElements, string> = {
   socialProof: "social proof",
   priceFraming: "price framing",
 };
+
+export function selectRotatingUntriedSwipes<T extends { id: string }>(
+  newestFirst: T[],
+) {
+  const selected = [
+    ...newestFirst.slice(0, 2),
+    ...newestFirst.slice(-2).reverse(),
+  ];
+  return Array.from(new Map(selected.map((swipe) => [swipe.id, swipe])).values())
+    .slice(0, 4);
+}
 
 export function buildElementsBrief(elements: SuggestionElements) {
   const entries = (

@@ -31,6 +31,7 @@ import type {
 } from "../../../../trigger/generate-static-ads";
 import {
   createStudioGeneration,
+  extendStudioWinner,
   fetchSourceCreatives,
   generationInput,
   markSchema,
@@ -578,55 +579,7 @@ export const studioGenerationProcedures = {
   extendVariant: studioWriteProcedure
     .input(z.object({ variantId: z.string() }))
     .mutation(async ({ input, ctx }) => {
-      const [source] = await db
-        .select({
-          imageUrl: studioVariants.imageUrl,
-          linkedCreativeId: studioVariants.linkedCreativeId,
-          brief: studioGenerations.brief,
-          angle: studioGenerations.angle,
-          format: studioGenerations.format,
-          copyPackageId: studioGenerations.copyPackageId,
-        })
-        .from(studioVariants)
-        .innerJoin(
-          studioGenerations,
-          eq(studioGenerations.id, studioVariants.generationId),
-        )
-        .where(
-          and(
-            eq(studioVariants.id, input.variantId),
-            eq(studioVariants.organizationId, ctx.organizationId),
-            eq(studioGenerations.organizationId, ctx.organizationId),
-          ),
-        )
-        .limit(1);
-      if (!source) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Image not found" });
-      }
-      if (!source.linkedCreativeId) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: "Link this image to a live ad before extending it",
-        });
-      }
-      if (!source.imageUrl) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: "This image is not ready to extend",
-        });
-      }
-      const generation = await createStudioGeneration(ctx.organizationId, {
-        brief: [
-          "Make 3 more like this proven winner — keep what works, vary one element per variant.",
-          source.brief,
-        ].join("\n"),
-        angle: source.angle ?? undefined,
-        count: 3,
-        format: source.format as StudioFormat,
-        referenceImageUrls: [source.imageUrl],
-        sourceCreativeId: source.linkedCreativeId,
-        copyPackageId: source.copyPackageId,
-      });
+      const generation = await extendStudioWinner(ctx.organizationId, input);
       return { generationId: generation.generationId };
     }),
 

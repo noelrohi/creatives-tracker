@@ -124,7 +124,10 @@ export const studioSuggestionProcedures = {
       : [];
     const expiredSince = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
     const expired = await db
-      .select({ id: studioSuggestions.id })
+      .select({
+        id: studioSuggestions.id,
+        evidence: studioSuggestions.evidence,
+      })
       .from(studioSuggestions)
       .where(
         and(
@@ -147,6 +150,7 @@ export const studioSuggestionProcedures = {
       })),
       library,
       expiredCount: expired.length,
+      droppedWatch: expired.filter((card) => card.evidence === "thin").length,
       generatedAt: cards[0]?.createdAt ?? null,
     };
   }),
@@ -175,6 +179,7 @@ export const studioSuggestionProcedures = {
         and(
           eq(studioSuggestions.organizationId, ctx.organizationId),
           eq(studioSuggestions.status, "proposed"),
+          isNull(studioSuggestions.evidence),
         ),
       )
       .returning({ id: studioSuggestions.id });

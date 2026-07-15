@@ -317,7 +317,9 @@ function VariantCard({
             ? "Blocked: the reference shows a real person's likeness"
             : variant.moderationReason === "logo"
               ? "Blocked: the reference contains protected branding"
-              : "Generation failed"}
+              : variant.moderationReason === "claims"
+                ? "Blocked: copy conflicts with the brand's claims rules"
+                : "Generation failed"}
         </p>
         <Button size="sm" variant="outline" className="h-7 text-xs" disabled={pending} onClick={() => onRetry(Boolean(variant.moderationReason))}>
           <RefreshCw /> {variant.moderationReason ? "Retry without image" : "Retry"}

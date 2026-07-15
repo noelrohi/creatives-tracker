@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { rebrandElementSpecSchema } from "@/lib/studio-suggestions";
+import {
+  rebrandElementSpecSchema,
+  selectRotatingUntriedSwipes,
+} from "@/lib/studio-suggestions";
 import {
   ART_DIRECTIONS,
   artDirectionFor,
@@ -8,6 +11,7 @@ import {
   buildRebrandBrief,
   buildRebrandPrompt,
   buildWeeklySuggestionPrompt,
+  classifyPromptClaims,
   isSupportedStudioSize,
   studioDimensions,
   studioSizeFor,
@@ -95,6 +99,8 @@ describe("Studio prompt building", () => {
         productDescription: "A solo-living starter kit",
         offer: "20% off",
         productNotes: 'Shallow "Tahan" wordmark debossed on the lid',
+        prohibitedClaims: ["guaranteed cure"],
+        requiredDisclaimers: ["Results vary"],
       },
       hasProductImage: true,
     });
@@ -102,6 +108,9 @@ describe("Studio prompt building", () => {
     expect(system).toMatch(/BRAND section describes the advertiser/);
     expect(system).toMatch(/advertiser's own product photo/);
     expect(system).toMatch(/markings from the product notes/);
+    expect(system).toContain("CLAIMS GUARDRAIL");
+    expect(system).toContain("guaranteed cure");
+    expect(system).toContain("Results vary");
     expect(prompt).toContain("Tahan — A solo-living starter kit");
     expect(prompt).toContain("Offer: 20% off");
     expect(prompt).toContain(
@@ -187,6 +196,94 @@ describe("Weekly and rebrand prompt builders", () => {
     expect(prompt).toContain("Offer: 20% off the first order");
   });
 
+  it("includes freshness, granular market, hook tallies, and claims context", () => {
+    const prompt = buildWeeklySuggestionPrompt({
+      winners: [],
+      skips: [],
+      tallies: [
+        {
+          angle: "Problem first",
+          style: "Native",
+          hook: "Question",
+          good: 2,
+          bad: 1,
+        },
+      ],
+      untriedSwipes: [],
+      copyPackages: [],
+      brand: {
+        brandName: "Reviv",
+        productDescription: "A wellness sleeve",
+        prohibitedClaims: ["cures arthritis"],
+        requiredDisclaimers: ["Results vary"],
+      },
+      marketResults: [
+        { angle: "Problem first", shipped: 2, avgRoas: 2.4, spend: 500 },
+      ],
+      topVariants: [
+        {
+          creativeName: "REVIV-ST-problem-first-abc123",
+          roas: 3.1,
+          purchases: 18,
+          trend: "rising",
+        },
+      ],
+      recentMade: [
+        { angle: "Problem first", style: "Native", hook: "Question" },
+      ],
+      notTriedLately: [
+        { kind: "hook_type", name: "Curiosity" },
+      ],
+    });
+
+    expect(prompt).toContain('"hook": "Question"');
+    expect(prompt).toContain("RECENTLY MADE");
+    expect(prompt).toContain("do not re-propose near-duplicates");
+    expect(prompt).toContain("NOT TRIED LATELY");
+    expect(prompt).toContain("about one exploration card per week");
+    expect(prompt).toContain("TOP PROVEN VARIANTS");
+    expect(prompt).toContain('"creativeName": "REVIV-ST-problem-first-abc123"');
+    expect(prompt).toContain("CLAIMS GUARDRAIL");
+    expect(prompt).toContain("Never state or imply: cures arthritis");
+    expect(prompt).toContain("Results vary");
+  });
+
+  it("rotates untried swipes as two newest plus two oldest without duplicates", () => {
+    const rows = ["new-1", "new-2", "middle", "old-2", "old-1"].map(
+      (id) => ({ id }),
+    );
+    expect(selectRotatingUntriedSwipes(rows).map((row) => row.id)).toEqual([
+      "new-1",
+      "new-2",
+      "old-1",
+      "old-2",
+    ]);
+    expect(
+      selectRotatingUntriedSwipes(rows.slice(0, 3)).map((row) => row.id),
+    ).toEqual(["new-1", "new-2", "middle"]);
+  });
+
+  it("classifies a first claims hit as retry and a second hit as claims failure", () => {
+    const first = classifyPromptClaims({
+      prompts: ["A sleeve that cures arthritis."],
+      prohibitedClaims: ["cures arthritis"],
+      retried: false,
+    });
+    expect(first).toMatchObject({
+      action: "retry",
+      violations: ["cures arthritis"],
+    });
+    expect(first.retryInstruction).toContain('"cures arthritis"');
+
+    expect(
+      classifyPromptClaims({
+        prompts: ["Still cures arthritis."],
+        prohibitedClaims: ["cures arthritis"],
+        retried: true,
+      }),
+    ).toMatchObject({ action: "claims" });
+  });
+
   it("includes shipped market results and tells the model to trust them", () => {
     const prompt = buildWeeklySuggestionPrompt({
       winners: [],
@@ -236,12 +333,19 @@ describe("Weekly and rebrand prompt builders", () => {
         cta: { action: "change", value: "Use our CTA" },
         brandMarks: { action: "change", value: "Use our logo" },
       },
+      brand: {
+        prohibitedClaims: ["pain free forever"],
+        requiredDisclaimers: ["Results vary"],
+      },
     });
 
     expect(prompt).toMatch(/replace ALL branding, logos, products/i);
     expect(prompt).toMatch(/recognizable likenesses/i);
     expect(prompt).toMatch(/offers, and copy with ours/i);
     expect(prompt).toMatch(/Never preserve or redraw the competitor/i);
+    expect(prompt).toContain("CLAIMS GUARDRAIL");
+    expect(prompt).toContain("pain free forever");
+    expect(prompt).toContain("Results vary");
   });
 
   it("writes the element spec as prose, not JSON", () => {
