@@ -63,9 +63,11 @@ export const studioSuggestionCardSchema = z.object({
   brief: z.string().min(1),
   elements: suggestionElementsSchema,
   visualStyle: z.string().min(1).nullable(),
+  hookType: z.string().min(1).nullable(),
   format: suggestionFormatSchema,
   count: z.number().int().min(3).max(4),
-  sourceOrder: z.number().int().min(1),
+  // null marks a source-less exploration card drawn from NOT TRIED LATELY.
+  sourceOrder: z.number().int().min(1).nullable(),
 });
 
 /** Shape used by the swipe vision pass. */

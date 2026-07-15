@@ -29,6 +29,7 @@ import {
   buildWeeklySuggestionPrompt,
   isStudioFormat,
 } from "@/lib/studio-prompt";
+import { scanTextForClaims } from "@/lib/studio-claims";
 import { studioSlug } from "@/lib/studio-taxonomy";
 import {
   classifyTrend,
@@ -287,8 +288,7 @@ export const generateStudioSuggestionsTask = task({
               eq(studioVariants.organizationId, payload.organizationId),
               eq(studioGenerations.organizationId, payload.organizationId),
               inArray(studioVariants.mark, ["good", "bad"]),
-              // updatedAt is the closest persisted proxy for when the mark changed.
-              gte(studioVariants.updatedAt, talliesCutoff),
+              gte(studioVariants.markedAt, talliesCutoff),
             ),
           ),
         db
@@ -463,7 +463,9 @@ export const generateStudioSuggestionsTask = task({
         .update(studioSuggestions)
         .set(
           action === "promote"
-            ? { evidence: null, updatedAt }
+            // Promotion re-stamps createdAt: the home queue is scoped to the
+            // current studio week, and a promoted card is this week's card.
+            ? { evidence: null, createdAt: updatedAt, updatedAt }
             : {
                 status: "expired",
                 actionedAt: updatedAt,
@@ -596,6 +598,9 @@ export const generateStudioSuggestionsTask = task({
       visualStyles: taxonomy
         .filter((value) => value.kind === "visual_style" && !value.archivedAt)
         .map((value) => value.name),
+      hookTypes: taxonomy
+        .filter((value) => value.kind === "hook_type" && !value.archivedAt)
+        .map((value) => value.name),
       brand,
       marketResults,
       topVariants: extendableTopVariants.map((variant) => ({
@@ -635,21 +640,24 @@ export const generateStudioSuggestionsTask = task({
       2,
     )}`;
     const system =
-      "You are a senior DTC creative strategist. Return one concise production card per useful sourceOrder, 6 cards at most. Use rebrand_swipe for swipe sources and extend_winner for proven sources. Make titles, reasons, briefs, and element values plain language. Never invent performance numbers. Use exactly 3 or 4 variants. Every card must include a one-sentence hypothesis naming the single variable being tested and the evidence it rests on: winner trend, Good/Bad tallies, market results, or swipe why-it-works. Set visualStyle to null or one exact value from AVAILABLE VISUAL STYLES. For winner sources, declining or paused trend requires kind refresh; rising or stable trend requires new_hooks or new_format and must never use refresh.";
-    async function generateCards(multimodal: boolean) {
+      "You are a senior DTC creative strategist. Return one concise production card per useful sourceOrder, 6 cards at most. Use rebrand_swipe for swipe sources and extend_winner for proven sources. Make titles, reasons, briefs, and element values plain language. Never invent performance numbers. Use exactly 3 or 4 variants. Every card must include a one-sentence hypothesis naming the single variable being tested and the evidence it rests on: winner trend, Good/Bad tallies, market results, or swipe why-it-works. Set visualStyle to null or one exact value from AVAILABLE VISUAL STYLES. Set hookType to null or one exact value from AVAILABLE HOOK TYPES. Include about one exploration card drawn from NOT TRIED LATELY with sourceOrder null; every other card's sourceOrder points at its source. For winner sources, declining or paused trend requires kind refresh; rising or stable trend requires new_hooks or new_format and must never use refresh.";
+    async function generateCards(multimodal: boolean, retryInstruction?: string) {
+      const promptText = retryInstruction
+        ? `${promptWithSources}\n\n${retryInstruction}`
+        : promptWithSources;
       if (!multimodal) {
         return generateObject({
           model: openai(SUGGESTION_MODEL),
           output: "array",
           schema: studioSuggestionCardSchema,
           system,
-          prompt: promptWithSources,
+          prompt: promptText,
         });
       }
 
       const content: Array<
         { type: "text"; text: string } | { type: "image"; image: URL }
-      > = [{ type: "text", text: promptWithSources }];
+      > = [{ type: "text", text: promptText }];
       let imageCount = 0;
       for (const [index, winner] of generationWinners.entries()) {
         if (imageCount >= 8) break;
@@ -690,7 +698,46 @@ export const generateStudioSuggestionsTask = task({
       });
     }
     const result = await generateCards(true).catch(() => generateCards(false));
-    const cards = result.object.slice(0, 6);
+    let cards = result.object.slice(0, 6);
+
+    // Deterministic banned-phrase scan of the card copy itself — the image
+    // prompts get their own scan later in generate-static-ads.
+    const prohibitedClaims = brand?.prohibitedClaims ?? [];
+    if (prohibitedClaims.length > 0) {
+      const cardViolations = (card: (typeof cards)[number]) => {
+        const copy = [
+          card.title,
+          card.whyLine,
+          card.hypothesis,
+          card.brief,
+          ...Object.values(card.elements).flatMap((element) =>
+            element?.value ? [element.value] : [],
+          ),
+        ].join("\n");
+        return scanTextForClaims(copy, prohibitedClaims).map(
+          (match) => match.claim,
+        );
+      };
+      const flagged = Array.from(new Set(cards.flatMap(cardViolations)));
+      if (flagged.length > 0) {
+        const retryInstruction =
+          "Rewrite every card. Remove or reframe these prohibited phrases and any equivalent implication from all titles, reasons, hypotheses, briefs, and element values: " +
+          flagged.map((claim) => `"${claim}"`).join(", ") +
+          ". Preserve each concept while obeying the CLAIMS GUARDRAIL exactly.";
+        const retried = await generateCards(true, retryInstruction).catch(() =>
+          generateCards(false, retryInstruction),
+        );
+        cards = retried.object.slice(0, 6);
+      }
+      const dropped = cards.filter((card) => cardViolations(card).length > 0);
+      if (dropped.length > 0) {
+        cards = cards.filter((card) => cardViolations(card).length === 0);
+        logger.warn("Dropped claims-flagged suggestion cards", {
+          organizationId: payload.organizationId,
+          dropped: dropped.map((card) => card.title),
+        });
+      }
+    }
 
     await db.transaction(async (tx) => {
       await tx
@@ -708,11 +755,14 @@ export const generateStudioSuggestionsTask = task({
         );
 
       for (const card of cards) {
-        const source = sources[card.sourceOrder - 1];
-        if (!source) continue;
-        const winner = source.type === "winner" ? source.winner : null;
-        const proven = source.type === "proven" ? source.proven : null;
-        const swipe = source.type === "swipe" ? source.swipe : null;
+        // sourceOrder null is a NOT TRIED LATELY exploration card — it
+        // persists with no source; a dangling non-null order is dropped.
+        const source =
+          card.sourceOrder != null ? sources[card.sourceOrder - 1] : null;
+        if (card.sourceOrder != null && !source) continue;
+        const winner = source?.type === "winner" ? source.winner : null;
+        const proven = source?.type === "proven" ? source.proven : null;
+        const swipe = source?.type === "swipe" ? source.swipe : null;
         const angle =
           winner?.angle?.trim() ||
           (swipe?.angleId ? taxonomyById.get(swipe.angleId) : null) ||
@@ -728,6 +778,13 @@ export const generateStudioSuggestionsTask = task({
               (value) =>
                 value.kind === "visual_style" &&
                 value.slug === studioSlug(card.visualStyle ?? ""),
+            )
+          : null;
+        const hookTypeValue = card.hookType
+          ? taxonomy.find(
+              (value) =>
+                value.kind === "hook_type" &&
+                value.slug === studioSlug(card.hookType ?? ""),
             )
           : null;
 
@@ -753,6 +810,7 @@ export const generateStudioSuggestionsTask = task({
           angle,
           angleId: angleValue?.id ?? swipe?.angleId ?? null,
           visualStyleId: swipe?.visualStyleId ?? visualStyleValue?.id ?? null,
+          hookTypeId: swipe?.hookTypeId ?? hookTypeValue?.id ?? null,
           persona: winner?.persona ?? null,
           awarenessLevel: (winner?.awarenessLevel as AwarenessLevel | null) ?? null,
           evidence: winner

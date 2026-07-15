@@ -73,6 +73,7 @@ export const studioGenerationProcedures = {
             imageUrl: null,
             prompt: null,
             mark: null,
+            markedAt: null,
             publishedAt: null,
             moderationReason: null,
             updatedAt: new Date(),
@@ -590,6 +591,7 @@ export const studioGenerationProcedures = {
         .update(studioVariants)
         .set({
           mark: input.mark,
+          markedAt: input.mark ? new Date() : null,
           publishedAt: input.mark === "good" ? undefined : null,
           updatedAt: new Date(),
         })
@@ -674,6 +676,7 @@ export const studioGenerationProcedures = {
             imageUrl: null,
             prompt: null,
             mark: null,
+            markedAt: null,
             publishedAt: null,
             moderationReason: null,
             retryWithoutImageAt: input.withoutReferenceImage ? new Date() : undefined,

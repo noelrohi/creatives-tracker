@@ -196,7 +196,8 @@ describe("studio router — v2 lifecycle", () => {
 
     expect(home.cards[0].evidence).toBe("thin");
     expect(home.droppedWatch).toBe(1);
-    expect(home.expiredCount).toBe(2);
+    // Watch-list drops are excluded so the expiry note never counts them twice.
+    expect(home.expiredCount).toBe(1);
   });
 
   it("warns on a duplicate swipe URL and archives an existing swipe", async () => {

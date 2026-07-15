@@ -256,6 +256,9 @@ export const studioVariants = pgTable(
     imageUrl: text("image_url"),
     prompt: text("prompt"),
     mark: text("mark"),
+    // When the current mark was set — the stable clock for the trailing
+    // 90-day Good/Bad tallies (updatedAt moves on publish/link too).
+    markedAt: timestamp("marked_at"),
     publishedAt: timestamp("published_at"),
     // The live ad creative this published variant became — closes the loop
     // from studio output to real market performance.

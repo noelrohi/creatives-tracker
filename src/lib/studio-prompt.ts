@@ -262,6 +262,7 @@ export type WeeklyPromptInput = {
     description: string;
   }>;
   visualStyles?: string[];
+  hookTypes?: string[];
   brand?: {
     brandName: string;
     productDescription: string;
@@ -352,6 +353,12 @@ export function buildWeeklySuggestionPrompt(input: WeeklyPromptInput) {
       ? [
           "\nAVAILABLE VISUAL STYLES\n" +
             JSON.stringify(input.visualStyles, null, 2),
+        ]
+      : []),
+    ...(input.hookTypes
+      ? [
+          "\nAVAILABLE HOOK TYPES\n" +
+            JSON.stringify(input.hookTypes, null, 2),
         ]
       : []),
     "\nANGLE COPY PACKAGES (TONE REFERENCE)\n" +

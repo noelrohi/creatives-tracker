@@ -274,19 +274,26 @@ function CopyPackageManager({ taxonomy }: { taxonomy: TaxonomyValue[] }) {
   );
 }
 
-function SwipeBoard({ swipes, pasted, angles, hooks, onUse, onArchive, onDelete, onRetry, onChangePasted, onFinishTagging }: { swipes: Swipe[]; pasted: PastedSwipe[]; angles: TaxonomyValue[]; hooks: TaxonomyValue[]; onUse: (swipe: Swipe) => void; onArchive: (id: string) => void; onDelete: (id: string) => void; onRetry: (item: PastedSwipe) => void; onChangePasted: (tempId: string, values: Partial<PastedSwipe>) => void; onFinishTagging: (item: PastedSwipe, save: boolean) => void }) {
+function SwipeBoard({ swipes, pasted, angles, hooks, suggestedHooks, onUse, onArchive, onDelete, onRetry, onChangePasted, onFinishTagging }: { swipes: Swipe[]; pasted: PastedSwipe[]; angles: TaxonomyValue[]; hooks: TaxonomyValue[]; suggestedHooks: Map<string, string | null>; onUse: (swipe: Swipe) => void; onArchive: (id: string) => void; onDelete: (id: string) => void; onRetry: (item: PastedSwipe) => void; onChangePasted: (tempId: string, values: Partial<PastedSwipe>) => void; onFinishTagging: (item: PastedSwipe, save: boolean) => void }) {
   const pastedIds = new Set(pasted.flatMap((item) => item.swipe ? [item.swipe.id] : []));
   return <div className="columns-2 gap-4 sm:columns-3 lg:columns-4 [&>*]:mb-4">
-    {pasted.map((item) => <article key={item.tempId} className={cn("relative break-inside-avoid overflow-hidden rounded-lg bg-muted", item.status === "saved" && item.tagOpen && "ring-2 ring-amber-400 ring-offset-2 ring-offset-background")}>
+    {pasted.map((item) => {
+      // The vision task fills hookTypeId after createSwipe returns, so the
+      // suggestion arrives via the swipeAnalyses poll, not the save snapshot.
+      const suggestedHookId = item.swipe
+        ? item.swipe.hookTypeId ?? suggestedHooks.get(item.swipe.id) ?? null
+        : null;
+      return <article key={item.tempId} className={cn("relative break-inside-avoid overflow-hidden rounded-lg bg-muted", item.status === "saved" && item.tagOpen && "ring-2 ring-amber-400 ring-offset-2 ring-offset-background")}>
       <img src={item.swipe?.imageUrl ?? item.previewUrl} alt="Pasted swipe" className="h-auto w-full" />
       {item.status !== "saved" ? <div className="absolute inset-0 flex items-center justify-center bg-black/60 p-3 text-center text-xs font-medium text-white">{item.status === "uploading" ? <span className="flex items-center gap-2"><Loader2 className="animate-spin" /> Uploading…</span> : <button type="button" className="rounded-md bg-background/95 px-3 py-2 text-foreground" onClick={() => onRetry(item)}>Upload failed — Retry</button>}</div> : null}
       {item.status === "saved" && item.tagOpen ? <div className="space-y-2 border-t bg-card p-2.5">
         <Input className="h-8 text-xs" value={item.brandName} onChange={(event) => onChangePasted(item.tempId, { brandName: event.target.value })} placeholder="Brand name" />
         <div className="flex flex-wrap gap-1">{angles.filter((value) => !value.archivedAt).map((value) => <button key={value.id} type="button" onClick={() => onChangePasted(item.tempId, { angleId: item.angleId === value.id ? "" : value.id })}><Badge variant={item.angleId === value.id ? "default" : "outline"} className="cursor-pointer text-[10px]">{value.name}</Badge></button>)}</div>
-        {item.swipe?.hookTypeId ? <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground"><span>Suggested hook</span>{hooks.filter((value) => value.id === item.swipe?.hookTypeId).map((value) => <button key={value.id} type="button" onClick={() => onChangePasted(item.tempId, { hookTypeId: item.hookTypeId === value.id ? "" : value.id })}><Badge variant={item.hookTypeId === value.id ? "default" : "outline"} className="cursor-pointer text-[10px]">{value.name}</Badge></button>)}</div> : null}
+        {suggestedHookId ? <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground"><span>Suggested hook</span>{hooks.filter((value) => value.id === suggestedHookId).map((value) => <button key={value.id} type="button" onClick={() => onChangePasted(item.tempId, { hookTypeId: item.hookTypeId === value.id ? "" : value.id })}><Badge variant={item.hookTypeId === value.id ? "default" : "outline"} className="cursor-pointer text-[10px]">{value.name}</Badge></button>)}</div> : null}
         <div className="flex gap-1.5"><Button size="sm" className="h-7 flex-1 text-xs" onClick={() => onFinishTagging(item, true)}><Check /> Done</Button><Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => onFinishTagging(item, false)}>Later</Button></div>
       </div> : null}
-    </article>)}
+    </article>;
+    })}
     {swipes.filter((swipe) => !pastedIds.has(swipe.id)).map((swipe) => <article key={swipe.id} className="group relative break-inside-avoid overflow-hidden rounded-lg bg-muted">
       <img src={swipe.imageUrl} alt={swipe.brandName || "Saved swipe"} className="h-auto w-full" />
       <div className="absolute inset-0 flex flex-col justify-between bg-black/65 p-2.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"><div className="flex justify-between"><p className="text-xs font-semibold text-white">{swipe.brandName || "Unknown brand"}</p><div className="flex"><button type="button" className="p-1 text-white/70 hover:text-white" aria-label="Archive swipe" onClick={() => onArchive(swipe.id)}><X /></button><button type="button" className="p-1 text-white/70 hover:text-white" aria-label="Delete swipe" onClick={() => onDelete(swipe.id)}><Trash2 /></button></div></div><div className="space-y-1.5"><div className="flex flex-wrap gap-1">{[swipe.angle?.name, swipe.visualStyle?.name, swipe.hookType?.name].filter(Boolean).map((tag) => <Badge key={tag} className="bg-white/20 text-[10px] text-white">{tag}</Badge>)}</div><Button size="sm" className="h-7 w-full text-xs" onClick={() => onUse(swipe)}>Use as reference <ArrowRight /></Button></div></div>
@@ -319,6 +326,22 @@ function SwipesContent() {
   const taxonomy = useQuery(trpc.studio.taxonomies.queryOptions());
   const copyPackages = useQuery(trpc.studio.copyPackages.queryOptions());
   const brandProfile = useQuery(trpc.studio.brandProfile.queryOptions());
+  // Vision fills hookTypeId after the save; poll until every open tag strip
+  // has its suggestion (or the strip is dismissed).
+  const analysisIds = pasted.flatMap((item) =>
+    item.status === "saved" && item.swipe && !item.swipe.hookTypeId
+      ? [item.swipe.id]
+      : [],
+  );
+  const analyses = useQuery({
+    ...trpc.studio.swipeAnalyses.queryOptions({ ids: analysisIds }),
+    enabled: analysisIds.length > 0,
+    refetchInterval: (query) =>
+      query.state.data?.every((row) => row.hookTypeId) ? false : 4000,
+  });
+  const suggestedHooks = new Map(
+    (analyses.data ?? []).map((row) => [row.id, row.hookTypeId]),
+  );
   const invalidate = useCallback(
     () => client.invalidateQueries({ queryKey: trpc.studio.swipes.queryKey() }),
     [client, trpc],
@@ -432,7 +455,7 @@ function SwipesContent() {
       <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search brands or why it works…" aria-label="Search swipes" />
       <div className="flex flex-wrap items-start justify-between gap-3"><div className="space-y-2"><FilterChips values={angles} selected={angleIds} onToggle={(id) => toggle(angleIds, id, setAngleIds)} /><FilterChips values={styles} selected={styleIds} onToggle={(id) => toggle(styleIds, id, setStyleIds)} /><FilterChips values={hooks} selected={hookTypeIds} onToggle={(id) => toggle(hookTypeIds, id, setHookTypeIds)} /></div><div className="flex rounded-lg border p-1"><Button size="sm" variant={view === "board" ? "secondary" : "ghost"} className="h-7" onClick={() => setView("board")}>Board</Button><Button size="sm" variant={view === "table" ? "secondary" : "ghost"} className="h-7" onClick={() => setView("table")}>Table</Button></div></div>
       <div className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground"><span className="font-medium text-foreground">⌘V anywhere</span> — a screenshot in your clipboard saves instantly. Tag it now or later.</div>
-      {swipes.isLoading && pasted.length === 0 ? <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">{[1,2,3,4].map((i) => <Skeleton key={i} className="aspect-[4/5] rounded-lg" />)}</div> : rows.length === 0 && pasted.length === 0 ? <Empty className="border py-10"><EmptyHeader><EmptyMedia variant="icon"><ImagePlus /></EmptyMedia><EmptyTitle>No swipes here</EmptyTitle><EmptyDescription>Paste or upload a competitor-ad screenshot, or clear the filters.</EmptyDescription></EmptyHeader><EmptyContent /></Empty> : view === "table" ? <SwipeTable swipes={rows} onUse={setActive} onArchive={(id) => archive.mutate({ id, archived: true })} onDelete={(id) => remove.mutate({ id })} /> : <SwipeBoard swipes={rows} pasted={pasted} angles={angles} hooks={hooks} onUse={setActive} onArchive={(id) => archive.mutate({ id, archived: true })} onDelete={(id) => remove.mutate({ id })} onRetry={(item) => void savePasted(item.tempId, item.file)} onChangePasted={changePasted} onFinishTagging={(item, save) => void finishTagging(item, save)} />}
+      {swipes.isLoading && pasted.length === 0 ? <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">{[1,2,3,4].map((i) => <Skeleton key={i} className="aspect-[4/5] rounded-lg" />)}</div> : rows.length === 0 && pasted.length === 0 ? <Empty className="border py-10"><EmptyHeader><EmptyMedia variant="icon"><ImagePlus /></EmptyMedia><EmptyTitle>No swipes here</EmptyTitle><EmptyDescription>Paste or upload a competitor-ad screenshot, or clear the filters.</EmptyDescription></EmptyHeader><EmptyContent /></Empty> : view === "table" ? <SwipeTable swipes={rows} onUse={setActive} onArchive={(id) => archive.mutate({ id, archived: true })} onDelete={(id) => remove.mutate({ id })} /> : <SwipeBoard swipes={rows} pasted={pasted} angles={angles} hooks={hooks} suggestedHooks={suggestedHooks} onUse={setActive} onArchive={(id) => archive.mutate({ id, archived: true })} onDelete={(id) => remove.mutate({ id })} onRetry={(item) => void savePasted(item.tempId, item.file)} onChangePasted={changePasted} onFinishTagging={(item, save) => void finishTagging(item, save)} />}
     </div>
     {active ? <StudioCreateDialog key={active.id} open title="Rebrand this ad" description="The image model will keep the composition while replacing the source brand, product, likeness, and copy." initialValue={{ brief: buildRebrandBrief({ brandName: brandProfile.data?.brandName, sourceBrandName: active.brandName }), format: "square", count: 3, references: [{ url: active.imageUrl, label: active.brandName || "Swipe reference" }] }} copyPackages={copyPackages.data ?? []} pending={rebrand.isPending && rebrand.variables?.mode === "generate_now"} submitLabel="Generate now" onOpenChange={(open) => { if (!open) setActive(null); }} onSubmit={(value) => submit(value, "generate_now")} secondaryAction={{ label: "Queue for this week", pending: rebrand.isPending && rebrand.variables?.mode === "queue", onClick: (value) => submit(value, "queue") }} /> : null}
   </>;

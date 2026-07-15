@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   rebrandElementSpecSchema,
   selectRotatingUntriedSwipes,
+  studioSuggestionCardSchema,
 } from "@/lib/studio-suggestions";
 import {
   ART_DIRECTIONS,
@@ -211,6 +212,7 @@ describe("Weekly and rebrand prompt builders", () => {
       ],
       untriedSwipes: [],
       copyPackages: [],
+      hookTypes: ["Question", "Curiosity"],
       brand: {
         brandName: "Reviv",
         productDescription: "A wellness sleeve",
@@ -237,6 +239,8 @@ describe("Weekly and rebrand prompt builders", () => {
     });
 
     expect(prompt).toContain('"hook": "Question"');
+    expect(prompt).toContain("AVAILABLE HOOK TYPES");
+    expect(prompt).toContain("Curiosity");
     expect(prompt).toContain("RECENTLY MADE");
     expect(prompt).toContain("do not re-propose near-duplicates");
     expect(prompt).toContain("NOT TRIED LATELY");
@@ -367,6 +371,35 @@ describe("Weekly and rebrand prompt builders", () => {
     expect(prompt).toContain("social proof — change: Use 2,000 reviews");
     expect(prompt).toContain("price framing — keep: $1 per day");
     expect(prompt).not.toContain('"action"');
+  });
+
+  it("parses a source-less exploration card with a hook type", () => {
+    const card = studioSuggestionCardSchema.parse({
+      kind: "new_hooks",
+      title: "Try a curiosity hook",
+      whyLine: "Curiosity hasn't been tried in six weeks.",
+      hypothesis: "A curiosity hook lifts CTR on an untried dimension.",
+      brief: "Lead with an unanswered question about night-time grinding.",
+      elements: {
+        headline: { action: "change", value: "Ask the question" },
+        heroImage: { action: "change", value: "Product on dark bedding" },
+        background: { action: "keep", value: null },
+        offer: { action: "change", value: "Our offer" },
+        cta: { action: "change", value: "Our CTA" },
+        brandMarks: null,
+        product: null,
+        copy: null,
+        socialProof: null,
+        priceFraming: null,
+      },
+      visualStyle: null,
+      hookType: "Curiosity",
+      format: "square",
+      count: 3,
+      sourceOrder: null,
+    });
+    expect(card.sourceOrder).toBeNull();
+    expect(card.hookType).toBe("Curiosity");
   });
 
   it("parses the vision-written element spec shape", () => {

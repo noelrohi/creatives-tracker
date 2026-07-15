@@ -316,6 +316,13 @@
       "when": 1784091930939,
       "tag": "0044_swipe_trgm",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1784095791503,
+      "tag": "0045_elite_scrambler",
+      "breakpoints": true
     }
   ]
 }

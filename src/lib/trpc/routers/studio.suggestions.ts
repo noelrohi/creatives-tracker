@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { auth as triggerAuth, tasks } from "@trigger.dev/sdk";
 import { TRPCError, type TRPCRouterRecord } from "@trpc/server";
-import { and, asc, desc, eq, gte, inArray, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@/db";
 import {
   studioCopyPackages,
@@ -29,8 +29,22 @@ export const studioSuggestionProcedures = {
       .where(
         and(
           eq(studioSuggestions.organizationId, ctx.organizationId),
-          inArray(studioSuggestions.status, ["proposed", "approved", "skipped"]),
-          gte(studioSuggestions.createdAt, startOfStudioWeek()),
+          or(
+            and(
+              inArray(studioSuggestions.status, [
+                "proposed",
+                "approved",
+                "skipped",
+              ]),
+              gte(studioSuggestions.createdAt, startOfStudioWeek()),
+            ),
+            // Kept watch-list items outlive the week window: they wait until
+            // Monday's refresh promotes or drops them.
+            and(
+              eq(studioSuggestions.status, "proposed"),
+              eq(studioSuggestions.evidence, "thin"),
+            ),
+          ),
         ),
       )
       .orderBy(desc(studioSuggestions.createdAt))
@@ -149,7 +163,9 @@ export const studioSuggestionProcedures = {
           : null,
       })),
       library,
-      expiredCount: expired.length,
+      // Watch-list drops are reported separately — keep them out of the
+      // rotated-out count so the expiry note doesn't count them twice.
+      expiredCount: expired.filter((card) => card.evidence !== "thin").length,
       droppedWatch: expired.filter((card) => card.evidence === "thin").length,
       generatedAt: cards[0]?.createdAt ?? null,
     };
@@ -163,8 +179,20 @@ export const studioSuggestionProcedures = {
       .where(
         and(
           eq(studioSuggestions.organizationId, ctx.organizationId),
-          inArray(studioSuggestions.status, ["proposed", "approved", "skipped"]),
-          gte(studioSuggestions.createdAt, startOfStudioWeek()),
+          or(
+            and(
+              inArray(studioSuggestions.status, [
+                "proposed",
+                "approved",
+                "skipped",
+              ]),
+              gte(studioSuggestions.createdAt, startOfStudioWeek()),
+            ),
+            and(
+              eq(studioSuggestions.status, "proposed"),
+              eq(studioSuggestions.evidence, "thin"),
+            ),
+          ),
         ),
       )
       .orderBy(desc(studioSuggestions.createdAt));

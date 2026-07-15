@@ -630,7 +630,7 @@ function StudioHomeContent() {
               ) : null}
               {expiredCount > 0 && droppedWatch > 0 ? " · " : null}
               {droppedWatch > 0 ? (
-                <>{droppedWatch} watch-list item{droppedWatch === 1 ? "" : "s"} dropped (source declining)</>
+                <>{droppedWatch} watch-list item{droppedWatch === 1 ? "" : "s"} dropped (source declining or paused)</>
               ) : null}
             </p>
           ) : null}

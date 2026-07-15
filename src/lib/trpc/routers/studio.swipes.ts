@@ -5,6 +5,7 @@ import { del } from "@vercel/blob";
 import { and, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { studioSuggestions, studioSwipes, studioTaxonomyValues } from "@/schema/studio";
+import { getStudioBrandProfile } from "@/lib/studio-brand";
 import { buildRebrandPrompt } from "@/lib/studio-prompt";
 import type { analyzeStudioSwipeTask } from "../../../../trigger/generate-studio-suggestions";
 import {
@@ -85,6 +86,24 @@ export const studioSwipeProcedures = {
           : null,
       }));
     }),
+
+  /**
+   * Poll seam for freshly pasted swipes: analyze-studio-swipe fills
+   * hookTypeId asynchronously, after createSwipe has already responded.
+   */
+  swipeAnalyses: studioProcedure
+    .input(z.object({ ids: z.array(z.string()).min(1).max(20) }))
+    .query(({ input, ctx }) =>
+      db
+        .select({ id: studioSwipes.id, hookTypeId: studioSwipes.hookTypeId })
+        .from(studioSwipes)
+        .where(
+          and(
+            eq(studioSwipes.organizationId, ctx.organizationId),
+            inArray(studioSwipes.id, input.ids),
+          ),
+        ),
+    ),
 
   createSwipe: studioWriteProcedure
     .input(
@@ -328,8 +347,13 @@ export const studioSwipeProcedures = {
         .limit(1);
       if (!swipe) throw new TRPCError({ code: "NOT_FOUND", message: "Swipe not found" });
       await requireCopyPackage(ctx.organizationId, input.copyPackageId);
-      const prompt = buildRebrandPrompt({ brief: input.brief, elements: swipe.elements });
       if (input.mode === "generate_now") {
+        const brand = await getStudioBrandProfile(ctx.organizationId);
+        const prompt = buildRebrandPrompt({
+          brief: input.brief,
+          elements: swipe.elements,
+          brand,
+        });
         const generation = await createStudioGeneration(ctx.organizationId, {
           brief: prompt,
           count: input.count,
