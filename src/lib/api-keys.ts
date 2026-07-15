@@ -78,7 +78,7 @@ export async function authenticateApiKey(rawApiKey: string): Promise<ApiKeyPrinc
   return {
     apiKeyId: record.id,
     organizationId: record.organizationId,
-    scopes: record.scopes ?? ["*"],
+    scopes: record.scopes?.length ? record.scopes : ["*"],
   };
 }
 

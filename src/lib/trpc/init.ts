@@ -124,6 +124,24 @@ const isAuthenticated = t.middleware(async ({ ctx, next }) => {
   });
 });
 
+function apiKeyHasScope(scopes: string[] | null | undefined, scope: string) {
+  const effectiveScopes = scopes?.length ? scopes : ["*"];
+  return effectiveScopes.includes("*") || effectiveScopes.includes(scope);
+}
+
+function requireApiKeyScope(
+  apiKeyId: string | null,
+  scopes: string[] | null | undefined,
+  scope: "read" | "write",
+) {
+  if (apiKeyId && !apiKeyHasScope(scopes, scope)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `API key is missing required "${scope}" scope`,
+    });
+  }
+}
+
 const hasOrganization = t.middleware(async ({ ctx, next }) => {
   if (!ctx.session && !ctx.apiKeyId && ctx.principalType !== "worker") {
     throw new TRPCError({ code: "UNAUTHORIZED" });
@@ -134,6 +152,9 @@ const hasOrganization = t.middleware(async ({ ctx, next }) => {
       message: "No active organization selected",
     });
   }
+
+  requireApiKeyScope(ctx.apiKeyId, ctx.apiKeyScopes, "read");
+
   return next({
     ctx: {
       ...ctx,
@@ -158,6 +179,8 @@ const hasWriteAccess = t.middleware(async ({ ctx, next }) => {
       message: "No active organization selected",
     });
   }
+
+  requireApiKeyScope(ctx.apiKeyId, ctx.apiKeyScopes, "write");
 
   if (ctx.principalType === "apiKey" || ctx.principalType === "worker") {
     return next({

@@ -47,11 +47,17 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { toast } from "sonner";
 
 const createKeySchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(100),
-  scopes: z.string().trim(),
 });
 
 type CreateKeyValues = z.infer<typeof createKeySchema>;
@@ -159,25 +165,24 @@ export default function ApiKeysPage() {
   // Expiration date picker state
   const [expiresAt, setExpiresAt] = useState<Date | undefined>(undefined);
 
+  // Access level for the new key
+  const [scopeChoice, setScopeChoice] = useState<"*" | "read">("*");
+
   const form = useForm<CreateKeyValues>({
     resolver: zodResolver(createKeySchema),
-    defaultValues: { name: "", scopes: "*" },
+    defaultValues: { name: "" },
   });
 
   async function onSubmit(data: CreateKeyValues) {
-    const scopes = data.scopes
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
     const result = await createMutation.mutateAsync({
       name: data.name,
-      scopes: scopes.length > 0 ? scopes : ["*"],
+      scopes: scopeChoice === "read" ? ["read"] : ["*"],
       expiresAt: expiresAt ? expiresAt.toISOString() : undefined,
     });
 
     setRevealedKey(result.key);
     setExpiresAt(undefined);
+    setScopeChoice("*");
     form.reset();
   }
 
@@ -251,13 +256,22 @@ export default function ApiKeysPage() {
                   </p>
                 )}
               </div>
-              <div className="w-full space-y-1.5 sm:w-40">
-                <Label htmlFor="key-scopes">Scopes</Label>
-                <Input
-                  {...form.register("scopes")}
-                  id="key-scopes"
-                  placeholder="*"
-                />
+              <div className="w-full space-y-1.5 sm:w-48">
+                <Label htmlFor="key-scopes">Access</Label>
+                <Select
+                  value={scopeChoice}
+                  onValueChange={(value) =>
+                    setScopeChoice(value === "read" ? "read" : "*")
+                  }
+                >
+                  <SelectTrigger id="key-scopes" className="w-full">
+                    <SelectValue placeholder="Read + write" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="*">Read + write</SelectItem>
+                    <SelectItem value="read">Read only</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div className="w-full space-y-1.5 sm:w-48">
                 <Label>Expires</Label>

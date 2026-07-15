@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createSelectSchema } from "drizzle-zod";
 import { tasks } from "@trigger.dev/sdk";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
@@ -57,6 +58,21 @@ export const taxonomyKindSchema = z.enum([
   "hook_type",
 ]);
 export const markSchema = z.enum(["good", "bad"]);
+export const studioCopyPackageRowSchema = createSelectSchema(studioCopyPackages);
+export const studioGenerationRowSchema = createSelectSchema(studioGenerations);
+export const studioSuggestionRowSchema = createSelectSchema(studioSuggestions);
+export const studioVariantRowSchema = createSelectSchema(studioVariants);
+export const sourceCreativeSummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  assetUrl: z.string().nullable(),
+  format: z.string().nullable(),
+  roas: z.number().nullable(),
+});
+export const queuedGenerationSchema = z.object({
+  runId: z.string(),
+  generationId: z.string(),
+});
 const STALE_GENERATION_MS = 15 * 60 * 1000;
 
 function requireImageStudioEnabled() {

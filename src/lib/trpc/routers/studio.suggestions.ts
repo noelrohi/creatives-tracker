@@ -4,8 +4,13 @@ import { TRPCError, type TRPCRouterRecord } from "@trpc/server";
 import { and, asc, desc, eq, gte, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@/db";
 import {
+  openApiMutationMeta,
+  openApiQueryMeta,
+} from "../openapi-meta";
+import {
   studioCopyPackages,
   studioGenerations,
+  studioSuggestionRuns,
   studioSuggestions,
   studioSwipes,
   studioVariants,
@@ -14,15 +19,96 @@ import type { generateStudioSuggestionsTask } from "../../../../trigger/generate
 import {
   fetchSourceCreatives,
   queueClaimedSuggestion,
+  queuedGenerationSchema,
   remoteImageUrlSchema,
+  sourceCreativeSummarySchema,
   startOfStudioWeek,
+  studioCopyPackageRowSchema,
   studioFormatSchema,
   studioProcedure,
+  studioSuggestionRowSchema,
+  studioVariantRowSchema,
   studioWriteProcedure,
 } from "./studio.shared";
 
+const latestSuggestionRunSchema = z.object({
+  id: z.string(),
+  status: z.enum(["triggered", "completed", "failed"]),
+  errorSummary: z.string().nullable(),
+  cardCount: z.number().int().nullable(),
+  createdAt: z.date(),
+  completedAt: z.date().nullable(),
+});
+
+const homeSchema = z.object({
+  cards: z.array(
+    studioSuggestionRowSchema.extend({
+      source: sourceCreativeSummarySchema.nullable(),
+      swipe: z.object({
+        id: z.string(),
+        imageUrl: z.string(),
+        brandName: z.string().nullable(),
+        createdAt: z.date(),
+      }).nullable(),
+      copyPackage: studioCopyPackageRowSchema.nullable(),
+      generationStatus: z.string().nullable(),
+    }),
+  ),
+  library: z.array(studioVariantRowSchema.pick({
+    id: true,
+    generationId: true,
+    status: true,
+    imageUrl: true,
+    mark: true,
+    publishedAt: true,
+    moderationReason: true,
+    copyPackageId: true,
+    createdAt: true,
+  })),
+  expiredCount: z.number().int(),
+  droppedWatch: z.number().int(),
+  generatedAt: z.date().nullable(),
+  latestRun: latestSuggestionRunSchema.nullable(),
+});
+
+const suggestionsSchema = z.object({
+  cards: z.array(studioSuggestionRowSchema),
+  generatedAt: z.date().nullable(),
+  isRefreshing: z.boolean(),
+  latestRun: latestSuggestionRunSchema.nullable(),
+});
+
+async function fetchLatestSuggestionRun(organizationId: string) {
+  const [latestRun] = await db
+    .select({
+      id: studioSuggestionRuns.id,
+      status: studioSuggestionRuns.status,
+      errorSummary: studioSuggestionRuns.errorSummary,
+      cardCount: studioSuggestionRuns.cardCount,
+      createdAt: studioSuggestionRuns.createdAt,
+      completedAt: studioSuggestionRuns.completedAt,
+    })
+    .from(studioSuggestionRuns)
+    .where(eq(studioSuggestionRuns.organizationId, organizationId))
+    .orderBy(desc(studioSuggestionRuns.createdAt))
+    .limit(1);
+  return latestRun ?? null;
+}
+
+function errorSummary(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export const studioSuggestionProcedures = {
-  home: studioProcedure.query(async ({ ctx }) => {
+  home: studioProcedure
+    .meta(openApiQueryMeta(
+      "studio",
+      "home",
+      "Get the Image Studio home queue",
+      "Returns this week's suggestion cards, recent generated images, and latestRun. Suggestions follow a weekly cadence; poll latestRun after a Monday refresh until its status is completed or failed.",
+    ))
+    .output(homeSchema)
+    .query(async ({ ctx }) => {
     const cards = await db
       .select()
       .from(studioSuggestions)
@@ -150,6 +236,7 @@ export const studioSuggestionProcedures = {
           gte(studioSuggestions.updatedAt, expiredSince),
         ),
       );
+    const latestRun = await fetchLatestSuggestionRun(ctx.organizationId);
     return {
       cards: cards.map((card) => ({
         ...card,
@@ -168,11 +255,20 @@ export const studioSuggestionProcedures = {
       expiredCount: expired.filter((card) => card.evidence !== "thin").length,
       droppedWatch: expired.filter((card) => card.evidence === "thin").length,
       generatedAt: cards[0]?.createdAt ?? null,
+      latestRun,
     };
   }),
 
   /** Compatibility alias for callers that only need the queue cards. */
-  suggestions: studioProcedure.query(async ({ ctx }) => {
+  suggestions: studioProcedure
+    .meta(openApiQueryMeta(
+      "studio",
+      "suggestions",
+      "List weekly Studio suggestions",
+      "Lists the current weekly suggestion batch and latestRun. After a Monday refresh, poll until latestRun is completed or failed before acting on the fresh batch.",
+    ))
+    .output(suggestionsSchema)
+    .query(async ({ ctx }) => {
     const cards = await db
       .select()
       .from(studioSuggestions)
@@ -196,10 +292,30 @@ export const studioSuggestionProcedures = {
         ),
       )
       .orderBy(desc(studioSuggestions.createdAt));
-    return { cards, generatedAt: cards[0]?.createdAt ?? null, isRefreshing: false };
+    const latestRun = await fetchLatestSuggestionRun(ctx.organizationId);
+    return {
+      cards,
+      generatedAt: cards[0]?.createdAt ?? null,
+      isRefreshing: latestRun?.status === "triggered",
+      latestRun,
+    };
   }),
 
-  refreshSuggestions: studioWriteProcedure.mutation(async ({ ctx }) => {
+  refreshSuggestions: studioWriteProcedure
+    .meta(openApiMutationMeta(
+      "studio",
+      "refreshSuggestions",
+      "Refresh the weekly Studio suggestions",
+      "Monday refresh semantics: expires unactioned non-thin proposals, starts a fresh weekly batch, and returns suggestionRunId. Poll home.latestRun until completed or failed; runId and publicAccessToken are an optional short-lived realtime upgrade.",
+    ))
+    .output(z.object({
+      runId: z.string(),
+      suggestionRunId: z.string(),
+      publicAccessToken: z.string(),
+      expiredCount: z.number().int(),
+      skipped: z.literal(false),
+    }))
+    .mutation(async ({ ctx }) => {
     const expired = await db
       .update(studioSuggestions)
       .set({ status: "expired", actionedAt: new Date(), updatedAt: new Date() })
@@ -211,16 +327,51 @@ export const studioSuggestionProcedures = {
         ),
       )
       .returning({ id: studioSuggestions.id });
-    const handle = await tasks.trigger<typeof generateStudioSuggestionsTask>(
-      "generate-studio-suggestions",
-      { organizationId: ctx.organizationId, force: true },
-    );
+    const [suggestionRun] = await db
+      .insert(studioSuggestionRuns)
+      .values({ organizationId: ctx.organizationId })
+      .returning({ id: studioSuggestionRuns.id });
+    if (!suggestionRun) {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "Could not create suggestion refresh run",
+      });
+    }
+
+    let handle: { id: string };
+    try {
+      handle = await tasks.trigger<typeof generateStudioSuggestionsTask>(
+        "generate-studio-suggestions",
+        {
+          organizationId: ctx.organizationId,
+          force: true,
+          suggestionRunId: suggestionRun.id,
+        },
+      );
+    } catch (error) {
+      const completedAt = new Date();
+      await db
+        .update(studioSuggestionRuns)
+        .set({
+          status: "failed",
+          errorSummary: errorSummary(error),
+          completedAt,
+          updatedAt: completedAt,
+        })
+        .where(eq(studioSuggestionRuns.id, suggestionRun.id));
+      throw error;
+    }
+    await db
+      .update(studioSuggestionRuns)
+      .set({ triggerRunId: handle.id, updatedAt: new Date() })
+      .where(eq(studioSuggestionRuns.id, suggestionRun.id));
     const publicAccessToken = await triggerAuth.createPublicToken({
       scopes: { read: { runs: [handle.id] } },
       expirationTime: "15m",
     });
     return {
       runId: handle.id,
+      suggestionRunId: suggestionRun.id,
       publicAccessToken,
       expiredCount: expired.length,
       skipped: false as const,
@@ -228,6 +379,12 @@ export const studioSuggestionProcedures = {
   }),
 
   setSuggestionStatus: studioWriteProcedure
+    .meta(openApiMutationMeta(
+      "studio",
+      "setSuggestionStatus",
+      "Approve or skip a Studio suggestion",
+      "Records human or agent triage for a card in the current weekly suggestion batch; approval does not queue generation until approveSuggestion or generateApproved is called.",
+    ))
     .input(
       z.object({
         suggestionId: z.string().optional(),
@@ -235,6 +392,10 @@ export const studioSuggestionProcedures = {
         status: z.enum(["approved", "skipped"]),
       }).refine((value) => value.suggestionId || value.variantId, "Suggestion id is required"),
     )
+    .output(z.object({
+      id: z.string(),
+      status: z.string(),
+    }))
     .mutation(async ({ input, ctx }) => {
       const id = input.suggestionId ?? input.variantId!;
       const now = new Date();
@@ -262,6 +423,12 @@ export const studioSuggestionProcedures = {
     }),
 
   approveSuggestion: studioWriteProcedure
+    .meta(openApiMutationMeta(
+      "studio",
+      "approveSuggestion",
+      "Approve and queue one Studio suggestion",
+      "Claims one weekly suggestion and queues its generation. Poll generation by generationId until ready or failed; runId is only an optional realtime handle and polling is canonical.",
+    ))
     .input(
       z.object({
         id: z.string(),
@@ -272,6 +439,7 @@ export const studioSuggestionProcedures = {
         referenceImageUrls: z.array(remoteImageUrlSchema).max(4).optional(),
       }),
     )
+    .output(queuedGenerationSchema)
     .mutation(async ({ input, ctx }) => {
       const now = new Date();
       const [claimed] = await db
@@ -321,7 +489,22 @@ export const studioSuggestionProcedures = {
       }
     }),
 
-  generateApproved: studioWriteProcedure.mutation(async ({ ctx }) => {
+  generateApproved: studioWriteProcedure
+    .meta(openApiMutationMeta(
+      "studio",
+      "generateApproved",
+      "Queue all approved Studio suggestions",
+      "Queues each approved card from the weekly batch and returns its suggestionId and generationId. Poll generation or generations until each status is ready or failed; polling is canonical.",
+    ))
+    .output(z.object({
+      queued: z.number().int(),
+      failed: z.number().int(),
+      generations: z.array(z.object({
+        suggestionId: z.string(),
+        generationId: z.string(),
+      })),
+    }))
+    .mutation(async ({ ctx }) => {
     const approved = await db
       .select()
       .from(studioSuggestions)
@@ -336,6 +519,7 @@ export const studioSuggestionProcedures = {
       .orderBy(asc(studioSuggestions.createdAt));
     let queued = 0;
     let failed = 0;
+    const generations: Array<{ suggestionId: string; generationId: string }> = [];
     for (const suggestion of approved) {
       const [claimed] = await db
         .update(studioSuggestions)
@@ -352,7 +536,14 @@ export const studioSuggestionProcedures = {
         .returning();
       if (!claimed) continue;
       try {
-        await queueClaimedSuggestion(ctx.organizationId, claimed);
+        const generation = await queueClaimedSuggestion(
+          ctx.organizationId,
+          claimed,
+        );
+        generations.push({
+          suggestionId: suggestion.id,
+          generationId: generation.generationId,
+        });
         queued += 1;
       } catch {
         failed += 1;
@@ -368,11 +559,29 @@ export const studioSuggestionProcedures = {
           );
       }
     }
-    return { queued, failed };
+    return { queued, failed, generations };
   }),
 
   suggestionPrefill: studioProcedure
+    .meta(openApiQueryMeta(
+      "studio",
+      "suggestionPrefill",
+      "Get generation prefill for a suggestion",
+      "Returns the brief and source references needed to review or customize a weekly suggestion before queueing generation.",
+    ))
     .input(z.object({ id: z.string().optional(), variantId: z.string().optional() }))
+    .output(z.object({
+      brief: z.string(),
+      angle: z.string().nullable(),
+      persona: z.string().nullable(),
+      awarenessLevel: z.string().nullable(),
+      format: z.string(),
+      count: z.number().int(),
+      copyPackageId: z.string().nullable(),
+      imageUrl: z.string().nullable(),
+      creativeId: z.string().nullable(),
+      swipeId: z.string().nullable(),
+    }))
     .query(async ({ input, ctx }) => {
       const [suggestion] = await db
         .select()

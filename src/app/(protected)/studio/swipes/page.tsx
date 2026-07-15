@@ -102,6 +102,7 @@ function AddSwipeDialog({
   const fileRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [imageUrl, setImageUrl] = useState("");
+  const [imageHash, setImageHash] = useState<string | undefined>(undefined);
   const [previewUrl, setPreviewUrl] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [brandName, setBrandName] = useState("");
@@ -138,12 +139,14 @@ function AddSwipeDialog({
       const form = new FormData();
       form.append("file", file);
       const response = await fetch("/api/upload", { method: "POST", body: form });
-      const body = (await response.json().catch(() => null)) as { url?: string; error?: string } | null;
+      const body = (await response.json().catch(() => null)) as { url?: string; hash?: string; error?: string } | null;
       if (!response.ok || !body?.url) throw new Error(body?.error || "Upload failed");
       setImageUrl(body.url);
+      setImageHash(body.hash);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Upload failed");
       setPreviewUrl("");
+      setImageHash(undefined);
     } finally {
       setUploading(false);
     }
@@ -177,7 +180,7 @@ function AddSwipeDialog({
           </div>
         </div>
         <DialogFooter>
-          <Button disabled={!imageUrl || uploading || create.isPending} onClick={() => create.mutate({ imageUrl, sourceUrl, brandName, angleId: angleId === "none" ? undefined : angleId, visualStyleId: styleId === "none" ? undefined : styleId, whyItWorks: why })}>
+          <Button disabled={!imageUrl || uploading || create.isPending} onClick={() => create.mutate({ imageUrl, imageHash, sourceUrl, brandName, angleId: angleId === "none" ? undefined : angleId, visualStyleId: styleId === "none" ? undefined : styleId, whyItWorks: why })}>
             {create.isPending ? <Loader2 className="animate-spin" /> : <Check />} Save swipe
           </Button>
         </DialogFooter>
@@ -368,12 +371,12 @@ function SwipesContent() {
   const savePasted = useCallback(async (tempId: string, file: File) => {
     setPasted((items) => items.map((item) => item.tempId === tempId ? { ...item, status: "uploading" } : item));
     try {
-      const imageHash = await sha256(file);
       const form = new FormData();
       form.append("file", file);
       const response = await fetch("/api/upload", { method: "POST", body: form });
-      const body = (await response.json().catch(() => null)) as { url?: string; error?: string } | null;
+      const body = (await response.json().catch(() => null)) as { url?: string; hash?: string; error?: string } | null;
       if (!response.ok || !body?.url) throw new Error(body?.error || "Upload failed");
+      const imageHash = body.hash ?? (await sha256(file));
       const result = await create.mutateAsync({ imageUrl: body.url, imageHash });
       const swipe = { ...result.swipe, angle: null, hookType: null, visualStyle: null } as Swipe;
       setPasted((items) => items.map((item) => item.tempId === tempId ? {

@@ -3,6 +3,10 @@ import { auth as triggerAuth, tasks } from "@trigger.dev/sdk";
 import { TRPCError, type TRPCRouterRecord } from "@trpc/server";
 import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { db } from "@/db";
+import {
+  openApiMutationMeta,
+  openApiQueryMeta,
+} from "../openapi-meta";
 import { adCreatives } from "@/schema/ad-creative";
 import {
   studioCopyPackages,
@@ -35,13 +39,54 @@ import {
   fetchSourceCreatives,
   generationInput,
   markSchema,
+  queuedGenerationSchema,
   reconcileStaleGenerations,
+  sourceCreativeSummarySchema,
+  studioCopyPackageRowSchema,
+  studioGenerationRowSchema,
   studioProcedure,
+  studioVariantRowSchema,
   studioWriteProcedure,
 } from "./studio.shared";
 
+const listLinkedCreativeSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  roas: z.number().nullable(),
+});
+const detailLinkedCreativeSchema = listLinkedCreativeSchema.extend({
+  assetUrl: z.string().nullable(),
+  format: z.string().nullable(),
+});
+const generationListItemSchema = studioGenerationRowSchema.extend({
+  source: sourceCreativeSummarySchema.nullable(),
+  variants: z.array(studioVariantRowSchema.extend({
+    copyPackage: studioCopyPackageRowSchema.nullable(),
+    linkedCreative: listLinkedCreativeSchema.nullable(),
+  })),
+});
+const generationDetailSchema = z.object({
+  generation: studioGenerationRowSchema,
+  variants: z.array(studioVariantRowSchema.extend({
+    copyPackage: studioCopyPackageRowSchema.nullable(),
+    linkedCreative: detailLinkedCreativeSchema.nullable(),
+  })),
+  realtime: z.object({
+    runId: z.string(),
+    publicAccessToken: z.string(),
+  }).nullable(),
+  source: sourceCreativeSummarySchema.nullable(),
+});
+
 export const studioGenerationProcedures = {
-  generate: studioWriteProcedure.input(generationInput).mutation(async ({ input, ctx }) => {
+  generate: studioWriteProcedure
+    .meta(openApiMutationMeta(
+      "studio", "generate", "Queue a Studio generation",
+      "Queues image generation and returns generationId plus runId and a short-lived publicAccessToken for optional realtime updates. Poll generation or generations until ready or failed; polling is canonical.",
+    ))
+    .input(generationInput)
+    .output(queuedGenerationSchema.extend({ publicAccessToken: z.string() }))
+    .mutation(async ({ input, ctx }) => {
     const generation = await createStudioGeneration(ctx.organizationId, input);
     const publicAccessToken = await triggerAuth.createPublicToken({
       scopes: { read: { runs: [generation.runId] } },
@@ -51,7 +96,12 @@ export const studioGenerationProcedures = {
   }),
 
   retry: studioWriteProcedure
+    .meta(openApiMutationMeta(
+      "studio", "retry", "Retry a failed Studio generation",
+      "Requeues a failed generation and returns its generationId and new runId. Poll generation or generations until ready or failed; polling is canonical.",
+    ))
     .input(z.object({ id: z.string() }))
+    .output(queuedGenerationSchema)
     .mutation(async ({ input, ctx }) => {
       const generation = await db.transaction(async (tx) => {
         const [claimed] = await tx
@@ -108,14 +158,20 @@ export const studioGenerationProcedures = {
           .update(studioGenerations)
           .set({ runId: handle.id, updatedAt: new Date() })
           .where(eq(studioGenerations.id, generation.id));
-        return { runId: handle.id };
+        return { runId: handle.id, generationId: generation.id };
       } catch (error) {
         await failStudioGeneration(generation.id, ctx.organizationId);
         throw error;
       }
     }),
 
-  generations: studioProcedure.query(async ({ ctx }) => {
+  generations: studioProcedure
+    .meta(openApiQueryMeta(
+      "studio", "generations", "List Studio generations",
+      "Lists recent generations with variants. Poll this endpoint until generation statuses are ready or failed; Trigger realtime tokens are optional upgrades and polling is canonical.",
+    ))
+    .output(z.array(generationListItemSchema))
+    .query(async ({ ctx }) => {
     const generations = await db
       .select()
       .from(studioGenerations)
@@ -214,12 +270,30 @@ export const studioGenerationProcedures = {
     }));
   }),
 
-  marketTopVariants: studioProcedure.query(({ ctx }) =>
-    fetchStudioMarketTopVariants(ctx.organizationId),
-  ),
+  marketTopVariants: studioProcedure
+    .meta(openApiQueryMeta(
+      "studio", "marketTopVariants", "List top linked Studio variants",
+      "Returns published Studio images linked to measured ad creatives, ranked by market performance; Studio does not write ad creative records or update Meta.",
+    ))
+    .output(z.array(z.object({
+      variantId: z.string(),
+      imageUrl: z.string(),
+      creativeId: z.string(),
+      creativeName: z.string(),
+      roas: z.number().nullable(),
+      purchases: z.number().nullable(),
+      spend: z.number().nullable(),
+      trend: z.enum(["rising", "stable", "declining", "paused"]),
+    })))
+    .query(({ ctx }) => fetchStudioMarketTopVariants(ctx.organizationId)),
 
   generation: studioProcedure
+    .meta(openApiQueryMeta(
+      "studio", "generation", "Get one Studio generation",
+      "Returns a generation and its variants. Poll until status is ready or failed; runId and publicAccessToken may appear as an optional short-lived realtime upgrade, while polling remains canonical.",
+    ))
     .input(z.object({ id: z.string() }))
+    .output(generationDetailSchema)
     .query(async ({ input, ctx }) => {
       const [generation] = await db
         .select()
@@ -331,6 +405,10 @@ export const studioGenerationProcedures = {
     }),
 
   linkCandidates: studioProcedure
+    .meta(openApiQueryMeta(
+      "studio", "linkCandidates", "Suggest creative links for a published image",
+      "Suggests likely ad creative matches after publish; a human or agent must confirm the link, and this endpoint performs no Meta write-back.",
+    ))
     .input(
       z.object({
         variantId: z.string().optional(),
@@ -338,6 +416,16 @@ export const studioGenerationProcedures = {
         publishedAfter: z.string().optional(),
       }),
     )
+    .output(z.array(z.object({
+      id: z.string(),
+      name: z.string(),
+      assetUrl: z.string().nullable(),
+      format: z.string().nullable(),
+      createdAt: z.date(),
+      matchReason: z.enum(["template", "angle", "fuzzy", "recent"]),
+      roas: z.number().nullable(),
+      spend: z.number().nullable(),
+    })))
     .query(async ({ input, ctx }) => {
       const [variant] = input.variantId
         ? await db
@@ -446,12 +534,17 @@ export const studioGenerationProcedures = {
     }),
 
   linkVariantToCreative: studioWriteProcedure
+    .meta(openApiMutationMeta(
+      "studio", "linkVariantToCreative", "Confirm a Studio image-to-creative link",
+      "Confirms a suggested link between a published image and an existing ad creative. This is human or agent confirmed and performs no Meta write-back.",
+    ))
     .input(
       z.object({
         variantId: z.string(),
         creativeId: z.string().nullable(),
       }),
     )
+    .output(z.object({ ok: z.literal(true) }))
     .mutation(async ({ input, ctx }) => {
       const [variant] = await db
         .select({ id: studioVariants.id, publishedAt: studioVariants.publishedAt })
@@ -499,12 +592,21 @@ export const studioGenerationProcedures = {
     }),
 
   publishAndLink: studioWriteProcedure
+    .meta(openApiMutationMeta(
+      "studio", "publishAndLink", "Publish and confirm a creative link",
+      "Publishes a Good image and optionally records a human or agent confirmed link to an existing creative; it never creates ad creative records or writes back to Meta.",
+    ))
     .input(
       z.object({
         variantId: z.string(),
         creativeId: z.string().nullable(),
       }),
     )
+    .output(z.object({
+      id: z.string(),
+      publishedAt: z.date().nullable(),
+      linkedCreativeId: z.string().nullable(),
+    }))
     .mutation(async ({ input, ctx }) =>
       db.transaction(async (tx) => {
         const [variant] = await tx
@@ -578,14 +680,28 @@ export const studioGenerationProcedures = {
     ),
 
   extendVariant: studioWriteProcedure
+    .meta(openApiMutationMeta(
+      "studio", "extendVariant", "Generate more images from a proven variant",
+      "Queues a new generation based on a linked winner and returns runId and generationId. Poll generation until ready or failed; polling is canonical.",
+    ))
     .input(z.object({ variantId: z.string() }))
+    .output(queuedGenerationSchema)
     .mutation(async ({ input, ctx }) => {
       const generation = await extendStudioWinner(ctx.organizationId, input);
-      return { generationId: generation.generationId };
+      return generation;
     }),
 
   setVariantMark: studioWriteProcedure
+    .meta(openApiMutationMeta(
+      "studio", "setVariantMark", "Mark a Studio image Good or Bad",
+      "Marks an image for curation. Setting mark to good is the Studio save action; Studio never writes ad creative records.",
+    ))
     .input(z.object({ variantId: z.string(), mark: markSchema.nullable() }))
+    .output(z.object({
+      id: z.string(),
+      mark: z.string().nullable(),
+      publishedAt: z.date().nullable(),
+    }))
     .mutation(async ({ input, ctx }) => {
       const [variant] = await db
         .update(studioVariants)
@@ -612,7 +728,12 @@ export const studioGenerationProcedures = {
     }),
 
   setVariantPublished: studioWriteProcedure
+    .meta(openApiMutationMeta(
+      "studio", "setVariantPublished", "Set publication state for a Good image",
+      "Records whether a Good Studio image has been published. It does not create an ad creative or write back to Meta; linking remains a separate confirmed action.",
+    ))
     .input(z.object({ variantId: z.string(), published: z.boolean().default(true) }))
+    .output(z.object({ id: z.string(), publishedAt: z.date().nullable() }))
     .mutation(async ({ input, ctx }) => {
       const [variant] = await db
         .update(studioVariants)
@@ -633,7 +754,16 @@ export const studioGenerationProcedures = {
     }),
 
   retryVariant: studioWriteProcedure
+    .meta(openApiMutationMeta(
+      "studio", "retryVariant", "Retry one failed Studio image",
+      "Requeues one failed variant and returns variantId plus generationId. Poll generation or generations until ready or failed; polling is canonical.",
+    ))
     .input(z.object({ variantId: z.string(), withoutReferenceImage: z.boolean().default(false) }))
+    .output(z.object({
+      ok: z.literal(true),
+      generationId: z.string(),
+      variantId: z.string(),
+    }))
     .mutation(async ({ input, ctx }) => {
       const claimed = await db.transaction(async (tx) => {
         const [variant] = await tx
@@ -740,6 +870,10 @@ export const studioGenerationProcedures = {
         await finalizeStudioGenerationIfSettled(claimed.generationId, ctx.organizationId);
         throw error;
       }
-      return { ok: true };
+      return {
+        ok: true as const,
+        generationId: claimed.generationId,
+        variantId: claimed.id,
+      };
     }),
 } satisfies TRPCRouterRecord;

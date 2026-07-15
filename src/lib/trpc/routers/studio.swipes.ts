@@ -7,6 +7,10 @@ import { db } from "@/db";
 import { studioSuggestions, studioSwipes, studioTaxonomyValues } from "@/schema/studio";
 import { getStudioBrandProfile } from "@/lib/studio-brand";
 import { buildRebrandPrompt } from "@/lib/studio-prompt";
+import {
+  openApiMutationMeta,
+  openApiQueryMeta,
+} from "../openapi-meta";
 import type { analyzeStudioSwipeTask } from "../../../../trigger/generate-studio-suggestions";
 import {
   createStudioGeneration,
@@ -19,8 +23,72 @@ import {
   studioWriteProcedure,
 } from "./studio.shared";
 
+const suggestionElementOutputSchema = z.object({
+  action: z.enum(["keep", "change"]),
+  value: z.string().nullable().optional(),
+});
+
+// Core keys are optional on output: elements is a nullable jsonb column and
+// legacy/partial analyses may predate the full slot set.
+const suggestionElementsOutputSchema = z.object({
+  headline: suggestionElementOutputSchema.nullable().optional(),
+  heroImage: suggestionElementOutputSchema.nullable().optional(),
+  background: suggestionElementOutputSchema.nullable().optional(),
+  offer: suggestionElementOutputSchema.nullable().optional(),
+  cta: suggestionElementOutputSchema.nullable().optional(),
+  brandMarks: suggestionElementOutputSchema.nullable().optional(),
+  product: suggestionElementOutputSchema.nullable().optional(),
+  copy: suggestionElementOutputSchema.nullable().optional(),
+  socialProof: suggestionElementOutputSchema.nullable().optional(),
+  priceFraming: suggestionElementOutputSchema.nullable().optional(),
+});
+
+const taxonomyValueOutputSchema = z.object({
+  id: z.string(),
+  organizationId: z.string(),
+  kind: z.string(),
+  name: z.string(),
+  slug: z.string(),
+  archivedAt: z.date().nullable(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+const swipeOutputSchema = z.object({
+  id: z.string(),
+  organizationId: z.string(),
+  imageUrl: z.string(),
+  imageHash: z.string().nullable(),
+  sourceUrl: z.string().nullable(),
+  brandName: z.string().nullable(),
+  angleId: z.string().nullable(),
+  hookTypeId: z.string().nullable(),
+  visualStyleId: z.string().nullable(),
+  whyItWorks: z.string().nullable(),
+  elements: suggestionElementsOutputSchema.nullable(),
+  addedBy: z.string().nullable(),
+  archivedAt: z.date().nullable(),
+  lastTriedAt: z.date().nullable(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+const duplicateImageOutputSchema = z.object({
+  id: z.string(),
+  brandName: z.string().nullable(),
+  createdAt: z.date(),
+});
+
 export const studioSwipeProcedures = {
   swipes: studioProcedure
+    .meta(
+      openApiQueryMeta(
+        "studio",
+        "swipes",
+        "List saved swipes",
+        "List saved swipe references with their angle, visual-style, and hook-type taxonomy records. Filter by tags or search text; archived swipes are omitted unless requested.",
+      ),
+    )
     .input(
       z.object({
         includeArchived: z.boolean().default(false),
@@ -29,6 +97,15 @@ export const studioSwipeProcedures = {
         hookTypeIds: z.array(z.string()).optional(),
         q: z.string().trim().max(200).optional(),
       }).optional(),
+    )
+    .output(
+      z.array(
+        swipeOutputSchema.extend({
+          angle: taxonomyValueOutputSchema.nullable(),
+          hookType: taxonomyValueOutputSchema.nullable(),
+          visualStyle: taxonomyValueOutputSchema.nullable(),
+        }),
+      ),
     )
     .query(async ({ input, ctx }) => {
       const conditions = [eq(studioSwipes.organizationId, ctx.organizationId)];
@@ -92,7 +169,20 @@ export const studioSwipeProcedures = {
    * hookTypeId asynchronously, after createSwipe has already responded.
    */
   swipeAnalyses: studioProcedure
+    .meta(
+      openApiQueryMeta(
+        "studio",
+        "swipeAnalyses",
+        "Poll swipe analyses",
+        "Poll hook-type assignments produced asynchronously by the vision analysis that runs after swipe creation.",
+      ),
+    )
     .input(z.object({ ids: z.array(z.string()).min(1).max(20) }))
+    .output(
+      z.array(
+        z.object({ id: z.string(), hookTypeId: z.string().nullable() }),
+      ),
+    )
     .query(({ input, ctx }) =>
       db
         .select({ id: studioSwipes.id, hookTypeId: studioSwipes.hookTypeId })
@@ -106,6 +196,14 @@ export const studioSwipeProcedures = {
     ),
 
   createSwipe: studioWriteProcedure
+    .meta(
+      openApiMutationMeta(
+        "studio",
+        "createSwipe",
+        "Save a swipe",
+        "Save an uploaded swipe and automatically trigger vision analysis; tags are optional and can be added later. imageUrl must come from POST /api/upload, which returns { url, hash }; pass url as imageUrl and hash as imageHash. A matching sourceUrl hard-returns the existing swipe with duplicate true, while a matching imageHash only returns a duplicateImage warning.",
+      ),
+    )
     .input(
       z.object({
         imageUrl: persistedSwipeImageUrlSchema,
@@ -115,6 +213,13 @@ export const studioSwipeProcedures = {
         angleId: z.string().optional(),
         visualStyleId: z.string().optional(),
         whyItWorks: z.string().trim().max(1000).optional(),
+      }),
+    )
+    .output(
+      z.object({
+        swipe: swipeOutputSchema,
+        duplicate: z.boolean(),
+        duplicateImage: duplicateImageOutputSchema.nullable(),
       }),
     )
     .mutation(async ({ input, ctx }) => {
@@ -217,6 +322,14 @@ export const studioSwipeProcedures = {
     }),
 
   updateSwipe: studioWriteProcedure
+    .meta(
+      openApiMutationMeta(
+        "studio",
+        "updateSwipe",
+        "Update a swipe",
+        "Update swipe metadata and optional angle, visual-style, or hook-type tags. Source URLs remain unique within the organization.",
+      ),
+    )
     .input(
       z.object({
         id: z.string(),
@@ -228,6 +341,7 @@ export const studioSwipeProcedures = {
         whyItWorks: z.string().trim().max(1000).nullable().optional(),
       }),
     )
+    .output(swipeOutputSchema)
     .mutation(async ({ input, ctx }) => {
       const { id, sourceUrl, ...values } = input;
       await Promise.all([
@@ -278,7 +392,16 @@ export const studioSwipeProcedures = {
     }),
 
   archiveSwipe: studioWriteProcedure
+    .meta(
+      openApiMutationMeta(
+        "studio",
+        "archiveSwipe",
+        "Archive a swipe",
+        "Archive or restore a swipe reference. Archived swipes are hidden from the default swipe list without deleting their history.",
+      ),
+    )
     .input(z.object({ id: z.string(), archived: z.boolean().default(true) }))
+    .output(swipeOutputSchema)
     .mutation(async ({ input, ctx }) => {
       const [swipe] = await db
         .update(studioSwipes)
@@ -295,7 +418,16 @@ export const studioSwipeProcedures = {
     }),
 
   deleteSwipe: studioWriteProcedure
+    .meta(
+      openApiMutationMeta(
+        "studio",
+        "deleteSwipe",
+        "Delete a swipe",
+        "Permanently delete an organization swipe and attempt to remove its uploaded blob when deletion succeeds.",
+      ),
+    )
     .input(z.object({ id: z.string() }))
+    .output(z.object({ deleted: z.boolean() }))
     .mutation(async ({ input, ctx }) => {
       const [existing] = await db
         .select({ imageUrl: studioSwipes.imageUrl })
@@ -323,6 +455,14 @@ export const studioSwipeProcedures = {
     }),
 
   rebrandSwipe: studioWriteProcedure
+    .meta(
+      openApiMutationMeta(
+        "studio",
+        "rebrandSwipe",
+        "Rebrand a swipe",
+        "Rebrand an active swipe using its image and analyzed elements. Generate immediately to queue a generation, or save the idea as a proposed Studio suggestion for later action.",
+      ),
+    )
     .input(
       z.object({
         swipeId: z.string(),
@@ -332,6 +472,19 @@ export const studioSwipeProcedures = {
         copyPackageId: z.string().nullable().optional(),
         mode: z.enum(["generate_now", "queue"]),
       }),
+    )
+    .output(
+      z.discriminatedUnion("mode", [
+        z.object({
+          mode: z.literal("generate_now"),
+          runId: z.string(),
+          generationId: z.string(),
+        }),
+        z.object({
+          mode: z.literal("queue"),
+          suggestionId: z.string(),
+        }),
+      ]),
     )
     .mutation(async ({ input, ctx }) => {
       const [swipe] = await db

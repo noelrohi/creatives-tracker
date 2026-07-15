@@ -48,7 +48,15 @@ const mockDb = {
         return chain;
       }),
       where: vi.fn(() => chain),
-      returning: vi.fn(async () => [{ id: "variant_1" }]),
+      returning: vi.fn(async () => {
+        const updated = dbState.updated.at(-1) ?? {};
+        return [{
+          id: "variant_1",
+          mark: updated.mark ?? null,
+          publishedAt: updated.publishedAt ?? null,
+          linkedCreativeId: updated.linkedCreativeId ?? null,
+        }];
+      }),
     };
     return chain;
   }),
@@ -406,7 +414,10 @@ describe("studio router — static-ad composer starters", () => {
       variantId: "variant_1",
     });
 
-    expect(result).toEqual({ generationId: "generation_new" });
+    expect(result).toEqual({
+      generationId: "generation_new",
+      runId: "run_abc123",
+    });
     expect(dbState.inserted[0]).toMatchObject({
       brief: expect.stringContaining("Make 3 more like this proven winner"),
       angle: "Price anchor",
