@@ -1,11 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// --- Mocked DB: supports the studio router's
-//   select().from().innerJoin().innerJoin().where().groupBy() chain,
-// resolving groupBy() with the next queued row set. save() uses
-//   insert().values().returning(). generate() uses insert/update chains.
+// --- Mocked DB: supports the studio router's select/insert/update chains.
 const dbState = {
   groupByRows: [] as Array<Record<string, unknown>[]>,
+  selectRows: [] as Array<Record<string, unknown>[]>,
   inserted: [] as Array<Record<string, unknown> | Record<string, unknown>[]>,
   updated: [] as Array<Record<string, unknown>>,
 };
@@ -16,6 +14,7 @@ const mockDb = {
       from: vi.fn(() => chain),
       innerJoin: vi.fn(() => chain),
       where: vi.fn(() => chain),
+      limit: vi.fn(async () => dbState.selectRows.shift() ?? []),
       groupBy: vi.fn(async () => dbState.groupByRows.shift() ?? []),
     };
     return chain;
@@ -47,10 +46,17 @@ const mockDb = {
         return chain;
       }),
       where: vi.fn(() => chain),
+      returning: vi.fn(async () => [{ id: "variant_1" }]),
     };
     return chain;
   }),
 };
+
+Object.assign(mockDb, {
+  transaction: vi.fn(
+    async (callback: (tx: typeof mockDb) => Promise<unknown>) => callback(mockDb),
+  ),
+});
 
 const triggerMock = {
   trigger: vi.fn<(...args: unknown[]) => Promise<{ id: string }>>(async () => ({
@@ -77,9 +83,12 @@ function queueGroupBy(...rowSets: Array<Record<string, unknown>[]>) {
 describe("studio router — static-ad composer starters", () => {
   beforeEach(() => {
     dbState.groupByRows = [];
+    dbState.selectRows = [];
     dbState.inserted = [];
     dbState.updated = [];
     vi.clearAllMocks();
+    triggerMock.trigger.mockResolvedValue({ id: "run_abc123" });
+    triggerMock.createPublicToken.mockResolvedValue("public_token_xyz");
   });
 
   it("winningAngles: aggregates per angle, ranks by ROAS, and keeps the highest-value creative's image as the thumbnail", async () => {
@@ -211,24 +220,24 @@ describe("studio router — static-ad composer starters", () => {
       referenceImageUrls: ["https://cdn.test/bold-high.png"],
     });
     expect(dbState.inserted[1]).toEqual([
-      {
+      expect.objectContaining({
         generationId: "generation_new",
         organizationId: "test-org-id",
         index: 0,
         status: "pending",
-      },
-      {
+      }),
+      expect.objectContaining({
         generationId: "generation_new",
         organizationId: "test-org-id",
         index: 1,
         status: "pending",
-      },
-      {
+      }),
+      expect.objectContaining({
         generationId: "generation_new",
         organizationId: "test-org-id",
         index: 2,
         status: "pending",
-      },
+      }),
     ]);
     expect(dbState.updated[0]).toMatchObject({ runId: "run_abc123" });
 
@@ -250,24 +259,88 @@ describe("studio router — static-ad composer starters", () => {
     );
   });
 
-  it("save: persists a generated variant as a static creative with its targeting", async () => {
+  it("generate: marks persisted scaffolding failed when Trigger enqueueing fails", async () => {
+    const caller = createMockCaller({ role: "owner" });
+    triggerMock.trigger.mockRejectedValueOnce(new Error("Trigger unavailable"));
+
+    await expect(
+      caller.studio.generate({ brief: "A launch ad", count: 2 }),
+    ).rejects.toThrow("Trigger unavailable");
+
+    expect(dbState.updated).toEqual([
+      expect.objectContaining({ status: "failed" }),
+      expect.objectContaining({ status: "failed" }),
+    ]);
+  });
+
+  it("generate: rejects non-HTTP reference image URLs before persisting", async () => {
     const caller = createMockCaller({ role: "owner" });
 
-    const creative = await caller.studio.save({
-      assetUrl: "https://cdn.test/generated-0.png",
-      angle: "Bold offer",
-      persona: "Deal seekers",
-      awarenessLevel: "most_aware",
+    await expect(
+      caller.studio.generate({
+        brief: "A launch ad",
+        referenceImageUrls: ["file:///etc/passwd"],
+      }),
+    ).rejects.toThrow("Reference images must use HTTP or HTTPS");
+
+    expect(dbState.inserted).toEqual([]);
+    expect(triggerMock.trigger).not.toHaveBeenCalled();
+  });
+
+  it("linkVariantToCreative: links a published variant to an org creative", async () => {
+    dbState.selectRows.push(
+      [{ id: "variant_1", publishedAt: new Date("2026-07-15T00:00:00Z") }],
+      [{ id: "creative_1" }],
+    );
+    const caller = createMockCaller({ role: "owner" });
+
+    await expect(
+      caller.studio.linkVariantToCreative({
+        variantId: "variant_1",
+        creativeId: "creative_1",
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(dbState.updated.at(-1)).toMatchObject({
+      linkedCreativeId: "creative_1",
+      updatedAt: expect.any(Date),
+    });
+  });
+
+  it("linkVariantToCreative: requires publishing before linking", async () => {
+    dbState.selectRows.push([{ id: "variant_1", publishedAt: null }]);
+    const caller = createMockCaller({ role: "owner" });
+
+    await expect(
+      caller.studio.linkVariantToCreative({
+        variantId: "variant_1",
+        creativeId: "creative_1",
+      }),
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "Publish the image first",
     });
 
-    expect(creative.id).toBe("creative_new");
-    expect(dbState.inserted[0]).toMatchObject({
-      assetUrl: "https://cdn.test/generated-0.png",
-      format: "static",
-      angle: "Bold offer",
-      persona: "Deal seekers",
-      awarenessLevel: "most_aware",
-      organizationId: "test-org-id",
+    expect(dbState.updated).toEqual([]);
+    expect(dbState.selectRows).toEqual([]);
+  });
+
+  it("setVariantMark: marks a ready variant Good", async () => {
+    const caller = createMockCaller({ role: "owner" });
+
+    await caller.studio.setVariantMark({
+      variantId: "variant_1",
+      mark: "good",
     });
+
+    expect(dbState.updated[0].mark).toBe("good");
+  });
+
+  it("setVariantMark: clears the mark and published state", async () => {
+    const caller = createMockCaller({ role: "owner" });
+
+    await caller.studio.setVariantMark({ variantId: "variant_1", mark: null });
+
+    expect(dbState.updated[0]).toMatchObject({ mark: null, publishedAt: null });
   });
 });

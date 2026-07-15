@@ -1,28 +1,10 @@
 import type { AwarenessLevel } from "@/lib/awareness";
+import type { StudioFormat } from "@/lib/studio-prompt";
 
-export type { AwarenessLevel };
-
-export type Starter = {
-  brief: string;
-  angle?: string;
-  persona?: string;
-  awarenessLevel?: AwarenessLevel;
-  imageUrl?: string | null;
-};
+export type { AwarenessLevel, StudioFormat };
 
 export type ComposerReference = {
   url: string;
   label: string;
   description?: string;
-};
-
-export type Generation = {
-  runId: string;
-  accessToken: string;
-  brief: string;
-  angle?: string;
-  persona?: string;
-  awarenessLevel?: AwarenessLevel;
-  referenceImageUrls?: string[];
-  count: number;
 };

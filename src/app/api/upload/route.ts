@@ -39,7 +39,8 @@ export async function POST(request: Request) {
   }
 
   const env = process.env.NODE_ENV === "production" ? "prod" : "dev";
-  const path = `${env}/${file.name}`;
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]+/g, "-");
+  const path = `${env}/${crypto.randomUUID()}-${safeName}`;
 
   const blob = await put(path, file, {
     access: "public",

@@ -1,0 +1,1 @@
+ALTER TABLE "studio_brand_profile" ADD COLUMN "product_notes" text;

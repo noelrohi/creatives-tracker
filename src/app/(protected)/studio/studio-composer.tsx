@@ -1,8 +1,23 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { ArrowUp, ImagePlus, Loader2, X } from "@/components/icons";
+import { useEffect, useRef, useState } from "react";
+import {
+  ArrowUp,
+  Check,
+  ChevronDown,
+  ImagePlus,
+  Loader2,
+  X,
+} from "@/components/icons";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Attachment,
@@ -21,10 +36,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  isSupportedStudioSize,
+  studioDimensions,
+  type StudioSize,
+} from "@/lib/studio-prompt";
 import { cn } from "@/lib/utils";
-import type { ComposerReference } from "./studio-types";
+import type { ComposerReference, StudioFormat } from "./studio-types";
 
 const MAX_REFERENCES = 4;
+const DEFAULT_CUSTOM_SIZE: StudioSize = "1024x1536";
+
+function isPrimaryFormat(format: StudioFormat) {
+  return format === "square" || format === "vertical";
+}
 
 type UploadingItem = {
   id: string;
@@ -38,11 +63,14 @@ type StudioComposerProps = {
   pending: boolean;
   count: number;
   onCountChange: (count: number) => void;
+  format: StudioFormat;
+  onFormatChange: (format: StudioFormat) => void;
   references?: ComposerReference[];
   onAddReference?: (reference: ComposerReference) => void;
   onRemoveReference?: (url: string) => void;
   className?: string;
   autoFocus?: boolean;
+  focusToken?: number;
 };
 
 function formatBytes(bytes: number) {
@@ -58,20 +86,65 @@ export function StudioComposer({
   pending,
   count,
   onCountChange,
+  format,
+  onFormatChange,
   references = [],
   onAddReference,
   onRemoveReference,
   className,
   autoFocus,
+  focusToken,
 }: StudioComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploads, setUploads] = useState<UploadingItem[]>([]);
+  const [sizeOpen, setSizeOpen] = useState(false);
+  const initialDimensions = studioDimensions(
+    isPrimaryFormat(format) ? DEFAULT_CUSTOM_SIZE : format,
+  );
+  const [customWidth, setCustomWidth] = useState(String(initialDimensions.width));
+  const [customHeight, setCustomHeight] = useState(String(initialDimensions.height));
+  const customMode = !isPrimaryFormat(format);
+  const customSize = `${customWidth}x${customHeight}`;
+  const customSizeValid = isSupportedStudioSize(customSize);
+
+  useEffect(() => {
+    if (focusToken == null) return;
+    textareaRef.current?.focus();
+  }, [focusToken]);
+
+  // Adjust-during-render (not an effect): when the format prop changes to a
+  // custom size from outside this component, re-seed the draft inputs from it.
+  const [prevFormat, setPrevFormat] = useState(format);
+  if (prevFormat !== format) {
+    setPrevFormat(format);
+    if (customMode) {
+      const dimensions = studioDimensions(format);
+      setCustomWidth(String(dimensions.width));
+      setCustomHeight(String(dimensions.height));
+    }
+  }
 
   const uploading = uploads.length > 0;
-  const canSend = value.trim().length > 0 && !pending && !uploading;
+  const canSend =
+    value.trim().length > 0 &&
+    !pending &&
+    !uploading &&
+    (!customMode || customSizeValid);
   const usedSlots = references.length + uploads.length;
   const canAttach = onAddReference != null && usedSlots < MAX_REFERENCES;
+
+  function updateCustomSize(width: string, height: string) {
+    setCustomWidth(width);
+    setCustomHeight(height);
+    const next = `${width}x${height}`;
+    if (isSupportedStudioSize(next)) onFormatChange(next);
+  }
+
+  function activateCustomSize() {
+    if (customMode) return;
+    onFormatChange(customSizeValid ? (customSize as StudioSize) : DEFAULT_CUSTOM_SIZE);
+  }
 
   async function handleFiles(fileList: FileList | null) {
     if (!fileList || !onAddReference) return;
@@ -104,9 +177,7 @@ export function StudioComposer({
           description: formatBytes(file.size),
         });
       } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : "Upload failed",
-        );
+        toast.error(error instanceof Error ? error.message : "Upload failed");
       } finally {
         setUploads((prev) => prev.filter((item) => item.id !== id));
       }
@@ -145,6 +216,7 @@ export function StudioComposer({
         placeholder="Describe the static ad — angle, offer, hook…"
         className="max-h-40 min-h-[52px] resize-none border-0 bg-transparent px-4 pt-4 text-base shadow-none focus-visible:ring-0 dark:bg-transparent"
       />
+
       {references.length > 0 || uploads.length > 0 ? (
         <AttachmentGroup className="px-3 pb-1">
           {references.map((reference) => (
@@ -156,9 +228,7 @@ export function StudioComposer({
               <AttachmentContent>
                 <AttachmentTitle>{reference.label}</AttachmentTitle>
                 {reference.description ? (
-                  <AttachmentDescription>
-                    {reference.description}
-                  </AttachmentDescription>
+                  <AttachmentDescription>{reference.description}</AttachmentDescription>
                 ) : null}
               </AttachmentContent>
               {onRemoveReference ? (
@@ -186,7 +256,8 @@ export function StudioComposer({
           ))}
         </AttachmentGroup>
       ) : null}
-      <div className="flex items-center gap-2 px-3 pb-3">
+
+      <div className="flex items-center gap-1 px-3 pb-3">
         <input
           ref={fileInputRef}
           type="file"
@@ -198,18 +269,121 @@ export function StudioComposer({
             event.target.value = "";
           }}
         />
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon"
           aria-label="Attach reference image"
           disabled={!canAttach}
           onClick={() => fileInputRef.current?.click()}
-          className={cn(
-            "flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50",
-          )}
+          className="rounded-full text-muted-foreground"
         >
           <ImagePlus className="size-4" />
-        </button>
+        </Button>
+
         <div className="ml-auto flex items-center gap-2">
+          <Popover
+            open={sizeOpen}
+            onOpenChange={(next) => {
+              if (!next && !isSupportedStudioSize(`${customWidth}x${customHeight}`)) {
+                const dimensions = studioDimensions(
+                  customMode ? format : DEFAULT_CUSTOM_SIZE,
+                );
+                setCustomWidth(String(dimensions.width));
+                setCustomHeight(String(dimensions.height));
+              }
+              setSizeOpen(next);
+            }}
+          >
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="flex h-8 w-auto items-center justify-between gap-1 rounded-[min(var(--radius-md),10px)] border border-input bg-transparent px-2.5 text-xs whitespace-nowrap transition-colors hover:bg-accent dark:bg-input/30 dark:hover:bg-input/50"
+              >
+                {format === "square"
+                  ? "1:1"
+                  : format === "vertical"
+                    ? "9:16"
+                    : `${studioDimensions(format).width}×${studioDimensions(format).height}`}
+                <ChevronDown className="size-3.5 opacity-50" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-48 p-2">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs hover:bg-accent"
+                onClick={() => {
+                  onFormatChange("square");
+                  setSizeOpen(false);
+                }}
+              >
+                <span>1:1 · Square</span>
+                {!customMode && format === "square" ? (
+                  <Check className="size-3.5" />
+                ) : null}
+              </button>
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs hover:bg-accent"
+                onClick={() => {
+                  onFormatChange("vertical");
+                  setSizeOpen(false);
+                }}
+              >
+                <span>9:16 · Vertical</span>
+                {!customMode && format === "vertical" ? (
+                  <Check className="size-3.5" />
+                ) : null}
+              </button>
+              <Separator className="my-2" />
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs hover:bg-accent"
+                onClick={activateCustomSize}
+              >
+                <span>Custom size</span>
+                {customMode ? <Check className="size-3.5" /> : null}
+              </button>
+              <div className="mt-1.5 flex items-center gap-2 px-2">
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min={16}
+                  max={3840}
+                  step={16}
+                  value={customWidth}
+                  onChange={(event) =>
+                    updateCustomSize(event.target.value, customHeight)
+                  }
+                  onFocus={activateCustomSize}
+                  aria-label="Image width"
+                  aria-invalid={!customSizeValid}
+                  className="h-7 min-w-0 flex-1 bg-background px-2 text-xs tabular-nums"
+                />
+                <span className="text-xs text-muted-foreground">×</span>
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min={16}
+                  max={3840}
+                  step={16}
+                  value={customHeight}
+                  onChange={(event) =>
+                    updateCustomSize(customWidth, event.target.value)
+                  }
+                  onFocus={activateCustomSize}
+                  aria-label="Image height"
+                  aria-invalid={!customSizeValid}
+                  className="h-7 min-w-0 flex-1 bg-background px-2 text-xs tabular-nums"
+                />
+              </div>
+              {!customSizeValid ? (
+                <p className="mt-1.5 px-2 text-[11px] text-destructive">
+                  Use multiples of 16, 655K–8.3M total pixels, up to 3840px, and a ratio from 1:3 to 3:1.
+                </p>
+              ) : null}
+            </PopoverContent>
+          </Popover>
           <Select
             value={String(count)}
             onValueChange={(next) => onCountChange(Number(next))}

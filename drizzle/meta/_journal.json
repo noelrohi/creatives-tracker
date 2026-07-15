@@ -260,6 +260,48 @@
       "when": 1783869310045,
       "tag": "0036_overrated_red_hulk",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1783918354157,
+      "tag": "0037_fast_silvermane",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1783930616499,
+      "tag": "0038_chubby_cargill",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1784017968787,
+      "tag": "0039_glossy_black_widow",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1784042556867,
+      "tag": "0040_even_mach_iv",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1784044993348,
+      "tag": "0041_wooden_mimic",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1784046471623,
+      "tag": "0042_giant_lifeguard",
+      "breakpoints": true
     }
   ]
 }
