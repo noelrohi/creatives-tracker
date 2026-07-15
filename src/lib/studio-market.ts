@@ -2,7 +2,10 @@ import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { db } from "@/db";
 import { adCreatives } from "@/schema/ad-creative";
 import { studioGenerations, studioVariants } from "@/schema/studio";
-import { fetchCreativePerformanceRows } from "@/lib/studio-performance";
+import {
+  fetchCreativePerformanceRows,
+  toNullableNumber,
+} from "@/lib/studio-performance";
 
 export type StudioMarketResult = {
   variantId: string;
@@ -15,12 +18,6 @@ export type StudioMarketResult = {
   spend: number | null;
   purchases: number | null;
 };
-
-function toNullableNumber(value: string | number | null | undefined) {
-  if (value == null) return null;
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
 
 export async function fetchStudioMarketResults(
   organizationId: string,

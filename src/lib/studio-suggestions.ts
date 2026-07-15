@@ -61,7 +61,7 @@ export const studioSuggestionCardSchema = z.object({
 /** Shape used by the swipe vision pass. */
 export const rebrandElementSpecSchema = suggestionElementsSchema;
 
-const ELEMENT_LABELS: Record<keyof SuggestionElements, string> = {
+export const ELEMENT_LABELS: Record<keyof SuggestionElements, string> = {
   headline: "headline",
   heroImage: "hero image",
   background: "background",
@@ -71,42 +71,6 @@ const ELEMENT_LABELS: Record<keyof SuggestionElements, string> = {
   product: "product",
   copy: "copy",
 };
-
-export function buildSuggestionBrief(
-  variant: {
-    headline: string;
-    diffSummary: string;
-    copyLine: string;
-    elements: SuggestionElements;
-  },
-  winnerName: string,
-) {
-  const entries = (
-    Object.entries(variant.elements) as Array<
-      [keyof SuggestionElements, SuggestionElement | null]
-    >
-  ).filter((entry): entry is [keyof SuggestionElements, SuggestionElement] =>
-    entry[1] != null,
-  );
-  const kept = entries
-    .filter(([, element]) => element.action === "keep")
-    .map(([key]) => ELEMENT_LABELS[key]);
-  const changed = entries
-    .filter(([, element]) => element.action === "change")
-    .map(
-      ([key, element]) =>
-        `${ELEMENT_LABELS[key]}: ${element.value?.trim() || "change from the winner"}`,
-    );
-
-  return [
-    `Iterate on the winning ad "${winnerName}".`,
-    `New headline: "${variant.headline}".`,
-    variant.diffSummary,
-    `Keep unchanged: ${kept.length > 0 ? kept.join(", ") : "none"}.`,
-    `Change: ${changed.length > 0 ? changed.join("; ") : "none"}.`,
-    `Suggested copy line: "${variant.copyLine}".`,
-  ].join(" ");
-}
 
 export function buildElementsBrief(elements: SuggestionElements) {
   const entries = (

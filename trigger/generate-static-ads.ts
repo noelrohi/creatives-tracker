@@ -21,7 +21,7 @@ import {
 } from "@/lib/studio-prompt";
 import { fetchRemoteImage } from "@/lib/remote-image";
 import { getStudioBrandProfile, type StudioBrandProfile } from "@/lib/studio-brand";
-import { moderationReasonFromError } from "@/lib/studio-v2";
+import { moderationReasonFromError } from "@/lib/studio-moderation";
 import {
   failStudioGeneration,
   finalizeStudioGenerationIfSettled,
@@ -302,6 +302,23 @@ export const generateStaticAdVariantTask = task({
         },
       );
 
+    const finalizeIfRequested = async () => {
+      if (!payload.finalizeGeneration) return;
+      await persistStudioUpdate(
+        "finalize generation status",
+        () =>
+          finalizeStudioGenerationIfSettled(
+            payload.generationId,
+            payload.organizationId,
+          ),
+        {
+          generationId: payload.generationId,
+          organizationId: payload.organizationId,
+          runId: ctx.run.id,
+        },
+      );
+    };
+
     await markVariant({ status: "generating" });
     setParentVariantMetadata({ index, status: "generating" });
 
@@ -364,21 +381,7 @@ export const generateStaticAdVariantTask = task({
       });
       setParentVariantMetadata({ index, status: "ready", url: blob.url });
 
-      if (payload.finalizeGeneration) {
-        await persistStudioUpdate(
-          "finalize generation status",
-          () =>
-            finalizeStudioGenerationIfSettled(
-              payload.generationId,
-              payload.organizationId,
-            ),
-          {
-            generationId: payload.generationId,
-            organizationId: payload.organizationId,
-            runId: ctx.run.id,
-          },
-        );
-      }
+      await finalizeIfRequested();
 
       return { index, status: "ready" as const, url: blob.url };
     } catch (error) {
@@ -395,21 +398,7 @@ export const generateStaticAdVariantTask = task({
       });
       setParentVariantMetadata({ index, status: "failed" });
 
-      if (payload.finalizeGeneration) {
-        await persistStudioUpdate(
-          "finalize generation status",
-          () =>
-            finalizeStudioGenerationIfSettled(
-              payload.generationId,
-              payload.organizationId,
-            ),
-          {
-            generationId: payload.generationId,
-            organizationId: payload.organizationId,
-            runId: ctx.run.id,
-          },
-        );
-      }
+      await finalizeIfRequested();
 
       return { index, status: "failed" as const };
     } finally {

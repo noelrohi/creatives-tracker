@@ -85,6 +85,17 @@ Good tests here assert external behavior at the existing seams — what a proced
 
 Video briefs and the script pipeline; auto-scraping or auto-capture from pasted URLs; competitor monitoring as a living workflow; PERKI-style codes; promoting a variant's generated copy into a package; package versioning, per-placement copy variants, and package-level performance stats; inferring "published" from Meta sync or any write-back to synced creatives.
 
+## Post-Spec Additions (Implemented)
+
+Adopted during/after the build and kept deliberately; documented here so the spec stays the source of truth.
+
+- **Brand profile** — `studio_brand_profile` (one row per org: brand name, product description, offer, product notes, product image) with a page at `/studio/brand` linked from the Swipes header (the nav stays three tabs). It defines "ours" for the rebrand instruction, rides the product image as the last reference, and feeds the prompt/rewrite stages. Verified end-to-end against the Reviv profile.
+- **Variant→creative linking + market results** — a Good/published variant can be manually linked to the synced ad creative it shipped as (`linked_creative_id`, read-only; no `adCreatives` writes, honoring the starring rule). Linked performance feeds the weekly generator as a fifth input, MARKET RESULTS, with the instruction to trust real ROAS over taste marks when they disagree. Manual link only — no inference from Meta sync, keeping the out-of-scope line intact.
+- **Hypothesis per card** — `studio_suggestion.hypothesis`: the generator states what each card is testing, shown in the card's preview popover.
+- **Winner trends + prompt-rewrite stage** — winners carry a rising/stable/declining/paused trend (recent 14 days vs the prior 14, `studio-winners.ts`) into the weekly prompt; and an LLM rewrite stage (`buildPromptRewrite`) turns the layered brief into one short concrete prompt per variant before image generation, carrying the mandated keep-layout/replace-branding instructions when references exist.
+- **Remix entry point** — "Remix in Studio" on the creatives list opens the slim create dialog prefilled with that winner as reference (`/studio?remix=<id>`), the same own-winner remix flow story 20 gives swipes.
+- **Variant count deviation** — story 3 says approved cards generate 3–4 variants; AI-proposed cards keep that via their schema, but user-queued rebrands may legitimately ask for 1–2, so approval clamps to 1–4 rather than 3–4.
+
 ## Further Notes
 
 Primary sources, all on the adsolute repo as throwaway branches: `prototype/results-placement` (queue vs library placement — variant B won), `prototype/taxonomy-vocabulary` (vocabulary model — seeded+editable won, codes rejected), `prototype/swipes-surface` (board + table toggle won), `prototype/rebrand-flow` (both-paths flow won), `prototype/home-surface` (approved definitive home mock, four page states), and `research/reference-image-support` (image-pipeline findings: reference images already supported end-to-end; ~$0.03/variant per reference; watch the `response_format` SDK quirk on ai-sdk upgrades). The PERKI pipeline extraction is pinned as a comment on the wayfinder map. Decision detail lives on the map's closed tickets; this spec is the assembled, build-ready view.

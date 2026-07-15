@@ -113,12 +113,17 @@ export function StudioComposer({
     textareaRef.current?.focus();
   }, [focusToken]);
 
-  useEffect(() => {
-    if (!customMode) return;
-    const dimensions = studioDimensions(format);
-    setCustomWidth(String(dimensions.width));
-    setCustomHeight(String(dimensions.height));
-  }, [customMode, format]);
+  // Adjust-during-render (not an effect): when the format prop changes to a
+  // custom size from outside this component, re-seed the draft inputs from it.
+  const [prevFormat, setPrevFormat] = useState(format);
+  if (prevFormat !== format) {
+    setPrevFormat(format);
+    if (customMode) {
+      const dimensions = studioDimensions(format);
+      setCustomWidth(String(dimensions.width));
+      setCustomHeight(String(dimensions.height));
+    }
+  }
 
   const uploading = uploads.length > 0;
   const canSend =

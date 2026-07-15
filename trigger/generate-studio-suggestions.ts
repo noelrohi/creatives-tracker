@@ -6,8 +6,17 @@ import { openai } from "@/lib/ai";
 import type { AwarenessLevel } from "@/lib/awareness";
 import { getStudioBrandProfile } from "@/lib/studio-brand";
 import { fetchStudioMarketResults } from "@/lib/studio-market";
-import { fetchCreativePerformanceRows } from "@/lib/studio-performance";
-import { isStudioFormat } from "@/lib/studio-prompt";
+import { isVideoFile } from "@/lib/studio-assets";
+import {
+  fetchCreativePerformanceRows,
+  toNumber,
+} from "@/lib/studio-performance";
+import {
+  buildRebrandBrief,
+  buildWeeklySuggestionPrompt,
+  isStudioFormat,
+} from "@/lib/studio-prompt";
+import { studioSlug } from "@/lib/studio-taxonomy";
 import {
   classifyTrend,
   selectStudioWinners,
@@ -18,11 +27,6 @@ import {
   rebrandElementSpecSchema,
   studioSuggestionCardSchema,
 } from "@/lib/studio-suggestions";
-import {
-  buildRebrandBrief,
-  buildWeeklySuggestionPrompt,
-  studioSlug,
-} from "@/lib/studio-v2";
 import { organization } from "@/schema/auth";
 import { performanceLogs } from "@/schema/performance-log";
 import {
@@ -38,13 +42,6 @@ const SUGGESTION_MODEL = "gpt-5.6-terra";
 const VISION_MODEL = "gpt-5.6-terra";
 const IDEMPOTENCY_WINDOW_MS = 2 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const VIDEO_ASSET_PATTERN = /\.(mp4|mov|webm)(\?|$)/i;
-
-function toNumber(value: string | number | null | undefined) {
-  if (value == null) return 0;
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
 
 export type GenerateStudioSuggestionsPayload = {
   organizationId: string;
@@ -359,7 +356,7 @@ export const generateStudioSuggestionsTask = task({
       let imageCount = 0;
       for (const [index, winner] of winners.entries()) {
         if (imageCount >= 8) break;
-        if (!winner.assetUrl || VIDEO_ASSET_PATTERN.test(winner.assetUrl)) continue;
+        if (!winner.assetUrl || isVideoFile(winner.assetUrl)) continue;
         content.push({
           type: "text",
           text: `WINNER ${index + 1} IMAGE — ${winner.name}`,

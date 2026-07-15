@@ -45,7 +45,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { buildRebrandBrief } from "@/lib/studio-v2";
+import { buildRebrandBrief } from "@/lib/studio-prompt";
 import { useTRPC, type RouterOutputs } from "@/lib/trpc/client";
 import { cn } from "@/lib/utils";
 import { StudioCreateDialog, type StudioDialogValue } from "../studio-create-dialog";

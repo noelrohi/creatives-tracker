@@ -5,6 +5,19 @@ import { adCreatives } from "@/schema/ad-creative";
 import { performanceLogs } from "@/schema/performance-log";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 
+// Drizzle returns aggregated numerics as strings; these coerce them for math.
+export function toNumber(value: string | number | null | undefined) {
+  if (value == null) return 0;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export function toNullableNumber(value: string | number | null | undefined) {
+  if (value == null) return null;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export type CreativePerformanceRow = {
   creativeId: string;
   name: string;

@@ -36,6 +36,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
+import { isVideoFile } from "@/lib/studio-assets";
 import { studioAspectRatio, type StudioFormat } from "@/lib/studio-prompt";
 import { useTRPC, type RouterOutputs } from "@/lib/trpc/client";
 import { cn } from "@/lib/utils";
@@ -55,13 +56,6 @@ function RealtimeUpdates({ runId, accessToken, onUpdate }: { runId: string; acce
 
 function formatRoas(roas: number | null) {
   return roas == null ? "—" : `${roas.toFixed(1)}x`;
-}
-
-// Whether the URL points at an actual video file — decides <video> vs <img>.
-// Meta-synced video creatives store an image preview frame in assetUrl, so
-// format alone must never switch the element type.
-function isVideoFile(assetUrl: string | null) {
-  return Boolean(assetUrl && /\.(mp4|mov|webm)(\?|$)/i.test(assetUrl));
 }
 
 // Whether the creative is a video ad — decides the "Video" label only.

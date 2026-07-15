@@ -41,6 +41,9 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { AwarenessLevel } from "@/lib/awareness";
+import { isVideoFile } from "@/lib/studio-assets";
+import { ELEMENT_LABELS } from "@/lib/studio-suggestions";
 import { useTRPC, type RouterOutputs } from "@/lib/trpc/client";
 import { cn } from "@/lib/utils";
 import { StudioCreateDialog, type StudioDialogValue } from "./studio-create-dialog";
@@ -94,18 +97,10 @@ const KIND_STYLES: Record<string, { label: string; className: string }> = {
   rebrand_swipe: { label: "Rebrand a swipe", className: "text-violet-500" },
 };
 
-const VIDEO_ASSET_PATTERN = /\.(mp4|mov|webm)(\?|$)/i;
-
-const ELEMENT_LABELS: Record<string, string> = {
-  headline: "Headline",
-  heroImage: "Hero image",
-  background: "Background",
-  offer: "Offer",
-  cta: "CTA",
-  brandMarks: "Brand marks",
-  product: "Product",
-  copy: "Copy",
-};
+function elementLabel(key: string) {
+  const label = (ELEMENT_LABELS as Record<string, string>)[key] ?? key;
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
 
 function moderationMessage(reason: string | null) {
   if (reason === "likeness") {
@@ -138,11 +133,10 @@ function TodoCard({
 }) {
   const kind = KIND_STYLES[card.kind] ?? KIND_STYLES.refresh;
   const previewUrl = card.swipe?.imageUrl ?? card.source?.assetUrl;
-  // Meta-synced video creatives store an image preview frame in assetUrl, so
-  // the file type decides the element and the creative format decides the label.
-  const isVideoFile = Boolean(previewUrl && VIDEO_ASSET_PATTERN.test(previewUrl));
+  // The file type decides the element and the creative format decides the label.
+  const previewIsVideoFile = isVideoFile(previewUrl);
   const isVideoAd =
-    isVideoFile || (!card.swipe && card.source?.format === "video");
+    previewIsVideoFile || (!card.swipe && card.source?.format === "video");
   const numericRoas = card.roas == null ? null : Number(card.roas);
   const roasLabel =
     numericRoas != null && Number.isFinite(numericRoas)
@@ -164,7 +158,7 @@ function TodoCard({
             >
               {previewUrl ? (
                 <>
-                  {isVideoFile ? (
+                  {previewIsVideoFile ? (
                     <video
                       src={previewUrl}
                       muted
@@ -199,7 +193,7 @@ function TodoCard({
           <PopoverContent align="start" className="w-72">
             <div className="flex h-72 items-center justify-center overflow-hidden rounded-md bg-muted">
               {previewUrl ? (
-                isVideoFile ? (
+                previewIsVideoFile ? (
                   <video
                     src={previewUrl}
                     controls
@@ -221,7 +215,7 @@ function TodoCard({
               )}
             </div>
             <div className="space-y-1 px-0.5 pb-0.5">
-              {isVideoAd && !isVideoFile ? (
+              {isVideoAd && !previewIsVideoFile ? (
                 <p className="text-[10px] text-muted-foreground">
                   Video ad — showing its preview frame.
                 </p>
@@ -296,7 +290,7 @@ function TodoCard({
                   {Object.entries(card.elements).map(([key, element]) =>
                     element ? (
                       <div key={key} className="grid grid-cols-[88px_52px_1fr] gap-2">
-                        <span className="font-medium">{ELEMENT_LABELS[key] ?? key}</span>
+                        <span className="font-medium">{elementLabel(key)}</span>
                         <span className={element.action === "keep" ? "text-emerald-600" : "text-amber-600"}>
                           {element.action}
                         </span>
@@ -421,9 +415,20 @@ function StudioHomeContent() {
   const queryClient = useQueryClient();
   const [compose, setCompose] = useQueryState("compose");
   const [editId, setEditId] = useQueryState("edit");
+  const [remixId, setRemixId] = useQueryState("remix");
   const homeKey = trpc.studio.home.queryKey();
   const home = useQuery({ ...trpc.studio.home.queryOptions(), refetchInterval: 8000 });
   const packages = useQuery(trpc.studio.copyPackages.queryOptions());
+  const remixSource = useQuery({
+    ...trpc.studio.remixSource.queryOptions({ creativeId: remixId ?? "" }),
+    enabled: remixId != null,
+  });
+  const remixError = remixId != null && remixSource.isError;
+  useEffect(() => {
+    if (!remixError) return;
+    toast.error("That creative could not be loaded for remixing");
+    void setRemixId(null);
+  }, [remixError, setRemixId]);
   const invalidate = () => queryClient.invalidateQueries({ queryKey: homeKey });
 
   const approve = useMutation(
@@ -468,6 +473,7 @@ function StudioHomeContent() {
       onSuccess: () => {
         toast.success("Generation started — results will appear in Library");
         void setCompose(null);
+        void setRemixId(null);
         void invalidate();
       },
       onError: (error) => toast.error(error.message),
@@ -509,6 +515,7 @@ function StudioHomeContent() {
   }
 
   const cards = home.data?.cards ?? [];
+  const remixing = remixId != null ? remixSource.data : undefined;
   const proposed = cards.filter((card) => card.status === "proposed");
   const done = cards.filter((card) => card.status !== "proposed");
   const total = cards.length;
@@ -655,6 +662,36 @@ function StudioHomeContent() {
           pending={generate.isPending}
           copyPackages={packages.data ?? []}
           onSubmit={submitScratch}
+        />
+      ) : null}
+      {remixing ? (
+        <StudioCreateDialog
+          key={`remix-${remixing.id}`}
+          open
+          title={`Remix "${remixing.name}"`}
+          description="Generate fresh takes on this winner. It rides along as the reference image."
+          initialValue={{
+            brief: `Iterate on the winning ad "${remixing.name}". Keep what works and change one big thing.`,
+            references:
+              remixing.assetUrl && !isVideoFile(remixing.assetUrl)
+                ? [{ url: remixing.assetUrl, label: remixing.name }]
+                : [],
+          }}
+          copyPackages={packages.data ?? []}
+          pending={generate.isPending}
+          onOpenChange={(open) => { if (!open) void setRemixId(null); }}
+          onSubmit={(value) => generate.mutate({
+            brief: value.brief.trim(),
+            format: value.format,
+            count: value.count,
+            referenceImageUrls: value.references.map((reference) => reference.url),
+            copyPackageId: value.copyPackageId ?? undefined,
+            sourceCreativeId: remixing.id,
+            angle: remixing.angle ?? undefined,
+            persona: remixing.persona ?? undefined,
+            awarenessLevel:
+              (remixing.awarenessLevel as AwarenessLevel | null) ?? undefined,
+          })}
         />
       ) : null}
       {editing ? (
