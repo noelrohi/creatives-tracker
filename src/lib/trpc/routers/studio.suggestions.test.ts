@@ -1,3 +1,4 @@
+import { PgDialect } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = {
@@ -5,6 +6,8 @@ const state = {
   returning: [] as Array<Record<string, unknown>[]>,
   inserts: [] as Array<Record<string, unknown> | Record<string, unknown>[]>,
   updates: [] as Array<Record<string, unknown>>,
+  wheres: [] as unknown[],
+  orderBys: [] as unknown[][],
   generation: 0,
 };
 
@@ -22,8 +25,14 @@ function selectChain() {
     from: vi.fn(() => chain),
     innerJoin: vi.fn(() => chain),
     leftJoin: vi.fn(() => chain),
-    where: vi.fn(() => chain),
-    orderBy: vi.fn(() => chain),
+    where: vi.fn((clause: unknown) => {
+      state.wheres.push(clause);
+      return chain;
+    }),
+    orderBy: vi.fn((...clauses: unknown[]) => {
+      state.orderBys.push(clauses);
+      return chain;
+    }),
     limit: vi.fn(() => chain),
     for: vi.fn(() => chain),
     then: (resolve: (value: Record<string, unknown>[]) => unknown) =>
@@ -133,6 +142,8 @@ describe("studio router — v2 lifecycle", () => {
     state.returning = [];
     state.inserts = [];
     state.updates = [];
+    state.wheres = [];
+    state.orderBys = [];
     state.generation = 0;
     vi.clearAllMocks();
   });
@@ -181,6 +192,69 @@ describe("studio router — v2 lifecycle", () => {
 
     await caller.studio.archiveSwipe({ id: "swipe_1", archived: true });
     expect(state.updates.at(-1)?.archivedAt).toBeInstanceOf(Date);
+  });
+
+  it("soft-warns on a second identical image hash without blocking creation", async () => {
+    const createdAt = new Date("2026-07-14T12:00:00Z");
+    state.selects.push([], [{ id: "swipe_first", brandName: "Acme", createdAt }]);
+    const caller = createMockCaller({ role: "owner" });
+    const imageHash = "a".repeat(64);
+
+    const first = await caller.studio.createSwipe({
+      imageUrl: "https://store.public.blob.vercel-storage.com/first.png",
+      imageHash,
+    });
+    const second = await caller.studio.createSwipe({
+      imageUrl: "https://store.public.blob.vercel-storage.com/second.png",
+      imageHash,
+    });
+
+    expect(first.duplicateImage).toBeNull();
+    expect(second).toMatchObject({
+      duplicate: false,
+      duplicateImage: { id: "swipe_first", brandName: "Acme", createdAt },
+    });
+    expect(state.inserts).toHaveLength(2);
+  });
+
+  it("combines swipe filter dimensions with AND and selections within each with IN", async () => {
+    state.selects.push([], []);
+    await createMockCaller({ role: "owner" }).studio.swipes({
+      angleIds: ["angle_1", "angle_2"],
+      visualStyleIds: ["style_1"],
+      hookTypeIds: ["hook_1", "hook_2"],
+    });
+
+    const query = new PgDialect().sqlToQuery(state.wheres[0] as Parameters<PgDialect["sqlToQuery"]>[0]);
+    expect(query.sql).toContain("and");
+    expect(query.sql.match(/ in \(/g)).toHaveLength(3);
+    expect(query.params).toEqual(expect.arrayContaining([
+      "test-org-id", "angle_1", "angle_2", "style_1", "hook_1", "hook_2",
+    ]));
+  });
+
+  it("uses trigram filtering and ranked ordering for typo-tolerant swipe search", async () => {
+    state.selects.push([
+      { id: "benefit", brandName: "Benefit Cosmetics", whyItWorks: "Strong offer", angleId: null, hookTypeId: null, visualStyleId: null },
+      { id: "other", brandName: "Other", whyItWorks: "Benefit-led layout", angleId: null, hookTypeId: null, visualStyleId: null },
+    ], []);
+    const rows = await createMockCaller({ role: "owner" }).studio.swipes({ q: "benfit" });
+
+    const where = new PgDialect().sqlToQuery(state.wheres[0] as Parameters<PgDialect["sqlToQuery"]>[0]);
+    const order = new PgDialect().sqlToQuery(state.orderBys[0][0] as Parameters<PgDialect["sqlToQuery"]>[0]);
+    expect(rows.map((row) => row.id)).toEqual(["benefit", "other"]);
+    expect(where.sql).toContain(" % ");
+    expect(order.sql).toContain("GREATEST(similarity(");
+  });
+
+  it("falls back to plain ILIKE for swipe searches shorter than three characters", async () => {
+    state.selects.push([], []);
+    await createMockCaller({ role: "owner" }).studio.swipes({ q: "be" });
+
+    const where = new PgDialect().sqlToQuery(state.wheres[0] as Parameters<PgDialect["sqlToQuery"]>[0]);
+    expect(where.sql).toContain("ilike");
+    expect(where.sql).not.toContain(" % ");
+    expect(where.params).toContain("%be%");
   });
 
   it("rejects a foreign screenshot URL instead of storing an expiring asset", async () => {

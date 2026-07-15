@@ -14,6 +14,8 @@ const mockDb = {
       from: vi.fn(() => chain),
       innerJoin: vi.fn(() => chain),
       where: vi.fn(() => chain),
+      orderBy: vi.fn(() => chain),
+      for: vi.fn(() => chain),
       limit: vi.fn(async () => dbState.selectRows.shift() ?? []),
       groupBy: vi.fn(async () => dbState.groupByRows.shift() ?? []),
     };
@@ -285,6 +287,142 @@ describe("studio router — static-ad composer starters", () => {
 
     expect(dbState.inserted).toEqual([]);
     expect(triggerMock.trigger).not.toHaveBeenCalled();
+  });
+
+  it("linkCandidates: ranks a template id hit above angle, fuzzy, and recent matches", async () => {
+    dbState.selectRows.push(
+      [{ id: "abcdef12-3456-7890-abcd-ef1234567890", angle: "Price anchor" }],
+      [
+        {
+          id: "creative_recent",
+          name: "Newest creative",
+          assetUrl: null,
+          format: "static",
+          createdAt: new Date("2026-07-18T00:00:00Z"),
+        },
+        {
+          id: "creative_fuzzy",
+          name: "Summer sale",
+          assetUrl: null,
+          format: "static",
+          createdAt: new Date("2026-07-17T00:00:00Z"),
+        },
+        {
+          id: "creative_angle",
+          name: "REVIV-ST-price-anchor-111111",
+          assetUrl: null,
+          format: "static",
+          createdAt: new Date("2026-07-16T00:00:00Z"),
+        },
+        {
+          id: "creative_template",
+          name: "REVIV-ST-other-angle-abcdef",
+          assetUrl: null,
+          format: "static",
+          createdAt: new Date("2026-07-15T00:00:00Z"),
+        },
+      ],
+    );
+    queueGroupBy([]);
+
+    const result = await createMockCaller({ role: "owner" }).studio.linkCandidates({
+      variantId: "abcdef12-3456-7890-abcd-ef1234567890",
+      search: "sale",
+    });
+
+    expect(result.map((row) => [row.id, row.matchReason])).toEqual([
+      ["creative_template", "template"],
+      ["creative_angle", "angle"],
+      ["creative_fuzzy", "fuzzy"],
+      ["creative_recent", "recent"],
+    ]);
+  });
+
+  it("publishAndLink: atomically publishes and links an org creative", async () => {
+    dbState.selectRows.push(
+      [{ id: "variant_1", publishedAt: null }],
+      [{ id: "creative_1" }],
+    );
+
+    await createMockCaller({ role: "owner" }).studio.publishAndLink({
+      variantId: "variant_1",
+      creativeId: "creative_1",
+    });
+
+    expect(dbState.updated.at(-1)).toMatchObject({
+      publishedAt: expect.any(Date),
+      linkedCreativeId: "creative_1",
+    });
+  });
+
+  it("publishAndLink: publishes without linking and preserves an existing timestamp", async () => {
+    const publishedAt = new Date("2026-07-15T00:00:00Z");
+    dbState.selectRows.push([{ id: "variant_1", publishedAt }]);
+
+    await createMockCaller({ role: "owner" }).studio.publishAndLink({
+      variantId: "variant_1",
+      creativeId: null,
+    });
+
+    expect(dbState.updated.at(-1)).toMatchObject({ publishedAt });
+    expect(dbState.updated.at(-1)?.linkedCreativeId).toBeUndefined();
+  });
+
+  it("extendVariant: rejects an image that is not linked to a live creative", async () => {
+    dbState.selectRows.push([{
+      imageUrl: "https://cdn.test/winner.png",
+      linkedCreativeId: null,
+      brief: "Original brief",
+      angle: "Price anchor",
+      format: "square",
+      copyPackageId: null,
+    }]);
+
+    await expect(
+      createMockCaller({ role: "owner" }).studio.extendVariant({
+        variantId: "variant_1",
+      }),
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "Link this image to a live ad before extending it",
+    });
+    expect(dbState.inserted).toEqual([]);
+  });
+
+  it("extendVariant: queues three variants with the winner as its reference", async () => {
+    dbState.selectRows.push(
+      [{
+        imageUrl: "https://cdn.test/winner.png",
+        linkedCreativeId: "creative_1",
+        brief: "Original brief",
+        angle: "Price anchor",
+        format: "portrait",
+        copyPackageId: null,
+      }],
+      [{ id: "creative_1" }],
+    );
+
+    const result = await createMockCaller({ role: "owner" }).studio.extendVariant({
+      variantId: "variant_1",
+    });
+
+    expect(result).toEqual({ generationId: "generation_new" });
+    expect(dbState.inserted[0]).toMatchObject({
+      brief: expect.stringContaining("Make 3 more like this proven winner"),
+      angle: "Price anchor",
+      count: 3,
+      format: "portrait",
+      referenceImageUrls: ["https://cdn.test/winner.png"],
+      sourceCreativeId: "creative_1",
+    });
+    expect(dbState.inserted[1]).toHaveLength(3);
+    expect(triggerMock.trigger).toHaveBeenCalledWith(
+      "generate-static-ads",
+      expect.objectContaining({
+        count: 3,
+        referenceImageUrls: ["https://cdn.test/winner.png"],
+      }),
+    );
   });
 
   it("linkVariantToCreative: links a published variant to an org creative", async () => {

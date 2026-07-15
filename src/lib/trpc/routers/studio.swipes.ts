@@ -2,7 +2,7 @@ import { z } from "zod";
 import { tasks } from "@trigger.dev/sdk";
 import { TRPCError, type TRPCRouterRecord } from "@trpc/server";
 import { del } from "@vercel/blob";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { studioSuggestions, studioSwipes, studioTaxonomyValues } from "@/schema/studio";
 import { buildRebrandPrompt } from "@/lib/studio-prompt";
@@ -23,19 +23,53 @@ export const studioSwipeProcedures = {
     .input(
       z.object({
         includeArchived: z.boolean().default(false),
-        angleId: z.string().optional(),
-        visualStyleId: z.string().optional(),
+        angleIds: z.array(z.string()).optional(),
+        visualStyleIds: z.array(z.string()).optional(),
+        hookTypeIds: z.array(z.string()).optional(),
+        q: z.string().trim().max(200).optional(),
       }).optional(),
     )
     .query(async ({ input, ctx }) => {
       const conditions = [eq(studioSwipes.organizationId, ctx.organizationId)];
       if (!input?.includeArchived) conditions.push(isNull(studioSwipes.archivedAt));
-      if (input?.angleId) conditions.push(eq(studioSwipes.angleId, input.angleId));
-      if (input?.visualStyleId) {
-        conditions.push(eq(studioSwipes.visualStyleId, input.visualStyleId));
+      if (input?.angleIds?.length) {
+        conditions.push(inArray(studioSwipes.angleId, input.angleIds));
       }
+      if (input?.visualStyleIds?.length) {
+        conditions.push(inArray(studioSwipes.visualStyleId, input.visualStyleIds));
+      }
+      if (input?.hookTypeIds?.length) {
+        conditions.push(inArray(studioSwipes.hookTypeId, input.hookTypeIds));
+      }
+      const q = input?.q?.trim();
+      let rank: ReturnType<typeof sql<number>> | undefined;
+      if (q) {
+        const contains = `%${q}%`;
+        if (q.length < 3) {
+          conditions.push(
+            or(
+              ilike(studioSwipes.brandName, contains),
+              ilike(studioSwipes.whyItWorks, contains),
+            )!,
+          );
+        } else {
+          conditions.push(
+            or(
+              sql`${studioSwipes.brandName} % ${q}`,
+              sql`${studioSwipes.whyItWorks} % ${q}`,
+            )!,
+          );
+          rank = sql<number>`GREATEST(similarity(${studioSwipes.brandName}, ${q}), similarity(${studioSwipes.whyItWorks}, ${q}))`;
+        }
+      }
+      const swipeQuery = db
+        .select()
+        .from(studioSwipes)
+        .where(and(...conditions))
+        .orderBy(...(rank ? [desc(rank), desc(studioSwipes.createdAt)] : [desc(studioSwipes.createdAt)]))
+        .limit(60);
       const [rows, taxonomy] = await Promise.all([
-        db.select().from(studioSwipes).where(and(...conditions)).orderBy(desc(studioSwipes.createdAt)),
+        swipeQuery,
         db
           .select()
           .from(studioTaxonomyValues)
@@ -45,6 +79,7 @@ export const studioSwipeProcedures = {
       return rows.map((swipe) => ({
         ...swipe,
         angle: swipe.angleId ? byId.get(swipe.angleId) ?? null : null,
+        hookType: swipe.hookTypeId ? byId.get(swipe.hookTypeId) ?? null : null,
         visualStyle: swipe.visualStyleId
           ? byId.get(swipe.visualStyleId) ?? null
           : null,
@@ -55,6 +90,7 @@ export const studioSwipeProcedures = {
     .input(
       z.object({
         imageUrl: persistedSwipeImageUrlSchema,
+        imageHash: z.string().regex(/^[a-f\d]{64}$/i, "Invalid SHA-256 hash").optional(),
         sourceUrl: z.string().url().optional().or(z.literal("")),
         brandName: z.string().trim().max(100).optional(),
         angleId: z.string().optional(),
@@ -71,6 +107,23 @@ export const studioSwipeProcedures = {
           "visual_style",
         ),
       ]);
+      const [duplicateImage] = input.imageHash
+        ? await db
+            .select({
+              id: studioSwipes.id,
+              brandName: studioSwipes.brandName,
+              createdAt: studioSwipes.createdAt,
+            })
+            .from(studioSwipes)
+            .where(
+              and(
+                eq(studioSwipes.organizationId, ctx.organizationId),
+                eq(studioSwipes.imageHash, input.imageHash.toLowerCase()),
+                isNull(studioSwipes.archivedAt),
+              ),
+            )
+            .limit(1)
+        : [];
       const sourceUrl = normalizeOptionalUrl(input.sourceUrl);
       if (sourceUrl) {
         const [existing] = await db
@@ -83,13 +136,20 @@ export const studioSwipeProcedures = {
             ),
           )
           .limit(1);
-        if (existing) return { swipe: existing, duplicate: true as const };
+        if (existing) {
+          return {
+            swipe: existing,
+            duplicate: true as const,
+            duplicateImage: duplicateImage ?? null,
+          };
+        }
       }
       const [swipe] = await db
         .insert(studioSwipes)
         .values({
           organizationId: ctx.organizationId,
           imageUrl: input.imageUrl,
+          imageHash: input.imageHash?.toLowerCase(),
           sourceUrl,
           brandName: input.brandName || null,
           angleId: input.angleId ?? null,
@@ -112,7 +172,13 @@ export const studioSwipeProcedures = {
             ),
           )
           .limit(1);
-        if (existing) return { swipe: existing, duplicate: true as const };
+        if (existing) {
+          return {
+            swipe: existing,
+            duplicate: true as const,
+            duplicateImage: duplicateImage ?? null,
+          };
+        }
       }
       if (!swipe) {
         throw new TRPCError({ code: "CONFLICT", message: "Swipe could not be saved" });
@@ -124,7 +190,11 @@ export const studioSwipeProcedures = {
           imageUrl: swipe.imageUrl,
         })
         .catch(() => undefined);
-      return { swipe, duplicate: false as const };
+      return {
+        swipe,
+        duplicate: false as const,
+        duplicateImage: duplicateImage ?? null,
+      };
     }),
 
   updateSwipe: studioWriteProcedure
@@ -134,6 +204,7 @@ export const studioSwipeProcedures = {
         sourceUrl: z.string().url().nullable().optional().or(z.literal("")),
         brandName: z.string().trim().max(100).nullable().optional(),
         angleId: z.string().nullable().optional(),
+        hookTypeId: z.string().nullable().optional(),
         visualStyleId: z.string().nullable().optional(),
         whyItWorks: z.string().trim().max(1000).nullable().optional(),
       }),
@@ -147,6 +218,7 @@ export const studioSwipeProcedures = {
           values.visualStyleId,
           "visual_style",
         ),
+        requireTaxonomyValue(ctx.organizationId, values.hookTypeId, "hook_type"),
       ]);
       const nextSourceUrl =
         sourceUrl === undefined ? undefined : normalizeOptionalUrl(sourceUrl);
