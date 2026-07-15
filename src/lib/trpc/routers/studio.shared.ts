@@ -29,7 +29,12 @@ import {
   type StudioFormat,
 } from "@/lib/studio-prompt";
 import { buildElementsBrief } from "@/lib/studio-suggestions";
-import { STUDIO_ANGLE_SEEDS, STUDIO_STYLE_SEEDS, studioSlug } from "@/lib/studio-taxonomy";
+import {
+  STUDIO_ANGLE_SEEDS,
+  STUDIO_HOOK_TYPE_SEEDS,
+  STUDIO_STYLE_SEEDS,
+  studioSlug,
+} from "@/lib/studio-taxonomy";
 import type { generateStaticAdsTask } from "../../../../trigger/generate-static-ads";
 
 export const awarenessLevelSchema = z.enum(AWARENESS_LEVELS);
@@ -46,7 +51,11 @@ export const persistedSwipeImageUrlSchema = remoteImageUrlSchema.refine((value) 
   return hostname === "blob.vercel-storage.com" ||
     hostname.endsWith(".blob.vercel-storage.com");
 }, "Swipe screenshots must be uploaded before saving");
-export const taxonomyKindSchema = z.enum(["angle", "visual_style"]);
+export const taxonomyKindSchema = z.enum([
+  "angle",
+  "visual_style",
+  "hook_type",
+]);
 export const markSchema = z.enum(["good", "bad"]);
 const STALE_GENERATION_MS = 15 * 60 * 1000;
 
@@ -84,7 +93,7 @@ export function normalizeOptionalUrl(value?: string | null) {
 export async function requireTaxonomyValue(
   organizationId: string,
   id: string | null | undefined,
-  kind: "angle" | "visual_style",
+  kind: "angle" | "visual_style" | "hook_type",
 ) {
   if (!id) return;
   const [value] = await db
@@ -102,7 +111,12 @@ export async function requireTaxonomyValue(
   if (!value) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: kind === "angle" ? "Invalid angle tag" : "Invalid visual-style tag",
+      message:
+        kind === "angle"
+          ? "Invalid angle tag"
+          : kind === "visual_style"
+            ? "Invalid visual-style tag"
+            : "Invalid hook-type tag",
     });
   }
 }
@@ -476,6 +490,7 @@ export async function seedTaxonomy(organizationId: string) {
   const rows = [
     ...STUDIO_ANGLE_SEEDS.map((name) => ({ kind: "angle", name })),
     ...STUDIO_STYLE_SEEDS.map((name) => ({ kind: "visual_style", name })),
+    ...STUDIO_HOOK_TYPE_SEEDS.map((name) => ({ kind: "hook_type", name })),
   ].map((value) => ({
     organizationId,
     kind: value.kind,

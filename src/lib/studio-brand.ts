@@ -8,6 +8,8 @@ export type StudioBrandProfile = {
   offer: string | null;
   productImageUrl: string | null;
   productNotes: string | null;
+  prohibitedClaims: string[];
+  requiredDisclaimers: string[];
 };
 
 export async function getStudioBrandProfile(
@@ -20,6 +22,8 @@ export async function getStudioBrandProfile(
       offer: studioBrandProfiles.offer,
       productImageUrl: studioBrandProfiles.productImageUrl,
       productNotes: studioBrandProfiles.productNotes,
+      prohibitedClaims: studioBrandProfiles.prohibitedClaims,
+      requiredDisclaimers: studioBrandProfiles.requiredDisclaimers,
     })
     .from(studioBrandProfiles)
     .where(eq(studioBrandProfiles.organizationId, organizationId))

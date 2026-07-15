@@ -22,6 +22,8 @@ export const studioBrandProcedures = {
         offer: z.string().trim().max(500).optional(),
         productImageUrl: remoteImageUrlSchema.nullish(),
         productNotes: z.string().trim().max(1000).optional(),
+        prohibitedClaims: z.array(z.string().trim().min(1)),
+        requiredDisclaimers: z.array(z.string().trim().min(1)),
       }),
     )
     .mutation(async ({ input, ctx }) => {
@@ -31,6 +33,8 @@ export const studioBrandProcedures = {
         offer: input.offer || null,
         productImageUrl: input.productImageUrl ?? null,
         productNotes: input.productNotes || null,
+        prohibitedClaims: input.prohibitedClaims,
+        requiredDisclaimers: input.requiredDisclaimers,
       };
       await db
         .insert(studioBrandProfiles)

@@ -173,7 +173,7 @@ function AddSwipeDialog({
 function TaxonomyManager({ values, onChanged }: { values: TaxonomyValue[]; onChanged: () => void }) {
   const trpc = useTRPC();
   const [open, setOpen] = useState(false);
-  const [kind, setKind] = useState<"angle" | "visual_style">("angle");
+  const [kind, setKind] = useState<"angle" | "visual_style" | "hook_type">("angle");
   const [name, setName] = useState("");
   const add = useMutation(trpc.studio.addTaxonomyValue.mutationOptions({ onSuccess: () => { setName(""); onChanged(); }, onError: (error) => toast.error(error.message) }));
   const archive = useMutation(trpc.studio.archiveTaxonomyValue.mutationOptions({ onSuccess: onChanged, onError: (error) => toast.error(error.message) }));
@@ -181,10 +181,10 @@ function TaxonomyManager({ values, onChanged }: { values: TaxonomyValue[]; onCha
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild><Button size="sm" variant="outline"><Settings /> Manage tags</Button></DialogTrigger>
       <DialogContent>
-        <DialogHeader><DialogTitle>Angle & visual-style tags</DialogTitle><DialogDescription>Add workspace vocabulary or archive values to hide them from pickers.</DialogDescription></DialogHeader>
-        <div className="flex gap-2"><Select value={kind} onValueChange={(value) => setKind(value as typeof kind)}><SelectTrigger className="w-36"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="angle">Angle</SelectItem><SelectItem value="visual_style">Visual style</SelectItem></SelectContent></Select><Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Plain-language value" /><Button disabled={!name.trim() || add.isPending} onClick={() => add.mutate({ kind, name })}><Plus /> Add</Button></div>
+        <DialogHeader><DialogTitle>Studio taxonomy tags</DialogTitle><DialogDescription>Add workspace vocabulary or archive values to hide them from pickers.</DialogDescription></DialogHeader>
+        <div className="flex gap-2"><Select value={kind} onValueChange={(value) => setKind(value as typeof kind)}><SelectTrigger className="w-36"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="angle">Angle</SelectItem><SelectItem value="visual_style">Visual style</SelectItem><SelectItem value="hook_type">Hook type</SelectItem></SelectContent></Select><Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Plain-language value" /><Button disabled={!name.trim() || add.isPending} onClick={() => add.mutate({ kind, name })}><Plus /> Add</Button></div>
         <div className="max-h-72 space-y-1 overflow-y-auto rounded-lg border p-2">
-          {values.map((value) => <div key={value.id} className={cn("flex items-center gap-2 rounded-md px-2 py-1.5 text-sm", value.archivedAt && "opacity-50")}><Badge variant="outline" className="w-20 justify-center text-[10px]">{value.kind === "angle" ? "Angle" : "Style"}</Badge><span className="flex-1">{value.name}</span><Button size="sm" variant="ghost" className="h-7" onClick={() => archive.mutate({ id: value.id, archived: !value.archivedAt })}>{value.archivedAt ? "Restore" : "Archive"}</Button></div>)}
+          {values.map((value) => <div key={value.id} className={cn("flex items-center gap-2 rounded-md px-2 py-1.5 text-sm", value.archivedAt && "opacity-50")}><Badge variant="outline" className="w-20 justify-center text-[10px]">{value.kind === "angle" ? "Angle" : value.kind === "hook_type" ? "Hook" : "Style"}</Badge><span className="flex-1">{value.name}</span><Button size="sm" variant="ghost" className="h-7" onClick={() => archive.mutate({ id: value.id, archived: !value.archivedAt })}>{value.archivedAt ? "Restore" : "Archive"}</Button></div>)}
         </div>
       </DialogContent>
     </Dialog>

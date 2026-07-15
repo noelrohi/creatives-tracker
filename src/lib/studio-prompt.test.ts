@@ -253,11 +253,15 @@ describe("Weekly and rebrand prompt builders", () => {
         background: { action: "keep" },
         offer: { action: "change", value: "Use our guarantee" },
         cta: { action: "change", value: "Use our CTA" },
+        socialProof: { action: "change", value: "Use 2,000 reviews" },
+        priceFraming: { action: "keep", value: "$1 per day" },
       },
     });
 
     expect(prompt).toContain("Element spec: headline — change: Use our headline");
     expect(prompt).toContain("background — keep: keep from the reference");
+    expect(prompt).toContain("social proof — change: Use 2,000 reviews");
+    expect(prompt).toContain("price framing — keep: $1 per day");
     expect(prompt).not.toContain('"action"');
   });
 
@@ -272,10 +276,14 @@ describe("Weekly and rebrand prompt builders", () => {
         brandMarks: { action: "change", value: "Remove every source logo" },
         product: { action: "change", value: "Use our product" },
         copy: { action: "change", value: "Use our words" },
+        socialProof: null,
+        priceFraming: null,
       }),
     ).toMatchObject({
       background: { action: "keep" },
       brandMarks: { action: "change" },
+      socialProof: null,
+      priceFraming: null,
     });
   });
 });

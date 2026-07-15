@@ -14,6 +14,8 @@ export type SuggestionElements = {
   brandMarks?: SuggestionElement | null;
   product?: SuggestionElement | null;
   copy?: SuggestionElement | null;
+  socialProof?: SuggestionElement | null;
+  priceFraming?: SuggestionElement | null;
 };
 
 // These schemas are sent to OpenAI structured outputs (strict mode), which
@@ -33,6 +35,8 @@ export const suggestionElementsSchema = z.object({
   brandMarks: suggestionElementSchema.nullable(),
   product: suggestionElementSchema.nullable(),
   copy: suggestionElementSchema.nullable(),
+  socialProof: suggestionElementSchema.nullable(),
+  priceFraming: suggestionElementSchema.nullable(),
 });
 
 const suggestionFormatSchema = z.enum([
@@ -70,6 +74,8 @@ export const ELEMENT_LABELS: Record<keyof SuggestionElements, string> = {
   brandMarks: "brand marks",
   product: "product",
   copy: "copy",
+  socialProof: "social proof",
+  priceFraming: "price framing",
 };
 
 export function buildElementsBrief(elements: SuggestionElements) {

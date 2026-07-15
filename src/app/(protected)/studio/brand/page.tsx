@@ -23,6 +23,12 @@ function BrandForm({ initial }: { initial: BrandProfile }) {
   );
   const [offer, setOffer] = useState(initial?.offer ?? "");
   const [productNotes, setProductNotes] = useState(initial?.productNotes ?? "");
+  const [prohibitedClaims, setProhibitedClaims] = useState(
+    initial?.prohibitedClaims.join("\n") ?? "",
+  );
+  const [requiredDisclaimers, setRequiredDisclaimers] = useState(
+    initial?.requiredDisclaimers.join("\n") ?? "",
+  );
   const [productImageUrl, setProductImageUrl] = useState(
     initial?.productImageUrl ?? "",
   );
@@ -116,6 +122,18 @@ function BrandForm({ initial }: { initial: BrandProfile }) {
           placeholder={'Product details the photo can miss, e.g. shallow "Reviv" wordmark debossed on the front face (optional)'}
           className="min-h-20"
         />
+        <Textarea
+          value={prohibitedClaims}
+          onChange={(event) => setProhibitedClaims(event.target.value)}
+          placeholder="Prohibited claims (one per line)"
+          className="min-h-24"
+        />
+        <Textarea
+          value={requiredDisclaimers}
+          onChange={(event) => setRequiredDisclaimers(event.target.value)}
+          placeholder="Required disclaimers (one per line)"
+          className="min-h-24"
+        />
         <Button
           disabled={!brandName.trim() || !productDescription.trim() || uploading || save.isPending}
           onClick={() =>
@@ -125,6 +143,14 @@ function BrandForm({ initial }: { initial: BrandProfile }) {
               offer: offer.trim() || undefined,
               productNotes: productNotes.trim() || undefined,
               productImageUrl: productImageUrl || null,
+              prohibitedClaims: prohibitedClaims
+                .split("\n")
+                .map((claim) => claim.trim())
+                .filter(Boolean),
+              requiredDisclaimers: requiredDisclaimers
+                .split("\n")
+                .map((disclaimer) => disclaimer.trim())
+                .filter(Boolean),
             })
           }
         >

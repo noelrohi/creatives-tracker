@@ -302,6 +302,20 @@
       "when": 1784046471623,
       "tag": "0042_giant_lifeguard",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1784091925690,
+      "tag": "0043_flippant_polaris",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1784091930939,
+      "tag": "0044_swipe_trgm",
+      "breakpoints": true
     }
   ]
 }
