@@ -90,7 +90,7 @@ function MetricCard({
 }
 
 interface PerformanceData {
-  logCount: number;
+  logCount: string;
   minDate: string | null;
   maxDate: string | null;
   totalSpend: string | null;
@@ -100,9 +100,9 @@ interface PerformanceData {
   portfolioAvgCpa: string | null;
   avgCtr: string | null;
   portfolioAvgCtr: string | null;
-  totalConversions: number | null;
-  totalImpressions: number | null;
-  totalClicks: number | null;
+  totalConversions: string | null;
+  totalImpressions: string | null;
+  totalClicks: string | null;
 }
 
 interface DailyPerformanceRow {
@@ -113,11 +113,11 @@ interface DailyPerformanceRow {
   roas: string | null;
   cpa: string | null;
   ctr: string | null;
-  conversions: number | null;
-  impressions: number | null;
-  reach: number | null;
+  conversions: string | null;
+  impressions: string | null;
+  reach: string | null;
   cpm: string | null;
-  linkClicks: number | null;
+  linkClicks: string | null;
 }
 
 interface AccountData {
@@ -144,7 +144,7 @@ export function CreativePerformanceTab({
   onDateRangeChange: (range: { from: Date; to: Date } | undefined) => void;
   showDateRange?: boolean;
 }) {
-  const hasPerf = perf && perf.logCount > 0;
+  const hasPerf = perf && Number(perf.logCount) > 0;
   const roasDiff = pctDiff(perf?.avgRoas, perf?.portfolioAvgRoas);
   const cpaDiff = pctDiff(perf?.avgCpa, perf?.portfolioAvgCpa);
   const ctrDiff = pctDiff(perf?.avgCtr, perf?.portfolioAvgCtr);

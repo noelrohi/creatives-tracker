@@ -14,6 +14,98 @@ import { effectiveAdStatusSql } from "@/lib/effective-ad-status";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 import { handleMetaApiError, META_GRAPH_API_BASE } from "@/lib/meta-insights-sync";
 
+const pgAggregateStringSchema = z.preprocess((value) => value, z.string());
+
+const adSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  adSetId: z.string().nullable(),
+  adCreativeId: z.string().nullable(),
+  accountId: z.string().nullable(),
+  caption: z.string().nullable(),
+  destinationUrl: z.string().nullable(),
+  metaId: z.string().nullable(),
+  metaImageHash: z.string().nullable(),
+  metaVideoId: z.string().nullable(),
+  metaCreativeId: z.string().nullable(),
+  rawMetaConfiguredStatus: z.string().nullable(),
+  rawMetaEffectiveStatus: z.string().nullable(),
+  organizationId: z.string().nullable(),
+  status: z.enum(["active", "paused", "archived"]),
+  notes: z.string().nullable(),
+  enrichmentAttemptedAt: z.date().nullable(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+const adDetailsSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  adSetId: z.string().nullable(),
+  adSetName: z.string().nullable(),
+  campaignId: z.string().nullable(),
+  campaignName: z.string().nullable(),
+  adCreativeId: z.string().nullable(),
+  adCreativeName: z.string().nullable(),
+  destinationUrl: z.string().nullable(),
+  status: z.enum(["active", "paused", "archived"]),
+  notes: z.string().nullable(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+const adSetListItemSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  adCreativeId: z.string().nullable(),
+  adCreativeName: z.string().nullable(),
+  destinationUrl: z.string().nullable(),
+  status: z.enum(["active", "paused", "archived"]),
+  notes: z.string().nullable(),
+  createdAt: z.date(),
+});
+
+const adCreativeListItemSchema = z.object({
+  id: z.string(),
+  metaId: z.string().nullable(),
+  name: z.string(),
+  caption: z.string().nullable(),
+  adSetId: z.string().nullable(),
+  adSetName: z.string().nullable(),
+  campaignName: z.string().nullable(),
+  destinationUrl: z.string().nullable(),
+  status: z.enum(["active", "paused", "archived"]),
+  notes: z.string().nullable(),
+  createdAt: z.date(),
+  totalSpend: z.string().nullable(),
+  avgRoas: z.string().nullable(),
+  totalConversions: pgAggregateStringSchema.nullable(),
+  runningDays: z.number(),
+  disableTier: z.enum(["pause_now", "watch"]).nullable(),
+  minDate: z.string().nullable(),
+  maxDate: z.string().nullable(),
+});
+
+const pauseMetaAdsResultSchema = z.object({
+  paused: z.array(z.object({
+    id: z.string(),
+    metaId: z.string(),
+    name: z.string(),
+  })),
+  failed: z.array(z.object({
+    id: z.string(),
+    metaId: z.string().nullable(),
+    name: z.string(),
+    error: z.string(),
+    metaPaused: z.boolean().optional(),
+  })),
+});
+
+const adImportResultSchema = z.object({
+  adId: z.string(),
+  name: z.string(),
+});
+
 type MetaPauseErrorBody = {
   error?: {
     type?: string;
@@ -115,52 +207,56 @@ async function assertWritableAdReferencesBelongToOrg(input: {
 }
 
 export const adRouter = router({
-  list: orgProcedure.meta(openApiQueryMeta("ad", "list")).query(async ({ ctx }) => {
-    return db
-      .select({
-        id: ads.id,
-        name: ads.name,
-        adSetId: adSets.id,
-        adSetName: adSets.name,
-        campaignId: campaigns.id,
-        campaignName: campaigns.name,
-        adCreativeId: adCreatives.id,
-        adCreativeName: adCreatives.name,
-        destinationUrl: ads.destinationUrl,
-        status: effectiveAdStatusSql(ads.status, adSets.status),
-        notes: ads.notes,
-        createdAt: ads.createdAt,
-        updatedAt: ads.updatedAt,
-      })
-      .from(ads)
-      .leftJoin(
-        adSets,
-        and(
-          eq(ads.adSetId, adSets.id),
-          eq(adSets.organizationId, ctx.organizationId),
-        ),
-      )
-      .leftJoin(
-        campaigns,
-        and(
-          eq(adSets.campaignId, campaigns.id),
-          eq(campaigns.organizationId, ctx.organizationId),
-        ),
-      )
-      .leftJoin(
-        adCreatives,
-        and(
-          eq(ads.adCreativeId, adCreatives.id),
-          eq(adCreatives.organizationId, ctx.organizationId),
-        ),
-      )
-      .where(eq(ads.organizationId, ctx.organizationId))
-      .orderBy(desc(ads.createdAt));
-  }),
+  list: orgProcedure
+    .meta(openApiQueryMeta("ad", "list"))
+    .output(z.array(adDetailsSchema))
+    .query(async ({ ctx }) => {
+      return db
+        .select({
+          id: ads.id,
+          name: ads.name,
+          adSetId: adSets.id,
+          adSetName: adSets.name,
+          campaignId: campaigns.id,
+          campaignName: campaigns.name,
+          adCreativeId: adCreatives.id,
+          adCreativeName: adCreatives.name,
+          destinationUrl: ads.destinationUrl,
+          status: effectiveAdStatusSql(ads.status, adSets.status),
+          notes: ads.notes,
+          createdAt: ads.createdAt,
+          updatedAt: ads.updatedAt,
+        })
+        .from(ads)
+        .leftJoin(
+          adSets,
+          and(
+            eq(ads.adSetId, adSets.id),
+            eq(adSets.organizationId, ctx.organizationId),
+          ),
+        )
+        .leftJoin(
+          campaigns,
+          and(
+            eq(adSets.campaignId, campaigns.id),
+            eq(campaigns.organizationId, ctx.organizationId),
+          ),
+        )
+        .leftJoin(
+          adCreatives,
+          and(
+            eq(ads.adCreativeId, adCreatives.id),
+            eq(adCreatives.organizationId, ctx.organizationId),
+          ),
+        )
+        .where(eq(ads.organizationId, ctx.organizationId))
+        .orderBy(desc(ads.createdAt));
+    }),
 
   listByAdSet: orgProcedure
     .meta(openApiQueryMeta("ad", "listByAdSet"))
     .input(z.object({ adSetId: z.string() }))
+    .output(z.array(adSetListItemSchema))
     .query(async ({ input, ctx }) => {
       await assertAdSetBelongsToOrg(input.adSetId, ctx.organizationId);
 
@@ -201,6 +297,7 @@ export const adRouter = router({
       from: z.string().optional(),
       to: z.string().optional(),
     }))
+    .output(z.array(adCreativeListItemSchema))
     .query(async ({ input, ctx }) => {
       await assertCreativeBelongsToOrg(input.adCreativeId, ctx.organizationId);
 
@@ -303,6 +400,7 @@ export const adRouter = router({
   getById: orgProcedure
     .meta(openApiQueryMeta("ad", "getById"))
     .input(z.object({ id: z.string() }))
+    .output(adDetailsSchema)
     .query(async ({ input, ctx }) => {
       const [ad] = await db
         .select({
@@ -357,6 +455,7 @@ export const adRouter = router({
         metaId: z.string().optional(),
       }),
     )
+    .output(adSchema)
     .mutation(async ({ input, ctx }) => {
       await assertWritableAdReferencesBelongToOrg({
         adSetId: input.adSetId,
@@ -390,6 +489,7 @@ export const adRouter = router({
         notes: z.string().nullable().optional(),
       }),
     )
+    .output(adSchema)
     .mutation(async ({ input, ctx }) => {
       await assertWritableAdReferencesBelongToOrg({
         adSetId: input.adSetId,
@@ -415,6 +515,7 @@ export const adRouter = router({
   pauseMetaAds: orgWriteProcedure
     .meta(openApiMutationMeta("ad", "pauseMetaAds", "Pause selected ads in Meta and mirror successful pauses locally"))
     .input(z.object({ adIds: z.array(z.string()).min(1).max(25) }))
+    .output(pauseMetaAdsResultSchema)
     .mutation(async ({ input, ctx }) => {
       const uniqueAdIds = [...new Set(input.adIds)];
       const rows = await db
@@ -520,6 +621,7 @@ export const adRouter = router({
   duplicate: orgWriteProcedure
     .meta(openApiMutationMeta("ad", "duplicate"))
     .input(z.object({ id: z.string() }))
+    .output(adSchema)
     .mutation(async ({ input, ctx }) => {
       const [source] = await db
         .select()
@@ -573,6 +675,7 @@ export const adRouter = router({
         ),
       }),
     )
+    .output(z.array(adImportResultSchema))
     .mutation(async ({ input, ctx }) => {
       if (input.rows.length === 0) return [];
       await assertAdSetBelongsToOrg(input.adSetId, ctx.organizationId);
@@ -637,6 +740,7 @@ export const adRouter = router({
   delete: orgWriteProcedure
     .meta(openApiMutationMeta("ad", "delete"))
     .input(z.object({ id: z.string() }))
+    .output(z.void())
     .mutation(async ({ input, ctx }) => {
       await db
         .delete(ads)

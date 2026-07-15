@@ -156,6 +156,7 @@ export const adAccountRouter = router({
   delete: orgWriteProcedure
     .meta(openApiMutationMeta("adAccount", "delete"))
     .input(z.object({ id: z.string() }))
+    .output(z.void())
     .mutation(async ({ input, ctx }) => {
       await db
         .delete(adAccounts)

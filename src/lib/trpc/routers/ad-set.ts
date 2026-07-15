@@ -8,6 +8,60 @@ import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
 import { adAccounts } from "@/schema/account";
 
+const pgAggregateStringSchema = z.preprocess((value) => value, z.string());
+
+const adSetSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  campaignId: z.string(),
+  accountId: z.string().nullable(),
+  costCap: z.string().nullable(),
+  dailyBudget: z.string().nullable(),
+  targetingMethod: z.array(z.string()).nullable(),
+  geos: z.array(z.string()).nullable(),
+  placements: z.array(z.string()).nullable(),
+  demographics: z.string().nullable(),
+  scheduleStart: z.date().nullable(),
+  scheduleEnd: z.date().nullable(),
+  metaId: z.string().nullable(),
+  organizationId: z.string().nullable(),
+  status: z.enum(["active", "paused", "archived"]),
+  notes: z.string().nullable(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+const adSetDetailsSchema = adSetSchema
+  .omit({ organizationId: true, accountId: true })
+  .extend({
+    campaignName: z.string().nullable(),
+    accountId: z.string().nullable(),
+    accountName: z.string().nullable(),
+    accountMetaAccountId: z.string().nullable(),
+  });
+
+const adSetListItemSchema = adSetDetailsSchema.extend({
+  adCount: pgAggregateStringSchema,
+});
+
+const adSetCampaignListItemSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  accountId: z.string().nullable(),
+  metaId: z.string().nullable(),
+  costCap: z.string().nullable(),
+  dailyBudget: z.string().nullable(),
+  status: z.enum(["active", "paused", "archived"]),
+  notes: z.string().nullable(),
+  createdAt: z.date(),
+  adCount: pgAggregateStringSchema,
+});
+
+const adSetImportResultSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+
 async function assertCampaignBelongsToOrg(
   campaignId: string,
   organizationId: string,
@@ -69,54 +123,58 @@ async function assertWritableReferencesBelongToOrg(input: {
 }
 
 export const adSetRouter = router({
-  list: orgProcedure.meta(openApiQueryMeta("adSet", "list")).query(async ({ ctx }) => {
-    const rows = await db
-      .select({
-        id: adSets.id,
-        name: adSets.name,
-        campaignId: adSets.campaignId,
-        campaignName: campaigns.name,
-        accountId: adAccounts.id,
-        accountName: adAccounts.name,
-        accountMetaAccountId: adAccounts.metaAccountId,
-        metaId: adSets.metaId,
-        costCap: adSets.costCap,
-        dailyBudget: adSets.dailyBudget,
-        targetingMethod: adSets.targetingMethod,
-        geos: adSets.geos,
-        placements: adSets.placements,
-        demographics: adSets.demographics,
-        scheduleStart: adSets.scheduleStart,
-        scheduleEnd: adSets.scheduleEnd,
-        status: adSets.status,
-        notes: adSets.notes,
-        createdAt: adSets.createdAt,
-        updatedAt: adSets.updatedAt,
-        adCount: sql<number>`(SELECT count(*) FROM ad WHERE ad.ad_set_id = ${adSets.id})`.as("ad_count"),
-      })
-      .from(adSets)
-      .leftJoin(
-        campaigns,
-        and(
-          eq(adSets.campaignId, campaigns.id),
-          eq(campaigns.organizationId, ctx.organizationId),
-        ),
-      )
-      .leftJoin(
-        adAccounts,
-        and(
-          eq(adSets.accountId, adAccounts.id),
-          eq(adAccounts.organizationId, ctx.organizationId),
-        ),
-      )
-      .where(eq(adSets.organizationId, ctx.organizationId))
-      .orderBy(desc(adSets.createdAt));
-    return rows;
-  }),
+  list: orgProcedure
+    .meta(openApiQueryMeta("adSet", "list"))
+    .output(z.array(adSetListItemSchema))
+    .query(async ({ ctx }) => {
+      const rows = await db
+        .select({
+          id: adSets.id,
+          name: adSets.name,
+          campaignId: adSets.campaignId,
+          campaignName: campaigns.name,
+          accountId: adAccounts.id,
+          accountName: adAccounts.name,
+          accountMetaAccountId: adAccounts.metaAccountId,
+          metaId: adSets.metaId,
+          costCap: adSets.costCap,
+          dailyBudget: adSets.dailyBudget,
+          targetingMethod: adSets.targetingMethod,
+          geos: adSets.geos,
+          placements: adSets.placements,
+          demographics: adSets.demographics,
+          scheduleStart: adSets.scheduleStart,
+          scheduleEnd: adSets.scheduleEnd,
+          status: adSets.status,
+          notes: adSets.notes,
+          createdAt: adSets.createdAt,
+          updatedAt: adSets.updatedAt,
+          adCount: sql<number>`(SELECT count(*) FROM ad WHERE ad.ad_set_id = ${adSets.id})`.as("ad_count"),
+        })
+        .from(adSets)
+        .leftJoin(
+          campaigns,
+          and(
+            eq(adSets.campaignId, campaigns.id),
+            eq(campaigns.organizationId, ctx.organizationId),
+          ),
+        )
+        .leftJoin(
+          adAccounts,
+          and(
+            eq(adSets.accountId, adAccounts.id),
+            eq(adAccounts.organizationId, ctx.organizationId),
+          ),
+        )
+        .where(eq(adSets.organizationId, ctx.organizationId))
+        .orderBy(desc(adSets.createdAt));
+      return rows;
+    }),
 
   listByCampaign: orgProcedure
     .meta(openApiQueryMeta("adSet", "listByCampaign"))
     .input(z.object({ campaignId: z.string() }))
+    .output(z.array(adSetCampaignListItemSchema))
     .query(async ({ input, ctx }) => {
       const rows = await db
         .select({
@@ -147,6 +205,7 @@ export const adSetRouter = router({
   getById: orgProcedure
     .meta(openApiQueryMeta("adSet", "getById"))
     .input(z.object({ id: z.string() }))
+    .output(adSetDetailsSchema)
     .query(async ({ input, ctx }) => {
       const [adSet] = await db
         .select({
@@ -209,6 +268,7 @@ export const adSetRouter = router({
         metaId: z.string().optional(),
       }),
     )
+    .output(adSetSchema)
     .mutation(async ({ input, ctx }) => {
       await assertWritableReferencesBelongToOrg({
         campaignId: input.campaignId,
@@ -258,6 +318,7 @@ export const adSetRouter = router({
         notes: z.string().nullable().optional(),
       }),
     )
+    .output(adSetSchema)
     .mutation(async ({ input, ctx }) => {
       await assertWritableReferencesBelongToOrg({
         campaignId: input.campaignId,
@@ -290,6 +351,7 @@ export const adSetRouter = router({
   duplicate: orgWriteProcedure
     .meta(openApiMutationMeta("adSet", "duplicate"))
     .input(z.object({ id: z.string() }))
+    .output(adSetSchema)
     .mutation(async ({ input, ctx }) => {
       const [source] = await db
         .select()
@@ -337,6 +399,7 @@ export const adSetRouter = router({
         ),
       }),
     )
+    .output(z.array(adSetImportResultSchema))
     .mutation(async ({ input, ctx }) => {
       await assertCampaignBelongsToOrg(input.campaignId, ctx.organizationId);
 
@@ -374,6 +437,7 @@ export const adSetRouter = router({
   delete: orgWriteProcedure
     .meta(openApiMutationMeta("adSet", "delete"))
     .input(z.object({ id: z.string() }))
+    .output(z.void())
     .mutation(async ({ input, ctx }) => {
       await db
         .delete(adSets)

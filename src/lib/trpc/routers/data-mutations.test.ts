@@ -10,6 +10,14 @@ const memberCaller = createMockCaller({ role: "member" });
 const adminCaller = createMockCaller({ role: "admin" });
 const ownerCaller = createMockCaller({ role: "owner" });
 
+async function expectPassesMiddleware(call: () => Promise<unknown>) {
+  try {
+    await call();
+  } catch (error) {
+    expect(error).not.toMatchObject({ code: "FORBIDDEN" });
+  }
+}
+
 // Helper: assert a call is forbidden for member but not for admin/owner
 function describeMutation(
   name: string,
@@ -23,15 +31,11 @@ function describeMutation(
     });
 
     it("admin passes middleware", async () => {
-      await expect(callAdmin()).rejects.not.toMatchObject({
-        code: "FORBIDDEN",
-      });
+      await expectPassesMiddleware(callAdmin);
     });
 
     it("owner passes middleware", async () => {
-      await expect(callOwner()).rejects.not.toMatchObject({
-        code: "FORBIDDEN",
-      });
+      await expectPassesMiddleware(callOwner);
     });
   });
 }
@@ -153,9 +157,7 @@ describe("adAccount mutations", () => {
 
 describe("adAccount reads", () => {
   it("member can list sanitized accounts", async () => {
-    await expect(memberCaller.adAccount.list()).rejects.not.toMatchObject({
-      code: "FORBIDDEN",
-    });
+    await expectPassesMiddleware(() => memberCaller.adAccount.list());
   });
 
   it("member is forbidden from getById", async () => {
@@ -167,20 +169,14 @@ describe("adAccount reads", () => {
 
 describe("member can read non-admin data", () => {
   it("campaign list passes middleware", async () => {
-    await expect(memberCaller.campaign.list()).rejects.not.toMatchObject({
-      code: "FORBIDDEN",
-    });
+    await expectPassesMiddleware(() => memberCaller.campaign.list());
   });
 
   it("ad list passes middleware", async () => {
-    await expect(memberCaller.ad.list()).rejects.not.toMatchObject({
-      code: "FORBIDDEN",
-    });
+    await expectPassesMiddleware(() => memberCaller.ad.list());
   });
 
   it("tag search passes middleware", async () => {
-    await expect(
-      memberCaller.tag.search({ query: "test" }),
-    ).rejects.not.toMatchObject({ code: "FORBIDDEN" });
+    await expectPassesMiddleware(() => memberCaller.tag.search({ query: "test" }));
   });
 });

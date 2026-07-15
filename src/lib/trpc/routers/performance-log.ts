@@ -8,6 +8,93 @@ import { ads } from "@/schema/ad";
 import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
 
+const performanceLogSchema = z.object({
+  id: z.string(),
+  adId: z.string(),
+  roas: z.string().nullable(),
+  cpa: z.string().nullable(),
+  ctr: z.string().nullable(),
+  conversionRate: z.string().nullable(),
+  spend: z.string().nullable(),
+  conversions: z.number().int().nullable(),
+  impressions: z.number().int().nullable(),
+  reach: z.number().int().nullable(),
+  frequency: z.string().nullable(),
+  cpm: z.string().nullable(),
+  linkClicks: z.number().int().nullable(),
+  clicksAll: z.number().int().nullable(),
+  cpc: z.string().nullable(),
+  ctrLinkClick: z.string().nullable(),
+  landingPageViews: z.number().int().nullable(),
+  costPerLpv: z.string().nullable(),
+  purchaseValue: z.string().nullable(),
+  addToCart: z.number().int().nullable(),
+  initiateCheckout: z.number().int().nullable(),
+  costPerAddToCart: z.string().nullable(),
+  videoViews3s: z.number().int().nullable(),
+  videoThruplay: z.number().int().nullable(),
+  videoAvgWatchTime: z.string().nullable(),
+  country: z.string().nullable(),
+  platform: z.string().nullable(),
+  placement: z.string().nullable(),
+  device: z.string().nullable(),
+  age: z.string().nullable(),
+  gender: z.string().nullable(),
+  qualityRanking: z.string().nullable(),
+  engagementRateRanking: z.string().nullable(),
+  conversionRateRanking: z.string().nullable(),
+  dateStart: z.string(),
+  dateEnd: z.string(),
+  organizationId: z.string().nullable(),
+  createdAt: z.date(),
+});
+
+const demographicBreakdownSchema = z.object({
+  label: z.string(),
+  spend: z.string().nullable(),
+  conversions: z.string().nullable(),
+  roas: z.string().nullable(),
+  impressions: z.string().nullable(),
+});
+
+const accountExportRowSchema = z.object({
+  dateStart: z.string(),
+  dateEnd: z.string(),
+  campaignName: z.string().nullable(),
+  campaignMetaId: z.string().nullable(),
+  adSetName: z.string().nullable(),
+  adSetMetaId: z.string().nullable(),
+  adName: z.string(),
+  adMetaId: z.string().nullable(),
+  spend: z.string().nullable(),
+  impressions: z.number().int().nullable(),
+  reach: z.number().int().nullable(),
+  frequency: z.string().nullable(),
+  cpm: z.string().nullable(),
+  cpc: z.string().nullable(),
+  ctr: z.string().nullable(),
+  conversions: z.number().int().nullable(),
+  purchaseValue: z.string().nullable(),
+  roas: z.string().nullable(),
+  cpa: z.string().nullable(),
+  linkClicks: z.number().int().nullable(),
+  landingPageViews: z.number().int().nullable(),
+  addToCart: z.number().int().nullable(),
+  initiateCheckout: z.number().int().nullable(),
+  qualityRanking: z.string().nullable(),
+  engagementRateRanking: z.string().nullable(),
+  conversionRateRanking: z.string().nullable(),
+  videoViews3s: z.number().int().nullable(),
+  videoThruplay: z.number().int().nullable(),
+  videoAvgWatchTime: z.string().nullable(),
+  country: z.string().nullable(),
+  platform: z.string().nullable(),
+  placement: z.string().nullable(),
+  device: z.string().nullable(),
+  age: z.string().nullable(),
+  gender: z.string().nullable(),
+});
+
 const dimensionColumn = (dim: "age" | "gender" | "country" | "device") => {
   const map = {
     age: sql.raw("pl.age"),
@@ -96,6 +183,7 @@ const perfFieldsNullable = {
 export const performanceLogRouter = router({
   listAll: orgProcedure
     .meta(openApiQueryMeta("performanceLog", "listAll"))
+    .output(z.array(performanceLogSchema))
     .query(async ({ ctx }) => {
     return db
       .select()
@@ -107,6 +195,7 @@ export const performanceLogRouter = router({
   listByAd: orgProcedure
     .meta(openApiQueryMeta("performanceLog", "listByAd"))
     .input(z.object({ adId: z.string() }))
+    .output(z.array(performanceLogSchema))
     .query(async ({ input, ctx }) => {
       return db
         .select()
@@ -125,6 +214,7 @@ export const performanceLogRouter = router({
         ...perfFields,
       }),
     )
+    .output(performanceLogSchema)
     .mutation(async ({ input, ctx }) => {
       const [log] = await db
         .insert(performanceLogs)
@@ -151,6 +241,7 @@ export const performanceLogRouter = router({
         ),
       }),
     )
+    .output(z.array(performanceLogSchema))
     .mutation(async ({ input, ctx }) => {
       if (input.rows.length === 0) return [];
       const values = input.rows.map((row) => ({
@@ -178,6 +269,7 @@ export const performanceLogRouter = router({
         ...perfFieldsNullable,
       }),
     )
+    .output(performanceLogSchema)
     .mutation(async ({ input, ctx }) => {
       const { id, ...data } = input;
       const [log] = await db
@@ -191,6 +283,7 @@ export const performanceLogRouter = router({
   delete: orgWriteProcedure
     .meta(openApiMutationMeta("performanceLog", "delete"))
     .input(z.object({ id: z.string() }))
+    .output(z.void())
     .mutation(async ({ input, ctx }) => {
       await db
         .delete(performanceLogs)
@@ -198,6 +291,7 @@ export const performanceLogRouter = router({
     }),
 
   demographicBreakdown: orgProcedure
+    .meta(openApiQueryMeta("performanceLog", "demographicBreakdown"))
     .input(
       z.object({
         dimension: z.enum(["age", "gender", "country", "device"]),
@@ -207,6 +301,7 @@ export const performanceLogRouter = router({
         teamId: z.string().optional(),
       }),
     )
+    .output(z.array(demographicBreakdownSchema))
     .query(async ({ input, ctx }) => {
       const dim = dimensionColumn(input.dimension);
       const accountFilter = input.accountId
@@ -253,6 +348,7 @@ export const performanceLogRouter = router({
     }),
 
   creativeDemographicBreakdown: orgProcedure
+    .meta(openApiQueryMeta("performanceLog", "creativeDemographicBreakdown"))
     .input(
       z.object({
         creativeId: z.string(),
@@ -261,6 +357,7 @@ export const performanceLogRouter = router({
         to: z.string().optional(),
       }),
     )
+    .output(z.array(demographicBreakdownSchema))
     .query(async ({ input, ctx }) => {
       const dim = dimensionColumn(input.dimension);
       const dateFilter = input.from && input.to
@@ -298,6 +395,7 @@ export const performanceLogRouter = router({
     }),
 
   exportByAccount: orgProcedure
+    .meta(openApiQueryMeta("performanceLog", "exportByAccount"))
     .input(
       z.object({
         accountId: z.string(),
@@ -305,6 +403,7 @@ export const performanceLogRouter = router({
         dateTo: z.string(),
       }),
     )
+    .output(z.array(accountExportRowSchema))
     .query(async ({ input, ctx }) => {
       const rows = await db
         .select({

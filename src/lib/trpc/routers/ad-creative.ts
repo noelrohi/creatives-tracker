@@ -46,6 +46,422 @@ const dashboardStatsInputSchema = dashboardAnalyticsFilterSchema
   })
   .optional();
 
+const creativeFormatSchema = z.enum(["static", "video", "ugc", "carousel"]);
+const awarenessLevelSchema = z.enum([
+  "unaware",
+  "problem_aware",
+  "solution_aware",
+  "product_aware",
+  "most_aware",
+]);
+const ownershipSchema = z.enum(["ours", "theirs"]);
+const creativeHealthSchema = z.enum(["healthy", "warning", "critical"]);
+const adStatusSchema = z.enum(["active", "paused", "archived"]);
+
+const adCreativeRowSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  assetUrl: z.string().nullable(),
+  videoUrl: z.string().nullable(),
+  format: creativeFormatSchema.nullable(),
+  angle: z.string().nullable(),
+  persona: z.string().nullable(),
+  awarenessLevel: awarenessLevelSchema.nullable(),
+  hook: z.string().nullable(),
+  tone: z.array(z.string()).nullable(),
+  cta: z.string().nullable(),
+  ownership: ownershipSchema.nullable(),
+  teamId: z.string().nullable(),
+  notes: z.string().nullable(),
+  organizationId: z.string().nullable(),
+  enrichmentAttemptedAt: z.date().nullable(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+const adCreativeListItemSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  assetUrl: z.string().nullable(),
+  videoUrl: z.string().nullable(),
+  destinationUrl: z.string().nullable(),
+  format: creativeFormatSchema.nullable(),
+  angle: z.string().nullable(),
+  persona: z.string().nullable(),
+  awarenessLevel: awarenessLevelSchema.nullable(),
+  hook: z.string().nullable(),
+  tone: z.array(z.string()).nullable(),
+  cta: z.string().nullable(),
+  ownership: ownershipSchema.nullable(),
+  teamId: z.string().nullable(),
+  notes: z.string().nullable(),
+  // The list resolver goes through raw SQL (db.execute), so timestamps
+  // arrive as strings, not Date objects like the drizzle-select paths.
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  firstSeen: z.string().nullable(),
+  totalSpend: z.string().nullable(),
+  avgRoas: z.string().nullable(),
+  totalConversions: z.string().nullable(),
+  adStatus: adStatusSchema.nullable(),
+  metaAdId: z.string().nullable(),
+  avgCpa: z.string().nullable(),
+  avgCtr: z.string().nullable(),
+  metaCampaignId: z.string().nullable(),
+  metaAdSetId: z.string().nullable(),
+  accountName: z.string().nullable(),
+  recentCtr: z.string().nullable(),
+  recentCpc: z.string().nullable(),
+  avgCpc: z.string().nullable(),
+  avgFrequency: z.string().nullable(),
+  recentHookRate: z.string().nullable(),
+  priorHookRate: z.string().nullable(),
+  recentCpa: z.string().nullable(),
+  thumbstopRatio: z.string().nullable(),
+  health: creativeHealthSchema.nullable(),
+  healthReasons: z.array(z.string()),
+});
+const adCreativeListOutputSchema = z.array(adCreativeListItemSchema);
+
+const landingPagesOutputSchema = z.array(z.string());
+
+const adExportRowSchema = z.object({
+  adId: z.string(),
+  metaAdId: z.string().nullable(),
+  adName: z.string(),
+  creativeId: z.string(),
+  creativeName: z.string(),
+  adSetId: z.string().nullable(),
+  metaAdSetId: z.string().nullable(),
+  adSetName: z.string().nullable(),
+  campaignId: z.string().nullable(),
+  metaCampaignId: z.string().nullable(),
+  campaignName: z.string().nullable(),
+  accountId: z.string().nullable(),
+  accountName: z.string().nullable(),
+  teamId: z.string().nullable(),
+  teamName: z.string().nullable(),
+  format: z.string().nullable(),
+  angle: z.string().nullable(),
+  persona: z.string().nullable(),
+  awarenessLevel: z.string().nullable(),
+  hook: z.string().nullable(),
+  cta: z.string().nullable(),
+  destinationUrl: z.string().nullable(),
+  assetUrl: z.string().nullable(),
+  videoUrl: z.string().nullable(),
+  status: z.string().nullable(),
+  windowFrom: z.string().nullable(),
+  windowTo: z.string().nullable(),
+  runningDays: z.number().nullable(),
+  daysInWindow: z.number().nullable(),
+  lastLogAt: z.string().nullable(),
+  activeInWindow: z.boolean(),
+  windowSpend: z.number().nullable(),
+  windowRevenue: z.number().nullable(),
+  windowConversions: z.number().nullable(),
+  windowRoas: z.number().nullable(),
+  windowCpa: z.number().nullable(),
+  windowCtr: z.number().nullable(),
+  windowCpc: z.number().nullable(),
+  windowFrequency: z.number().nullable(),
+  windowImpressions: z.number().nullable(),
+  windowClicks: z.number().nullable(),
+  windowHookRate: z.number().nullable(),
+  genderBreakdown: z.string().nullable(),
+  ageBreakdown: z.string().nullable(),
+  countryBreakdown: z.string().nullable(),
+  deviceBreakdown: z.string().nullable(),
+  lifetimeSpend: z.number().nullable(),
+  lifetimeConversions: z.number().nullable(),
+  lifetimeRoas: z.number().nullable(),
+  ctrDeltaPct: z.number().nullable(),
+  cpcDeltaPct: z.number().nullable(),
+  cpaDeltaPct: z.number().nullable(),
+  hookRateDeltaPct: z.number().nullable(),
+  adHealth: creativeHealthSchema.nullable(),
+  adHealthReasons: z.array(z.string()),
+  creativeRollupHealth: creativeHealthSchema.nullable(),
+  creativeRollupReasons: z.array(z.string()),
+  dollarsAtRisk: z.number(),
+  flagDisableCandidate: z.boolean(),
+  flagScaleCandidate: z.boolean(),
+  flagReviewCandidate: z.boolean(),
+  disableTier: z.enum(["pause_now", "watch", "cooking"]).nullable(),
+  creativeHasWinners: z.boolean(),
+});
+
+const creativeExportRowSchema = z.object({
+  creativeId: z.string(),
+  creativeName: z.string(),
+  accountId: z.string().nullable(),
+  accountName: z.string().nullable(),
+  teamId: z.string().nullable(),
+  teamName: z.string().nullable(),
+  format: z.string().nullable(),
+  angle: z.string().nullable(),
+  persona: z.string().nullable(),
+  awarenessLevel: z.string().nullable(),
+  hook: z.string().nullable(),
+  cta: z.string().nullable(),
+  destinationUrl: z.string().nullable(),
+  assetUrl: z.string().nullable(),
+  videoUrl: z.string().nullable(),
+  windowFrom: z.string().nullable(),
+  windowTo: z.string().nullable(),
+  adCount: z.number(),
+  activeAdCount: z.number(),
+  activeInWindow: z.boolean(),
+  windowSpend: z.number().nullable(),
+  windowRevenue: z.number().nullable(),
+  windowConversions: z.number().nullable(),
+  windowRoas: z.number().nullable(),
+  windowCpa: z.number().nullable(),
+  windowCtr: z.number().nullable(),
+  lifetimeSpend: z.number().nullable(),
+  lifetimeConversions: z.number().nullable(),
+  lifetimeRoas: z.number().nullable(),
+  runningDays: z.number().nullable(),
+  lastLogAt: z.string().nullable(),
+  rollupHealth: creativeHealthSchema.nullable(),
+  rollupReasons: z.array(z.string()),
+  dollarsAtRisk: z.number(),
+  flagDisableCandidate: z.boolean(),
+  flagScaleCandidate: z.boolean(),
+  flagReviewCandidate: z.boolean(),
+});
+
+const exportAgentRowsOutputSchema = z.object({
+  ads: z.array(adExportRowSchema),
+  creatives: z.array(creativeExportRowSchema),
+});
+
+const trackerListItemSchema = z.object({
+  adId: z.string(),
+  adName: z.string(),
+  creativeId: z.string().nullable(),
+  creativeName: z.string().nullable(),
+  assetUrl: z.string().nullable(),
+  videoUrl: z.string().nullable(),
+  format: creativeFormatSchema.nullable(),
+  ownership: ownershipSchema.nullable(),
+  destinationUrl: z.string().nullable(),
+  dateStart: z.string(),
+  dateEnd: z.string(),
+  spend: z.string().nullable(),
+  roas: z.string().nullable(),
+  cpa: z.string().nullable(),
+  ctr: z.string().nullable(),
+  conversions: z.number().nullable(),
+  impressions: z.number().nullable(),
+  linkClicks: z.number().nullable(),
+  purchaseValue: z.string().nullable(),
+  landingPageViews: z.number().nullable(),
+});
+const trackerListOutputSchema = z.array(trackerListItemSchema);
+
+const portfolioSummarySchema = z.object({
+  totalSpend: z.string().nullable(),
+  totalRevenue: z.string().nullable(),
+  roas: z.string().nullable(),
+  cpa: z.string().nullable(),
+  ctr: z.string().nullable(),
+  conversions: z.string().nullable(),
+});
+
+const dashboardPerformerSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  format: creativeFormatSchema.nullable(),
+  assetUrl: z.string().nullable(),
+  videoUrl: z.string().nullable(),
+  totalSpend: z.string(),
+  roas: z.string(),
+  cpa: z.string().nullable(),
+  ctr: z.string().nullable(),
+  conversions: z.string().nullable(),
+  adStatus: z.string().nullable(),
+  health: creativeHealthSchema.nullable(),
+  healthReasons: z.array(z.string()),
+});
+
+const dashboardStatsOutputSchema = z.object({
+  portfolio: portfolioSummarySchema,
+  topPerformers: z.array(dashboardPerformerSchema.extend({
+    runningDays: z.number(),
+    isEvergreen: z.boolean(),
+  })),
+  bottomPerformers: z.array(dashboardPerformerSchema.extend({
+    bleederAdCount: z.number(),
+    activeAdCount: z.number(),
+    bleederSpend: z.string(),
+    bleederDollarsAtRisk: z.string(),
+    hasWinnerAd: z.boolean(),
+    bleederMetaIds: z.array(z.string()),
+    tier: z.enum(["pause_now", "watch"]),
+  })),
+  survivingCreatives: z.array(dashboardPerformerSchema.extend({
+    runningDays: z.number(),
+  })),
+});
+
+const dashboardExportRowSchema = z.object({
+  date_start: z.string(),
+  date_end: z.string(),
+  campaign_name: z.string().nullable(),
+  ad_set_name: z.string().nullable(),
+  ad_name: z.string(),
+  ad_status: z.string(),
+  caption: z.string().nullable(),
+  destination_url: z.string().nullable(),
+  creative_name: z.string(),
+  format: creativeFormatSchema.nullable(),
+  angle: z.string().nullable(),
+  persona: z.string().nullable(),
+  awareness_level: awarenessLevelSchema.nullable(),
+  ownership: ownershipSchema.nullable(),
+  asset_url: z.string().nullable(),
+  video_url: z.string().nullable(),
+  spend: z.string().nullable(),
+  impressions: z.number().nullable(),
+  reach: z.number().nullable(),
+  frequency: z.string().nullable(),
+  cpm: z.string().nullable(),
+  cpc: z.string().nullable(),
+  link_clicks: z.number().nullable(),
+  ctr: z.string().nullable(),
+  landing_page_views: z.number().nullable(),
+  cost_per_lpv: z.string().nullable(),
+  conversions: z.number().nullable(),
+  purchase_value: z.string().nullable(),
+  roas: z.string().nullable(),
+  cpa: z.string().nullable(),
+  add_to_cart: z.number().nullable(),
+  initiate_checkout: z.number().nullable(),
+  cost_per_add_to_cart: z.string().nullable(),
+  video_views_3s: z.number().nullable(),
+  video_thruplay: z.number().nullable(),
+  video_avg_watch_time: z.string().nullable(),
+  country: z.string().nullable(),
+  platform: z.string().nullable(),
+  placement: z.string().nullable(),
+  device: z.string().nullable(),
+  age: z.string().nullable(),
+  gender: z.string().nullable(),
+  quality_ranking: z.string().nullable(),
+  engagement_rate_ranking: z.string().nullable(),
+  conversion_rate_ranking: z.string().nullable(),
+});
+const dashboardExportOutputSchema = z.array(dashboardExportRowSchema);
+
+const dailyPortfolioPerformanceRowSchema = z.object({
+  dateStart: z.string(),
+  dateEnd: z.string(),
+  spend: z.string().nullable(),
+  purchaseValue: z.string().nullable(),
+  roas: z.string().nullable(),
+  cpa: z.string().nullable(),
+  ctr: z.string().nullable(),
+  conversions: z.number(),
+  impressions: z.number(),
+  reach: z.number(),
+  cpm: z.string().nullable(),
+  linkClicks: z.number(),
+});
+const dailyPortfolioPerformanceOutputSchema = z.array(dailyPortfolioPerformanceRowSchema);
+
+const merSparklinePointSchema = z.object({
+  date: z.string(),
+  spend: z.number(),
+  revenue: z.number(),
+  roas: z.number().nullable(),
+});
+const merAccountBreakdownOutputSchema = z.array(z.object({
+  accountId: z.string(),
+  accountName: z.string(),
+  spend: z.string().nullable(),
+  revenue: z.string().nullable(),
+  roas: z.string().nullable(),
+  priorSpend: z.string().nullable(),
+  priorRoas: z.string().nullable(),
+  spendDelta: z.string().nullable(),
+  roasDelta: z.string().nullable(),
+  sparkline: z.array(merSparklinePointSchema),
+}));
+
+const adCreativeDetailSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  assetUrl: z.string().nullable(),
+  videoUrl: z.string().nullable(),
+  destinationUrl: z.string().nullable(),
+  format: creativeFormatSchema.nullable(),
+  angle: z.string().nullable(),
+  persona: z.string().nullable(),
+  awarenessLevel: awarenessLevelSchema.nullable(),
+  hook: z.string().nullable(),
+  tone: z.array(z.string()).nullable(),
+  cta: z.string().nullable(),
+  ownership: ownershipSchema.nullable(),
+  teamId: z.string().nullable(),
+  notes: z.string().nullable(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+const adPreviewUrlOutputSchema = z.object({
+  previewUrl: z.string().nullable(),
+});
+
+const metaCreativePreviewSchema = z.object({
+  assetUrl: z.string().nullable(),
+  format: z.enum(["static", "video"]).nullable(),
+  videoUrl: z.string().optional(),
+  destinationUrl: z.string().optional(),
+  caption: z.string().optional(),
+});
+
+const bulkUpdateOutputSchema = z.object({ updated: z.number() });
+const bulkImportOutputSchema = z.object({
+  created: z.array(z.object({ id: z.string(), name: z.string() })),
+  totalRows: z.number(),
+  uniqueAds: z.number(),
+  perfLogs: z.number(),
+});
+
+const creativePerformanceOutputSchema = z.object({
+  totalSpend: z.string().nullable(),
+  avgRoas: z.string().nullable(),
+  avgCpa: z.string().nullable(),
+  avgCtr: z.string().nullable(),
+  totalConversions: z.string().nullable(),
+  totalImpressions: z.string().nullable(),
+  totalClicks: z.string().nullable(),
+  logCount: z.string(),
+  minDate: z.string().nullable(),
+  maxDate: z.string().nullable(),
+  portfolioAvgRoas: z.string().nullable(),
+  portfolioAvgCpa: z.string().nullable(),
+  portfolioAvgCtr: z.string().nullable(),
+  liveStatus: z.enum(["no_ads", "active", "paused"]),
+});
+
+const dailyPerformanceRowSchema = z.object({
+  dateStart: z.string(),
+  dateEnd: z.string(),
+  spend: z.string().nullable(),
+  purchaseValue: z.string().nullable(),
+  roas: z.string().nullable(),
+  cpa: z.string().nullable(),
+  ctr: z.string().nullable(),
+  conversions: z.string().nullable(),
+  impressions: z.string().nullable(),
+  reach: z.string().nullable(),
+  cpm: z.string().nullable(),
+  linkClicks: z.string().nullable(),
+});
+const dailyPerformanceOutputSchema = z.array(dailyPerformanceRowSchema);
+
 type DashboardAnalyticsInput = z.infer<typeof dashboardAnalyticsInputSchema>;
 
 type PortfolioRow = {
@@ -138,6 +554,7 @@ function mapPortfolioRow(portfolio: PortfolioRow | undefined) {
 export const adCreativeRouter = router({
   list: orgProcedure
     .meta(openApiQueryMeta("adCreative", "list"))
+    .output(adCreativeListOutputSchema)
     .input(
       z
         .object({
@@ -228,23 +645,24 @@ export const adCreativeRouter = router({
         asset_url: string | null;
         video_url: string | null;
         destination_url: string | null;
-        format: string | null;
+        format: z.infer<typeof creativeFormatSchema> | null;
         angle: string | null;
         persona: string | null;
-        awareness_level: string | null;
+        awareness_level: z.infer<typeof awarenessLevelSchema> | null;
         hook: string | null;
         tone: string[] | null;
         cta: string | null;
-        ownership: string | null;
+        ownership: z.infer<typeof ownershipSchema> | null;
         team_id: string | null;
         notes: string | null;
-        created_at: Date;
-        updated_at: Date;
+        // db.execute returns raw pg values: timestamps arrive as strings here
+        created_at: string;
+        updated_at: string;
         first_seen: string | null;
         total_spend: string | null;
         avg_roas: string | null;
-        total_conversions: number | string | null;
-        ad_status: string | null;
+        total_conversions: string | null;
+        ad_status: z.infer<typeof adStatusSchema> | null;
         meta_ad_id: string | null;
         avg_cpa: string | null;
         avg_ctr: string | null;
@@ -466,7 +884,10 @@ export const adCreativeRouter = router({
       });
     }),
 
-  landingPages: orgProcedure.query(async ({ ctx }) => {
+  landingPages: orgProcedure
+    .meta(openApiQueryMeta("adCreative", "landingPages"))
+    .output(landingPagesOutputSchema)
+    .query(async ({ ctx }) => {
     const result = await db.execute(sql`
       SELECT DISTINCT split_part(destination_url, '?', 1) AS destination_url
       FROM ad
@@ -479,6 +900,8 @@ export const adCreativeRouter = router({
   }),
 
   exportAgentRows: orgProcedure
+    .meta(openApiQueryMeta("adCreative", "exportAgentRows"))
+    .output(exportAgentRowsOutputSchema)
     .input(
       z.object({
         from: z.string(),
@@ -515,6 +938,7 @@ export const adCreativeRouter = router({
 
   trackerList: orgProcedure
     .meta(openApiQueryMeta("adCreative", "trackerList"))
+    .output(trackerListOutputSchema)
     .input(
       z.object({
         from: z.string(),
@@ -588,6 +1012,8 @@ export const adCreativeRouter = router({
     }),
 
   portfolioSummary: orgProcedure
+    .meta(openApiQueryMeta("adCreative", "portfolioSummary"))
+    .output(portfolioSummarySchema)
     .input(dashboardAnalyticsInputSchema)
     .query(async ({ input, ctx }) => {
       const filters = buildDashboardAnalyticsFilters(input, ctx.organizationId);
@@ -597,6 +1023,7 @@ export const adCreativeRouter = router({
 
   dashboardStats: orgProcedure
     .meta(openApiQueryMeta("adCreative", "dashboardStats"))
+    .output(dashboardStatsOutputSchema)
     .input(dashboardStatsInputSchema)
     .query(async ({ input, ctx }) => {
       const filters = buildDashboardAnalyticsFilters(input, ctx.organizationId);
@@ -635,14 +1062,14 @@ export const adCreativeRouter = router({
       type CreativeRow = {
         id: string;
         name: string;
-        format: string | null;
+        format: z.infer<typeof creativeFormatSchema> | null;
         asset_url: string | null;
         video_url: string | null;
         total_spend: string;
         roas: string;
         cpa: string | null;
         ctr: string | null;
-        total_conversions: string;
+        total_conversions: string | null;
         ad_status: string | null;
       };
 
@@ -939,6 +1366,8 @@ export const adCreativeRouter = router({
     }),
 
   dashboardExport: orgProcedure
+    .meta(openApiQueryMeta("adCreative", "dashboardExport"))
+    .output(dashboardExportOutputSchema)
     .input(
       z.object({
         from: z.string(),
@@ -1020,11 +1449,12 @@ export const adCreativeRouter = router({
         ORDER BY pl.date_start DESC, ad.name
       `);
 
-      return rows.rows as Record<string, unknown>[];
+      return rows.rows as z.infer<typeof dashboardExportOutputSchema>;
     }),
 
   getDailyPortfolioPerformance: orgProcedure
     .meta(openApiQueryMeta("adCreative", "getDailyPortfolioPerformance"))
+    .output(dailyPortfolioPerformanceOutputSchema)
     .input(
       z.object({
         from: z.string().optional(),
@@ -1062,11 +1492,11 @@ export const adCreativeRouter = router({
         roas: string | null;
         cpa: string | null;
         ctr: string | null;
-        conversions: number | null;
-        impressions: number | null;
-        reach: number | null;
+        conversions: number;
+        impressions: number;
+        reach: number;
         cpm: string | null;
-        link_clicks: number | null;
+        link_clicks: number;
       };
 
       const result = await db.execute(sql`
@@ -1142,6 +1572,7 @@ export const adCreativeRouter = router({
 
   getMerAccountBreakdown: orgProcedure
     .meta(openApiQueryMeta("adCreative", "getMerAccountBreakdown"))
+    .output(merAccountBreakdownOutputSchema)
     .input(
       z.object({
         from: z.string(),
@@ -1295,6 +1726,7 @@ export const adCreativeRouter = router({
 
   getById: orgProcedure
     .meta(openApiQueryMeta("adCreative", "getById"))
+    .output(adCreativeDetailSchema)
     .input(z.object({ id: z.string() }))
     .query(async ({ input, ctx }) => {
       const [creative] = await db
@@ -1331,6 +1763,7 @@ export const adCreativeRouter = router({
 
   getAdPreviewUrl: orgProcedure
     .meta(openApiQueryMeta("adCreative", "getAdPreviewUrl"))
+    .output(adPreviewUrlOutputSchema)
     .input(z.object({ id: z.string(), adId: z.string().optional() }))
     .query(async ({ input, ctx }) => {
       const conditions: SQL[] = [
@@ -1367,6 +1800,7 @@ export const adCreativeRouter = router({
 
   fetchMetaPreview: orgWriteProcedure
     .meta(openApiMutationMeta("adCreative", "fetchMetaPreview"))
+    .output(metaCreativePreviewSchema)
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
       const [linkedMetaAd] = await db
@@ -1407,6 +1841,7 @@ export const adCreativeRouter = router({
 
   create: orgWriteProcedure
     .meta(openApiMutationMeta("adCreative", "create"))
+    .output(adCreativeRowSchema)
     .input(z.object({ name: z.string().optional() }).optional())
     .mutation(async ({ input, ctx }) => {
       const [creative] = await db
@@ -1421,6 +1856,7 @@ export const adCreativeRouter = router({
 
   update: orgWriteProcedure
     .meta(openApiMutationMeta("adCreative", "update"))
+    .output(adCreativeRowSchema)
     .input(
       z.object({
         id: z.string(),
@@ -1454,6 +1890,7 @@ export const adCreativeRouter = router({
 
   duplicate: orgWriteProcedure
     .meta(openApiMutationMeta("adCreative", "duplicate"))
+    .output(adCreativeRowSchema)
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
       const [source] = await db
@@ -1485,6 +1922,7 @@ export const adCreativeRouter = router({
 
   bulkUpdateOwnership: orgWriteProcedure
     .meta(openApiMutationMeta("adCreative", "bulkUpdateOwnership"))
+    .output(bulkUpdateOutputSchema)
     .input(
       z.object({
         ids: z.array(z.string()).min(1),
@@ -1506,6 +1944,7 @@ export const adCreativeRouter = router({
 
   bulkUpdateTeam: orgWriteProcedure
     .meta(openApiMutationMeta("adCreative", "bulkUpdateTeam"))
+    .output(bulkUpdateOutputSchema)
     .input(
       z.object({
         ids: z.array(z.string()).min(1),
@@ -1527,6 +1966,7 @@ export const adCreativeRouter = router({
 
   bulkImport: orgWriteProcedure
     .meta(openApiMutationMeta("adCreative", "bulkImport"))
+    .output(bulkImportOutputSchema)
     .input(
       z.object({
         accountId: z.string().optional(),
@@ -1598,6 +2038,7 @@ export const adCreativeRouter = router({
 
   getPerformance: orgProcedure
     .meta(openApiQueryMeta("adCreative", "getPerformance"))
+    .output(creativePerformanceOutputSchema)
     .input(z.object({ id: z.string(), from: z.string().optional(), to: z.string().optional() }))
     .query(async ({ input, ctx }) => {
       const basePl = basePerformanceLogFilter("performance_log");
@@ -1620,10 +2061,10 @@ export const adCreativeRouter = router({
           avgRoas: sql<string | null>`coalesce(sum(${performanceLogs.purchaseValue}), 0) / nullif(sum(${performanceLogs.spend}), 0)`,
           avgCpa: sql<string | null>`coalesce(sum(${performanceLogs.spend}), 0) / nullif(sum(${performanceLogs.conversions}), 0)`,
           avgCtr: sql<string | null>`coalesce(sum(${performanceLogs.ctr} * ${performanceLogs.impressions}), 0) / nullif(sum(${performanceLogs.impressions}), 0)`,
-          totalConversions: sql<number | null>`sum(${performanceLogs.conversions})`,
-          totalImpressions: sql<number | null>`sum(${performanceLogs.impressions})`,
-          totalClicks: sql<number | null>`sum(${performanceLogs.linkClicks})`,
-          logCount: sql<number>`count(*)`,
+          totalConversions: sql<string | null>`sum(${performanceLogs.conversions})`,
+          totalImpressions: sql<string | null>`sum(${performanceLogs.impressions})`,
+          totalClicks: sql<string | null>`sum(${performanceLogs.linkClicks})`,
+          logCount: sql<string>`count(*)`,
           minDate: sql<string | null>`min(${performanceLogs.dateStart})`,
           maxDate: sql<string | null>`max(${performanceLogs.dateEnd})`,
         })
@@ -1681,7 +2122,7 @@ export const adCreativeRouter = router({
         totalConversions: creative?.totalConversions ?? null,
         totalImpressions: creative?.totalImpressions ?? null,
         totalClicks: creative?.totalClicks ?? null,
-        logCount: creative?.logCount ?? 0,
+        logCount: creative?.logCount ?? "0",
         minDate: creative?.minDate ?? null,
         maxDate: creative?.maxDate ?? null,
         portfolioAvgRoas: portfolio?.avgRoas ?? null,
@@ -1693,6 +2134,7 @@ export const adCreativeRouter = router({
 
   getDailyPerformance: orgProcedure
     .meta(openApiQueryMeta("adCreative", "getDailyPerformance"))
+    .output(dailyPerformanceOutputSchema)
     .input(z.object({ id: z.string(), from: z.string().optional(), to: z.string().optional() }))
     .query(async ({ input, ctx }) => {
       const basePl = basePerformanceLogFilter("performance_log");
@@ -1717,11 +2159,11 @@ export const adCreativeRouter = router({
           roas: sql<string | null>`coalesce(sum(${performanceLogs.purchaseValue}), 0) / nullif(sum(${performanceLogs.spend}), 0)`,
           cpa: sql<string | null>`coalesce(sum(${performanceLogs.spend}), 0) / nullif(sum(${performanceLogs.conversions}), 0)`,
           ctr: sql<string | null>`coalesce(sum(${performanceLogs.ctr} * ${performanceLogs.impressions}), 0) / nullif(sum(${performanceLogs.impressions}), 0)`,
-          conversions: sql<number | null>`sum(${performanceLogs.conversions})`,
-          impressions: sql<number | null>`sum(${performanceLogs.impressions})`,
-          reach: sql<number | null>`sum(${performanceLogs.reach})`,
+          conversions: sql<string | null>`sum(${performanceLogs.conversions})`,
+          impressions: sql<string | null>`sum(${performanceLogs.impressions})`,
+          reach: sql<string | null>`sum(${performanceLogs.reach})`,
           cpm: sql<string | null>`case when sum(${performanceLogs.impressions}) > 0 then (sum(${performanceLogs.spend}) / sum(${performanceLogs.impressions})) * 1000 else null end`,
-          linkClicks: sql<number | null>`sum(${performanceLogs.linkClicks})`,
+          linkClicks: sql<string | null>`sum(${performanceLogs.linkClicks})`,
         })
         .from(performanceLogs)
         .innerJoin(ads, eq(performanceLogs.adId, ads.id))
@@ -1734,6 +2176,7 @@ export const adCreativeRouter = router({
 
   delete: orgWriteProcedure
     .meta(openApiMutationMeta("adCreative", "delete"))
+    .output(z.void())
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
       // Delete linked ads (cascades to performance_logs via FK)

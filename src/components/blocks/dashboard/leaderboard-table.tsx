@@ -31,7 +31,7 @@ export type LeaderboardRow = {
   roas: string;
   cpa: string | null;
   ctr: string | null;
-  conversions: string;
+  conversions: string | null;
   adStatus: string | null;
   runningDays?: number;
   health?: CreativeHealth | null;

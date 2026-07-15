@@ -53,9 +53,9 @@ describe("adCreative analytics procedures", () => {
     it("maps portfolio, leaderboard rows, and health rollups without changing public shape", async () => {
       mockComputeCreativeHealthByCreativeId.mockResolvedValue(
         new Map([
-          ["creative_top", { health: "winner", reasons: ["High ROAS"] }],
-          ["creative_bottom", { health: "fatigued", reasons: ["CPA rising"] }],
-          ["creative_survivor", { health: "stable", reasons: ["Still profitable"] }],
+          ["creative_top", { health: "healthy", reasons: ["High ROAS"] }],
+          ["creative_bottom", { health: "critical", reasons: ["CPA rising"] }],
+          ["creative_survivor", { health: "healthy", reasons: ["Still profitable"] }],
         ]),
       );
       queueExecuteRows(
@@ -155,7 +155,7 @@ describe("adCreative analytics procedures", () => {
           adStatus: "active",
           runningDays: 16,
           isEvergreen: true,
-          health: "winner",
+          health: "healthy",
           healthReasons: ["High ROAS"],
         }),
       ]);
@@ -169,7 +169,7 @@ describe("adCreative analytics procedures", () => {
           hasWinnerAd: true,
           bleederMetaIds: ["meta_1", "meta_2"],
           tier: "pause_now",
-          health: "fatigued",
+          health: "critical",
           healthReasons: ["CPA rising"],
         }),
       ]);
@@ -178,7 +178,7 @@ describe("adCreative analytics procedures", () => {
           id: "creative_survivor",
           name: "Survivor Creative",
           runningDays: 24,
-          health: "stable",
+          health: "healthy",
           healthReasons: ["Still profitable"],
         }),
       ]);
@@ -368,7 +368,7 @@ describe("adCreative analytics procedures", () => {
   describe("adCreative.list", () => {
     it("returns the public fields used by the creatives page and includes health rollup data", async () => {
       mockComputeCreativeHealthByCreativeId.mockResolvedValue(
-        new Map([["creative_1", { health: "winner", reasons: ["Efficient spend"] }]]),
+        new Map([["creative_1", { health: "healthy", reasons: ["Efficient spend"] }]]),
       );
       queueExecuteRows([
         {
@@ -382,16 +382,17 @@ describe("adCreative analytics procedures", () => {
           persona: "founder",
           awareness_level: "problem_aware",
           hook: "Stop wasting spend",
-          tone: "direct",
+          tone: ["direct"],
           cta: "Shop now",
           ownership: "ours",
           team_id: "team_1",
           notes: "note",
           created_at: new Date("2026-06-01T00:00:00.000Z"),
           updated_at: new Date("2026-06-02T00:00:00.000Z"),
+          first_seen: "2026-06-01",
           total_spend: "123.45",
           avg_roas: "2.25",
-          total_conversions: 4,
+          total_conversions: "4",
           ad_status: "active",
           meta_ad_id: "meta_ad_1",
           avg_cpa: "30.86",
@@ -428,7 +429,7 @@ describe("adCreative analytics procedures", () => {
           persona: "founder",
           awarenessLevel: "problem_aware",
           hook: "Stop wasting spend",
-          tone: "direct",
+          tone: ["direct"],
           cta: "Shop now",
           ownership: "ours",
           teamId: "team_1",
@@ -437,7 +438,7 @@ describe("adCreative analytics procedures", () => {
           avgRoas: "2.25",
           avgCpa: "30.86",
           avgCtr: "0.012",
-          totalConversions: 4,
+          totalConversions: "4",
           adStatus: "active",
           metaAdId: "meta_ad_1",
           metaCampaignId: "meta_campaign_1",
@@ -451,7 +452,7 @@ describe("adCreative analytics procedures", () => {
           priorHookRate: "0.15",
           recentCpa: "28",
           thumbstopRatio: "0.19",
-          health: "winner",
+          health: "healthy",
           healthReasons: ["Efficient spend"],
         }),
       ]);
@@ -483,6 +484,7 @@ describe("adCreative analytics procedures", () => {
           notes: null,
           created_at: new Date("2026-06-01T00:00:00.000Z"),
           updated_at: new Date("2026-06-02T00:00:00.000Z"),
+          first_seen: null,
           total_spend: null,
           avg_roas: null,
           total_conversions: null,
