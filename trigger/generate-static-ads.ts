@@ -3,21 +3,25 @@ import { randomUUID } from "node:crypto";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { experimental_generateImage as generateImage } from "ai";
+import { experimental_generateImage as generateImage, generateObject } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { logger, metadata, task, tags } from "@trigger.dev/sdk";
 import { put } from "@vercel/blob";
 import { and, asc, eq } from "drizzle-orm";
+import { z } from "zod";
 import { db } from "@/db";
 import type { AwarenessLevel } from "@/lib/awareness";
 import {
-  ART_DIRECTIONS,
+  artDirectionFor,
   buildPrompt,
+  buildPromptRewrite,
   studioSizeFor,
   variantPromptFor,
   type StudioFormat,
 } from "@/lib/studio-prompt";
 import { fetchRemoteImage } from "@/lib/remote-image";
+import { getStudioBrandProfile, type StudioBrandProfile } from "@/lib/studio-brand";
+import { moderationReasonFromError } from "@/lib/studio-v2";
 import {
   failStudioGeneration,
   finalizeStudioGenerationIfSettled,
@@ -25,6 +29,67 @@ import {
 import { studioVariants } from "@/schema/studio";
 
 const GENERATION_MODEL = "gpt-image-2";
+const REWRITE_MODEL = "gpt-5.6-terra";
+
+const rewrittenPromptsSchema = z.object({
+  prompts: z.array(z.string().trim().min(1)).min(1).max(8),
+});
+
+/**
+ * Turns the layered brief into one short concrete prompt per variant. Returns
+ * null when the rewrite fails so the caller can fall back to template prompts.
+ */
+async function rewriteVariantPrompts(
+  payload: GenerateStaticAdsPayload,
+  format: StudioFormat,
+  hasReferenceImages: boolean,
+  brand: StudioBrandProfile | null,
+): Promise<string[] | null> {
+  try {
+    const { system, prompt } = buildPromptRewrite({
+      brief: payload.brief,
+      angle: payload.angle,
+      persona: payload.persona,
+      awarenessLevel: payload.awarenessLevel,
+      count: payload.count,
+      format,
+      hasReferenceImages,
+      brand,
+      hasProductImage: Boolean(brand?.productImageUrl),
+    });
+    // The rewriter sees the actual images so its scene descriptions match the
+    // real reference layout instead of an invented one; product photo last.
+    const content: Array<
+      { type: "text"; text: string } | { type: "image"; image: URL }
+    > = [{ type: "text", text: prompt }];
+    for (const url of (payload.referenceImageUrls ?? []).slice(0, 3)) {
+      content.push({ type: "image", image: new URL(url) });
+    }
+    if (brand?.productImageUrl) {
+      content.push({ type: "image", image: new URL(brand.productImageUrl) });
+    }
+    const result = await logger.trace("Rewrite variant prompts", () =>
+      generateObject({
+        model: openai(REWRITE_MODEL),
+        schema: rewrittenPromptsSchema,
+        system,
+        messages: [{ role: "user", content }],
+      }),
+    );
+    const prompts = result.object.prompts;
+    return Array.from(
+      { length: payload.count },
+      (_, index) => prompts[index % prompts.length],
+    );
+  } catch (error) {
+    logger.warn("Prompt rewrite failed; falling back to template prompts", {
+      generationId: payload.generationId,
+      organizationId: payload.organizationId,
+      error,
+    });
+    return null;
+  }
+}
 
 export type { StudioFormat };
 
@@ -214,6 +279,7 @@ export const generateStaticAdVariantTask = task({
       status: VariantStatus;
       imageUrl?: string | null;
       prompt?: string;
+      moderationReason?: string | null;
     }) =>
       persistStudioUpdate(
         `mark variant ${values.status}`,
@@ -290,7 +356,12 @@ export const generateStaticAdVariantTask = task({
         }),
       );
 
-      await markVariant({ status: "ready", imageUrl: blob.url, prompt: variantPrompt });
+      await markVariant({
+        status: "ready",
+        imageUrl: blob.url,
+        prompt: variantPrompt,
+        moderationReason: null,
+      });
       setParentVariantMetadata({ index, status: "ready", url: blob.url });
 
       if (payload.finalizeGeneration) {
@@ -317,7 +388,11 @@ export const generateStaticAdVariantTask = task({
         variantIndex: index,
         error,
       });
-      await markVariant({ status: "failed", prompt: variantPrompt });
+      await markVariant({
+        status: "failed",
+        prompt: variantPrompt,
+        moderationReason: moderationReasonFromError(error),
+      });
       setParentVariantMetadata({ index, status: "failed" });
 
       if (payload.finalizeGeneration) {
@@ -353,7 +428,8 @@ export const generateStaticAdsTask = task({
     await tags.add(`create:org:${payload.organizationId}`);
 
     const format = payload.format ?? "square";
-    const basePrompt = buildPrompt({ ...payload, format });
+    const layoutReferenceUrls = payload.referenceImageUrls ?? [];
+    const hasReferenceImages = layoutReferenceUrls.length > 0;
     const variants: GeneratedVariant[] = Array.from(
       { length: payload.count },
       (_, index) => ({ index, status: "pending" }),
@@ -364,6 +440,23 @@ export const generateStaticAdsTask = task({
     metadata.set("angle", payload.angle ?? null);
     metadata.set("variants", variants);
 
+    const brand = await getStudioBrandProfile(payload.organizationId);
+    // The product photo goes last so "the last reference image" in the
+    // rewrite rules stays true regardless of layout references.
+    const referenceImageUrls =
+      brand?.productImageUrl &&
+      !layoutReferenceUrls.includes(brand.productImageUrl)
+        ? [...layoutReferenceUrls, brand.productImageUrl]
+        : payload.referenceImageUrls;
+
+    const rewrittenPrompts = await rewriteVariantPrompts(
+      payload,
+      format,
+      hasReferenceImages,
+      brand,
+    );
+    const fallbackPrompt = buildPrompt({ ...payload, format, brand });
+
     try {
       const batch = await generateStaticAdVariantTask.batchTriggerAndWait(
         variants.map((variant) => ({
@@ -371,13 +464,12 @@ export const generateStaticAdsTask = task({
             generationId: payload.generationId,
             organizationId: payload.organizationId,
             variantIndex: variant.index,
-            basePrompt,
-            artDirection:
-              payload.count > 1
-                ? ART_DIRECTIONS[variant.index % ART_DIRECTIONS.length]
-                : null,
+            basePrompt: rewrittenPrompts?.[variant.index] ?? fallbackPrompt,
+            artDirection: rewrittenPrompts
+              ? null
+              : artDirectionFor(variant.index, payload.count, hasReferenceImages),
             format,
-            referenceImageUrls: payload.referenceImageUrls,
+            referenceImageUrls,
           } satisfies GenerateStaticAdVariantPayload,
         })),
       );

@@ -1,25 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const dbState = {
-  selectRows: [] as Array<Record<string, unknown>[]>,
-  updateReturningRows: [] as Array<Record<string, unknown>[]>,
-  inserted: [] as Array<Record<string, unknown> | Record<string, unknown>[]>,
-  updates: [] as Array<{
-    values: Record<string, unknown>;
-    where?: unknown;
-  }>,
-  generationNumber: 0,
+const state = {
+  selects: [] as Array<Record<string, unknown>[]>,
+  returning: [] as Array<Record<string, unknown>[]>,
+  inserts: [] as Array<Record<string, unknown> | Record<string, unknown>[]>,
+  updates: [] as Array<Record<string, unknown>>,
+  generation: 0,
 };
 
-function queuedSelectChain() {
+function selectChain() {
   let consumed = false;
-  let result: Record<string, unknown>[] = [];
-  const resolveRows = () => {
+  let rows: Record<string, unknown>[] = [];
+  const consume = () => {
     if (!consumed) {
       consumed = true;
-      result = dbState.selectRows.shift() ?? [];
+      rows = state.selects.shift() ?? [];
     }
-    return result;
+    return rows;
   };
   const chain: Record<string, unknown> = {
     from: vi.fn(() => chain),
@@ -28,313 +25,311 @@ function queuedSelectChain() {
     where: vi.fn(() => chain),
     orderBy: vi.fn(() => chain),
     limit: vi.fn(() => chain),
-    groupBy: vi.fn(async () => resolveRows()),
-    then: (
-      resolve: (rows: Record<string, unknown>[]) => unknown,
-      reject: (error: unknown) => unknown,
-    ) => Promise.resolve(resolveRows()).then(resolve, reject),
+    for: vi.fn(() => chain),
+    then: (resolve: (value: Record<string, unknown>[]) => unknown) =>
+      Promise.resolve(consume()).then(resolve),
   };
   return chain;
 }
 
 const mockDb = {
-  select: vi.fn(() => queuedSelectChain()),
+  select: vi.fn(() => selectChain()),
   insert: vi.fn(() => {
     let inserted: Record<string, unknown> | Record<string, unknown>[] = {};
     const chain: Record<string, unknown> = {
-      values: vi.fn((value: Record<string, unknown> | Record<string, unknown>[]) => {
+      values: vi.fn((value: typeof inserted) => {
         inserted = value;
-        dbState.inserted.push(value);
+        state.inserts.push(value);
         return chain;
       }),
       returning: vi.fn(async () => {
-        if (!Array.isArray(inserted) && inserted.brief) {
-          dbState.generationNumber += 1;
-          return [{ id: `generation_${dbState.generationNumber}`, ...inserted }];
+        if (!Array.isArray(inserted) && inserted.brief && inserted.count) {
+          state.generation += 1;
+          return [{ id: `generation_${state.generation}`, ...inserted }];
         }
         return [{ id: "inserted_row", ...inserted }];
       }),
-      then: (resolve: (value: unknown[]) => unknown, reject: (error: unknown) => unknown) =>
-        Promise.resolve([]).then(resolve, reject),
+      onConflictDoNothing: vi.fn(() => chain),
+      onConflictDoUpdate: vi.fn(() => chain),
+      then: (resolve: (value: unknown[]) => unknown) => Promise.resolve([]).then(resolve),
     };
     return chain;
   }),
   update: vi.fn(() => {
-    const update = { values: {} as Record<string, unknown>, where: undefined as unknown };
     const chain: Record<string, unknown> = {
-      set: vi.fn((values: Record<string, unknown>) => {
-        update.values = values;
-        dbState.updates.push(update);
+      set: vi.fn((value: Record<string, unknown>) => {
+        state.updates.push(value);
         return chain;
       }),
-      where: vi.fn((condition: unknown) => {
-        update.where = condition;
-        return chain;
-      }),
-      returning: vi.fn(async () => dbState.updateReturningRows.shift() ?? []),
-      then: (resolve: (value: unknown[]) => unknown, reject: (error: unknown) => unknown) =>
-        Promise.resolve([]).then(resolve, reject),
+      where: vi.fn(() => chain),
+      returning: vi.fn(async () => state.returning.shift() ?? []),
+      then: (resolve: (value: unknown[]) => unknown) => Promise.resolve([]).then(resolve),
+    };
+    return chain;
+  }),
+  delete: vi.fn(() => {
+    const chain: Record<string, unknown> = {
+      where: vi.fn(() => chain),
+      returning: vi.fn(async () => state.returning.shift() ?? []),
     };
     return chain;
   }),
 };
-
 Object.assign(mockDb, {
-  transaction: vi.fn(
-    async (callback: (tx: typeof mockDb) => Promise<unknown>) => callback(mockDb),
+  transaction: vi.fn(async (callback: (tx: typeof mockDb) => Promise<unknown>) =>
+    callback(mockDb),
   ),
 });
 
-const triggerMock = vi.fn<(...args: unknown[]) => Promise<{ id: string }>>(
-  async () => ({ id: "run_1" }),
-);
-
+const trigger = vi.fn(async (...args: unknown[]) => {
+  void args;
+  return { id: "run_1" };
+});
 vi.mock("@/db", () => ({ db: mockDb }));
 vi.mock("server-only", () => ({}));
+vi.mock("@vercel/blob", () => ({ del: vi.fn(async () => undefined) }));
 vi.mock("@trigger.dev/sdk", () => ({
-  tasks: { trigger: (...args: unknown[]) => triggerMock(...args) },
-  auth: { createPublicToken: vi.fn(async () => "public_token") },
+  tasks: { trigger: (...args: unknown[]) => trigger(...args) },
+  auth: { createPublicToken: vi.fn(async () => "token") },
 }));
 
 const { createMockCaller } = await import("../test-helpers");
 
-function queueSelect(...rows: Array<Record<string, unknown>[]>) {
-  dbState.selectRows.push(...rows);
-}
-
-function collectPrimitiveValues(value: unknown, seen = new Set<unknown>()): unknown[] {
-  if (value == null || typeof value !== "object") return [value];
-  if (seen.has(value)) return [];
-  seen.add(value);
-  const values: unknown[] = [];
-  for (const child of Object.values(value as Record<string, unknown>)) {
-    values.push(...collectPrimitiveValues(child, seen));
-  }
-  return values;
-}
-
-const elements = {
-  headline: { action: "change" as const, value: "A sharper hook" },
-  heroImage: { action: "keep" as const },
-  background: { action: "keep" as const },
-  offer: { action: "keep" as const },
-  cta: { action: "keep" as const },
-};
-
-function approvedVariant(id: string) {
+function suggestion(overrides: Record<string, unknown> = {}) {
   return {
-    id,
-    headline: "A sharper hook",
-    diffSummary: "Only the headline changes from the winner.",
-    copyLine: "Wake up ready.",
-    elements,
-    format: "square",
-    sourceCreativeId: "creative_1",
-    title: "Our top winner",
+    id: "suggestion_1",
+    organizationId: "test-org-id",
+    sourceCreativeId: null,
+    swipeId: null,
+    kind: "new_hooks",
+    title: "Try a sharper hook",
+    whyLine: "The winner has room for another hook.",
+    brief: "Keep the winner and change the headline.",
+    elements: null,
     angle: "Problem first",
-    persona: "Busy parents",
-    awarenessLevel: "problem_aware",
+    angleId: null,
+    visualStyleId: null,
+    persona: null,
+    awarenessLevel: null,
+    roas: "4",
+    purchases: 12,
+    spend: "100",
+    format: "square",
+    count: 3,
+    copyPackageId: null,
+    generationId: null,
+    status: "proposed",
+    claimedAt: null,
+    actionedAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
   };
 }
 
-function queueSourceCreative() {
-  queueSelect(
-    [
-      {
-        id: "creative_1",
-        name: "Airflow winner",
-        assetUrl: "https://cdn.test/winner.png",
-      },
-    ],
-    [
-      {
-        creativeId: "creative_1",
-        name: "Airflow winner",
-        angle: "Problem first",
-        persona: "Busy parents",
-        awarenessLevel: "problem_aware",
-        assetUrl: "https://cdn.test/winner.png",
-        spend: "100",
-        purchases: 12,
-        purchaseValue: "400",
-        roas: "4",
-        adCount: 1,
-      },
-    ],
-  );
-}
-
-describe("studio router — suggestions", () => {
+describe("studio router — v2 lifecycle", () => {
   beforeEach(() => {
-    dbState.selectRows = [];
-    dbState.updateReturningRows = [];
-    dbState.inserted = [];
-    dbState.updates = [];
-    dbState.generationNumber = 0;
+    state.selects = [];
+    state.returning = [];
+    state.inserts = [];
+    state.updates = [];
+    state.generation = 0;
     vi.clearAllMocks();
-    triggerMock.mockResolvedValue({ id: "run_1" });
   });
 
-  it("setSuggestionStatus updates mutable rows and refuses generated rows in the where clause", async () => {
+  it("moves a proposal to skipped and refresh expires unactioned proposals", async () => {
+    state.returning.push(
+      [{ id: "suggestion_1", status: "skipped" }],
+      [{ id: "old_1" }, { id: "old_2" }],
+    );
     const caller = createMockCaller({ role: "owner" });
-    dbState.updateReturningRows.push(
-      [{ id: "variant_1", status: "approved" }],
-      [],
-    );
 
     await expect(
       caller.studio.setSuggestionStatus({
-        variantId: "variant_1",
-        status: "approved",
-      }),
-    ).resolves.toEqual({ id: "variant_1", status: "approved" });
-
-    const whereValues = collectPrimitiveValues(dbState.updates[0].where);
-    expect(whereValues).toEqual(
-      expect.arrayContaining(["suggested", "approved", "skipped"]),
-    );
-    expect(whereValues).not.toContain("generated");
-
-    await expect(
-      caller.studio.setSuggestionStatus({
-        variantId: "variant_generated",
+        suggestionId: "suggestion_1",
         status: "skipped",
       }),
-    ).rejects.toThrow("Generated suggestions cannot be changed");
+    ).resolves.toEqual({ id: "suggestion_1", status: "skipped" });
+    const refreshed = await caller.studio.refreshSuggestions();
+
+    expect(refreshed).toMatchObject({ expiredCount: 2, runId: "run_1" });
+    expect(state.updates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: "skipped" }),
+        expect.objectContaining({ status: "expired" }),
+      ]),
+    );
   });
 
-  it("suggestions maps active cards to ordered variants and source creative summaries", async () => {
-    const createdAt = new Date("2026-07-13T08:00:00.000Z");
-    queueSelect(
-      [
-        {
-          id: "suggestion_1",
-          sourceCreativeId: "creative_1",
-          kind: "new_hooks",
-          title: "Airflow — your top ad",
-          whyLine: "This winner has room for fresh hooks.",
-          angle: "Problem first",
-          persona: "Busy parents",
-          awarenessLevel: "problem_aware",
-          roas: "4",
-          purchases: 12,
-          spend: "100",
-          status: "active",
-          createdAt,
-          updatedAt: createdAt,
-        },
-      ],
-      [
-        {
-          id: "variant_1",
-          suggestionId: "suggestion_1",
-          index: 0,
-          headline: "A sharper hook",
-          diffSummary: "Only the headline changes from the winner.",
-          copyLine: "Wake up ready.",
-          elements,
-          format: "square",
-          status: "suggested",
-          generationId: null,
-          createdAt,
-          updatedAt: createdAt,
-        },
-      ],
+  it("warns on a duplicate swipe URL and archives an existing swipe", async () => {
+    const existing = {
+      id: "swipe_1",
+      organizationId: "test-org-id",
+      imageUrl: "https://store.public.blob.vercel-storage.com/swipe.png",
+      sourceUrl: "https://example.test/ad",
+    };
+    state.selects.push([existing]);
+    state.returning.push([{ ...existing, archivedAt: new Date() }]);
+    const caller = createMockCaller({ role: "owner" });
+
+    const duplicate = await caller.studio.createSwipe({
+      imageUrl: "https://store.public.blob.vercel-storage.com/new.png",
+      sourceUrl: "https://example.test/ad",
+    });
+    expect(duplicate).toMatchObject({ duplicate: true, swipe: { id: "swipe_1" } });
+    expect(state.inserts).toHaveLength(0);
+
+    await caller.studio.archiveSwipe({ id: "swipe_1", archived: true });
+    expect(state.updates.at(-1)?.archivedAt).toBeInstanceOf(Date);
+  });
+
+  it("rejects a foreign screenshot URL instead of storing an expiring asset", async () => {
+    await expect(
+      createMockCaller({ role: "owner" }).studio.createSwipe({
+        imageUrl: "https://competitor.example/ad.png",
+      }),
+    ).rejects.toThrow("must be uploaded before saving");
+    expect(state.inserts).toHaveLength(0);
+  });
+
+  it("creates, updates, and hard-deletes a swipe", async () => {
+    state.returning.push(
+      [{ id: "inserted_row", brandName: "Updated brand" }],
+      [{ id: "inserted_row" }],
     );
-    queueSourceCreative();
+    state.selects.push([{ imageUrl: "https://store.public.blob.vercel-storage.com/swipe.png" }]);
+    const caller = createMockCaller({ role: "owner" });
 
-    const result = await createMockCaller({ role: "owner" }).studio.suggestions();
+    const created = await caller.studio.createSwipe({
+      imageUrl: "https://store.public.blob.vercel-storage.com/swipe.png",
+      brandName: "Brand",
+    });
+    expect(created).toMatchObject({ duplicate: false, swipe: { id: "inserted_row" } });
 
-    expect(result).toMatchObject({
-      generatedAt: createdAt,
-      isRefreshing: false,
-      cards: [
-        {
-          id: "suggestion_1",
-          source: {
-            id: "creative_1",
-            name: "Airflow winner",
-            assetUrl: "https://cdn.test/winner.png",
-            roas: 4,
-          },
-          variants: [{ id: "variant_1", index: 0 }],
-        },
-      ],
+    await caller.studio.updateSwipe({ id: "inserted_row", brandName: "Updated brand" });
+    await expect(caller.studio.deleteSwipe({ id: "inserted_row" })).resolves.toEqual({
+      deleted: true,
     });
   });
 
-  it("generateApproved creates a one-image generation and marks the suggestion generated", async () => {
-    queueSelect([approvedVariant("variant_1")]);
-    queueSourceCreative();
-    queueSelect([{ id: "creative_1" }]);
+  it("creates a manual Meta-trio copy package", async () => {
+    state.selects.push([{ id: "angle_1" }]);
+    const result = await createMockCaller({ role: "owner" }).studio.createCopyPackage({
+      name: "Problem-first winner",
+      angleId: "angle_1",
+      primaryText: "Primary text",
+      headline: "Headline",
+      description: "Description",
+    });
 
-    const result = await createMockCaller({ role: "owner" }).studio.generateApproved();
+    expect(result).toMatchObject({
+      name: "Problem-first winner",
+      primaryText: "Primary text",
+      headline: "Headline",
+      description: "Description",
+    });
+  });
 
-    expect(result).toEqual({ queued: 1, failed: 0 });
-    expect(dbState.inserted).toEqual(
+  it("saves a synced creative's Meta copy as an angle-tagged package", async () => {
+    state.selects.push(
+      [
+        {
+          id: "creative_1",
+          name: "Winning ad",
+          angle: "Problem first",
+          caption: "Proven primary text",
+        },
+      ],
+      [{ id: "angle_1" }],
+    );
+    const result = await createMockCaller({ role: "owner" })
+      .studio.createCopyPackageFromCreative({
+        creativeId: "creative_1",
+        angleId: "angle_1",
+      });
+
+    expect(result).toMatchObject({
+      sourceCreativeId: "creative_1",
+      angleId: "angle_1",
+      primaryText: "Proven primary text",
+      headline: "Winning ad",
+    });
+  });
+
+  it("defaults approval to the angle's latest package and claim-first prevents a double queue", async () => {
+    const claimed = suggestion({
+      angleId: "angle_1",
+      kind: "rebrand_swipe",
+      swipeId: "swipe_1",
+      status: "approved",
+      claimedAt: new Date(),
+    });
+    state.returning.push([claimed], []);
+    state.selects.push(
+      [{
+        id: "swipe_1",
+        imageUrl: "https://store.public.blob.vercel-storage.com/swipe.png",
+        brandName: "Competitor",
+        elements: null,
+      }],
+      [{ id: "package_latest" }],
+      // brand profile lookup (none configured)
+      [],
+      [{ id: "swipe_1" }],
+      [{ id: "package_latest" }],
+    );
+    const caller = createMockCaller({ role: "owner" });
+
+    const attempts = await Promise.allSettled([
+      caller.studio.approveSuggestion({ id: "suggestion_1" }),
+      caller.studio.approveSuggestion({ id: "suggestion_1" }),
+    ]);
+
+    expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
+    expect(attempts.filter((attempt) => attempt.status === "rejected")).toHaveLength(1);
+    expect(attempts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          organizationId: "test-org-id",
-          count: 1,
-          format: "square",
-          referenceImageUrls: ["https://cdn.test/winner.png"],
-          sourceCreativeId: "creative_1",
+          status: "fulfilled",
+          value: expect.objectContaining({ generationId: "generation_1" }),
         }),
-        [
-          {
-            generationId: "generation_1",
-            organizationId: "test-org-id",
-            index: 0,
-            status: "pending",
-          },
-        ],
+        expect.objectContaining({
+          status: "rejected",
+          reason: expect.objectContaining({ message: "This suggestion is already queued" }),
+        }),
       ]),
     );
-    expect(triggerMock).toHaveBeenCalledWith(
+    expect(trigger).toHaveBeenCalledTimes(1);
+    expect(trigger).toHaveBeenCalledWith(
       "generate-static-ads",
       expect.objectContaining({
-        generationId: "generation_1",
-        count: 1,
-        referenceImageUrls: ["https://cdn.test/winner.png"],
+        referenceImageUrls: ["https://store.public.blob.vercel-storage.com/swipe.png"],
       }),
     );
-    expect(dbState.updates).toEqual(
+    expect(state.inserts).toContainEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          values: expect.objectContaining({
-            status: "generated",
-            generationId: "generation_1",
-          }),
-        }),
+        expect.objectContaining({ copyPackageId: "package_latest" }),
       ]),
     );
   });
 
-  it("generateApproved continues after one variant trigger fails", async () => {
-    queueSelect([
-      approvedVariant("variant_1"),
-      approvedVariant("variant_2"),
-    ]);
-    queueSourceCreative();
-    queueSelect([{ id: "creative_1" }], [{ id: "creative_1" }]);
-    triggerMock
-      .mockResolvedValueOnce({ id: "run_1" })
-      .mockRejectedValueOnce(new Error("Trigger unavailable"));
-
-    const result = await createMockCaller({ role: "owner" }).studio.generateApproved();
-
-    expect(result).toEqual({ queued: 1, failed: 1 });
-    expect(triggerMock).toHaveBeenCalledTimes(2);
-    const generatedUpdates = dbState.updates.filter(
-      (update) => update.values.status === "generated",
+  it("marks Good/Bad/null and only publishes through the Good transition", async () => {
+    state.returning.push(
+      [{ id: "variant_1", mark: "good", publishedAt: null }],
+      [{ id: "variant_1", publishedAt: new Date() }],
+      [{ id: "variant_1", mark: "bad", publishedAt: null }],
     );
-    expect(generatedUpdates).toHaveLength(1);
-    expect(generatedUpdates[0].values.generationId).toBe("generation_1");
-    expect(dbState.updates).toEqual(
+    const caller = createMockCaller({ role: "owner" });
+
+    await caller.studio.setVariantMark({ variantId: "variant_1", mark: "good" });
+    await caller.studio.setVariantPublished({ variantId: "variant_1", published: true });
+    await caller.studio.setVariantMark({ variantId: "variant_1", mark: "bad" });
+
+    expect(state.updates).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          values: expect.objectContaining({ status: "failed" }),
-        }),
+        expect.objectContaining({ mark: "good" }),
+        expect.objectContaining({ publishedAt: expect.any(Date) }),
+        expect.objectContaining({ mark: "bad", publishedAt: null }),
       ]),
     );
   });

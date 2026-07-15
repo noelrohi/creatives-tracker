@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Images, PenLine, Sparkles } from "@/components/icons";
+import { Images, Sparkles } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 const tabs = [
-  { label: "Create", href: "/studio", icon: PenLine },
-  { label: "Suggestions", href: "/studio/suggestions", icon: Sparkles },
+  { label: "Home", href: "/studio", icon: Sparkles },
+  { label: "Swipes", href: "/studio/swipes", icon: Images },
   { label: "Library", href: "/studio/library", icon: Images },
 ];
 

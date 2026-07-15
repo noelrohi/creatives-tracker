@@ -1,11 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// --- Mocked DB: supports the studio router's
-//   select().from().innerJoin().innerJoin().where().groupBy() chain,
-// resolving groupBy() with the next queued row set. setStarred() uses
-//   update().set().where().returning(). generate() uses insert/update chains.
+// --- Mocked DB: supports the studio router's select/insert/update chains.
 const dbState = {
   groupByRows: [] as Array<Record<string, unknown>[]>,
+  selectRows: [] as Array<Record<string, unknown>[]>,
   inserted: [] as Array<Record<string, unknown> | Record<string, unknown>[]>,
   updated: [] as Array<Record<string, unknown>>,
 };
@@ -16,6 +14,7 @@ const mockDb = {
       from: vi.fn(() => chain),
       innerJoin: vi.fn(() => chain),
       where: vi.fn(() => chain),
+      limit: vi.fn(async () => dbState.selectRows.shift() ?? []),
       groupBy: vi.fn(async () => dbState.groupByRows.shift() ?? []),
     };
     return chain;
@@ -84,6 +83,7 @@ function queueGroupBy(...rowSets: Array<Record<string, unknown>[]>) {
 describe("studio router — static-ad composer starters", () => {
   beforeEach(() => {
     dbState.groupByRows = [];
+    dbState.selectRows = [];
     dbState.inserted = [];
     dbState.updated = [];
     vi.clearAllMocks();
@@ -220,24 +220,24 @@ describe("studio router — static-ad composer starters", () => {
       referenceImageUrls: ["https://cdn.test/bold-high.png"],
     });
     expect(dbState.inserted[1]).toEqual([
-      {
+      expect.objectContaining({
         generationId: "generation_new",
         organizationId: "test-org-id",
         index: 0,
         status: "pending",
-      },
-      {
+      }),
+      expect.objectContaining({
         generationId: "generation_new",
         organizationId: "test-org-id",
         index: 1,
         status: "pending",
-      },
-      {
+      }),
+      expect.objectContaining({
         generationId: "generation_new",
         organizationId: "test-org-id",
         index: 2,
         status: "pending",
-      },
+      }),
     ]);
     expect(dbState.updated[0]).toMatchObject({ runId: "run_abc123" });
 
@@ -287,23 +287,60 @@ describe("studio router — static-ad composer starters", () => {
     expect(triggerMock.trigger).not.toHaveBeenCalled();
   });
 
-  it("setStarred: stamps starredAt on ready variants and reports the count", async () => {
+  it("linkVariantToCreative: links a published variant to an org creative", async () => {
+    dbState.selectRows.push(
+      [{ id: "variant_1", publishedAt: new Date("2026-07-15T00:00:00Z") }],
+      [{ id: "creative_1" }],
+    );
     const caller = createMockCaller({ role: "owner" });
 
-    const result = await caller.studio.setStarred({
-      variantIds: ["variant_1"],
-      starred: true,
-    });
+    await expect(
+      caller.studio.linkVariantToCreative({
+        variantId: "variant_1",
+        creativeId: "creative_1",
+      }),
+    ).resolves.toEqual({ ok: true });
 
-    expect(result).toEqual({ updatedCount: 1 });
-    expect(dbState.updated[0].starredAt).toBeInstanceOf(Date);
+    expect(dbState.updated.at(-1)).toMatchObject({
+      linkedCreativeId: "creative_1",
+      updatedAt: expect.any(Date),
+    });
   });
 
-  it("setStarred: clears starredAt when unstarring", async () => {
+  it("linkVariantToCreative: requires publishing before linking", async () => {
+    dbState.selectRows.push([{ id: "variant_1", publishedAt: null }]);
     const caller = createMockCaller({ role: "owner" });
 
-    await caller.studio.setStarred({ variantIds: ["variant_1"], starred: false });
+    await expect(
+      caller.studio.linkVariantToCreative({
+        variantId: "variant_1",
+        creativeId: "creative_1",
+      }),
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "Publish the image first",
+    });
 
-    expect(dbState.updated[0].starredAt).toBeNull();
+    expect(dbState.updated).toEqual([]);
+    expect(dbState.selectRows).toEqual([]);
+  });
+
+  it("setVariantMark: marks a ready variant Good", async () => {
+    const caller = createMockCaller({ role: "owner" });
+
+    await caller.studio.setVariantMark({
+      variantId: "variant_1",
+      mark: "good",
+    });
+
+    expect(dbState.updated[0].mark).toBe("good");
+  });
+
+  it("setVariantMark: clears the mark and published state", async () => {
+    const caller = createMockCaller({ role: "owner" });
+
+    await caller.studio.setVariantMark({ variantId: "variant_1", mark: null });
+
+    expect(dbState.updated[0]).toMatchObject({ mark: null, publishedAt: null });
   });
 });

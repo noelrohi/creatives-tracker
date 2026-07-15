@@ -1,9 +1,8 @@
 import { z } from "zod";
-import { isStudioFormat } from "@/lib/studio-prompt";
 
 export type SuggestionElement = {
   action: "keep" | "change";
-  value?: string;
+  value?: string | null;
 };
 
 export type SuggestionElements = {
@@ -12,45 +11,55 @@ export type SuggestionElements = {
   background: SuggestionElement;
   offer: SuggestionElement;
   cta: SuggestionElement;
+  brandMarks?: SuggestionElement | null;
+  product?: SuggestionElement | null;
+  copy?: SuggestionElement | null;
 };
 
-const suggestionElementSchema = z.object({
+// These schemas are sent to OpenAI structured outputs (strict mode), which
+// requires every property to be required — "may be absent" is expressed as
+// .nullable(), never .optional(), and defaults are not allowed.
+export const suggestionElementSchema = z.object({
   action: z.enum(["keep", "change"]),
-  value: z.string().optional(),
+  value: z.string().nullable(),
 });
 
-const suggestionElementsSchema = z.object({
+export const suggestionElementsSchema = z.object({
   headline: suggestionElementSchema,
   heroImage: suggestionElementSchema,
   background: suggestionElementSchema,
   offer: suggestionElementSchema,
   cta: suggestionElementSchema,
+  brandMarks: suggestionElementSchema.nullable(),
+  product: suggestionElementSchema.nullable(),
+  copy: suggestionElementSchema.nullable(),
 });
 
-const suggestionFormatSchema = z
-  .string()
-  .refine(isStudioFormat, "Unsupported image dimensions");
+const suggestionFormatSchema = z.enum([
+  "square",
+  "portrait",
+  "landscape",
+  "widescreen",
+  "vertical",
+]);
 
-export const studioSuggestionCardsSchema = z
-  .array(
-    z.object({
-      kind: z.enum(["new_hooks", "new_format", "refresh"]),
-      title: z.string().min(1),
-      whyLine: z.string().min(1),
-      variants: z
-        .array(
-          z.object({
-            headline: z.string().min(1),
-            diffSummary: z.string().min(1),
-            copyLine: z.string().min(1),
-            elements: suggestionElementsSchema,
-            format: suggestionFormatSchema,
-          }),
-        )
-        .length(3),
-    }),
-  )
-  .max(3);
+// Passed to generateObject with output: "array" — OpenAI strict mode rejects
+// root-level array schemas, so the SDK wraps this object schema itself.
+export const studioSuggestionCardSchema = z.object({
+  kind: z.enum(["new_hooks", "new_format", "refresh", "rebrand_swipe"]),
+  title: z.string().min(1),
+  whyLine: z.string().min(1),
+  hypothesis: z.string().min(1),
+  brief: z.string().min(1),
+  elements: suggestionElementsSchema,
+  visualStyle: z.string().min(1).nullable(),
+  format: suggestionFormatSchema,
+  count: z.number().int().min(3).max(4),
+  sourceOrder: z.number().int().min(1),
+});
+
+/** Shape used by the swipe vision pass. */
+export const rebrandElementSpecSchema = suggestionElementsSchema;
 
 const ELEMENT_LABELS: Record<keyof SuggestionElements, string> = {
   headline: "headline",
@@ -58,6 +67,9 @@ const ELEMENT_LABELS: Record<keyof SuggestionElements, string> = {
   background: "background",
   offer: "offer",
   cta: "CTA",
+  brandMarks: "brand marks",
+  product: "product",
+  copy: "copy",
 };
 
 export function buildSuggestionBrief(
@@ -69,9 +81,13 @@ export function buildSuggestionBrief(
   },
   winnerName: string,
 ) {
-  const entries = Object.entries(variant.elements) as Array<
-    [keyof SuggestionElements, SuggestionElement]
-  >;
+  const entries = (
+    Object.entries(variant.elements) as Array<
+      [keyof SuggestionElements, SuggestionElement | null]
+    >
+  ).filter((entry): entry is [keyof SuggestionElements, SuggestionElement] =>
+    entry[1] != null,
+  );
   const kept = entries
     .filter(([, element]) => element.action === "keep")
     .map(([key]) => ELEMENT_LABELS[key]);
@@ -90,4 +106,22 @@ export function buildSuggestionBrief(
     `Change: ${changed.length > 0 ? changed.join("; ") : "none"}.`,
     `Suggested copy line: "${variant.copyLine}".`,
   ].join(" ");
+}
+
+export function buildElementsBrief(elements: SuggestionElements) {
+  const entries = (
+    Object.entries(elements) as Array<
+      [keyof SuggestionElements, SuggestionElement | null]
+    >
+  ).filter((entry): entry is [keyof SuggestionElements, SuggestionElement] =>
+    entry[1] != null,
+  );
+  return entries
+    .map(([key, element]) => {
+      const instruction =
+        element.value?.trim() ||
+        (element.action === "keep" ? "keep from the reference" : "replace");
+      return `${ELEMENT_LABELS[key]} — ${element.action}: ${instruction}`;
+    })
+    .join("; ");
 }

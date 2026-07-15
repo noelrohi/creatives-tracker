@@ -67,16 +67,44 @@ export const ART_DIRECTIONS = [
   "Before/after or comparison-style split composition with clear visual storytelling.",
 ];
 
+/**
+ * Layout-level art directions contradict "keep the reference composition", so
+ * they only rotate when the generation has no reference images.
+ */
+export function artDirectionFor(
+  index: number,
+  count: number,
+  hasReferenceImages: boolean,
+) {
+  if (count <= 1 || hasReferenceImages) return null;
+  return ART_DIRECTIONS[index % ART_DIRECTIONS.length];
+}
+
+export type StudioBrandContext = {
+  brandName: string;
+  productDescription: string;
+  offer?: string | null;
+  /** Product details the photo can't carry, e.g. a blind-debossed wordmark. */
+  productNotes?: string | null;
+};
+
 export function buildPrompt(payload: {
   brief: string;
   angle?: string | null;
   persona?: string | null;
   awarenessLevel?: AwarenessLevel | null;
   format?: StudioFormat;
+  brand?: StudioBrandContext | null;
 }) {
-  const format = payload.format ?? "square";
   const details = [
     `Brief: ${payload.brief}`,
+    payload.brand
+      ? `Brand: ${payload.brand.brandName} — ${payload.brand.productDescription}`
+      : null,
+    payload.brand?.offer ? `Offer: ${payload.brand.offer}` : null,
+    payload.brand?.productNotes
+      ? `Product notes: ${payload.brand.productNotes}`
+      : null,
     payload.angle ? `Angle: ${payload.angle}` : null,
     payload.persona ? `Persona: ${payload.persona}` : null,
     payload.awarenessLevel
@@ -85,8 +113,8 @@ export function buildPrompt(payload: {
   ].filter(Boolean);
 
   return [
-    `Create a polished ${studioSizeFor(format)} static ad image for paid social.`,
-    "Use strong visual hierarchy, direct-response clarity, and a premium ecommerce feel.",
+    "Create a static ad image for paid social.",
+    "One clear focal point and a headline that reads at a glance in a scrolling feed.",
     "Do not include platform UI, watermarks, or unrelated brand logos.",
     ...details,
   ].join("\n");
@@ -94,4 +122,92 @@ export function buildPrompt(payload: {
 
 export function variantPromptFor(basePrompt: string, artDirection: string | null) {
   return artDirection ? `${basePrompt}\nArt direction: ${artDirection}` : basePrompt;
+}
+
+export type PromptRewriteInput = {
+  brief: string;
+  angle?: string | null;
+  persona?: string | null;
+  awarenessLevel?: AwarenessLevel | null;
+  count: number;
+  format?: StudioFormat;
+  /** Layout references (swipe/winning creative) — not the product photo. */
+  hasReferenceImages: boolean;
+  brand?: StudioBrandContext | null;
+  hasProductImage?: boolean;
+};
+
+/**
+ * The rewrite stage: an LLM turns the layered brief (rebrand instructions,
+ * element spec, copy package, angle/persona metadata) into per-variant image
+ * prompts, so the image model receives one short concrete description instead
+ * of concatenated instructions.
+ */
+export function buildPromptRewrite(input: PromptRewriteInput) {
+  const variantRules = input.hasReferenceImages
+    ? [
+        "- The layout reference image is attached. Every prompt keeps the reference's layout, composition, and visual hierarchy: describe its actual arrangement of product, text blocks, and negative space. Do not invent people, scenes, or props the reference does not show.",
+        "- State that all source branding, logos, products, recognizable people, and copy are replaced with the advertiser's own.",
+        "- For every text block visible in the reference (headline, bullets, badge, CTA), write short exact replacement copy in quotes for the advertiser — never reuse the source's words.",
+        "- Vary palette, lighting, materials, and background texture between variants — never the layout.",
+      ]
+    : [
+        "- No reference images. Make each variant a distinct concept: e.g. product close-up, lifestyle in context, headline-led typographic layout, split comparison, editorial negative space.",
+      ];
+
+  const system = [
+    "You write finished prompts for an image model that generates static paid-social ads.",
+    "",
+    "Every prompt must:",
+    "- Be self-contained and under 120 words: one plain-language visual description covering subject, composition, lighting, palette, and mood.",
+    "- Quote exactly, in double quotes, any words that should appear in the image (headline, offer, CTA) and keep them short. Never leave in-image text unspecified and never quote long paragraphs.",
+    '- End with: No other text. No watermarks, platform UI, or third-party logos.',
+    '- Avoid vague style words like "premium", "polished", or "high quality"; describe the look concretely instead.',
+    "- Contain no JSON, labels, or meta-instructions — only the description the image model should render.",
+    ...(input.brand
+      ? [
+          '- The BRAND section describes the advertiser. Wherever the brief says "ours" or "our brand", it means this brand; name it and its product concretely in the prompt.',
+        ]
+      : []),
+    ...(input.hasProductImage
+      ? [
+          "- The last attached image is the advertiser's own product photo. State that the product in the ad matches it exactly. Render any markings from the product notes precisely (embossed, debossed, or printed branding); beyond those, add no markings, logos, or text to the product. It is product guidance, not layout guidance.",
+        ]
+      : []),
+    "",
+    "Variant rules:",
+    `- Return exactly ${input.count} prompts, one per variant.`,
+    ...variantRules,
+    "- Use the awareness level to set how direct the headline is: unaware → curiosity hook; problem aware → call out the problem; solution aware → why this approach wins; product aware → lead with proof; most aware → lead with the offer.",
+  ].join("\n");
+
+  const prompt = [
+    "BRIEF",
+    input.brief,
+    "",
+    ...(input.brand
+      ? [
+          "BRAND",
+          `${input.brand.brandName} — ${input.brand.productDescription}`,
+          input.brand.offer ? `Offer: ${input.brand.offer}` : null,
+          input.brand.productNotes
+            ? `Product notes: ${input.brand.productNotes}`
+            : null,
+          "",
+        ]
+      : []),
+    input.angle ? `ANGLE: ${input.angle}` : null,
+    input.persona ? `PERSONA: ${input.persona}` : null,
+    input.awarenessLevel
+      ? `AWARENESS LEVEL: ${input.awarenessLevel.replace(/_/g, " ")}`
+      : null,
+    `FORMAT: ${studioSizeFor(input.format ?? "square")}`,
+    `VARIANTS: ${input.count}`,
+    `REFERENCE IMAGES PROVIDED: ${input.hasReferenceImages ? "yes" : "no"}`,
+    `PRODUCT PHOTO PROVIDED: ${input.hasProductImage ? "yes" : "no"}`,
+  ]
+    .filter((line) => line !== null)
+    .join("\n");
+
+  return { system, prompt };
 }

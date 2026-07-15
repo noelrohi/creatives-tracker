@@ -11,6 +11,7 @@ export type CreativePerformanceRow = {
   angle: string | null;
   persona: string | null;
   awarenessLevel: string | null;
+  format: string | null;
   assetUrl: string | null;
   spend: string | null;
   purchases: number | null;
@@ -38,6 +39,7 @@ export async function fetchCreativePerformanceRows(
       angle: adCreatives.angle,
       persona: adCreatives.persona,
       awarenessLevel: adCreatives.awarenessLevel,
+      format: adCreatives.format,
       assetUrl: adCreatives.assetUrl,
       spend: sql<string | null>`sum(${performanceLogs.spend})::text`,
       purchases: sql<number | null>`sum(${performanceLogs.conversions})::int`,
@@ -55,6 +57,7 @@ export async function fetchCreativePerformanceRows(
       adCreatives.angle,
       adCreatives.persona,
       adCreatives.awarenessLevel,
+      adCreatives.format,
       adCreatives.assetUrl,
     ) as Promise<CreativePerformanceRow[]>;
 }

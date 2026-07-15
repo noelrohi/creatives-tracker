@@ -1,5 +1,5 @@
-import { StudioSuggestions } from "./studio-suggestions";
+import { redirect } from "next/navigation";
 
 export default function StudioSuggestionsPage() {
-  return <StudioSuggestions />;
+  redirect("/studio");
 }
