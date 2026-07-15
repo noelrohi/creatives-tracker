@@ -1,13 +1,12 @@
 import { z } from "zod";
 import { eq, and, desc } from "drizzle-orm";
 import { router, orgProcedure, orgWriteProcedure } from "../init";
-import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { abTests, abTestVariants } from "@/schema/ab-test";
 import { ads } from "@/schema/ad";
 
 export const abTestRouter = router({
-  list: orgProcedure.meta(openApiQueryMeta("abTest", "list")).query(async ({ ctx }) => {
+  list: orgProcedure.query(async ({ ctx }) => {
     const tests = await db
       .select()
       .from(abTests)
@@ -29,13 +28,17 @@ export const abTestRouter = router({
   }),
 
   getById: orgProcedure
-    .meta(openApiQueryMeta("abTest", "getById"))
     .input(z.object({ id: z.string() }))
     .query(async ({ input, ctx }) => {
       const [test] = await db
         .select()
         .from(abTests)
-        .where(and(eq(abTests.id, input.id), eq(abTests.organizationId, ctx.organizationId)));
+        .where(
+          and(
+            eq(abTests.id, input.id),
+            eq(abTests.organizationId, ctx.organizationId),
+          ),
+        );
       if (!test) throw new Error("A/B test not found");
 
       const variants = await db
@@ -54,7 +57,6 @@ export const abTestRouter = router({
     }),
 
   create: orgWriteProcedure
-    .meta(openApiMutationMeta("abTest", "create"))
     .input(
       z
         .object({
@@ -76,7 +78,6 @@ export const abTestRouter = router({
     }),
 
   update: orgWriteProcedure
-    .meta(openApiMutationMeta("abTest", "update"))
     .input(
       z.object({
         id: z.string(),
@@ -91,22 +92,30 @@ export const abTestRouter = router({
       const [test] = await db
         .update(abTests)
         .set(data)
-        .where(and(eq(abTests.id, id), eq(abTests.organizationId, ctx.organizationId)))
+        .where(
+          and(
+            eq(abTests.id, id),
+            eq(abTests.organizationId, ctx.organizationId),
+          ),
+        )
         .returning();
       return test;
     }),
 
   delete: orgWriteProcedure
-    .meta(openApiMutationMeta("abTest", "delete"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
       await db
         .delete(abTests)
-        .where(and(eq(abTests.id, input.id), eq(abTests.organizationId, ctx.organizationId)));
+        .where(
+          and(
+            eq(abTests.id, input.id),
+            eq(abTests.organizationId, ctx.organizationId),
+          ),
+        );
     }),
 
   addVariant: orgWriteProcedure
-    .meta(openApiMutationMeta("abTest", "addVariant"))
     .input(
       z.object({
         abTestId: z.string(),
@@ -128,11 +137,15 @@ export const abTestRouter = router({
     }),
 
   removeVariant: orgWriteProcedure
-    .meta(openApiMutationMeta("abTest", "removeVariant"))
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
       await db
         .delete(abTestVariants)
-        .where(and(eq(abTestVariants.id, input.id), eq(abTestVariants.organizationId, ctx.organizationId)));
+        .where(
+          and(
+            eq(abTestVariants.id, input.id),
+            eq(abTestVariants.organizationId, ctx.organizationId),
+          ),
+        );
     }),
 });

@@ -1,20 +1,9 @@
 import { TRPCError } from "@trpc/server";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
-import { z, toJSONSchema, type ZodTypeAny } from "zod";
-import { createSelectSchema } from "drizzle-zod";
+import { toJSONSchema, type ZodTypeAny } from "zod";
 import { createContext } from "./init";
 import type { OpenApiMeta, OpenApiMethod } from "./openapi-meta";
 import { appRouter } from "./routers/_app";
-import { adCreatives } from "@/schema/ad-creative";
-import { campaigns } from "@/schema/campaign";
-import { adSets } from "@/schema/ad-set";
-import { ads } from "@/schema/ad";
-import { performanceLogs } from "@/schema/performance-log";
-import { tags, entityTags } from "@/schema/tag";
-import { adAccounts } from "@/schema/account";
-import { apiKeys } from "@/schema/api-key";
-
-const EXCLUDED_OPENAPI_ROUTERS = new Set(["abTest"]);
 
 const TAG_METADATA: Record<string, { name: string; description: string }> = {
   adCreative: {
@@ -49,6 +38,10 @@ const TAG_METADATA: Record<string, { name: string; description: string }> = {
     name: "API Keys",
     description: "Manage organization-scoped API keys",
   },
+  team: {
+    name: "Teams",
+    description: "Manage teams for creative ownership",
+  },
   studio: {
     name: "studio",
     description:
@@ -56,291 +49,29 @@ const TAG_METADATA: Record<string, { name: string; description: string }> = {
   },
 };
 
-const dateAsString = z.string().describe("ISO 8601 date-time string");
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function selectSchema(table: any) {
-  // Override Date columns to string for JSON Schema compatibility
-  const schema = createSelectSchema(table);
-
-  if (!("shape" in schema)) return schema;
-
-  const objSchema = schema as unknown as z.ZodObject<z.ZodRawShape>;
-  const shape = objSchema.shape;
-  const overrides: Record<string, ZodTypeAny> = {};
-
-  for (const [key, field] of Object.entries(shape)) {
-    const unwrapped =
-      field instanceof z.ZodNullable ? field.unwrap() : field;
-    if (unwrapped instanceof z.ZodDate) {
-      overrides[key] =
-        field instanceof z.ZodNullable
-          ? dateAsString.nullable()
-          : dateAsString;
-    }
-  }
-
-  if (Object.keys(overrides).length > 0) {
-    return objSchema.extend(overrides);
-  }
-  return schema;
-}
-
-const selectSchemas: Record<string, ZodTypeAny> = {
-  adCreative: selectSchema(adCreatives),
-  campaign: selectSchema(campaigns),
-  adSet: selectSchema(adSets),
-  ad: selectSchema(ads),
-  performanceLog: selectSchema(performanceLogs),
-  tag: selectSchema(tags),
-  entityTag: selectSchema(entityTags),
-  adAccount: selectSchema(adAccounts),
-  apiKey: selectSchema(apiKeys),
-};
-
-const creativeListItemSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  assetUrl: z.string().nullable(),
-  videoUrl: z.string().nullable(),
-  format: z.string().nullable(),
-  angle: z.string().nullable(),
-  persona: z.string().nullable(),
-  awarenessLevel: z.string().nullable(),
-  hook: z.string().nullable(),
-  tone: z.array(z.string()).nullable(),
-  cta: z.string().nullable(),
-  ownership: z.string().nullable(),
-  notes: z.string().nullable(),
-  createdAt: dateAsString,
-  updatedAt: dateAsString,
-  totalSpend: z.string().nullable(),
-  avgRoas: z.string().nullable(),
-  totalConversions: z.number().nullable(),
-  adStatus: z.string().nullable(),
-  metaAdId: z.string().nullable(),
-  avgCpa: z.string().nullable(),
-  avgCtr: z.string().nullable(),
-  metaCampaignId: z.string().nullable(),
-  metaAdSetId: z.string().nullable(),
-  accountName: z.string().nullable(),
-});
-
-const creativeGetByIdSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  assetUrl: z.string().nullable(),
-  videoUrl: z.string().nullable(),
-  format: z.string().nullable(),
-  angle: z.string().nullable(),
-  persona: z.string().nullable(),
-  awarenessLevel: z.string().nullable(),
-  hook: z.string().nullable(),
-  tone: z.array(z.string()).nullable(),
-  cta: z.string().nullable(),
-  ownership: z.string().nullable(),
-  notes: z.string().nullable(),
-  createdAt: dateAsString,
-  updatedAt: dateAsString,
-});
-
-const creativePerformerSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  format: z.string().nullable(),
-  totalSpend: z.string(),
-  roas: z.string(),
-  cpa: z.string().nullable(),
-  ctr: z.string().nullable(),
-  conversions: z.string(),
-  adStatus: z.string().nullable(),
-});
-
-const customResponseSchemas: Record<string, Record<string, ZodTypeAny>> = {
-  adAccount: {
-    list: z.array(
-      z.object({
-        id: z.string(),
-        name: z.string(),
-        metaAccountId: z.string(),
-        notes: z.string().nullable(),
-        lastImportedAt: dateAsString.nullable(),
-        dataDateEnd: z.string().nullable(),
-        organizationId: z.string().nullable(),
-        createdAt: dateAsString,
-        updatedAt: dateAsString,
-        hasMetaAccessToken: z.boolean(),
-      }),
-    ),
-    getById: z.object({
-      id: z.string(),
-      name: z.string(),
-      metaAccountId: z.string(),
-      notes: z.string().nullable(),
-      lastImportedAt: dateAsString.nullable(),
-      dataDateEnd: z.string().nullable(),
-      organizationId: z.string().nullable(),
-      createdAt: dateAsString,
-      updatedAt: dateAsString,
-      hasMetaAccessToken: z.boolean(),
-    }),
-    create: z.object({
-      id: z.string(),
-      name: z.string(),
-      metaAccountId: z.string(),
-      notes: z.string().nullable(),
-      lastImportedAt: dateAsString.nullable(),
-      dataDateEnd: z.string().nullable(),
-      organizationId: z.string().nullable(),
-      createdAt: dateAsString,
-      updatedAt: dateAsString,
-      hasMetaAccessToken: z.boolean(),
-    }),
-    update: z.object({
-      id: z.string(),
-      name: z.string(),
-      metaAccountId: z.string(),
-      notes: z.string().nullable(),
-      lastImportedAt: dateAsString.nullable(),
-      dataDateEnd: z.string().nullable(),
-      organizationId: z.string().nullable(),
-      createdAt: dateAsString,
-      updatedAt: dateAsString,
-      hasMetaAccessToken: z.boolean(),
-    }),
-  },
-  adCreative: {
-    list: z.array(creativeListItemSchema),
-    getById: creativeGetByIdSchema,
-    dashboardStats: z.object({
-      portfolio: z.object({
-        totalSpend: z.string().nullable(),
-        totalRevenue: z.string().nullable(),
-        roas: z.string().nullable(),
-        cpa: z.string().nullable(),
-        ctr: z.string().nullable(),
-        conversions: z.string().nullable(),
-      }),
-      topPerformers: z.array(creativePerformerSchema),
-      bottomPerformers: z.array(creativePerformerSchema),
-    }),
-    bulkImport: z.object({
-      created: z.array(z.object({ id: z.string(), name: z.string() })),
-      totalRows: z.number(),
-      uniqueAds: z.number(),
-      perfLogs: z.number(),
-    }),
-    getPerformance: z.object({
-      totalSpend: z.string().nullable(),
-      avgRoas: z.string().nullable(),
-      avgCpa: z.string().nullable(),
-      avgCtr: z.string().nullable(),
-      totalConversions: z.number().nullable(),
-      totalImpressions: z.number().nullable(),
-      totalClicks: z.number().nullable(),
-      logCount: z.number(),
-      minDate: z.string().nullable(),
-      maxDate: z.string().nullable(),
-      portfolioAvgRoas: z.string().nullable(),
-      portfolioAvgCpa: z.string().nullable(),
-      portfolioAvgCtr: z.string().nullable(),
-      liveStatus: z.enum(["active", "paused", "no_ads"]),
-    }),
-  },
-  apiKey: {
-    list: z.array(
-      z.object({
-        id: z.string(),
-        name: z.string(),
-        prefix: z.string(),
-        scopes: z.array(z.string()).nullable(),
-        lastUsedAt: dateAsString.nullable(),
-        expiresAt: dateAsString.nullable(),
-        revokedAt: dateAsString.nullable(),
-        createdAt: dateAsString,
-        createdByUserId: z.string().nullable(),
-      }),
-    ),
-    create: z.object({
-      id: z.string(),
-      name: z.string(),
-      prefix: z.string(),
-      scopes: z.array(z.string()).nullable(),
-      expiresAt: dateAsString.nullable(),
-      createdAt: dateAsString,
-      key: z.string(),
-    }),
-    revoke: z.object({
-      id: z.string(),
-      revokedAt: dateAsString.nullable(),
-    }),
-    delete: z.object({
-      id: z.string(),
-    }),
-  },
-};
-
 function getResponseSchema(
-  routerName: string,
-  procedureName: string,
   declaredOutput?: ZodTypeAny,
 ): JsonSchema | undefined {
-  if (declaredOutput) {
-    return toJSONSchema(declaredOutput, {
-      target: "openapi-3.0",
-      reused: "inline",
-      unrepresentable: "any",
-      override: (ctx) => {
-        // z.date() outputs serialize as ISO 8601 strings over REST.
-        if (ctx.zodSchema._zod.def.type === "date") {
-          ctx.jsonSchema.type = "string";
-          ctx.jsonSchema.format = "date-time";
-        }
-      },
-    }) as JsonSchema;
+  if (!declaredOutput) {
+    return undefined;
   }
 
-  const customSchema = customResponseSchemas[routerName]?.[procedureName];
-  if (customSchema) {
-    return toJSONSchema(customSchema, {
-      target: "openapi-3.0",
-      reused: "inline",
-    }) as JsonSchema;
-  }
-
-  const baseSchema = selectSchemas[routerName];
-  if (!baseSchema) return undefined;
-
-  const itemSchema = toJSONSchema(baseSchema, {
+  return toJSONSchema(declaredOutput, {
     target: "openapi-3.0",
     reused: "inline",
+    unrepresentable: "any",
+    override: (ctx) => {
+      const outputType = ctx.zodSchema._zod.def.type;
+
+      if (outputType === "date") {
+        ctx.jsonSchema.type = "string";
+        ctx.jsonSchema.format = "date-time";
+        ctx.jsonSchema.description = "ISO 8601 date-time string";
+      } else if (outputType === "void" || outputType === "undefined") {
+        ctx.jsonSchema.type = "null";
+      }
+    },
   }) as JsonSchema;
-
-  if (
-    procedureName === "list" ||
-    procedureName.startsWith("listBy") ||
-    procedureName.startsWith("listAll")
-  ) {
-    return { type: "array", items: itemSchema };
-  }
-
-  if (procedureName === "listForEntity") {
-    const tagWithEntitySchema = z.object({
-      tagId: z.string(),
-      tagName: z.string(),
-      tagColor: z.string().nullable(),
-      entityTagId: z.string(),
-    });
-    return {
-      type: "array",
-      items: toJSONSchema(tagWithEntitySchema, {
-        target: "openapi-3.0",
-        reused: "inline",
-      }) as JsonSchema,
-    };
-  }
-
-  return itemSchema;
 }
 
 function humanizeProcedureName(procedureName: string): string {
@@ -376,8 +107,8 @@ type OpenApiProcedure = {
 function isProcedure(value: unknown): value is ProcedureLike {
   return Boolean(
     value &&
-      (typeof value === "object" || typeof value === "function") &&
-      (value as ProcedureLike)._def?.procedure,
+    (typeof value === "object" || typeof value === "function") &&
+    (value as ProcedureLike)._def?.procedure,
   );
 }
 
@@ -388,9 +119,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isZodSchema(value: unknown): value is ZodTypeAny {
   return Boolean(
     value &&
-      typeof value === "object" &&
-      "safeParse" in value &&
-      "toJSONSchema" in value,
+    typeof value === "object" &&
+    "safeParse" in value &&
+    "toJSONSchema" in value,
   );
 }
 
@@ -593,11 +324,7 @@ function collectOpenApiProcedures(
       description: openapi.description,
       tags: openapi.tags ?? [displayTag],
       inputSchema: getProcedureInputSchema(value),
-      responseSchema: getResponseSchema(
-        routerName,
-        key,
-        getProcedureOutputSchema(value),
-      ),
+      responseSchema: getResponseSchema(getProcedureOutputSchema(value)),
     });
   }
 
@@ -607,13 +334,10 @@ function collectOpenApiProcedures(
 export function getOpenApiProcedures() {
   return collectOpenApiProcedures(
     appRouter._def.record as Record<string, unknown>,
-  ).filter((procedure) => !EXCLUDED_OPENAPI_ROUTERS.has(procedure.routerName));
+  );
 }
 
-export function getOpenApiProcedure(
-  routerName: string,
-  procedureName: string,
-) {
+export function getOpenApiProcedure(routerName: string, procedureName: string) {
   return getOpenApiProcedures().find(
     (procedure) =>
       procedure.routerName === routerName &&
@@ -631,9 +355,7 @@ export function generateOpenApiDocument(
   const paths: Record<string, Record<string, unknown>> = {};
   const usedTags = new Set<string>();
 
-  const procedures = collectOpenApiProcedures(routerRecord).filter(
-    (procedure) => !EXCLUDED_OPENAPI_ROUTERS.has(procedure.routerName),
-  );
+  const procedures = collectOpenApiProcedures(routerRecord);
 
   for (const procedure of procedures) {
     const security =
@@ -725,7 +447,9 @@ export function generateOpenApiDocument(
 }
 
 async function getCaller(request?: Request) {
-  return appRouter.createCaller(await createContext(request ? { req: request } : undefined));
+  return appRouter.createCaller(
+    await createContext(request ? { req: request } : undefined),
+  );
 }
 
 export async function callOpenApiProcedure(
@@ -736,10 +460,7 @@ export async function callOpenApiProcedure(
   const procedure = getOpenApiProcedure(routerName, procedureName);
 
   if (!procedure) {
-    return Response.json(
-      { message: "Procedure not found" },
-      { status: 404 },
-    );
+    return Response.json({ message: "Procedure not found" }, { status: 404 });
   }
 
   if (request.method !== procedure.method) {
@@ -787,7 +508,9 @@ export async function callOpenApiProcedure(
     const result =
       input === undefined
         ? await (procedureCaller as () => Promise<unknown>)()
-        : await (procedureCaller as (value: unknown) => Promise<unknown>)(input);
+        : await (procedureCaller as (value: unknown) => Promise<unknown>)(
+            input,
+          );
 
     return Response.json(result ?? null);
   } catch (error) {
@@ -801,8 +524,7 @@ export async function callOpenApiProcedure(
       );
     }
 
-    const message =
-      error instanceof Error ? error.message : "Unknown error";
+    const message = error instanceof Error ? error.message : "Unknown error";
 
     return Response.json(
       {

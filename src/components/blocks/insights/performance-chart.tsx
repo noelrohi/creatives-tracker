@@ -31,9 +31,9 @@ interface PerformanceLog {
   cpa: string | null;
   ctr: string | null;
   purchaseValue?: string | null;
-  conversions: number | null;
-  impressions: number | null;
-  reach: number | null;
+  conversions: number | string | null;
+  impressions: number | string | null;
+  reach: number | string | null;
   cpm: string | null;
   [key: string]: unknown;
 }
@@ -72,9 +72,9 @@ export function PerformanceChart({ logs, compact, defaultMetric = "spend", lockM
       };
       const spend = log.spend ? Number(log.spend) : 0;
       const purchaseValue = log.purchaseValue ? Number(log.purchaseValue) : 0;
-      const conversions = log.conversions ?? 0;
-      const impressions = log.impressions ?? 0;
-      const reach = log.reach ?? 0;
+      const conversions = log.conversions ? Number(log.conversions) : 0;
+      const impressions = log.impressions ? Number(log.impressions) : 0;
+      const reach = log.reach ? Number(log.reach) : 0;
       const ctr = log.ctr ? Number(log.ctr) : 0;
 
       bucket.spend += spend;

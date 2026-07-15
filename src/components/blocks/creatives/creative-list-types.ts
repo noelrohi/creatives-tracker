@@ -14,8 +14,8 @@ export interface Creative {
   tone: string[] | null;
   cta: string | null;
   notes: string | null;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
   firstSeen: string | null;
   totalSpend: string | null;
   avgRoas: string | null;

@@ -12,10 +12,19 @@ const entityTypeSchema = z.enum([
   "ad",
 ]);
 
+const tagSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  color: z.string().nullable(),
+  organizationId: z.string().nullable(),
+  createdAt: z.date(),
+});
+
 export const tagRouter = router({
   search: orgProcedure
     .meta(openApiQueryMeta("tag", "search"))
     .input(z.object({ query: z.string().optional() }).optional())
+    .output(z.array(tagSchema))
     .query(async ({ input, ctx }) => {
       if (input?.query) {
         return db
@@ -41,6 +50,7 @@ export const tagRouter = router({
         entityId: z.string(),
       }),
     )
+    .output(z.array(tagSchema))
     .query(async ({ input, ctx }) => {
       const rows = await db
         .select({ tag: tags, entityTag: entityTags })
@@ -66,6 +76,7 @@ export const tagRouter = router({
         tagColor: z.string().optional(),
       }),
     )
+    .output(tagSchema)
     .mutation(async ({ input, ctx }) => {
       // Find or create tag
       let [tag] = await db
@@ -118,6 +129,7 @@ export const tagRouter = router({
         tagId: z.string(),
       }),
     )
+    .output(z.void())
     .mutation(async ({ input, ctx }) => {
       await db
         .delete(entityTags)

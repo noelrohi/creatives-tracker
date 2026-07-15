@@ -29,15 +29,14 @@ import {
   listRecentAccountSyncRuns,
   updateAccountSyncRun,
 } from "@/lib/meta-sync-runs";
-import { internalWorkerProcedure, router, orgProcedure, orgWriteProcedure } from "../init";
-import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
+import {
+  internalWorkerProcedure,
+  router,
+  orgProcedure,
+  orgWriteProcedure,
+} from "../init";
 
-const breakdownSchema = z.enum([
-  "age",
-  "gender",
-  "country",
-  "device_platform",
-]);
+const breakdownSchema = z.enum(["age", "gender", "country", "device_platform"]);
 type Breakdown = z.infer<typeof breakdownSchema>;
 
 const syncStatusSchema = z.enum([
@@ -84,7 +83,9 @@ const SUGGESTED_WINDOW_MAX_DAYS = 30;
 const DEFAULT_STALE_HOURS = 20;
 const ENRICH_PREVIEW_DEFAULT_LIMIT = 100;
 
-type RecentSyncRunRow = Awaited<ReturnType<typeof listRecentAccountSyncRuns>>["runs"][number];
+type RecentSyncRunRow = Awaited<
+  ReturnType<typeof listRecentAccountSyncRuns>
+>["runs"][number];
 
 function sanitizeRun(run: RecentSyncRunRow) {
   return publicAccountSyncRunSchema.parse({
@@ -126,11 +127,17 @@ export const metaSyncRouter = router({
     }),
 
   listSyncableAccounts: orgProcedure
-    .meta(openApiQueryMeta("metaSync", "listSyncableAccounts", "List Meta-enabled accounts with suggested sync windows"))
     .input(
-      z.object({
-        staleThresholdHours: z.number().int().min(1).max(168).default(DEFAULT_STALE_HOURS),
-      }).optional(),
+      z
+        .object({
+          staleThresholdHours: z
+            .number()
+            .int()
+            .min(1)
+            .max(168)
+            .default(DEFAULT_STALE_HOURS),
+        })
+        .optional(),
     )
     .output(
       z.array(
@@ -201,14 +208,15 @@ export const metaSyncRouter = router({
     }),
 
   startReport: orgWriteProcedure
-    .meta(openApiMutationMeta("metaSync", "startReport", "Request a Meta async insights report and persist a sync run"))
     .input(
       z.object({
         accountId: z.string(),
         dateFrom: z.string(),
         dateTo: z.string(),
         breakdown: breakdownSchema.nullable().optional(),
-        triggerType: z.enum(["scheduled", "manual_backfill"]).default("manual_backfill"),
+        triggerType: z
+          .enum(["scheduled", "manual_backfill"])
+          .default("manual_backfill"),
       }),
     )
     .output(
@@ -261,7 +269,6 @@ export const metaSyncRouter = router({
     }),
 
   pollReport: orgProcedure
-    .meta(openApiQueryMeta("metaSync", "pollReport", "Check Meta's async report status for a sync run"))
     .input(z.object({ syncRunId: z.string() }))
     .output(
       z.object({
@@ -283,13 +290,17 @@ export const metaSyncRouter = router({
         );
 
       if (!run) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Sync run not found" });
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Sync run not found",
+        });
       }
 
       if (run.finishedAt) {
-        const phase = run.result === "success" || run.result === "partial_success"
-          ? "done"
-          : "failed";
+        const phase =
+          run.result === "success" || run.result === "partial_success"
+            ? "done"
+            : "failed";
         return {
           phase,
           percentComplete: 100,
@@ -349,7 +360,6 @@ export const metaSyncRouter = router({
     }),
 
   importReport: orgWriteProcedure
-    .meta(openApiMutationMeta("metaSync", "importReport", "Import one page of a completed Meta report into the database"))
     .input(
       z.object({
         syncRunId: z.string(),
@@ -376,7 +386,10 @@ export const metaSyncRouter = router({
         );
 
       if (!run) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Sync run not found" });
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Sync run not found",
+        });
       }
 
       if (run.finishedAt) {
@@ -424,16 +437,19 @@ export const metaSyncRouter = router({
       });
 
       const breakdown = meta.breakdown ?? null;
-      const adMetaIds = [...new Set(
-        page.rows.map((row) => row.ad_id).filter(Boolean) as string[],
-      )];
+      const adMetaIds = [
+        ...new Set(
+          page.rows.map((row) => row.ad_id).filter(Boolean) as string[],
+        ),
+      ];
 
-      const deliveryByAdId = !breakdown && adMetaIds.length > 0
-        ? await fetchMetaAdDelivery({
-            adMetaIds,
-            accessToken: account.metaAccessToken,
-          })
-        : undefined;
+      const deliveryByAdId =
+        !breakdown && adMetaIds.length > 0
+          ? await fetchMetaAdDelivery({
+              adMetaIds,
+              accessToken: account.metaAccessToken,
+            })
+          : undefined;
 
       const mapped = mapMetaInsightsToRows(
         page.rows as Parameters<typeof mapMetaInsightsToRows>[0],
@@ -492,7 +508,6 @@ export const metaSyncRouter = router({
     }),
 
   refreshStatuses: orgWriteProcedure
-    .meta(openApiMutationMeta("metaSync", "refreshStatuses", "Refresh Meta ad and ad set delivery statuses for an account"))
     .input(z.object({ accountId: z.string() }))
     .output(
       z.object({
@@ -516,11 +531,15 @@ export const metaSyncRouter = router({
     }),
 
   enrichPreviews: orgWriteProcedure
-    .meta(openApiMutationMeta("metaSync", "enrichPreviews", "Fetch Meta creative previews for ads missing assets, destination URLs, or captions"))
     .input(
       z.object({
         accountId: z.string(),
-        limit: z.number().int().min(1).max(500).default(ENRICH_PREVIEW_DEFAULT_LIMIT),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(500)
+          .default(ENRICH_PREVIEW_DEFAULT_LIMIT),
       }),
     )
     .output(
@@ -597,13 +616,14 @@ export const metaSyncRouter = router({
     }),
 
   listRecentRuns: orgProcedure
-    .meta(openApiQueryMeta("metaSync", "listRecentRuns", "List recent per-account Meta sync runs with cursor pagination"))
     .input(
-      z.object({
-        accountId: z.string().optional(),
-        limit: z.number().int().min(1).max(100).default(20),
-        cursor: z.string().nullable().optional(),
-      }).optional(),
+      z
+        .object({
+          accountId: z.string().optional(),
+          limit: z.number().int().min(1).max(100).default(20),
+          cursor: z.string().nullable().optional(),
+        })
+        .optional(),
     )
     .output(
       z.object({

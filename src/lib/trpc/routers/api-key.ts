@@ -13,9 +13,41 @@ const createApiKeyInput = z.object({
   expiresAt: z.string().datetime().optional(),
 });
 
+const apiKeyListItemSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  prefix: z.string(),
+  scopes: z.array(z.string()).nullable(),
+  lastUsedAt: z.date().nullable(),
+  expiresAt: z.date().nullable(),
+  revokedAt: z.date().nullable(),
+  createdAt: z.date(),
+  createdByUserId: z.string().nullable(),
+});
+
+const createdApiKeySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  prefix: z.string(),
+  scopes: z.array(z.string()).nullable(),
+  expiresAt: z.date().nullable(),
+  createdAt: z.date(),
+  key: z.string(),
+});
+
+const revokedApiKeySchema = z.object({
+  id: z.string(),
+  revokedAt: z.date().nullable(),
+});
+
+const deletedApiKeySchema = z.object({
+  id: z.string(),
+});
+
 export const apiKeyRouter = router({
   list: orgAdminProcedure
     .meta(openApiQueryMeta("apiKey", "list"))
+    .output(z.array(apiKeyListItemSchema))
     .query(async ({ ctx }) =>
       db
         .select({
@@ -36,6 +68,7 @@ export const apiKeyRouter = router({
   create: orgAdminProcedure
     .meta(openApiMutationMeta("apiKey", "create"))
     .input(createApiKeyInput)
+    .output(createdApiKeySchema)
     .mutation(async ({ input, ctx }) => {
       const generated = generateApiKey();
       const [created] = await db
@@ -67,6 +100,7 @@ export const apiKeyRouter = router({
   revoke: orgAdminProcedure
     .meta(openApiMutationMeta("apiKey", "revoke"))
     .input(z.object({ id: z.string() }))
+    .output(revokedApiKeySchema)
     .mutation(async ({ input, ctx }) => {
       const [revoked] = await db
         .update(apiKeys)
@@ -96,6 +130,7 @@ export const apiKeyRouter = router({
   delete: orgAdminProcedure
     .meta(openApiMutationMeta("apiKey", "delete"))
     .input(z.object({ id: z.string() }))
+    .output(deletedApiKeySchema)
     .mutation(async ({ input, ctx }) => {
       const [deleted] = await db
         .delete(apiKeys)

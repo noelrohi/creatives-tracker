@@ -127,6 +127,7 @@ export const teamRouter = router({
   delete: orgWriteProcedure
     .meta(openApiMutationMeta("team", "delete"))
     .input(z.object({ id: z.string() }))
+    .output(z.void())
     .mutation(async ({ input, ctx }) => {
       await db
         .delete(teams)

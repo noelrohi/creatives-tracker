@@ -65,7 +65,7 @@ interface LinkedAd {
   destinationUrl: string | null;
   totalSpend: string | null;
   avgRoas: string | null;
-  totalConversions: number | null;
+  totalConversions: string | null;
   runningDays?: number | null;
   disableTier?: "pause_now" | "watch" | null;
   minDate: string | null;

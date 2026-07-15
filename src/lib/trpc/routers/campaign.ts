@@ -7,6 +7,26 @@ import { db } from "@/db";
 import { adAccounts } from "@/schema/account";
 import { campaigns } from "@/schema/campaign";
 
+const campaignSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  objective: z
+    .enum(["conversions", "traffic", "engagement", "awareness", "leads", "app_installs"])
+    .nullable(),
+  organizationId: z.string().nullable(),
+  accountId: z.string().nullable(),
+  status: z.enum(["active", "paused", "archived"]),
+  metaId: z.string().nullable(),
+  notes: z.string().nullable(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+const campaignImportResultSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+
 async function assertAccountBelongsToOrg(
   accountId: string,
   organizationId: string,
@@ -31,17 +51,21 @@ async function assertAccountBelongsToOrg(
 }
 
 export const campaignRouter = router({
-  list: orgProcedure.meta(openApiQueryMeta("campaign", "list")).query(async ({ ctx }) => {
-    return db
-      .select()
-      .from(campaigns)
-      .where(eq(campaigns.organizationId, ctx.organizationId))
-      .orderBy(desc(campaigns.createdAt));
-  }),
+  list: orgProcedure
+    .meta(openApiQueryMeta("campaign", "list"))
+    .output(z.array(campaignSchema))
+    .query(async ({ ctx }) => {
+      return db
+        .select()
+        .from(campaigns)
+        .where(eq(campaigns.organizationId, ctx.organizationId))
+        .orderBy(desc(campaigns.createdAt));
+    }),
 
   getById: orgProcedure
     .meta(openApiQueryMeta("campaign", "getById"))
     .input(z.object({ id: z.string() }))
+    .output(campaignSchema)
     .query(async ({ input, ctx }) => {
       const [campaign] = await db
         .select()
@@ -63,6 +87,7 @@ export const campaignRouter = router({
       metaId: z.string().optional(),
       accountId: z.string().optional(),
     }).optional())
+    .output(campaignSchema)
     .mutation(async ({ input, ctx }) => {
       if (input?.accountId) {
         await assertAccountBelongsToOrg(input.accountId, ctx.organizationId);
@@ -96,6 +121,7 @@ export const campaignRouter = router({
         notes: z.string().nullable().optional(),
       }),
     )
+    .output(campaignSchema.optional())
     .mutation(async ({ input, ctx }) => {
       const { id, ...data } = input;
       if (data.accountId) {
@@ -118,6 +144,7 @@ export const campaignRouter = router({
   duplicate: orgWriteProcedure
     .meta(openApiMutationMeta("campaign", "duplicate"))
     .input(z.object({ id: z.string() }))
+    .output(campaignSchema)
     .mutation(async ({ input, ctx }) => {
       const [source] = await db
         .select()
@@ -155,6 +182,7 @@ export const campaignRouter = router({
         ),
       }),
     )
+    .output(z.array(campaignImportResultSchema))
     .mutation(async ({ input, ctx }) => {
       const results: { id: string; name: string }[] = [];
       const accountIds = Array.from(new Set(input.rows.map((row) => row.accountId).filter((value): value is string => Boolean(value))));
@@ -203,6 +231,7 @@ export const campaignRouter = router({
   delete: orgWriteProcedure
     .meta(openApiMutationMeta("campaign", "delete"))
     .input(z.object({ id: z.string() }))
+    .output(z.void())
     .mutation(async ({ input, ctx }) => {
       await db
         .delete(campaigns)
