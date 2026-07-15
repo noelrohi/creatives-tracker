@@ -49,6 +49,11 @@ const TAG_METADATA: Record<string, { name: string; description: string }> = {
     name: "API Keys",
     description: "Manage organization-scoped API keys",
   },
+  studio: {
+    name: "studio",
+    description:
+      "Image Studio: swipe file, weekly suggestions, generation queue, and library curation",
+  },
 };
 
 const dateAsString = z.string().describe("ISO 8601 date-time string");
@@ -278,7 +283,23 @@ const customResponseSchemas: Record<string, Record<string, ZodTypeAny>> = {
 function getResponseSchema(
   routerName: string,
   procedureName: string,
+  declaredOutput?: ZodTypeAny,
 ): JsonSchema | undefined {
+  if (declaredOutput) {
+    return toJSONSchema(declaredOutput, {
+      target: "openapi-3.0",
+      reused: "inline",
+      unrepresentable: "any",
+      override: (ctx) => {
+        // z.date() outputs serialize as ISO 8601 strings over REST.
+        if (ctx.zodSchema._zod.def.type === "date") {
+          ctx.jsonSchema.type = "string";
+          ctx.jsonSchema.format = "date-time";
+        }
+      },
+    }) as JsonSchema;
+  }
+
   const customSchema = customResponseSchemas[routerName]?.[procedureName];
   if (customSchema) {
     return toJSONSchema(customSchema, {
@@ -335,6 +356,7 @@ type ProcedureLike = {
   _def: {
     procedure?: boolean;
     inputs?: unknown[];
+    output?: unknown;
     meta?: OpenApiMeta;
   };
 };
@@ -345,6 +367,7 @@ type OpenApiProcedure = {
   method: OpenApiMethod;
   path: `/${string}`;
   summary?: string;
+  description?: string;
   tags: string[];
   inputSchema?: ZodTypeAny;
   responseSchema?: JsonSchema;
@@ -373,6 +396,11 @@ function isZodSchema(value: unknown): value is ZodTypeAny {
 
 function getProcedureInputSchema(procedure: ProcedureLike) {
   const [schema] = procedure._def.inputs ?? [];
+  return isZodSchema(schema) ? schema : undefined;
+}
+
+function getProcedureOutputSchema(procedure: ProcedureLike) {
+  const schema = procedure._def.output;
   return isZodSchema(schema) ? schema : undefined;
 }
 
@@ -441,6 +469,15 @@ function getInputSchemaJson(schema?: ZodTypeAny) {
   return toJSONSchema(schema, {
     target: "openapi-3.0",
     reused: "inline",
+    io: "input",
+    unrepresentable: "any",
+    override: (ctx) => {
+      // z.date() inputs arrive as ISO 8601 strings over REST.
+      if (ctx.zodSchema._zod.def.type === "date") {
+        ctx.jsonSchema.type = "string";
+        ctx.jsonSchema.format = "date-time";
+      }
+    },
   }) as JsonSchema;
 }
 
@@ -466,7 +503,9 @@ function getQueryInput(
   }
 
   if (entries.size === 0) {
-    return undefined;
+    // The procedure declares an input schema; all-optional object inputs
+    // must parse {} rather than fail on undefined when no params are sent.
+    return {};
   }
 
   const input: Record<string, unknown> = {};
@@ -551,9 +590,14 @@ function collectOpenApiProcedures(
       method: openapi.method,
       path: openapi.path,
       summary: openapi.summary ?? humanizeProcedureName(key),
+      description: openapi.description,
       tags: openapi.tags ?? [displayTag],
       inputSchema: getProcedureInputSchema(value),
-      responseSchema: getResponseSchema(routerName, key),
+      responseSchema: getResponseSchema(
+        routerName,
+        key,
+        getProcedureOutputSchema(value),
+      ),
     });
   }
 
@@ -577,11 +621,19 @@ export function getOpenApiProcedure(
   );
 }
 
-export function generateOpenApiDocument(baseUrl: string) {
+export function generateOpenApiDocument(
+  baseUrl: string,
+  routerRecord: Record<string, unknown> = appRouter._def.record as Record<
+    string,
+    unknown
+  >,
+) {
   const paths: Record<string, Record<string, unknown>> = {};
   const usedTags = new Set<string>();
 
-  const procedures = getOpenApiProcedures();
+  const procedures = collectOpenApiProcedures(routerRecord).filter(
+    (procedure) => !EXCLUDED_OPENAPI_ROUTERS.has(procedure.routerName),
+  );
 
   for (const procedure of procedures) {
     const security =
@@ -608,6 +660,10 @@ export function generateOpenApiDocument(baseUrl: string) {
         },
       },
     };
+
+    if (procedure.description !== undefined) {
+      operation.description = procedure.description;
+    }
 
     if (procedure.method === "GET") {
       operation.parameters = getJsonSchemaParameters(procedure.inputSchema);
@@ -641,7 +697,8 @@ export function generateOpenApiDocument(baseUrl: string) {
       title: "Adsolute API",
       version: "1.0.0",
       description:
-        "REST API for managing ad campaigns, creatives, and performance analytics.",
+        "REST API for managing ad campaigns, creatives, performance analytics, and the Image Studio loop. " +
+        "Agent-facing workflow recipes (swipe capture, weekly triage, generation polling) are served as markdown at `/api/openapi/guide`.",
     },
     servers: [{ url: baseUrl }],
     components: {

@@ -9,6 +9,7 @@ import {
 } from "drizzle-orm/pg-core";
 import type { SuggestionElements } from "@/lib/studio-suggestions";
 import { adCreatives } from "./ad-creative";
+import { organization } from "./auth";
 import { awarenessLevelEnum } from "./enums";
 
 export const studioTaxonomyValues = pgTable(
@@ -178,6 +179,34 @@ export const studioGenerations = pgTable(
   (table) => [
     index("studio_generation_organization_id_idx").on(table.organizationId),
     index("studio_generation_created_at_idx").on(table.createdAt),
+  ],
+);
+
+export const studioSuggestionRuns = pgTable(
+  "studio_suggestion_run",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => `suggestion_run_${crypto.randomUUID()}`),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    status: text("status")
+      .$type<"triggered" | "completed" | "failed">()
+      .notNull()
+      .default("triggered"),
+    errorSummary: text("error_summary"),
+    cardCount: integer("card_count"),
+    triggerRunId: text("trigger_run_id"),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("studio_suggestion_run_org_created_at_idx").on(
+      table.organizationId,
+      table.createdAt,
+    ),
   ],
 );
 

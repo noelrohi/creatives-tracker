@@ -48,6 +48,7 @@ import { organization } from "@/schema/auth";
 import { performanceLogs } from "@/schema/performance-log";
 import {
   studioCopyPackages,
+  studioSuggestionRuns,
   studioSuggestions,
   studioSwipes,
   studioTaxonomyValues,
@@ -63,6 +64,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export type GenerateStudioSuggestionsPayload = {
   organizationId: string;
   force?: boolean;
+  suggestionRunId?: string;
 };
 
 const swipeAnalysisSchema = z.object({
@@ -128,11 +130,73 @@ export const analyzeStudioSwipeTask = task({
   },
 });
 
+async function markSuggestionRunFailed(
+  payload: GenerateStudioSuggestionsPayload,
+  error: unknown,
+) {
+  if (!payload.suggestionRunId) return;
+  const completedAt = new Date();
+  await db
+    .update(studioSuggestionRuns)
+    .set({
+      status: "failed",
+      errorSummary: error instanceof Error ? error.message : String(error),
+      completedAt,
+      updatedAt: completedAt,
+    })
+    .where(
+      and(
+        eq(studioSuggestionRuns.id, payload.suggestionRunId),
+        eq(studioSuggestionRuns.organizationId, payload.organizationId),
+      ),
+    );
+}
+
 export const generateStudioSuggestionsTask = task({
   id: "generate-studio-suggestions",
   machine: { preset: "small-1x" },
   maxDuration: 300,
+  onFailure: async ({ payload, error }) => {
+    await markSuggestionRunFailed(payload, error);
+  },
   run: async (payload: GenerateStudioSuggestionsPayload) => {
+    // Attempt-level failures rethrow so Trigger.dev can retry; the run is
+    // marked failed only by the terminal onFailure hook above.
+    const result = await generateStudioSuggestions(payload);
+    if (payload.suggestionRunId) {
+      // The work succeeded; a failed status write must not reject the run
+      // (that would retry the whole generation and end in a false "failed").
+      try {
+        const completedAt = new Date();
+        await db
+          .update(studioSuggestionRuns)
+          .set({
+            status: "completed",
+            errorSummary: null,
+            cardCount: "cards" in result ? result.cards : 0,
+            completedAt,
+            updatedAt: completedAt,
+          })
+          .where(
+            and(
+              eq(studioSuggestionRuns.id, payload.suggestionRunId),
+              eq(studioSuggestionRuns.organizationId, payload.organizationId),
+            ),
+          );
+      } catch (error) {
+        logger.error("Failed to mark suggestion run completed", {
+          suggestionRunId: payload.suggestionRunId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return result;
+  },
+});
+
+async function generateStudioSuggestions(
+  payload: GenerateStudioSuggestionsPayload,
+) {
     const cutoff = new Date(Date.now() - IDEMPOTENCY_WINDOW_MS);
     if (!payload.force) {
       const [recent] = await db
@@ -739,6 +803,7 @@ export const generateStudioSuggestionsTask = task({
       }
     }
 
+    let createdCardCount = 0;
     await db.transaction(async (tx) => {
       await tx
         .update(studioSuggestions)
@@ -832,16 +897,16 @@ export const generateStudioSuggestionsTask = task({
           copyPackageId: defaultPackage?.id ?? null,
           status: "proposed",
         });
+        createdCardCount += 1;
       }
     });
 
     logger.info("Generated Studio weekly queue", {
       organizationId: payload.organizationId,
-      cards: cards.length,
+      cards: createdCardCount,
     });
-    return { cards: cards.length };
-  },
-});
+    return { cards: createdCardCount };
+}
 
 async function expireProposals(
   organizationId: string,

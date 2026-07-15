@@ -8,10 +8,43 @@ import {
   fetchCreativePerformanceRows,
   toNumber,
 } from "@/lib/studio-performance";
-import { studioProcedure } from "./studio.shared";
+import { openApiQueryMeta } from "../openapi-meta";
+import { awarenessLevelSchema, studioProcedure } from "./studio.shared";
+
+const winningAngleOutputSchema = z.object({
+  angle: z.string(),
+  awarenessLevel: awarenessLevelSchema.nullable(),
+  adCount: z.number().int(),
+  roas: z.number(),
+  spend: z.number(),
+  purchases: z.number(),
+  assetUrl: z.string().nullable(),
+});
+
+const topCreativeOutputSchema = z.object({
+  creativeId: z.string(),
+  name: z.string(),
+  angle: z.string().nullable(),
+  persona: z.string().nullable(),
+  awarenessLevel: awarenessLevelSchema.nullable(),
+  assetUrl: z.string().nullable(),
+  purchases: z.number(),
+  purchaseValue: z.number(),
+  roas: z.number(),
+});
 
 export const studioWinnerProcedures = {
-  winningAngles: studioProcedure.query(async ({ ctx }) => {
+  winningAngles: studioProcedure
+    .meta(
+      openApiQueryMeta(
+        "studio",
+        "winningAngles",
+        "List winning angles",
+        "List read-only market signals aggregated by creative angle for remix and extend workflows. Results are ranked by blended ROAS; thin evidence below 10 purchases is demoted by the Studio UI.",
+      ),
+    )
+    .output(z.array(winningAngleOutputSchema))
+    .query(async ({ ctx }) => {
     const rows = await fetchCreativePerformanceRows(ctx.organizationId, [
       sql`nullif(trim(${adCreatives.angle}), '') is not null`,
     ]);
@@ -72,7 +105,17 @@ export const studioWinnerProcedures = {
       .slice(0, 8);
   }),
 
-  topByPurchases: studioProcedure.query(async ({ ctx }) => {
+  topByPurchases: studioProcedure
+    .meta(
+      openApiQueryMeta(
+        "studio",
+        "topByPurchases",
+        "List top creatives",
+        "List read-only market signals for creatives ranked by purchases for remix and extend workflows. The Studio UI demotes thin evidence below 10 purchases.",
+      ),
+    )
+    .output(z.array(topCreativeOutputSchema))
+    .query(async ({ ctx }) => {
     const rows = await fetchCreativePerformanceRows(ctx.organizationId);
     return rows
       .map((row) => ({
@@ -92,7 +135,25 @@ export const studioWinnerProcedures = {
   }),
 
   remixSource: studioProcedure
+    .meta(
+      openApiQueryMeta(
+        "studio",
+        "remixSource",
+        "Get a remix source",
+        "Get the organization-owned creative fields needed to start a remix flow from a market winner. This is a read-only source lookup.",
+      ),
+    )
     .input(z.object({ creativeId: z.string() }))
+    .output(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        assetUrl: z.string().nullable(),
+        angle: z.string().nullable(),
+        persona: z.string().nullable(),
+        awarenessLevel: awarenessLevelSchema.nullable(),
+      }),
+    )
     .query(async ({ input, ctx }) => {
       const [creative] = await db
         .select({

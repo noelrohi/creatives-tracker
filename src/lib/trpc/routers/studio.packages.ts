@@ -7,14 +7,41 @@ import { adCreatives } from "@/schema/ad-creative";
 import { studioCopyPackages, studioTaxonomyValues } from "@/schema/studio";
 import { studioSlug } from "@/lib/studio-taxonomy";
 import {
+  openApiMutationMeta,
+  openApiQueryMeta,
+} from "../openapi-meta";
+import {
   requireTaxonomyValue,
   studioProcedure,
   studioWriteProcedure,
 } from "./studio.shared";
 
+const copyPackageOutputSchema = z.object({
+  id: z.string(),
+  organizationId: z.string(),
+  name: z.string(),
+  angleId: z.string().nullable(),
+  primaryText: z.string(),
+  headline: z.string(),
+  description: z.string(),
+  sourceCreativeId: z.string().nullable(),
+  archivedAt: z.date().nullable(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
 export const studioPackageProcedures = {
   copyPackages: studioProcedure
+    .meta(
+      openApiQueryMeta(
+        "studio",
+        "copyPackages",
+        "List copy packages",
+        "List reusable copy packages for the organization, newest first. Archived packages are omitted unless explicitly requested.",
+      ),
+    )
     .input(z.object({ includeArchived: z.boolean().default(false) }).optional())
+    .output(z.array(copyPackageOutputSchema))
     .query(async ({ input, ctx }) => {
       const conditions = [eq(studioCopyPackages.organizationId, ctx.organizationId)];
       if (!input?.includeArchived) conditions.push(isNull(studioCopyPackages.archivedAt));
@@ -26,6 +53,14 @@ export const studioPackageProcedures = {
     }),
 
   createCopyPackage: studioWriteProcedure
+    .meta(
+      openApiMutationMeta(
+        "studio",
+        "createCopyPackage",
+        "Create a copy package",
+        "Create a reusable primary-text, headline, and description package, optionally associated with an active angle.",
+      ),
+    )
     .input(
       z.object({
         name: z.string().trim().min(1).max(120),
@@ -35,6 +70,7 @@ export const studioPackageProcedures = {
         description: z.string(),
       }),
     )
+    .output(copyPackageOutputSchema)
     .mutation(async ({ input, ctx }) => {
       await requireTaxonomyValue(ctx.organizationId, input.angleId, "angle");
       const [pkg] = await db
@@ -45,6 +81,14 @@ export const studioPackageProcedures = {
     }),
 
   updateCopyPackage: studioWriteProcedure
+    .meta(
+      openApiMutationMeta(
+        "studio",
+        "updateCopyPackage",
+        "Update a copy package",
+        "Update, archive, or restore an organization copy package. Any supplied angle must be an active angle taxonomy value.",
+      ),
+    )
     .input(
       z.object({
         id: z.string(),
@@ -56,6 +100,7 @@ export const studioPackageProcedures = {
         archived: z.boolean().optional(),
       }),
     )
+    .output(copyPackageOutputSchema)
     .mutation(async ({ input, ctx }) => {
       const { id, archived, ...values } = input;
       await requireTaxonomyValue(ctx.organizationId, values.angleId, "angle");
@@ -78,6 +123,14 @@ export const studioPackageProcedures = {
     }),
 
   createCopyPackageFromCreative: studioWriteProcedure
+    .meta(
+      openApiMutationMeta(
+        "studio",
+        "createCopyPackageFromCreative",
+        "Create a package from a creative",
+        "Create a reusable copy package from an organization creative and its latest synced ad copy. The creative angle is reused or added to the angle taxonomy when no angle is supplied.",
+      ),
+    )
     .input(
       z.object({
         creativeId: z.string(),
@@ -88,6 +141,7 @@ export const studioPackageProcedures = {
         description: z.string().optional(),
       }),
     )
+    .output(copyPackageOutputSchema)
     .mutation(async ({ input, ctx }) => {
       const [row] = await db
         .select({

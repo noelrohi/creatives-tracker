@@ -56,6 +56,24 @@ const mockDb = {
           state.generation += 1;
           return [{ id: `generation_${state.generation}`, ...inserted }];
         }
+        if (!Array.isArray(inserted) && inserted.imageUrl) {
+          return [swipe({
+            id: "inserted_row",
+            ...inserted,
+            imageHash: inserted.imageHash ?? null,
+          })];
+        }
+        if (!Array.isArray(inserted) && inserted.primaryText) {
+          const now = new Date();
+          return [{
+            id: "inserted_row",
+            sourceCreativeId: null,
+            archivedAt: null,
+            createdAt: now,
+            updatedAt: now,
+            ...inserted,
+          }];
+        }
         return [{ id: "inserted_row", ...inserted }];
       }),
       onConflictDoNothing: vi.fn(() => chain),
@@ -107,6 +125,29 @@ vi.mock("@trigger.dev/sdk", () => ({
 
 const { createMockCaller } = await import("../test-helpers");
 
+function swipe(overrides: Record<string, unknown> = {}) {
+  const now = new Date();
+  return {
+    id: "swipe_1",
+    organizationId: "test-org-id",
+    imageUrl: "https://store.public.blob.vercel-storage.com/swipe.png",
+    imageHash: null,
+    sourceUrl: null,
+    brandName: null,
+    angleId: null,
+    hookTypeId: null,
+    visualStyleId: null,
+    whyItWorks: null,
+    elements: null,
+    addedBy: null,
+    archivedAt: null,
+    lastTriedAt: null,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
 function suggestion(overrides: Record<string, unknown> = {}) {
   return {
     id: "suggestion_1",
@@ -116,10 +157,12 @@ function suggestion(overrides: Record<string, unknown> = {}) {
     kind: "new_hooks",
     title: "Try a sharper hook",
     whyLine: "The winner has room for another hook.",
+    hypothesis: null,
     brief: "Keep the winner and change the headline.",
     elements: null,
     angle: "Problem first",
     angleId: null,
+    hookTypeId: null,
     visualStyleId: null,
     persona: null,
     awarenessLevel: null,
@@ -166,9 +209,18 @@ describe("studio router — v2 lifecycle", () => {
     ).resolves.toEqual({ id: "suggestion_1", status: "skipped" });
     const refreshed = await caller.studio.refreshSuggestions();
 
-    expect(refreshed).toMatchObject({ expiredCount: 2, runId: "run_1" });
+    expect(refreshed).toMatchObject({
+      expiredCount: 2,
+      runId: "run_1",
+      suggestionRunId: "inserted_row",
+    });
+    expect(state.inserts).toContainEqual({ organizationId: "test-org-id" });
+    expect(trigger).toHaveBeenCalledWith(
+      "generate-studio-suggestions",
+      expect.objectContaining({ suggestionRunId: "inserted_row" }),
+    );
     const refreshWhere = new PgDialect().sqlToQuery(
-      state.wheres.at(-1) as Parameters<PgDialect["sqlToQuery"]>[0],
+      state.wheres[1] as Parameters<PgDialect["sqlToQuery"]>[0],
     );
     expect(refreshWhere.sql).toContain('"evidence" is null');
     expect(state.updates).toEqual(
@@ -181,6 +233,14 @@ describe("studio router — v2 lifecycle", () => {
 
   it("home exposes thin evidence cards and the recently dropped watch count", async () => {
     const thin = suggestion({ id: "thin_1", evidence: "thin" });
+    const latestRun = {
+      id: "suggestion_run_1",
+      status: "completed",
+      errorSummary: null,
+      cardCount: 4,
+      createdAt: new Date("2026-07-14T12:00:00Z"),
+      completedAt: new Date("2026-07-14T12:01:00Z"),
+    };
     state.selects.push(
       [thin],
       // recent generations
@@ -190,23 +250,44 @@ describe("studio router — v2 lifecycle", () => {
         { id: "dropped_1", evidence: "thin" },
         { id: "expired_main", evidence: null },
       ],
+      [latestRun],
     );
 
     const home = await createMockCaller({ role: "owner" }).studio.home();
 
     expect(home.cards[0].evidence).toBe("thin");
+    expect(home.latestRun).toEqual(latestRun);
     expect(home.droppedWatch).toBe(1);
     // Watch-list drops are excluded so the expiry note never counts them twice.
     expect(home.expiredCount).toBe(1);
   });
 
-  it("warns on a duplicate swipe URL and archives an existing swipe", async () => {
-    const existing = {
-      id: "swipe_1",
-      organizationId: "test-org-id",
-      imageUrl: "https://store.public.blob.vercel-storage.com/swipe.png",
-      sourceUrl: "https://example.test/ad",
+  it("surfaces a failed latest suggestion run", async () => {
+    const failedRun = {
+      id: "suggestion_run_failed",
+      status: "failed",
+      errorSummary: "Model request timed out",
+      cardCount: null,
+      createdAt: new Date("2026-07-14T12:00:00Z"),
+      completedAt: new Date("2026-07-14T12:05:00Z"),
     };
+    state.selects.push(
+      [],
+      // recent generations
+      [],
+      // recently expired cards
+      [],
+      [failedRun],
+    );
+
+    const home = await createMockCaller({ role: "owner" }).studio.home();
+
+    expect(home.latestRun).toEqual(failedRun);
+    expect(home.latestRun?.status).toBe("failed");
+  });
+
+  it("warns on a duplicate swipe URL and archives an existing swipe", async () => {
+    const existing = swipe({ sourceUrl: "https://example.test/ad" });
     state.selects.push([existing]);
     state.returning.push([{ ...existing, archivedAt: new Date() }]);
     const caller = createMockCaller({ role: "owner" });
@@ -263,8 +344,8 @@ describe("studio router — v2 lifecycle", () => {
 
   it("uses trigram filtering and ranked ordering for typo-tolerant swipe search", async () => {
     state.selects.push([
-      { id: "benefit", brandName: "Benefit Cosmetics", whyItWorks: "Strong offer", angleId: null, hookTypeId: null, visualStyleId: null },
-      { id: "other", brandName: "Other", whyItWorks: "Benefit-led layout", angleId: null, hookTypeId: null, visualStyleId: null },
+      swipe({ id: "benefit", brandName: "Benefit Cosmetics", whyItWorks: "Strong offer" }),
+      swipe({ id: "other", brandName: "Other", whyItWorks: "Benefit-led layout" }),
     ], []);
     const rows = await createMockCaller({ role: "owner" }).studio.swipes({ q: "benfit" });
 
@@ -296,7 +377,7 @@ describe("studio router — v2 lifecycle", () => {
 
   it("creates, updates, and hard-deletes a swipe", async () => {
     state.returning.push(
-      [{ id: "inserted_row", brandName: "Updated brand" }],
+      [swipe({ id: "inserted_row", brandName: "Updated brand" })],
       [{ id: "inserted_row" }],
     );
     state.selects.push([{ imageUrl: "https://store.public.blob.vercel-storage.com/swipe.png" }]);
@@ -452,6 +533,25 @@ describe("studio router — v2 lifecycle", () => {
         referenceImageUrls: ["https://cdn.test/proven.png"],
       }),
     );
+  });
+
+  it("returns a generation id for every approved suggestion it queues", async () => {
+    const approved = suggestion({ status: "approved" });
+    const claimed = suggestion({ status: "approved", claimedAt: new Date() });
+    state.selects.push([approved]);
+    state.returning.push([claimed]);
+
+    const result = await createMockCaller({ role: "owner" })
+      .studio.generateApproved();
+
+    expect(result).toEqual({
+      queued: 1,
+      failed: 0,
+      generations: [{
+        suggestionId: "suggestion_1",
+        generationId: "generation_1",
+      }],
+    });
   });
 
   it("marks Good/Bad/null and only publishes through the Good transition", async () => {
