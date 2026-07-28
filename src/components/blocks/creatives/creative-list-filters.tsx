@@ -245,14 +245,22 @@ export function LandingPageCombobox({
   );
 }
 
-export function AdSetCombobox({
+export function MultiSelectCombobox({
   value,
   onValueChange,
-  adSets,
+  items,
+  label,
+  searchPlaceholder,
+  emptyText,
+  ariaLabel,
 }: {
   value: string[];
   onValueChange: (v: string[]) => void;
-  adSets: { id: string; name: string }[];
+  items: { id: string; name: string }[];
+  label: string;
+  searchPlaceholder: string;
+  emptyText: string;
+  ariaLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -262,13 +270,6 @@ export function AdSetCombobox({
     );
   };
 
-  const label =
-    value.length === 0
-      ? "Ad Set"
-      : value.length === 1
-        ? adSets.find((a) => a.id === value[0])?.name ?? "1 ad set"
-        : `${value.length} ad sets`;
-
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -276,6 +277,7 @@ export function AdSetCombobox({
           variant="ghost"
           role="combobox"
           aria-expanded={open}
+          aria-label={ariaLabel}
           className="h-8 w-auto gap-1 border-none bg-muted/40 px-3 text-[13px] shadow-none hover:bg-muted/60"
         >
           <span className="max-w-[200px] truncate">{label}</span>
@@ -284,9 +286,9 @@ export function AdSetCombobox({
       </PopoverTrigger>
       <PopoverContent className="w-[260px] p-0" align="start">
         <Command>
-          <CommandInput placeholder="Search ad sets..." className="h-8 text-[13px]" />
+          <CommandInput placeholder={searchPlaceholder} className="h-8 text-[13px]" />
           <CommandList>
-            <CommandEmpty>No ad sets found.</CommandEmpty>
+            <CommandEmpty>{emptyText}</CommandEmpty>
             <CommandGroup>
               {value.length > 0 && (
                 <CommandItem
@@ -296,16 +298,16 @@ export function AdSetCombobox({
                   Clear selection
                 </CommandItem>
               )}
-              {adSets.map((a) => {
-                const isSelected = value.includes(a.id);
+              {items.map((item) => {
+                const isSelected = value.includes(item.id);
                 return (
                   <CommandItem
-                    key={a.id}
-                    value={a.name}
-                    onSelect={() => toggle(a.id)}
+                    key={item.id}
+                    value={item.name}
+                    onSelect={() => toggle(item.id)}
                   >
                     <Check className={cn("mr-2 size-3.5", isSelected ? "opacity-100" : "opacity-0")} />
-                    <span className="truncate">{a.name}</span>
+                    <span className="truncate">{item.name}</span>
                   </CommandItem>
                 );
               })}
@@ -314,6 +316,63 @@ export function AdSetCombobox({
         </Command>
       </PopoverContent>
     </Popover>
+  );
+}
+
+export function AdSetCombobox({
+  value,
+  onValueChange,
+  adSets,
+}: {
+  value: string[];
+  onValueChange: (v: string[]) => void;
+  adSets: { id: string; name: string }[];
+}) {
+  const label =
+    value.length === 0
+      ? "Ad Set"
+      : value.length === 1
+        ? adSets.find((a) => a.id === value[0])?.name ?? "1 ad set"
+        : `${value.length} ad sets`;
+
+  return (
+    <MultiSelectCombobox
+      value={value}
+      onValueChange={onValueChange}
+      items={adSets}
+      label={label}
+      searchPlaceholder="Search ad sets..."
+      emptyText="No ad sets found."
+    />
+  );
+}
+
+export function CampaignCombobox({
+  value,
+  onValueChange,
+  campaigns,
+}: {
+  value: string[];
+  onValueChange: (v: string[]) => void;
+  campaigns: { id: string; name: string }[];
+}) {
+  const label =
+    value.length === 0
+      ? "Campaign"
+      : value.length === 1
+        ? campaigns.find((c) => c.id === value[0])?.name ?? "1 campaign"
+        : `${value.length} campaigns`;
+
+  return (
+    <MultiSelectCombobox
+      value={value}
+      onValueChange={onValueChange}
+      items={campaigns}
+      label={label}
+      searchPlaceholder="Search campaigns..."
+      emptyText="No campaigns found."
+      ariaLabel="Filter by campaign"
+    />
   );
 }
 

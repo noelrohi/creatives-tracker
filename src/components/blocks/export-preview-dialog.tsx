@@ -20,6 +20,7 @@ export type ExportFilters = {
   to: string;
   accountId?: string;
   adSetIds?: string[];
+  campaignIds?: string[];
   landingPageUrls?: string[];
   teamId?: string;
   format?: string;
@@ -155,6 +156,7 @@ export function ExportPreviewDialog({
       to: filters.to,
       accountId: filters.accountId,
       adSetIds: filters.adSetIds,
+      campaignIds: filters.campaignIds,
       landingPageUrls: filters.landingPageUrls,
       teamId: filters.teamId,
       format: filters.format,

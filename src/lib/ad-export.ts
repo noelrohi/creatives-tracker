@@ -343,6 +343,7 @@ export async function fetchAgentExportRows(opts: {
   filter?: {
     accountId?: string | null;
     adSetIds?: string[] | null;
+    campaignIds?: string[] | null;
     landingPageUrls?: string[] | null;
     teamId?: string | null;
     format?: string | null;
@@ -362,6 +363,9 @@ export async function fetchAgentExportRows(opts: {
   if (filter?.search) whereParts.push(sql`ac.name ILIKE ${"%" + filter.search + "%"}`);
   if (filter?.adSetIds?.length) {
     whereParts.push(sql`ast.id IN (${sql.join(filter.adSetIds.map((id) => sql`${id}`), sql`, `)})`);
+  }
+  if (filter?.campaignIds?.length) {
+    whereParts.push(sql`c.id IN (${sql.join(filter.campaignIds.map((id) => sql`${id}`), sql`, `)})`);
   }
   if (filter?.landingPageUrls?.length) {
     whereParts.push(sql`split_part(ad.destination_url, '?', 1) IN (${sql.join(filter.landingPageUrls.map((url) => sql`${url}`), sql`, `)})`);
