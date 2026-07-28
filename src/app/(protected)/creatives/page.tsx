@@ -152,7 +152,9 @@ export default function CreativesPage() {
       <div className="flex items-center gap-3">
         <h1 className="text-lg font-medium tracking-tight">Creatives</h1>
         {total > 0 && (
-          <span className="text-[13px] tabular-nums text-muted-foreground/50">{total}</span>
+          <span className="text-[13px] tabular-nums text-muted-foreground/50">
+            {total} creatives · {totalAds} ads
+          </span>
         )}
       </div>
 
@@ -274,12 +276,6 @@ export default function CreativesPage() {
         <StaleDataBanner
           account={accountsQuery.data?.find((a) => a.id === accountId) ?? accountsQuery.data?.[0]}
         />
-      ) : null}
-
-      {!creatives.isLoading && total > 0 ? (
-        <p className="text-[13px] tabular-nums text-muted-foreground/50">
-          {total} creatives · {totalAds} ads
-        </p>
       ) : null}
 
       {/* Data Table */}
