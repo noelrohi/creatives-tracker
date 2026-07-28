@@ -120,6 +120,9 @@ const adCreativeListItemSchema = z.object({
   thumbstopRatio: z.string().nullable(),
   health: creativeHealthSchema.nullable(),
   healthReasons: z.array(z.string()),
+  campaignNames: z.array(z.string()),
+  campaignCount: z.number(),
+  adCount: z.number(),
 });
 const adCreativeListOutputSchema = z.array(adCreativeListItemSchema);
 
@@ -573,6 +576,7 @@ export const adCreativeRouter = router({
           search: z.string().optional(),
           accountId: z.string().optional(),
           adSetIds: z.array(z.string()).optional(),
+          campaignIds: z.array(z.string()).optional(),
           landingPageUrls: z.array(z.string()).optional(),
           ownership: z.enum(["ours", "theirs"]).optional(),
           teamId: z.string().optional(),
@@ -598,17 +602,26 @@ export const adCreativeRouter = router({
       if (input?.search) {
         conditions.push(sql`ac.name ILIKE ${`%${input.search}%`}`);
       }
+      // Per-ad predicates, written against the `ad` / `ad_set ast` aliases so the
+      // same fragments drive both the filtered_creatives EXISTS and ad_rollup.
+      const adConditions: SQL[] = [];
       if (input?.accountId) {
-        conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = ac.id AND ad.account_id = ${input.accountId})`);
+        adConditions.push(sql`ad.account_id = ${input.accountId}`);
       }
       if (input?.adSetIds?.length) {
-        const placeholders = input.adSetIds.map((id) => sql`${id}`);
-        const inList = sql.join(placeholders, sql`, `);
-        conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = ac.id AND ad.ad_set_id IN (${inList}))`);
+        const inList = sql.join(input.adSetIds.map((id) => sql`${id}`), sql`, `);
+        adConditions.push(sql`ad.ad_set_id IN (${inList})`);
+      }
+      if (input?.campaignIds?.length) {
+        const inList = sql.join(input.campaignIds.map((id) => sql`${id}`), sql`, `);
+        adConditions.push(sql`ast.campaign_id IN (${inList})`);
       }
       if (input?.landingPageUrls?.length) {
         const urls = sql.join(input.landingPageUrls.map((url) => sql`${url}`), sql`, `);
-        conditions.push(sql`EXISTS (SELECT 1 FROM ad WHERE ad.ad_creative_id = ac.id AND split_part(ad.destination_url, '?', 1) IN (${urls}))`);
+        adConditions.push(sql`split_part(ad.destination_url, '?', 1) IN (${urls})`);
+      }
+      if (adConditions.length) {
+        conditions.push(sql`EXISTS (SELECT 1 FROM ad LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id WHERE ad.ad_creative_id = ac.id AND ${sql.join(adConditions, sql` AND `)})`);
       }
       if (input?.ownership) {
         if (input.ownership === "theirs") {
@@ -677,6 +690,9 @@ export const adCreativeRouter = router({
         prior_hook_rate: string | null;
         recent_cpa: string | null;
         thumbstop_ratio: string | null;
+        campaign_names: string[] | null;
+        campaign_count: number | null;
+        ad_count: number | null;
       };
 
       const result = await db.execute(sql`
@@ -762,6 +778,19 @@ export const adCreativeRouter = router({
             AND pl.date_end <= rc.cutoff
           GROUP BY ad.ad_creative_id
         ),
+        ad_rollup AS (
+          SELECT
+            ad.ad_creative_id,
+            count(DISTINCT ad.id)::int AS ad_count,
+            count(DISTINCT c.id)::int AS campaign_count,
+            array_agg(DISTINCT c.name) FILTER (WHERE c.name IS NOT NULL) AS campaign_names
+          FROM filtered_creatives fc
+          JOIN ad ON ad.ad_creative_id = fc.id
+          LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
+          LEFT JOIN campaign c ON c.id = ast.campaign_id
+          WHERE ${sql.join([sql`TRUE`, ...adConditions], sql` AND `)}
+          GROUP BY ad.ad_creative_id
+        ),
         latest_ad AS (
           SELECT DISTINCT ON (ad.ad_creative_id)
             ad.ad_creative_id,
@@ -819,13 +848,17 @@ export const adCreativeRouter = router({
           recent_perf.recent_hook_rate,
           prior_perf.prior_hook_rate,
           recent_perf.recent_cpa,
-          window_perf.thumbstop_ratio
+          window_perf.thumbstop_ratio,
+          ad_rollup.campaign_names,
+          ad_rollup.campaign_count,
+          ad_rollup.ad_count
         FROM filtered_creatives fc
         LEFT JOIN first_delivery ON first_delivery.ad_creative_id = fc.id
         LEFT JOIN window_perf ON window_perf.ad_creative_id = fc.id
         LEFT JOIN recent_perf ON recent_perf.ad_creative_id = fc.id
         LEFT JOIN prior_perf ON prior_perf.ad_creative_id = fc.id
         LEFT JOIN latest_ad ON latest_ad.ad_creative_id = fc.id
+        LEFT JOIN ad_rollup ON ad_rollup.ad_creative_id = fc.id
         WHERE ${sql.join(performanceConditions, sql` AND `)}
         ORDER BY fc.created_at DESC
       `);
@@ -880,6 +913,9 @@ export const adCreativeRouter = router({
           thumbstopRatio: r.thumbstop_ratio,
           health: rollup?.health ?? null,
           healthReasons: rollup?.reasons ?? [],
+          campaignNames: r.campaign_names ?? [],
+          campaignCount: r.campaign_count ?? 0,
+          adCount: r.ad_count ?? 0,
         };
       });
     }),
@@ -908,6 +944,7 @@ export const adCreativeRouter = router({
         to: z.string(),
         accountId: z.string().optional(),
         adSetIds: z.array(z.string()).optional(),
+        campaignIds: z.array(z.string()).optional(),
         landingPageUrls: z.array(z.string()).optional(),
         teamId: z.string().optional(),
         format: z.string().optional(),
@@ -925,6 +962,7 @@ export const adCreativeRouter = router({
         filter: {
           accountId: input.accountId ?? null,
           adSetIds: input.adSetIds ?? null,
+          campaignIds: input.campaignIds ?? null,
           landingPageUrls: input.landingPageUrls ?? null,
           teamId: input.teamId ?? null,
           format: input.format ?? null,

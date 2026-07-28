@@ -245,29 +245,36 @@ export function LandingPageCombobox({
   );
 }
 
-export function AdSetCombobox({
+export function MultiSelectCombobox({
   value,
   onValueChange,
-  adSets,
+  items,
+  placeholder,
+  noun,
+  nounPlural,
 }: {
   value: string[];
   onValueChange: (v: string[]) => void;
-  adSets: { id: string; name: string }[];
+  items: { id: string; name: string }[];
+  placeholder: string;
+  noun: string;
+  nounPlural: string;
 }) {
   const [open, setOpen] = useState(false);
+  const sortedItems = [...items].sort((a, b) => a.name.localeCompare(b.name));
+
+  const label =
+    value.length === 0
+      ? placeholder
+      : value.length === 1
+        ? items.find((item) => item.id === value[0])?.name ?? `1 ${noun}`
+        : `${value.length} ${nounPlural}`;
 
   const toggle = (id: string) => {
     onValueChange(
       value.includes(id) ? value.filter((v) => v !== id) : [...value, id],
     );
   };
-
-  const label =
-    value.length === 0
-      ? "Ad Set"
-      : value.length === 1
-        ? adSets.find((a) => a.id === value[0])?.name ?? "1 ad set"
-        : `${value.length} ad sets`;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -276,6 +283,7 @@ export function AdSetCombobox({
           variant="ghost"
           role="combobox"
           aria-expanded={open}
+          aria-label={`Filter by ${noun}`}
           className="h-8 w-auto gap-1 border-none bg-muted/40 px-3 text-[13px] shadow-none hover:bg-muted/60"
         >
           <span className="max-w-[200px] truncate">{label}</span>
@@ -284,9 +292,9 @@ export function AdSetCombobox({
       </PopoverTrigger>
       <PopoverContent className="w-[260px] p-0" align="start">
         <Command>
-          <CommandInput placeholder="Search ad sets..." className="h-8 text-[13px]" />
+          <CommandInput placeholder={`Search ${nounPlural}...`} className="h-8 text-[13px]" />
           <CommandList>
-            <CommandEmpty>No ad sets found.</CommandEmpty>
+            <CommandEmpty>{`No ${nounPlural} found.`}</CommandEmpty>
             <CommandGroup>
               {value.length > 0 && (
                 <CommandItem
@@ -296,16 +304,16 @@ export function AdSetCombobox({
                   Clear selection
                 </CommandItem>
               )}
-              {adSets.map((a) => {
-                const isSelected = value.includes(a.id);
+              {sortedItems.map((item) => {
+                const isSelected = value.includes(item.id);
                 return (
                   <CommandItem
-                    key={a.id}
-                    value={a.name}
-                    onSelect={() => toggle(a.id)}
+                    key={item.id}
+                    value={item.name}
+                    onSelect={() => toggle(item.id)}
                   >
                     <Check className={cn("mr-2 size-3.5", isSelected ? "opacity-100" : "opacity-0")} />
-                    <span className="truncate">{a.name}</span>
+                    <span className="truncate">{item.name}</span>
                   </CommandItem>
                 );
               })}
@@ -314,6 +322,48 @@ export function AdSetCombobox({
         </Command>
       </PopoverContent>
     </Popover>
+  );
+}
+
+export function AdSetCombobox({
+  value,
+  onValueChange,
+  adSets,
+}: {
+  value: string[];
+  onValueChange: (v: string[]) => void;
+  adSets: { id: string; name: string }[];
+}) {
+  return (
+    <MultiSelectCombobox
+      value={value}
+      onValueChange={onValueChange}
+      items={adSets}
+      placeholder="Ad Set"
+      noun="ad set"
+      nounPlural="ad sets"
+    />
+  );
+}
+
+export function CampaignCombobox({
+  value,
+  onValueChange,
+  campaigns,
+}: {
+  value: string[];
+  onValueChange: (v: string[]) => void;
+  campaigns: { id: string; name: string }[];
+}) {
+  return (
+    <MultiSelectCombobox
+      value={value}
+      onValueChange={onValueChange}
+      items={campaigns}
+      placeholder="Campaign"
+      noun="campaign"
+      nounPlural="campaigns"
+    />
   );
 }
 

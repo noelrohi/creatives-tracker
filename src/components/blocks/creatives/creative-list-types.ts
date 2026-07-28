@@ -39,4 +39,7 @@ export interface Creative {
   thumbstopRatio: string | null;
   health: CreativeHealth | null;
   healthReasons: string[];
+  campaignNames: string[];
+  campaignCount: number;
+  adCount: number;
 }

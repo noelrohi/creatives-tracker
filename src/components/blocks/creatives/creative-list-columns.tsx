@@ -126,8 +126,69 @@ export const creativeColumns: ColumnDef<Creative>[] = [
       </Button>
     ),
     cell: ({ row }) => (
-      <span className="line-clamp-1 font-medium">{row.getValue("name")}</span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="block max-w-[260px] truncate font-medium">{row.getValue("name")}</span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-sm break-all">
+          {row.getValue("name")}
+        </TooltipContent>
+      </Tooltip>
     ),
+  },
+  {
+    accessorKey: "campaignNames",
+    header: "Campaign",
+    cell: ({ row }) => {
+      const names = row.original.campaignNames;
+      const count = row.original.campaignCount;
+      if (names.length === 0) return <span className="text-muted-foreground/30">&mdash;</span>;
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="flex max-w-[160px] items-center gap-1.5 text-sm text-muted-foreground">
+              <span className="truncate">{names[0]}</span>
+              {count > 1 && (
+                <Badge variant="secondary" className="shrink-0 text-[10px] tabular-nums">
+                  +{count - 1}
+                </Badge>
+              )}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-xs">
+            <div className="space-y-0.5">
+              {names.map((name) => (
+                <div key={name}>{name}</div>
+              ))}
+            </div>
+          </TooltipContent>
+        </Tooltip>
+      );
+    },
+    enableSorting: false,
+  },
+  {
+    accessorKey: "adCount",
+    header: ({ column }) => (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="-ml-3 h-8"
+        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+      >
+        Ads
+        <ArrowUpDown className="ml-1.5 size-3.5" />
+      </Button>
+    ),
+    cell: ({ row }) => {
+      const count = row.original.adCount;
+      return (
+        <Badge variant="secondary" className="text-[10px] tabular-nums text-muted-foreground">
+          {count === 1 ? "1 ad" : `${count} ads`}
+        </Badge>
+      );
+    },
+    size: 80,
   },
   {
     accessorKey: "adStatus",

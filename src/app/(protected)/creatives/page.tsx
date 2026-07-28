@@ -32,6 +32,7 @@ import {
   AWARENESS,
   FORMATS,
   AdSetCombobox,
+  CampaignCombobox,
   EmptyState,
   FilterPill,
   LandingPageCombobox,
@@ -52,7 +53,7 @@ export default function CreativesPage() {
 
   const {
     format, setFormat, awareness, setAwareness, search, setSearch,
-    accountId, setAccountId, adSetIds, setAdSetIds,
+    accountId, setAccountId, adSetIds, setAdSetIds, campaignIds, setCampaignIds,
     landingPageUrls, setLandingPageUrls,
     minRoas, setMinRoas, minConversions, setMinConversions, minCtr, setMinCtr,
     healthFilter, setHealthFilter, teamId, setTeamId,
@@ -68,6 +69,7 @@ export default function CreativesPage() {
 
   const accountsQuery = useQuery(trpc.adAccount.list.queryOptions());
   const adSetsQuery = useQuery(trpc.adSet.list.queryOptions());
+  const campaignsQuery = useQuery(trpc.campaign.list.queryOptions());
   const landingPagesQuery = useQuery(trpc.adCreative.landingPages.queryOptions());
   const teamsQuery = useQuery(trpc.team.list.queryOptions());
   const metaAccountId = accountsQuery.data?.find((a) => a.id === accountId)?.metaAccountId
@@ -89,6 +91,7 @@ export default function CreativesPage() {
       search: search || undefined,
       accountId: accountId ? accountId : undefined,
       adSetIds: adSetIds ? adSetIds.split(",") : undefined,
+      campaignIds: campaignIds ? campaignIds.split(",") : undefined,
       landingPageUrls: landingPageUrls.length ? landingPageUrls : undefined,
       teamId: teamId || undefined,
       from: fromValue,
@@ -124,9 +127,12 @@ export default function CreativesPage() {
       const name = teamsQuery.data?.find((t) => t.id === teamId)?.name ?? teamId;
       labels.push({ label: "Team", value: name });
     }
+    const selectedCount = (csv: string) => `${csv.split(",").filter(Boolean).length} selected`;
     if (adSetIds) {
-      const count = adSetIds.split(",").filter(Boolean).length;
-      labels.push({ label: "Ad sets", value: `${count} selected` });
+      labels.push({ label: "Ad sets", value: selectedCount(adSetIds) });
+    }
+    if (campaignIds) {
+      labels.push({ label: "Campaigns", value: selectedCount(campaignIds) });
     }
     if (landingPageUrls.length) {
       labels.push({ label: "Landing pages", value: landingPageUrls.length === 1 ? formatLandingPage(landingPageUrls[0]) : `${landingPageUrls.length} selected` });
@@ -138,6 +144,7 @@ export default function CreativesPage() {
 
 
   const total = creativeRows.length;
+  const totalAds = creativeRows.reduce((sum, c) => sum + c.adCount, 0);
 
   return (
     <div className="flex flex-col gap-4">
@@ -145,7 +152,9 @@ export default function CreativesPage() {
       <div className="flex items-center gap-3">
         <h1 className="text-lg font-medium tracking-tight">Creatives</h1>
         {total > 0 && (
-          <span className="text-[13px] tabular-nums text-muted-foreground/50">{total}</span>
+          <span className="text-[13px] tabular-nums text-muted-foreground/50">
+            {total} creatives · {totalAds} ads
+          </span>
         )}
       </div>
 
@@ -202,6 +211,13 @@ export default function CreativesPage() {
             value={adSetIds ? adSetIds.split(",").filter(Boolean) : []}
             onValueChange={(ids) => setAdSetIds(ids.length ? ids.join(",") : "")}
             adSets={adSetsQuery.data}
+          />
+        )}
+        {campaignsQuery.data && campaignsQuery.data.length > 0 && (
+          <CampaignCombobox
+            value={campaignIds ? campaignIds.split(",").filter(Boolean) : []}
+            onValueChange={(ids) => setCampaignIds(ids.length ? ids.join(",") : "")}
+            campaigns={campaignsQuery.data}
           />
         )}
         {landingPagesQuery.data && landingPagesQuery.data.length > 0 && (
@@ -303,6 +319,7 @@ export default function CreativesPage() {
           search: search || undefined,
           accountId: accountId || undefined,
           adSetIds: adSetIds ? adSetIds.split(",") : undefined,
+          campaignIds: campaignIds ? campaignIds.split(",") : undefined,
           landingPageUrls: landingPageUrls.length ? landingPageUrls : undefined,
           teamId: teamId || undefined,
         }}

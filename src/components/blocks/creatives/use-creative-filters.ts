@@ -23,6 +23,7 @@ export function useCreativeFilters() {
   const [search, setSearch] = useQueryState("q", { defaultValue: "" });
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
   const [adSetIds, setAdSetIds] = useQueryState("adSet", parseAsString.withDefault(""));
+  const [campaignIds, setCampaignIds] = useQueryState("campaign", parseAsString.withDefault(""));
   const [healthFilter, setHealthFilter] = useQueryState("health", parseAsString.withDefault(""));
   const [teamId, setTeamId] = useQueryState("team", parseAsString.withDefault(""));
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
@@ -44,6 +45,7 @@ export function useCreativeFilters() {
     setSearch("");
     setAccountId("");
     setAdSetIds("");
+    setCampaignIds("");
     setLandingPageUrls([]);
     setMinRoas("");
     setMinConversions("");
@@ -51,18 +53,18 @@ export function useCreativeFilters() {
     setTeamId("");
     setHealthFilter("");
   }, [
-    setAccountId, setAdSetIds, setAwareness, setFormat, setHealthFilter,
+    setAccountId, setAdSetIds, setAwareness, setCampaignIds, setFormat, setHealthFilter,
     setLandingPageUrls, setMinConversions, setMinCtr, setMinRoas, setSearch, setTeamId,
   ]);
 
   const hasFilters = Boolean(
-    format || awareness || search || accountId || adSetIds || landingPageUrls.length ||
+    format || awareness || search || accountId || adSetIds || campaignIds || landingPageUrls.length ||
     minRoas || minConversions || minCtr || healthFilter || teamId,
   );
 
   return {
     format, setFormat, awareness, setAwareness, search, setSearch,
-    accountId, setAccountId, adSetIds, setAdSetIds,
+    accountId, setAccountId, adSetIds, setAdSetIds, campaignIds, setCampaignIds,
     landingPageUrls, setLandingPageUrls,
     minRoas, setMinRoas, minConversions, setMinConversions, minCtr, setMinCtr,
     healthFilter, setHealthFilter, teamId, setTeamId,
