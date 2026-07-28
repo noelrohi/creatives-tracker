@@ -11,6 +11,12 @@
       "sourceType": "github",
       "computedHash": "063a0e6448123cd359ad0044cc46b0e490cc7964d45ef4bb9fd842bd2ffbca67"
     },
+    "grilling-frontend-prototyping": {
+      "source": "will-ness-ai/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/grilling-frontend-prototyping/SKILL.md",
+      "computedHash": "1c2e0501c57eaa8a2fefab5d59e032d1a96f0eef001416dac21de6121a52552c"
+    },
     "implement": {
       "source": "mattpocock/skills",
       "sourceType": "github",
