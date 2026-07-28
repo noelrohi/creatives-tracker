@@ -126,7 +126,14 @@ export const creativeColumns: ColumnDef<Creative>[] = [
       </Button>
     ),
     cell: ({ row }) => (
-      <span className="line-clamp-1 font-medium">{row.getValue("name")}</span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="block max-w-[260px] truncate font-medium">{row.getValue("name")}</span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-sm break-all">
+          {row.getValue("name")}
+        </TooltipContent>
+      </Tooltip>
     ),
   },
   {
@@ -134,15 +141,16 @@ export const creativeColumns: ColumnDef<Creative>[] = [
     header: "Campaign",
     cell: ({ row }) => {
       const names = row.original.campaignNames;
+      const count = row.original.campaignCount;
       if (names.length === 0) return <span className="text-muted-foreground/30">&mdash;</span>;
       return (
         <Tooltip>
           <TooltipTrigger asChild>
             <span className="flex max-w-[160px] items-center gap-1.5 text-sm text-muted-foreground">
               <span className="truncate">{names[0]}</span>
-              {names.length > 1 && (
+              {count > 1 && (
                 <Badge variant="secondary" className="shrink-0 text-[10px] tabular-nums">
-                  +{names.length - 1}
+                  +{count - 1}
                 </Badge>
               )}
             </span>

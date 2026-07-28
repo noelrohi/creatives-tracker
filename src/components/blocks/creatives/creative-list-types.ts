@@ -40,5 +40,6 @@ export interface Creative {
   health: CreativeHealth | null;
   healthReasons: string[];
   campaignNames: string[];
+  campaignCount: number;
   adCount: number;
 }

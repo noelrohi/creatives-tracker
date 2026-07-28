@@ -121,6 +121,7 @@ const adCreativeListItemSchema = z.object({
   health: creativeHealthSchema.nullable(),
   healthReasons: z.array(z.string()),
   campaignNames: z.array(z.string()),
+  campaignCount: z.number(),
   adCount: z.number(),
 });
 const adCreativeListOutputSchema = z.array(adCreativeListItemSchema);
@@ -619,8 +620,8 @@ export const adCreativeRouter = router({
         const urls = sql.join(input.landingPageUrls.map((url) => sql`${url}`), sql`, `);
         adConditions.push(sql`split_part(ad.destination_url, '?', 1) IN (${urls})`);
       }
-      for (const adCondition of adConditions) {
-        conditions.push(sql`EXISTS (SELECT 1 FROM ad LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id WHERE ad.ad_creative_id = ac.id AND ${adCondition})`);
+      if (adConditions.length) {
+        conditions.push(sql`EXISTS (SELECT 1 FROM ad LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id WHERE ad.ad_creative_id = ac.id AND ${sql.join(adConditions, sql` AND `)})`);
       }
       if (input?.ownership) {
         if (input.ownership === "theirs") {
@@ -690,6 +691,7 @@ export const adCreativeRouter = router({
         recent_cpa: string | null;
         thumbstop_ratio: string | null;
         campaign_names: string[] | null;
+        campaign_count: number | null;
         ad_count: number | null;
       };
 
@@ -780,6 +782,7 @@ export const adCreativeRouter = router({
           SELECT
             ad.ad_creative_id,
             count(DISTINCT ad.id)::int AS ad_count,
+            count(DISTINCT c.id)::int AS campaign_count,
             array_agg(DISTINCT c.name) FILTER (WHERE c.name IS NOT NULL) AS campaign_names
           FROM filtered_creatives fc
           JOIN ad ON ad.ad_creative_id = fc.id
@@ -847,6 +850,7 @@ export const adCreativeRouter = router({
           recent_perf.recent_cpa,
           window_perf.thumbstop_ratio,
           ad_rollup.campaign_names,
+          ad_rollup.campaign_count,
           ad_rollup.ad_count
         FROM filtered_creatives fc
         LEFT JOIN first_delivery ON first_delivery.ad_creative_id = fc.id
@@ -910,6 +914,7 @@ export const adCreativeRouter = router({
           health: rollup?.health ?? null,
           healthReasons: rollup?.reasons ?? [],
           campaignNames: r.campaign_names ?? [],
+          campaignCount: r.campaign_count ?? 0,
           adCount: r.ad_count ?? 0,
         };
       });

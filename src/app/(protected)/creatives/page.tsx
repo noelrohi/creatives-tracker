@@ -127,13 +127,12 @@ export default function CreativesPage() {
       const name = teamsQuery.data?.find((t) => t.id === teamId)?.name ?? teamId;
       labels.push({ label: "Team", value: name });
     }
+    const selectedCount = (csv: string) => `${csv.split(",").filter(Boolean).length} selected`;
     if (adSetIds) {
-      const count = adSetIds.split(",").filter(Boolean).length;
-      labels.push({ label: "Ad sets", value: `${count} selected` });
+      labels.push({ label: "Ad sets", value: selectedCount(adSetIds) });
     }
     if (campaignIds) {
-      const count = campaignIds.split(",").filter(Boolean).length;
-      labels.push({ label: "Campaigns", value: `${count} selected` });
+      labels.push({ label: "Campaigns", value: selectedCount(campaignIds) });
     }
     if (landingPageUrls.length) {
       labels.push({ label: "Landing pages", value: landingPageUrls.length === 1 ? formatLandingPage(landingPageUrls[0]) : `${landingPageUrls.length} selected` });
@@ -216,7 +215,7 @@ export default function CreativesPage() {
           <CampaignCombobox
             value={campaignIds ? campaignIds.split(",").filter(Boolean) : []}
             onValueChange={(ids) => setCampaignIds(ids.length ? ids.join(",") : "")}
-            campaigns={[...campaignsQuery.data].sort((a, b) => a.name.localeCompare(b.name))}
+            campaigns={campaignsQuery.data}
           />
         )}
         {landingPagesQuery.data && landingPagesQuery.data.length > 0 && (

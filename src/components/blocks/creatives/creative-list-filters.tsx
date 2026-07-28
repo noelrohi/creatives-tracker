@@ -249,20 +249,26 @@ export function MultiSelectCombobox({
   value,
   onValueChange,
   items,
-  label,
-  searchPlaceholder,
-  emptyText,
-  ariaLabel,
+  placeholder,
+  noun,
+  nounPlural,
 }: {
   value: string[];
   onValueChange: (v: string[]) => void;
   items: { id: string; name: string }[];
-  label: string;
-  searchPlaceholder: string;
-  emptyText: string;
-  ariaLabel?: string;
+  placeholder: string;
+  noun: string;
+  nounPlural: string;
 }) {
   const [open, setOpen] = useState(false);
+  const sortedItems = [...items].sort((a, b) => a.name.localeCompare(b.name));
+
+  const label =
+    value.length === 0
+      ? placeholder
+      : value.length === 1
+        ? items.find((item) => item.id === value[0])?.name ?? `1 ${noun}`
+        : `${value.length} ${nounPlural}`;
 
   const toggle = (id: string) => {
     onValueChange(
@@ -277,7 +283,7 @@ export function MultiSelectCombobox({
           variant="ghost"
           role="combobox"
           aria-expanded={open}
-          aria-label={ariaLabel}
+          aria-label={`Filter by ${noun}`}
           className="h-8 w-auto gap-1 border-none bg-muted/40 px-3 text-[13px] shadow-none hover:bg-muted/60"
         >
           <span className="max-w-[200px] truncate">{label}</span>
@@ -286,9 +292,9 @@ export function MultiSelectCombobox({
       </PopoverTrigger>
       <PopoverContent className="w-[260px] p-0" align="start">
         <Command>
-          <CommandInput placeholder={searchPlaceholder} className="h-8 text-[13px]" />
+          <CommandInput placeholder={`Search ${nounPlural}...`} className="h-8 text-[13px]" />
           <CommandList>
-            <CommandEmpty>{emptyText}</CommandEmpty>
+            <CommandEmpty>{`No ${nounPlural} found.`}</CommandEmpty>
             <CommandGroup>
               {value.length > 0 && (
                 <CommandItem
@@ -298,7 +304,7 @@ export function MultiSelectCombobox({
                   Clear selection
                 </CommandItem>
               )}
-              {items.map((item) => {
+              {sortedItems.map((item) => {
                 const isSelected = value.includes(item.id);
                 return (
                   <CommandItem
@@ -328,21 +334,14 @@ export function AdSetCombobox({
   onValueChange: (v: string[]) => void;
   adSets: { id: string; name: string }[];
 }) {
-  const label =
-    value.length === 0
-      ? "Ad Set"
-      : value.length === 1
-        ? adSets.find((a) => a.id === value[0])?.name ?? "1 ad set"
-        : `${value.length} ad sets`;
-
   return (
     <MultiSelectCombobox
       value={value}
       onValueChange={onValueChange}
       items={adSets}
-      label={label}
-      searchPlaceholder="Search ad sets..."
-      emptyText="No ad sets found."
+      placeholder="Ad Set"
+      noun="ad set"
+      nounPlural="ad sets"
     />
   );
 }
@@ -356,22 +355,14 @@ export function CampaignCombobox({
   onValueChange: (v: string[]) => void;
   campaigns: { id: string; name: string }[];
 }) {
-  const label =
-    value.length === 0
-      ? "Campaign"
-      : value.length === 1
-        ? campaigns.find((c) => c.id === value[0])?.name ?? "1 campaign"
-        : `${value.length} campaigns`;
-
   return (
     <MultiSelectCombobox
       value={value}
       onValueChange={onValueChange}
       items={campaigns}
-      label={label}
-      searchPlaceholder="Search campaigns..."
-      emptyText="No campaigns found."
-      ariaLabel="Filter by campaign"
+      placeholder="Campaign"
+      noun="campaign"
+      nounPlural="campaigns"
     />
   );
 }
