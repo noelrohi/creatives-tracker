@@ -1,36 +1,68 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Adsolute
 
-## Getting Started
+Ad creative performance tracking for Meta ads. Syncs ad, ad set, campaign, and demographic data from Meta, tracks creative-level performance and MER, and generates new static ad images from briefs via Image Studio.
 
-First, run the development server:
+## Stack
+
+- [Next.js 16](https://nextjs.org) (App Router, React 19, React Compiler) with Tailwind CSS v4 and shadcn/ui
+- [tRPC](https://trpc.io) for the API layer
+- PostgreSQL with [Drizzle ORM](https://orm.drizzle.team)
+- [Better Auth](https://better-auth.com) for auth and organizations
+- [Trigger.dev](https://trigger.dev) for background jobs (Meta sync, image generation)
+
+## Getting started
+
+Prerequisites: [Bun](https://bun.sh) and Docker (for the local Postgres database).
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
+# Install dependencies
+bun install
+
+# Configure environment
+cp .env.example .env   # then fill in the values
+
+# Start Postgres
+docker compose up -d db
+
+# Apply migrations
+bun run db:migrate
+
+# Run the dev server
 bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+To run background jobs locally, start the Trigger.dev dev server in a second terminal:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+bun run trigger:dev
+```
 
-## Learn More
+## Commands
 
-To learn more about Next.js, take a look at the following resources:
+| Command | Description |
+| --- | --- |
+| `bun dev` | Next.js dev server on port 3000 |
+| `bun run build` | Production build |
+| `bun run lint` | ESLint |
+| `bun test` | Run tests (Vitest) |
+| `bun run db:generate` | Generate a Drizzle migration from schema changes |
+| `bun run db:migrate` | Apply migrations |
+| `bun run db:studio` | Open Drizzle Studio |
+| `bun run trigger:dev` | Trigger.dev local dev server |
+| `bun run trigger:deploy` | Deploy Trigger.dev jobs |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Note: `db:push` is disabled by design — always generate a migration with `db:generate` and apply it with `db:migrate`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Project structure
 
-## Deploy on Vercel
+- `src/app/(protected)/` — dashboard routes: home, `creatives`, `import`, `mer`, `accounts`, `teams`, `studio` (Image Studio)
+- `src/lib/trpc/routers/` — domain routers (ads, ad sets, creatives, campaigns, insights, studio, …)
+- `src/schema/` — Drizzle schema files
+- `trigger/` — Trigger.dev background jobs
+- `cli/` — `adsolute` CLI for API-key-based workflows
+- `scripts/` — one-off backfill and ops scripts
+- `docs/specs/` — specs for in-flight and planned work
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The `@/*` path alias maps to `./src/*`.
