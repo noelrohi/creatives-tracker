@@ -122,6 +122,8 @@ const adCreativeListItemSchema = z.object({
   healthReasons: z.array(z.string()),
   campaignNames: z.array(z.string()),
   campaignCount: z.number(),
+  adSetNames: z.array(z.string()),
+  adSetCount: z.number(),
   adCount: z.number(),
 });
 const adCreativeListOutputSchema = z.array(adCreativeListItemSchema);
@@ -578,6 +580,7 @@ export const adCreativeRouter = router({
           adSetIds: z.array(z.string()).optional(),
           campaignIds: z.array(z.string()).optional(),
           landingPageUrls: z.array(z.string()).optional(),
+          statuses: z.array(adStatusSchema).optional(),
           ownership: z.enum(["ours", "theirs"]).optional(),
           teamId: z.string().optional(),
           untaggedOnly: z.boolean().optional(),
@@ -619,6 +622,10 @@ export const adCreativeRouter = router({
       if (input?.landingPageUrls?.length) {
         const urls = sql.join(input.landingPageUrls.map((url) => sql`${url}`), sql`, `);
         adConditions.push(sql`split_part(ad.destination_url, '?', 1) IN (${urls})`);
+      }
+      if (input?.statuses?.length) {
+        const inList = sql.join(input.statuses.map((status) => sql`${status}`), sql`, `);
+        adConditions.push(sql`${effectiveAdStatusSql(sql`ad.status`, sql`ast.status`)} IN (${inList})`);
       }
       if (adConditions.length) {
         conditions.push(sql`EXISTS (SELECT 1 FROM ad LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id WHERE ad.ad_creative_id = ac.id AND ${sql.join(adConditions, sql` AND `)})`);
@@ -692,6 +699,8 @@ export const adCreativeRouter = router({
         thumbstop_ratio: string | null;
         campaign_names: string[] | null;
         campaign_count: number | null;
+        ad_set_names: string[] | null;
+        ad_set_count: number | null;
         ad_count: number | null;
       };
 
@@ -783,7 +792,9 @@ export const adCreativeRouter = router({
             ad.ad_creative_id,
             count(DISTINCT ad.id)::int AS ad_count,
             count(DISTINCT c.id)::int AS campaign_count,
-            array_agg(DISTINCT c.name) FILTER (WHERE c.name IS NOT NULL) AS campaign_names
+            array_agg(DISTINCT c.name) FILTER (WHERE c.name IS NOT NULL) AS campaign_names,
+            count(DISTINCT ast.id)::int AS ad_set_count,
+            array_agg(DISTINCT ast.name) FILTER (WHERE ast.name IS NOT NULL) AS ad_set_names
           FROM filtered_creatives fc
           JOIN ad ON ad.ad_creative_id = fc.id
           LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
@@ -805,6 +816,7 @@ export const adCreativeRouter = router({
           LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
           LEFT JOIN campaign c ON c.id = ast.campaign_id
           LEFT JOIN ad_account acc ON acc.id = ad.account_id
+          WHERE ${sql.join([sql`TRUE`, ...adConditions], sql` AND `)}
           ORDER BY
             ad.ad_creative_id,
             ${effectiveAdActiveSql(sql`ad.status`, sql`ast.status`)} DESC,
@@ -851,6 +863,8 @@ export const adCreativeRouter = router({
           window_perf.thumbstop_ratio,
           ad_rollup.campaign_names,
           ad_rollup.campaign_count,
+          ad_rollup.ad_set_names,
+          ad_rollup.ad_set_count,
           ad_rollup.ad_count
         FROM filtered_creatives fc
         LEFT JOIN first_delivery ON first_delivery.ad_creative_id = fc.id
@@ -915,6 +929,8 @@ export const adCreativeRouter = router({
           healthReasons: rollup?.reasons ?? [],
           campaignNames: r.campaign_names ?? [],
           campaignCount: r.campaign_count ?? 0,
+          adSetNames: r.ad_set_names ?? [],
+          adSetCount: r.ad_set_count ?? 0,
           adCount: r.ad_count ?? 0,
         };
       });
@@ -946,6 +962,7 @@ export const adCreativeRouter = router({
         adSetIds: z.array(z.string()).optional(),
         campaignIds: z.array(z.string()).optional(),
         landingPageUrls: z.array(z.string()).optional(),
+        statuses: z.array(adStatusSchema).optional(),
         teamId: z.string().optional(),
         format: z.string().optional(),
         awarenessLevel: z.string().optional(),
@@ -964,6 +981,7 @@ export const adCreativeRouter = router({
           adSetIds: input.adSetIds ?? null,
           campaignIds: input.campaignIds ?? null,
           landingPageUrls: input.landingPageUrls ?? null,
+          statuses: input.statuses ?? null,
           teamId: input.teamId ?? null,
           format: input.format ?? null,
           awarenessLevel: input.awarenessLevel ?? null,

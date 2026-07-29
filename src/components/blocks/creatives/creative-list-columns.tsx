@@ -40,6 +40,62 @@ function formatDateTime(value: Date | string) {
   };
 }
 
+const UTM_COLUMNS = [
+  { key: "utm_source", label: "UTM Source" },
+  { key: "utm_medium", label: "UTM Medium" },
+  { key: "utm_campaign", label: "UTM Campaign" },
+  { key: "utm_content", label: "UTM Content" },
+  { key: "utm_term", label: "UTM Term" },
+] as const;
+
+function getUtmParam(url: string | null, key: string) {
+  if (!url) return null;
+  try {
+    return new URL(url).searchParams.get(key) || null;
+  } catch {
+    return null;
+  }
+}
+
+function NameListCell({ names, count }: { names: string[]; count: number }) {
+  if (names.length === 0) return <span className="text-muted-foreground/30">&mdash;</span>;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="flex max-w-[160px] items-center gap-1.5 text-sm text-muted-foreground">
+          <span className="truncate">{names[0]}</span>
+          {count > 1 && (
+            <Badge variant="secondary" className="shrink-0 text-[10px] tabular-nums">
+              +{count - 1}
+            </Badge>
+          )}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-xs">
+        <div className="space-y-0.5">
+          {names.map((name) => (
+            <div key={name}>{name}</div>
+          ))}
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function UtmCell({ value }: { value: string | null }) {
+  if (!value) return <span className="text-muted-foreground/30">&mdash;</span>;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="block max-w-[140px] truncate text-sm text-muted-foreground">{value}</span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-xs break-all text-xs">
+        {value}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function MediaPreview({ creative }: { creative: Creative }) {
   const href = creative.videoUrl || creative.assetUrl;
 
@@ -139,32 +195,17 @@ export const creativeColumns: ColumnDef<Creative>[] = [
   {
     accessorKey: "campaignNames",
     header: "Campaign",
-    cell: ({ row }) => {
-      const names = row.original.campaignNames;
-      const count = row.original.campaignCount;
-      if (names.length === 0) return <span className="text-muted-foreground/30">&mdash;</span>;
-      return (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="flex max-w-[160px] items-center gap-1.5 text-sm text-muted-foreground">
-              <span className="truncate">{names[0]}</span>
-              {count > 1 && (
-                <Badge variant="secondary" className="shrink-0 text-[10px] tabular-nums">
-                  +{count - 1}
-                </Badge>
-              )}
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="max-w-xs">
-            <div className="space-y-0.5">
-              {names.map((name) => (
-                <div key={name}>{name}</div>
-              ))}
-            </div>
-          </TooltipContent>
-        </Tooltip>
-      );
-    },
+    cell: ({ row }) => (
+      <NameListCell names={row.original.campaignNames} count={row.original.campaignCount} />
+    ),
+    enableSorting: false,
+  },
+  {
+    accessorKey: "adSetNames",
+    header: "Ad Set",
+    cell: ({ row }) => (
+      <NameListCell names={row.original.adSetNames} count={row.original.adSetCount} />
+    ),
     enableSorting: false,
   },
   {
@@ -253,6 +294,12 @@ export const creativeColumns: ColumnDef<Creative>[] = [
       );
     },
   },
+  ...UTM_COLUMNS.map<ColumnDef<Creative>>(({ key, label }) => ({
+    id: key,
+    accessorFn: (row: Creative) => getUtmParam(row.destinationUrl, key),
+    header: label,
+    cell: ({ row }) => <UtmCell value={getUtmParam(row.original.destinationUrl, key)} />,
+  })),
   {
     accessorKey: "teamId",
     header: "Team",

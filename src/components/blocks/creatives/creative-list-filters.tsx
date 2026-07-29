@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 
 export const FORMATS = ["static", "video", "ugc", "carousel"] as const;
 export const AWARENESS = ["unaware", "problem_aware", "solution_aware", "product_aware", "most_aware"] as const;
+export const AD_STATUSES = ["active", "paused", "archived"] as const;
 
 export function prettify(s: string | null | undefined) {
   return s ? s.replace(/_/g, " ") : null;

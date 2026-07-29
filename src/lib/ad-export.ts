@@ -345,6 +345,7 @@ export async function fetchAgentExportRows(opts: {
     adSetIds?: string[] | null;
     campaignIds?: string[] | null;
     landingPageUrls?: string[] | null;
+    statuses?: string[] | null;
     teamId?: string | null;
     format?: string | null;
     awarenessLevel?: string | null;
@@ -369,6 +370,9 @@ export async function fetchAgentExportRows(opts: {
   }
   if (filter?.landingPageUrls?.length) {
     whereParts.push(sql`split_part(ad.destination_url, '?', 1) IN (${sql.join(filter.landingPageUrls.map((url) => sql`${url}`), sql`, `)})`);
+  }
+  if (filter?.statuses?.length) {
+    whereParts.push(sql`${effectiveAdStatusSql(sql`ad.status`, sql`ast.status`)} IN (${sql.join(filter.statuses.map((status) => sql`${status}`), sql`, `)})`);
   }
   if (filter?.ownership === "ours") whereParts.push(sql`ac.ownership = 'ours'`);
   if (filter?.ownership === "theirs") whereParts.push(sql`(ac.ownership IS NULL OR ac.ownership != 'ours')`);

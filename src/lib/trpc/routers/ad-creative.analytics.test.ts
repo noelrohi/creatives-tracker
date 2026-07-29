@@ -550,5 +550,19 @@ describe("adCreative analytics procedures", () => {
       expect(query).toContain("pl.date_start >=");
       expect(query).toContain("pl.date_start <=");
     });
+
+    it("filters by effective ad status across the creative, rollup, and latest-ad passes", async () => {
+      queueExecuteRows([]);
+
+      const caller = createMockCaller({ role: "admin", organizationId: "org_1" });
+      await caller.adCreative.list({ statuses: ["paused"], includeHealth: false });
+
+      const query = compileSql(mockState.executedSql[0]);
+      // The effective status collapses an active ad under a paused ad set to "paused",
+      // so the filter must go through that expression rather than ad.status directly.
+      expect(query).toContain("coalesce(ast.status::text, 'active') != 'active'");
+      // Once for filtered_creatives' EXISTS, once for ad_rollup, once for latest_ad.
+      expect(query.match(/END IN \(/g)).toHaveLength(3);
+    });
   });
 });

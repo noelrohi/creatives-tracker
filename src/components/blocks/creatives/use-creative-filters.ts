@@ -9,7 +9,7 @@ import {
 } from "nuqs";
 import { subDays } from "date-fns";
 import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
-import { AWARENESS, FORMATS } from "./creative-list-filters";
+import { AD_STATUSES, AWARENESS, FORMATS } from "./creative-list-filters";
 
 export function useCreativeFilters() {
   const [format, setFormat] = useQueryState(
@@ -25,6 +25,10 @@ export function useCreativeFilters() {
   const [adSetIds, setAdSetIds] = useQueryState("adSet", parseAsString.withDefault(""));
   const [campaignIds, setCampaignIds] = useQueryState("campaign", parseAsString.withDefault(""));
   const [healthFilter, setHealthFilter] = useQueryState("health", parseAsString.withDefault(""));
+  const [status, setStatus] = useQueryState(
+    "status",
+    parseAsStringLiteral(AD_STATUSES).withDefault(undefined as unknown as (typeof AD_STATUSES)[number]),
+  );
   const [teamId, setTeamId] = useQueryState("team", parseAsString.withDefault(""));
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
   const [to, setTo] = useQueryState("to", parseAsString.withDefault(formatDateOnly(new Date())));
@@ -52,14 +56,15 @@ export function useCreativeFilters() {
     setMinCtr("");
     setTeamId("");
     setHealthFilter("");
+    setStatus(null);
   }, [
     setAccountId, setAdSetIds, setAwareness, setCampaignIds, setFormat, setHealthFilter,
-    setLandingPageUrls, setMinConversions, setMinCtr, setMinRoas, setSearch, setTeamId,
+    setLandingPageUrls, setMinConversions, setMinCtr, setMinRoas, setSearch, setStatus, setTeamId,
   ]);
 
   const hasFilters = Boolean(
     format || awareness || search || accountId || adSetIds || campaignIds || landingPageUrls.length ||
-    minRoas || minConversions || minCtr || healthFilter || teamId,
+    minRoas || minConversions || minCtr || healthFilter || teamId || status,
   );
 
   return {
@@ -67,7 +72,7 @@ export function useCreativeFilters() {
     accountId, setAccountId, adSetIds, setAdSetIds, campaignIds, setCampaignIds,
     landingPageUrls, setLandingPageUrls,
     minRoas, setMinRoas, minConversions, setMinConversions, minCtr, setMinCtr,
-    healthFilter, setHealthFilter, teamId, setTeamId,
+    healthFilter, setHealthFilter, teamId, setTeamId, status, setStatus,
     fromValue, toValue,
     fromDate: parseDateOnly(fromValue),
     toDate: parseDateOnly(toValue),

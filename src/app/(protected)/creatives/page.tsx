@@ -29,6 +29,7 @@ import { CreativeBulkActions } from "@/components/blocks/creatives/creative-bulk
 import { creativeColumns } from "@/components/blocks/creatives/creative-list-columns";
 import type { Creative } from "@/components/blocks/creatives/creative-list-types";
 import {
+  AD_STATUSES,
   AWARENESS,
   FORMATS,
   AdSetCombobox,
@@ -56,7 +57,7 @@ export default function CreativesPage() {
     accountId, setAccountId, adSetIds, setAdSetIds, campaignIds, setCampaignIds,
     landingPageUrls, setLandingPageUrls,
     minRoas, setMinRoas, minConversions, setMinConversions, minCtr, setMinCtr,
-    healthFilter, setHealthFilter, teamId, setTeamId,
+    healthFilter, setHealthFilter, teamId, setTeamId, status, setStatus,
     fromValue, toValue, fromDate, toDate, setFrom, setTo,
     clearFilters, hasFilters,
   } = useCreativeFilters();
@@ -82,6 +83,11 @@ export default function CreativesPage() {
     format: false,
     health: false,
     avgCpa: false,
+    utm_source: false,
+    utm_medium: false,
+    utm_campaign: false,
+    utm_content: false,
+    utm_term: false,
   });
 
   const creatives = useQuery(
@@ -93,6 +99,7 @@ export default function CreativesPage() {
       adSetIds: adSetIds ? adSetIds.split(",") : undefined,
       campaignIds: campaignIds ? campaignIds.split(",") : undefined,
       landingPageUrls: landingPageUrls.length ? landingPageUrls : undefined,
+      statuses: status ? [status] : undefined,
       teamId: teamId || undefined,
       from: fromValue,
       to: toValue,
@@ -137,6 +144,7 @@ export default function CreativesPage() {
     if (landingPageUrls.length) {
       labels.push({ label: "Landing pages", value: landingPageUrls.length === 1 ? formatLandingPage(landingPageUrls[0]) : `${landingPageUrls.length} selected` });
     }
+    if (status) labels.push({ label: "Status", value: status });
     if (healthFilter) labels.push({ label: "Health", value: healthFilter });
     return labels;
   })();
@@ -192,6 +200,15 @@ export default function CreativesPage() {
             ]}
           />
         )}
+        <FilterPill
+          value={status ?? "all"}
+          onValueChange={(v) => setStatus(v === "all" ? null : (v as (typeof AD_STATUSES)[number]))}
+          placeholder="Status"
+          options={[
+            { label: "All Statuses", value: "all" },
+            ...AD_STATUSES.map((item) => ({ label: item, value: item })),
+          ]}
+        />
         {teamsQuery.data && teamsQuery.data.length > 0 && (
           <FilterPill
             value={teamId || "all"}
@@ -321,6 +338,7 @@ export default function CreativesPage() {
           adSetIds: adSetIds ? adSetIds.split(",") : undefined,
           campaignIds: campaignIds ? campaignIds.split(",") : undefined,
           landingPageUrls: landingPageUrls.length ? landingPageUrls : undefined,
+          statuses: status ? [status] : undefined,
           teamId: teamId || undefined,
         }}
         filterLabels={exportFilterLabels}

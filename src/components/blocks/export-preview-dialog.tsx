@@ -22,6 +22,7 @@ export type ExportFilters = {
   adSetIds?: string[];
   campaignIds?: string[];
   landingPageUrls?: string[];
+  statuses?: ("active" | "paused" | "archived")[];
   teamId?: string;
   format?: string;
   awarenessLevel?: string;
@@ -158,6 +159,7 @@ export function ExportPreviewDialog({
       adSetIds: filters.adSetIds,
       campaignIds: filters.campaignIds,
       landingPageUrls: filters.landingPageUrls,
+      statuses: filters.statuses,
       teamId: filters.teamId,
       format: filters.format,
       awarenessLevel: filters.awarenessLevel,
