@@ -101,22 +101,31 @@ const pauseMetaAdsResultSchema = z.object({
   })),
 });
 
+const renameMetaAdResultSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+
 const adImportResultSchema = z.object({
   adId: z.string(),
   name: z.string(),
 });
 
-type MetaPauseErrorBody = {
+type MetaApiErrorBody = {
   error?: {
     type?: string;
     message?: string;
   };
 };
 
-async function pauseMetaAd(input: { metaId: string; accessToken: string }) {
+async function postToMetaObject(input: {
+  metaId: string;
+  accessToken: string;
+  fields: Record<string, string>;
+}) {
   const body = new URLSearchParams({
     access_token: input.accessToken,
-    status: "PAUSED",
+    ...input.fields,
   });
 
   const response = await fetch(`${META_GRAPH_API_BASE}/${input.metaId}`, {
@@ -125,7 +134,7 @@ async function pauseMetaAd(input: { metaId: string; accessToken: string }) {
   });
 
   if (!response.ok) {
-    const errorBody = await response.json().catch(() => null) as MetaPauseErrorBody | null;
+    const errorBody = await response.json().catch(() => null) as MetaApiErrorBody | null;
     handleMetaApiError(response, errorBody);
   }
 }
@@ -558,7 +567,11 @@ export const adRouter = router({
       const metaResults = await Promise.all(
         pauseableRows.map(async (row) => {
           try {
-            await pauseMetaAd({ metaId: row.metaId, accessToken: row.metaAccessToken });
+            await postToMetaObject({
+              metaId: row.metaId,
+              accessToken: row.metaAccessToken,
+              fields: { status: "PAUSED" },
+            });
             return { row, ok: true as const };
           } catch (error) {
             return {
@@ -616,6 +629,76 @@ export const adRouter = router({
       }
 
       return { paused, failed };
+    }),
+
+  renameMetaAd: orgWriteProcedure
+    .meta(openApiMutationMeta("ad", "renameMetaAd", "Rename an ad in Meta and mirror the new name locally"))
+    .input(z.object({ adId: z.string(), name: z.string().trim().min(1).max(512) }))
+    .output(renameMetaAdResultSchema)
+    .mutation(async ({ input, ctx }) => {
+      const [row] = await db
+        .select({
+          id: ads.id,
+          metaId: ads.metaId,
+          metaAccessToken: adAccounts.metaAccessToken,
+        })
+        .from(ads)
+        .leftJoin(
+          adAccounts,
+          and(
+            eq(ads.accountId, adAccounts.id),
+            eq(adAccounts.organizationId, ctx.organizationId),
+          ),
+        )
+        .where(and(eq(ads.id, input.adId), eq(ads.organizationId, ctx.organizationId)))
+        .limit(1);
+
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Ad does not exist in this organization",
+        });
+      }
+
+      if (!row.metaId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "This ad is not linked to Meta, so it cannot be renamed there",
+        });
+      }
+
+      if (!row.metaAccessToken) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "This ad's account has no Meta access token connected",
+        });
+      }
+
+      await postToMetaObject({
+        metaId: row.metaId,
+        accessToken: row.metaAccessToken,
+        fields: { name: input.name },
+      });
+
+      let updatedRows: { id: string }[] = [];
+      try {
+        updatedRows = await db
+          .update(ads)
+          .set({ name: input.name })
+          .where(and(eq(ads.id, input.adId), eq(ads.organizationId, ctx.organizationId)))
+          .returning({ id: ads.id });
+      } catch {
+        // Treated the same as matching no rows below.
+      }
+
+      if (updatedRows.length === 0) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Renamed on Meta, but the local update failed. The next sync will reconcile it.",
+        });
+      }
+
+      return { id: row.id, name: input.name };
     }),
 
   duplicate: orgWriteProcedure

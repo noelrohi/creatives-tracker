@@ -91,6 +91,7 @@ const EXPECTED_PROCEDURES = {
     "create",
     "update",
     "pauseMetaAds",
+    "renameMetaAd",
     "duplicate",
     "bulkImport",
     "delete",
@@ -223,8 +224,8 @@ describe("OpenAPI app inventory", () => {
     ({ path }) => !path.startsWith("/api/openapi/studio/"),
   );
 
-  it("contains exactly the expected 73 non-studio paths", () => {
-    expect(nonStudioOperations).toHaveLength(73);
+  it("contains exactly the expected 74 non-studio paths", () => {
+    expect(nonStudioOperations).toHaveLength(74);
     expect(
       Object.keys(document.paths)
         .filter((path) => !path.startsWith("/api/openapi/studio/"))

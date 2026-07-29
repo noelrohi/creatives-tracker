@@ -2,10 +2,15 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Copy, ExternalLink, FileText, MoreHorizontal, PauseCircle } from "@/components/icons";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import { Copy, ExternalLink, FileText, MoreHorizontal, PauseCircle, Pencil } from "@/components/icons";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Field, FieldContent, FieldError, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -54,6 +59,16 @@ function BleederTierBadge({ tier }: { tier: LinkedAd["disableTier"] }) {
   return <span className={`rounded px-1.5 py-0.5 text-[9px] font-medium ${className}`}>{label}</span>;
 }
 
+const renameAdSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, "Name is required")
+    .max(512, "Name must be 512 characters or fewer"),
+});
+
+type RenameAdForm = z.infer<typeof renameAdSchema>;
+
 interface LinkedAd {
   id: string;
   metaId: string | null;
@@ -84,8 +99,14 @@ export function CreativeAdsTab({ ads, creativeId, from, to, canPauseMetaAds = fa
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const [captionAd, setCaptionAd] = useState<LinkedAd | null>(null);
+  const [renamingAd, setRenamingAd] = useState<LinkedAd | null>(null);
   const [manualSelectedAdIds, setManualSelectedAdIds] = useState<string[] | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const renameForm = useForm<RenameAdForm>({
+    resolver: zodResolver(renameAdSchema),
+    defaultValues: { name: "" },
+  });
 
   const sharedCaption = useMemo(() => {
     if (!ads || ads.length === 0) return null;
@@ -133,6 +154,27 @@ export function CreativeAdsTab({ ads, creativeId, from, to, canPauseMetaAds = fa
       onError: (error) => toast.error(error.message || "Failed to pause ads"),
     }),
   );
+
+  const renameMutation = useMutation(
+    trpc.ad.renameMetaAd.mutationOptions({
+      onSuccess: () => {
+        toast.success("Ad renamed");
+        setRenamingAd(null);
+        queryClient.invalidateQueries({ queryKey: trpc.ad.listByCreative.queryKey({ adCreativeId: creativeId, from, to }) });
+      },
+      onError: (error) => toast.error(error.message || "Failed to rename ad"),
+    }),
+  );
+
+  function openRename(ad: LinkedAd) {
+    renameForm.reset({ name: ad.name });
+    setRenamingAd(ad);
+  }
+
+  function onRenameSubmit(values: RenameAdForm) {
+    if (!renamingAd) return;
+    renameMutation.mutate({ adId: renamingAd.id, name: values.name });
+  }
 
   if (!ads || ads.length === 0) {
     return (
@@ -309,6 +351,11 @@ export function CreativeAdsTab({ ads, creativeId, from, to, canPauseMetaAds = fa
                           <Copy className="size-3.5" /> Copy Meta ID
                         </DropdownMenuItem>
                       )}
+                      {canPauseMetaAds && ad.metaId && (
+                        <DropdownMenuItem onClick={() => openRename(ad)}>
+                          <Pencil className="size-3.5" /> Rename
+                        </DropdownMenuItem>
+                      )}
                       {ad.caption && !sharedCaption && (
                         <DropdownMenuItem onClick={() => setCaptionAd(ad)}>
                           <FileText className="size-3.5" /> View Caption
@@ -362,6 +409,41 @@ export function CreativeAdsTab({ ads, creativeId, from, to, canPauseMetaAds = fa
               {pauseMutation.isPending ? "Pausing..." : "Pause in Meta"}
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!renamingAd} onOpenChange={(open) => !open && setRenamingAd(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-sm font-medium">Rename ad</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={renameForm.handleSubmit(onRenameSubmit)} className="grid gap-4">
+            <Field data-invalid={!!renameForm.formState.errors.name}>
+              <FieldLabel htmlFor="rename-ad-name">Name</FieldLabel>
+              <FieldContent>
+                <Input
+                  id="rename-ad-name"
+                  {...renameForm.register("name")}
+                  placeholder="Ad name"
+                />
+                <FieldError errors={[renameForm.formState.errors.name]} />
+              </FieldContent>
+            </Field>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setRenamingAd(null)}
+                disabled={renameMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={renameMutation.isPending}>
+                {renameMutation.isPending ? "Saving..." : "Save"}
+              </Button>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
 
