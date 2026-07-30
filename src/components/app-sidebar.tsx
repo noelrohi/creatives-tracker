@@ -48,6 +48,7 @@ import { isImageStudioEnabled } from "@/lib/image-studio-enabled";
 const dashboardSubItems = [
   { label: "Dashboard", href: "/", icon: "solar:widget-5-linear" },
   { label: "MER", href: "/mer", icon: "solar:graph-up-linear" },
+  { label: "Attribution", href: "/attribution", icon: "solar:pie-chart-2-linear" },
 ];
 
 const navItems: Array<{

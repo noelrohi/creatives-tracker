@@ -1,5 +1,8 @@
 import { TRPCError } from "@trpc/server";
+import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
+import { db } from "@/db";
+import { shopifySyncRuns } from "@/schema/shopify";
 import {
   ATTRIBUTION_BUCKETS,
   computeRoas,
@@ -205,4 +208,34 @@ export const attributionRouter = router({
 
       return { orders, nextCursor };
     }),
+
+  /**
+   * The newest `shopify_sync_run` row for the org's store. The first-load screen
+   * polls this while a backfill is in flight, so it reports the run as-is —
+   * `result` is "running" until the run finishes.
+   */
+  syncStatus: orgProcedure.query(async ({ ctx }) => {
+    const store = await requireStore(ctx.organizationId);
+
+    const [run] = await db
+      .select({
+        phase: shopifySyncRuns.phase,
+        result: shopifySyncRuns.result,
+        requestedAt: shopifySyncRuns.requestedAt,
+        finishedAt: shopifySyncRuns.finishedAt,
+        ordersSynced: shopifySyncRuns.ordersSynced,
+        meta: shopifySyncRuns.meta,
+      })
+      .from(shopifySyncRuns)
+      .where(
+        and(
+          eq(shopifySyncRuns.organizationId, ctx.organizationId),
+          eq(shopifySyncRuns.storeId, store.id),
+        ),
+      )
+      .orderBy(desc(shopifySyncRuns.requestedAt))
+      .limit(1);
+
+    return { run: run ?? null };
+  }),
 });
