@@ -58,6 +58,7 @@ const navItems: Array<{
   privileged?: boolean;
 }> = [
   { label: "Creatives", href: "/creatives", icon: "solar:gallery-linear" },
+  { label: "Campaigns", href: "/campaigns", icon: "solar:layers-minimalistic-linear" },
   { label: "Imports", href: "/import", icon: "solar:upload-linear", privileged: true },
   { label: "Teams", href: "/teams", icon: "solar:users-group-rounded-linear" },
   { label: "Accounts", href: "/accounts", icon: "solar:settings-linear", privileged: true },
