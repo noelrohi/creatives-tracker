@@ -262,12 +262,14 @@ export const managerRouter = router({
         ? sql`AND (s.unprune OR ${nameMatches("a.name", pattern)})`
         : sql``;
       const adSetSearchKeep = pattern ? sql`s.unprune` : sql`TRUE`;
-      // Same semantics as the campaign level: on a match path either because
-      // the ad set (or its campaign) matches — `unprune` — or because it holds
-      // a matching ad that survived the status filter.
+      // On the path to a match only if the ad set itself matches or holds a
+      // matching ad. An ancestor-campaign match deliberately does NOT count:
+      // it unprunes the subtree for display (§4's counting rule) but must not
+      // auto-expand every ad set in the campaign (§6's expansion rule) — the
+      // matched campaign row already reveals the match.
       const hasMatchesProjection = pattern
         ? sql`(
-            s.unprune
+            ${nameMatches("s.name", pattern)}
             OR EXISTS (
               SELECT 1 FROM counted_ads ca
               WHERE ca.ad_set_id = s.id AND ${nameMatches("ca.name", pattern)}

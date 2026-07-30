@@ -62,11 +62,11 @@ export function useManagerAdActions(filters: ManagerLedgerFilters): {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
 
-  // Identical privilege check to the creatives page, which computes
-  // `isReadOnly = role === "member"` and passes `canPauseMetaAds={!isReadOnly}`
-  // (src/app/(protected)/creatives/[id]/page.tsx:82,:695).
+  // Same privilege rule as the creatives page (`isReadOnly = role === "member"`),
+  // but closed while the role is still resolving — a null role must not grant
+  // the actions to a member for the first render.
   const { role } = useActiveOrganizationRole();
-  const canPauseMetaAds = role !== "member";
+  const canPauseMetaAds = role != null && role !== "member";
 
   const [pauseTarget, setPauseTarget] = useState<ManagerAdActionTarget | null>(null);
   const [renameTarget, setRenameTarget] = useState<ManagerAdActionTarget | null>(null);

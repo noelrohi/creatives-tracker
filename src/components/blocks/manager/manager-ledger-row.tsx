@@ -27,19 +27,22 @@ import {
 import {
   MANAGER_ANCESTOR_OFF_LABELS,
   type ManagerAncestorOff,
-  type ManagerLedgerRow,
+  type ManagerRowData,
   type ManagerLevel,
   type ManagerRowActions,
 } from "./manager-ledger-types";
 
-const ROW_HEIGHT = "h-[29px]";
-const CELL = "px-2 py-0 text-[13px]";
-const NUMERIC_CELL = `${CELL} text-right font-mono tabular-nums`;
-
-// Shared with the header in manager-ledger.tsx so the columns line up. Status
+// Shared with the header in manager-ledger.tsx and the state rows in
+// manager-ledger-states.tsx so every row of the ledger lines up. Status
 // widened from w-16 to fit the §8 "campaign off" / "ad set off" annotation.
+export const ROW_HEIGHT = "h-[29px]";
+export const CELL = "px-2 py-0 text-[13px]";
 export const STATUS_COLUMN = "w-28";
 export const ACTION_COLUMN = "w-14";
+// chevron · name · status · 5 metrics · actions.
+export const LEDGER_COLUMN_COUNT = 9;
+
+const NUMERIC_CELL = `${CELL} text-right font-mono tabular-nums`;
 
 // Hover-only affordance that still reaches keyboard users, and stays put while
 // its dropdown is open so the menu never detaches from a vanished trigger.
@@ -63,20 +66,21 @@ const LEVEL_STRIPES: Record<ManagerLevel, string> = {
 export function ManagerLedgerRow({
   row,
   level,
-  isExpanded,
+  isExpanded = false,
   onToggle,
   ancestorOff = null,
   actions = null,
 }: {
-  row: ManagerLedgerRow;
+  row: ManagerRowData;
   level: ManagerLevel;
-  isExpanded: boolean;
-  onToggle: () => void;
+  // Expansion only applies to rows with children; ad rows omit both.
+  isExpanded?: boolean;
+  onToggle?: () => void;
   ancestorOff?: ManagerAncestorOff;
   actions?: ManagerRowActions | null;
 }) {
   const chip = LEVEL_CHIPS[level];
-  const expandable = row.hasChildren;
+  const expandable = row.hasChildren && onToggle != null;
 
   return (
     // `group` drives the §8 hover affordances. The dim is on the row so an
@@ -151,7 +155,7 @@ function ManagerRowActionButtons({
   row,
   actions,
 }: {
-  row: ManagerLedgerRow;
+  row: ManagerRowData;
   actions: ManagerRowActions;
 }) {
   return (
@@ -197,7 +201,7 @@ function ManagerRowActionButtons({
 
 // ON for active, OFF plus the actual word otherwise, matching the badge
 // conventions in creative-ads-tab.tsx.
-function ManagerStatusTag({ status }: { status: ManagerLedgerRow["status"] }) {
+function ManagerStatusTag({ status }: { status: ManagerRowData["status"] }) {
   if (status === "active") {
     return (
       <Badge

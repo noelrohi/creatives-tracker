@@ -9,7 +9,7 @@ export type ManagerAdRow = RouterOutputs["manager"]["ads"][number];
 // Every level returns the same row shape (campaigns add accountName, campaigns
 // and ad sets add hasMatches), so one presentational row component covers the
 // whole tree. The ad row is the common denominator.
-export type ManagerLedgerRow = ManagerAdRow;
+export type ManagerRowData = ManagerAdRow;
 
 // The from/to/status/search inputs shared by all three procedures — the child
 // queries reuse the page's current values so rollups stay consistent (§4).

@@ -17,7 +17,7 @@ import {
   MANAGER_STALE_TIME_MS,
   type ManagerAncestorOff,
   type ManagerLedgerFilters,
-  type ManagerLedgerRow as ManagerRow,
+  type ManagerRowData,
 } from "./manager-ledger-types";
 import type { ManagerExpansion } from "./use-manager-expansion";
 
@@ -26,8 +26,8 @@ import type { ManagerExpansion } from "./use-manager-expansion";
 // switched-off ancestor wins — under a paused campaign, that is the root cause
 // and the ad set's own state is moot.
 function ancestorOffFor(
-  campaignStatus: ManagerRow["status"],
-  adSetStatus?: ManagerRow["status"],
+  campaignStatus: ManagerRowData["status"],
+  adSetStatus?: ManagerRowData["status"],
 ): ManagerAncestorOff {
   if (campaignStatus !== "active") return "campaign";
   if (adSetStatus && adSetStatus !== "active") return "adSet";
@@ -64,7 +64,7 @@ export function ManagerAdSetRows({
   adActions,
 }: {
   campaignId: string;
-  campaignStatus: ManagerRow["status"];
+  campaignStatus: ManagerRowData["status"];
   filters: ManagerLedgerFilters;
   expansion: ManagerExpansion;
   sort: ManagerSort;
@@ -136,9 +136,9 @@ function ManagerAdRows({
   adActions,
 }: {
   adSetId: string;
-  adSetStatus: ManagerRow["status"];
+  adSetStatus: ManagerRowData["status"];
   campaignId: string;
-  campaignStatus: ManagerRow["status"];
+  campaignStatus: ManagerRowData["status"];
   filters: ManagerLedgerFilters;
   sort: ManagerSort;
   adActions: ManagerAdActions;
@@ -176,8 +176,6 @@ function ManagerAdRows({
           key={ad.id}
           row={ad}
           level="ad"
-          isExpanded={false}
-          onToggle={noop}
           ancestorOff={ancestorOff}
           // Ads are the only actionable level (§8); the branch ids come along so
           // a mutation can invalidate exactly this ad set and campaign.
@@ -187,5 +185,3 @@ function ManagerAdRows({
     </>
   );
 }
-
-function noop() {}

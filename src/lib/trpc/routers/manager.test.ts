@@ -617,7 +617,7 @@ describeIfDb("manager router aggregates", () => {
         expect(adSets[0].hasMatches).toBe(true);
       });
 
-      it("is true for every ad set when the ancestor campaign matches", async () => {
+      it("stays false under a matching ancestor campaign — unpruned, not a path", async () => {
         const adSets = await caller.manager.adSets({
           campaignId: "cmp_a",
           from: FROM,
@@ -625,9 +625,11 @@ describeIfDb("manager router aggregates", () => {
           search: "Retargeting",
         });
 
-        // The campaign is the match, so the whole subtree is a match path.
+        // The campaign match unprunes its whole subtree for display, but the
+        // ad sets themselves are not on the path to the match — expanding the
+        // campaign already reveals it, so none of them auto-expand (§6).
         expect(adSets.map((row) => row.id).sort()).toEqual(["set_a", "set_a2"]);
-        expect(adSets.every((row) => row.hasMatches === true)).toBe(true);
+        expect(adSets.every((row) => row.hasMatches === false)).toBe(true);
       });
 
       it("is true for an ad set holding a matching ad", async () => {

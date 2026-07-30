@@ -1404,7 +1404,7 @@ export async function importMetaRows(input: {
 
   const results = newKeys.map((key) => {
     const info = adInfoMap.get(key)!;
-    const adId = (info.metaAdId && adIdByMetaId.get(info.metaAdId)) || adIdByName.get(info.name) || key;
+    const adId = (info.metaAdId ? adIdByMetaId.get(info.metaAdId) : adIdByName.get(info.name)) || key;
     return { id: adId, name: info.name };
   });
 

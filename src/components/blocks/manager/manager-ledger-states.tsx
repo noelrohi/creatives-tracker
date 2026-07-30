@@ -5,16 +5,11 @@ import Link from "next/link";
 import { AlertCircle, CloudDownload, RefreshCw } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { TableCell, TableRow } from "@/components/ui/table";
+import { CELL, LEDGER_COLUMN_COUNT, ROW_HEIGHT } from "./manager-ledger-row";
 import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role";
 import { isPrivilegedOrgRole } from "@/lib/organization-access";
 import { cn } from "@/lib/utils";
 
-// chevron · name · status · 5 metrics · actions — keep in step with the header
-// in manager-ledger.tsx so a full-width state row spans the whole ledger.
-const LEDGER_COLUMN_COUNT = 9;
-
-const ROW_HEIGHT = "h-[29px]";
-const CELL = "px-2 py-0 text-[13px]";
 
 // Inline states stay at the ledger row height (§9) so the table doesn't jump
 // when a branch resolves to an error or to nothing.

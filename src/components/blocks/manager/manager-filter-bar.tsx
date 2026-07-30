@@ -13,7 +13,7 @@ import { formatDateOnly } from "@/lib/date";
 import {
   MANAGER_STATUSES,
   type ManagerStatus,
-} from "@/components/blocks/manager/use-manager-filters";
+} from "./use-manager-filters";
 
 type AccountOption = { id: string; name: string };
 
