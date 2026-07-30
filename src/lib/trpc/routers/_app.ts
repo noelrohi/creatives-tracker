@@ -15,6 +15,7 @@ import { metaSyncRouter } from "./meta-sync";
 import { triggerRouter } from "./trigger";
 import { studioRouter } from "./studio";
 import { attributionRouter } from "./attribution";
+import { findingsRouter } from "./findings";
 
 export const appRouter = router({
   adCreative: adCreativeRouter,
@@ -33,6 +34,7 @@ export const appRouter = router({
   trigger: triggerRouter,
   studio: studioRouter,
   attribution: attributionRouter,
+  findings: findingsRouter,
 });
 
 export type AppRouter = typeof appRouter;
