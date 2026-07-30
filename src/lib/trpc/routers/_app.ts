@@ -11,6 +11,7 @@ import { metaInsightsRouter } from "./meta-insights";
 import { apiKeyRouter } from "./api-key";
 import { organizationRouter } from "./organization";
 import { teamRouter } from "./team";
+import { managerRouter } from "./manager";
 import { metaSyncRouter } from "./meta-sync";
 import { triggerRouter } from "./trigger";
 import { studioRouter } from "./studio";
@@ -30,6 +31,7 @@ export const appRouter = router({
   apiKey: apiKeyRouter,
   organization: organizationRouter,
   team: teamRouter,
+  manager: managerRouter,
   metaSync: metaSyncRouter,
   trigger: triggerRouter,
   studio: studioRouter,

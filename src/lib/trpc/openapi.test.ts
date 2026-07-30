@@ -107,6 +107,7 @@ const EXPECTED_PROCEDURES = {
     "update",
     "delete",
   ],
+  manager: ["campaigns", "adSets", "ads"],
   tag: ["search", "listForEntity", "attach", "detach"],
   adAccount: ["list", "getById", "create", "update", "delete"],
   apiKey: ["list", "create", "revoke", "delete"],
@@ -224,8 +225,8 @@ describe("OpenAPI app inventory", () => {
     ({ path }) => !path.startsWith("/api/openapi/studio/"),
   );
 
-  it("contains exactly the expected 74 non-studio paths", () => {
-    expect(nonStudioOperations).toHaveLength(74);
+  it("contains exactly the expected 77 non-studio paths", () => {
+    expect(nonStudioOperations).toHaveLength(77);
     expect(
       Object.keys(document.paths)
         .filter((path) => !path.startsWith("/api/openapi/studio/"))

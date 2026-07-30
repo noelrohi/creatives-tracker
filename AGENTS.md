@@ -22,7 +22,7 @@ Next.js 16 app using the App Router with React 19, React Compiler enabled, and T
 
 Main routes live under `src/app/(protected)/`:
 - The `(dashboard)` route group holds the dashboard home (`page.tsx`)
-- Feature areas for `creatives`, `import`, `mer`, `accounts`, `teams`, and `settings` (API keys, members, org)
+- Feature areas for `creatives`, `campaigns` (manager view: campaign → ad set → ad ledger), `import`, `mer`, `accounts`, `teams`, and `settings` (API keys, members, org)
 - `studio` for Image Studio: a brief-driven composer that queues image generation via a Trigger.dev job and streams realtime status
 - Shared dashboard shell (sidebar, breadcrumbs, org guard) in `src/app/(protected)/layout.tsx`
 

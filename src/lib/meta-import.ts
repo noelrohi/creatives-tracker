@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   normalizeImportedAdStatus,
@@ -70,9 +70,10 @@ function chunk<T>(items: T[], size: number): T[][] {
   return batches;
 }
 
-function toStagingPerfRow(row: PerformanceLogImportRow) {
+export function toStagingPerfRow(row: PerformanceLogImportRow) {
   return {
     ad_id: row.adId,
+    meta_ad_id: row.metaAdId ?? null,
     roas: row.roas ?? null,
     cpa: row.cpa ?? null,
     ctr: row.ctr ?? null,
@@ -123,6 +124,7 @@ async function replacePerformanceLogRowsViaStaging(rows: PerformanceLogImportRow
     await tx.execute(sql`
       create temp table temp_meta_perf_import (
         ad_id text not null,
+        meta_ad_id text,
         roas numeric,
         cpa numeric,
         ctr numeric,
@@ -172,6 +174,7 @@ async function replacePerformanceLogRowsViaStaging(rows: PerformanceLogImportRow
       await tx.execute(sql`
         insert into temp_meta_perf_import (
           ad_id,
+          meta_ad_id,
           roas,
           cpa,
           ctr,
@@ -213,6 +216,7 @@ async function replacePerformanceLogRowsViaStaging(rows: PerformanceLogImportRow
         )
         select
           ad_id,
+          meta_ad_id,
           roas,
           cpa,
           ctr,
@@ -253,6 +257,7 @@ async function replacePerformanceLogRowsViaStaging(rows: PerformanceLogImportRow
           organization_id
         from jsonb_to_recordset(${payload}::jsonb) as x(
           ad_id text,
+          meta_ad_id text,
           roas numeric,
           cpa numeric,
           ctr numeric,
@@ -313,6 +318,7 @@ async function replacePerformanceLogRowsViaStaging(rows: PerformanceLogImportRow
         insert into performance_log (
           id,
           ad_id,
+          meta_ad_id,
           roas,
           cpa,
           ctr,
@@ -367,6 +373,7 @@ async function replacePerformanceLogRowsViaStaging(rows: PerformanceLogImportRow
             || coalesce(gender, '')
           ),
           ad_id,
+          meta_ad_id,
           roas,
           cpa,
           ctr,
@@ -411,7 +418,7 @@ async function replacePerformanceLogRowsViaStaging(rows: PerformanceLogImportRow
   });
 }
 
-function buildPerformanceLogRows(input: {
+export function buildPerformanceLogRows(input: {
   rows: ImportMetaRow[];
   adIdByName: Map<string, string>;
   adIdByMetaId: Map<string, string>;
@@ -420,8 +427,11 @@ function buildPerformanceLogRows(input: {
   const perfRows: PerformanceLogImportRow[] = [];
 
   for (const row of input.rows) {
-    const adId = (row.adId && input.adIdByMetaId.get(row.adId))
-      || input.adIdByName.get(row.name);
+    // An ID-bearing row resolves by Meta ad id or not at all — falling back to
+    // the name would attach it to a same-named sibling ad.
+    const adId = row.adId
+      ? input.adIdByMetaId.get(row.adId)
+      : input.adIdByName.get(row.name);
     if (!adId) continue;
 
     const {
@@ -465,6 +475,7 @@ function buildPerformanceLogRows(input: {
       ...perfPayload,
       conversionRate,
       adId,
+      metaAdId: row.adId ?? null,
       organizationId: input.organizationId,
     });
   }
@@ -499,8 +510,18 @@ async function updateAccountFreshness(input: {
   );
 }
 
-async function resolveAdsForRows(input: {
+// Name matching is a legacy/CSV-only path, so keep it inside the account being
+// imported. Ads predating account assignment carry a null accountId, which is
+// still the same account's history — those stay eligible.
+function adAccountScope(accountId?: string) {
+  return accountId
+    ? sql`(${ads.accountId} = ${accountId} or ${ads.accountId} is null)`
+    : undefined;
+}
+
+export async function resolveAdsForRows(input: {
   organizationId: string;
+  accountId?: string;
   rows: ImportMetaRow[];
 }) {
   const metaIds = [...new Set(input.rows.map((row) => row.adId).filter(Boolean) as string[])];
@@ -521,9 +542,7 @@ async function resolveAdsForRows(input: {
   );
 
   const unmatchedNames = [...new Set(
-    input.rows
-      .filter((row) => !row.adId || !adIdByMetaId.has(row.adId))
-      .map((row) => row.name),
+    input.rows.filter((row) => !row.adId).map((row) => row.name),
   )];
 
   const adsByName = unmatchedNames.length > 0
@@ -534,6 +553,7 @@ async function resolveAdsForRows(input: {
           and(
             sql`${ads.name} IN (${sql.join(unmatchedNames.map((name) => sql`${name}`), sql`, `)})`,
             eq(ads.organizationId, input.organizationId),
+            adAccountScope(input.accountId),
           ),
         )
     : [];
@@ -542,6 +562,54 @@ async function resolveAdsForRows(input: {
     adIdByMetaId,
     adIdByName: new Map(adsByName.map((row) => [row.name, row.id])),
   };
+}
+
+export type ExistingAdRow = {
+  id: string;
+  name: string;
+  adCreativeId: string | null;
+  adSetId: string | null;
+  metaId: string | null;
+};
+
+export function matchExistingAdsForImport(input: {
+  adInfoMap: Map<string, { name: string; metaAdId?: string }>;
+  existingByMetaId: Map<string, ExistingAdRow>;
+  existingByName: Map<string, ExistingAdRow>;
+  adoptableByName: Map<string, ExistingAdRow[]>;
+}) {
+  const existingMap = new Map<string, ExistingAdRow>();
+  const claimedAdIds = new Set<string>();
+
+  for (const [key, info] of input.adInfoMap) {
+    if (info.metaAdId) {
+      const byMetaId = input.existingByMetaId.get(info.metaAdId);
+      if (byMetaId) {
+        existingMap.set(key, byMetaId);
+        claimedAdIds.add(byMetaId.id);
+        continue;
+      }
+      // First ID-bearing sync of an ad created by a name-keyed import: adopt
+      // the legacy row (the update below stamps its metaId) instead of
+      // inserting a twin beside it. Never adopt a row that already has a
+      // metaId — that would be a same-named sibling, not this ad.
+      const adoptable = (input.adoptableByName.get(info.name) ?? [])
+        .find((row) => !claimedAdIds.has(row.id));
+      if (adoptable) {
+        existingMap.set(key, adoptable);
+        claimedAdIds.add(adoptable.id);
+      }
+      continue;
+    }
+
+    const byName = input.existingByName.get(info.name);
+    if (byName) {
+      existingMap.set(key, byName);
+      claimedAdIds.add(byName.id);
+    }
+  }
+
+  return existingMap;
 }
 
 export async function refreshMetaAdStatusesForAccount(input: {
@@ -801,6 +869,7 @@ export async function importMetaBreakdownRows(input: {
 
   const { adIdByMetaId, adIdByName } = await resolveAdsForRows({
     organizationId: input.organizationId,
+    accountId: input.accountId,
     rows: input.rows,
   });
 
@@ -1120,7 +1189,7 @@ export async function importMetaRows(input: {
   }
 
   const metaIds = [...adInfoMap.values()].map((ad) => ad.metaAdId).filter(Boolean) as string[];
-  const existingByMetaId = new Map<string, { id: string; name: string; adCreativeId: string | null; adSetId: string | null }>();
+  const existingByMetaId = new Map<string, ExistingAdRow>();
   if (metaIds.length > 0) {
     const existingAdRows = await db
       .select({ id: ads.id, name: ads.name, adCreativeId: ads.adCreativeId, adSetId: ads.adSetId, metaId: ads.metaId })
@@ -1136,35 +1205,39 @@ export async function importMetaRows(input: {
     }
   }
 
-  const unmatchedNames: string[] = [];
-  for (const info of adInfoMap.values()) {
-    if (info.metaAdId && existingByMetaId.has(info.metaAdId)) continue;
-    if (!info.metaAdId) unmatchedNames.push(info.name);
-  }
+  const unmatchedNames = [...new Set(
+    [...adInfoMap.values()]
+      .filter((info) => !info.metaAdId || !existingByMetaId.has(info.metaAdId))
+      .map((info) => info.name),
+  )];
 
-  const existingByName = new Map<string, { id: string; name: string; adCreativeId: string | null; adSetId: string | null }>();
+  const existingByName = new Map<string, ExistingAdRow>();
+  const adoptableByName = new Map<string, ExistingAdRow[]>();
   if (unmatchedNames.length > 0) {
     const existingAdRows = await db
-      .select({ id: ads.id, name: ads.name, adCreativeId: ads.adCreativeId, adSetId: ads.adSetId })
+      .select({ id: ads.id, name: ads.name, adCreativeId: ads.adCreativeId, adSetId: ads.adSetId, metaId: ads.metaId })
       .from(ads)
       .where(
         and(
           sql`${ads.name} IN (${sql.join(unmatchedNames.map((name) => sql`${name}`), sql`, `)})`,
           eq(ads.organizationId, input.organizationId),
+          adAccountScope(knownAccountId),
         ),
       );
     for (const row of existingAdRows) {
-      existingByName.set(row.name, row);
+      if (!existingByName.has(row.name)) existingByName.set(row.name, row);
+      if (row.metaId === null) {
+        adoptableByName.set(row.name, [...(adoptableByName.get(row.name) ?? []), row]);
+      }
     }
   }
 
-  const existingMap = new Map<string, { id: string; name: string; adCreativeId: string | null; adSetId: string | null }>();
-  for (const [key, info] of adInfoMap) {
-    const byMeta = info.metaAdId ? existingByMetaId.get(info.metaAdId) : undefined;
-    const byName = existingByName.get(info.name);
-    const existing = byMeta || byName;
-    if (existing) existingMap.set(key, existing);
-  }
+  const existingMap = matchExistingAdsForImport({
+    adInfoMap,
+    existingByMetaId,
+    existingByName,
+    adoptableByName,
+  });
 
   const newKeys = [...adInfoMap.keys()].filter((key) => !existingMap.has(key));
 
@@ -1317,15 +1390,24 @@ export async function importMetaRows(input: {
     }
   }
 
-  const allAdNames = [...adInfoMap.values()].map((ad) => ad.name);
-  const allAds = allAdNames.length > 0
+  const allAdNames = [...new Set([...adInfoMap.values()].map((ad) => ad.name))];
+  const allAdMetaIds = [...new Set(metaIds)];
+  const allAds = allAdNames.length > 0 || allAdMetaIds.length > 0
     ? await db
         .select({ id: ads.id, name: ads.name, metaId: ads.metaId })
         .from(ads)
         .where(
           and(
-            sql`${ads.name} IN (${sql.join(allAdNames.map((name) => sql`${name}`), sql`, `)})`,
+            or(
+              allAdNames.length > 0
+                ? sql`${ads.name} IN (${sql.join(allAdNames.map((name) => sql`${name}`), sql`, `)})`
+                : undefined,
+              allAdMetaIds.length > 0
+                ? sql`${ads.metaId} IN (${sql.join(allAdMetaIds.map((metaId) => sql`${metaId}`), sql`, `)})`
+                : undefined,
+            ),
             eq(ads.organizationId, input.organizationId),
+            adAccountScope(knownAccountId),
           ),
         )
     : [];
@@ -1343,7 +1425,7 @@ export async function importMetaRows(input: {
 
   const results = newKeys.map((key) => {
     const info = adInfoMap.get(key)!;
-    const adId = (info.metaAdId && adIdByMetaId.get(info.metaAdId)) || adIdByName.get(info.name) || key;
+    const adId = (info.metaAdId ? adIdByMetaId.get(info.metaAdId) : adIdByName.get(info.name)) || key;
     return { id: adId, name: info.name };
   });
 
