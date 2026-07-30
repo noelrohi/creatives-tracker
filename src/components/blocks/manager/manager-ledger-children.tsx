@@ -11,20 +11,20 @@ import {
   MANAGER_STALE_TIME_MS,
   type ManagerLedgerFilters,
 } from "./manager-ledger-types";
+import type { ManagerExpansion } from "./use-manager-expansion";
 
 // Mounted only while its parent is expanded (§6 lazy load): mounting fires the
 // query, collapsing unmounts without a refetch, re-expanding hits the React
-// Query cache inside staleTime.
+// Query cache inside staleTime. Ad sets carry their own `hasMatches`, so an
+// auto-expanded campaign cascades down to its matching ad sets from here.
 export function ManagerAdSetRows({
   campaignId,
   filters,
-  expanded,
-  onToggle,
+  expansion,
 }: {
   campaignId: string;
   filters: ManagerLedgerFilters;
-  expanded: ReadonlySet<string>;
-  onToggle: (id: string) => void;
+  expansion: ManagerExpansion;
 }) {
   const trpc = useTRPC();
   const adSets = useQuery(
@@ -39,14 +39,14 @@ export function ManagerAdSetRows({
   return (
     <>
       {(adSets.data ?? []).map((adSet) => {
-        const isExpanded = expanded.has(adSet.id);
+        const isExpanded = expansion.isExpanded(adSet);
         return (
           <Fragment key={adSet.id}>
             <ManagerLedgerRow
               row={adSet}
               level="adSet"
               isExpanded={isExpanded}
-              onToggle={onToggle}
+              onToggle={() => expansion.toggle(adSet)}
             />
             {isExpanded && (
               <ManagerAdRows adSetId={adSet.id} filters={filters} />

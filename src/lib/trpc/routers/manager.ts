@@ -22,12 +22,16 @@ const managerRowSchema = z.object({
   hasChildren: z.boolean(),
 });
 
+// Null when no search is active; the client only needs it to auto-expand the
+// branches that are on the path to a search hit (§6).
+const hasMatchesField = { hasMatches: z.boolean().nullable() };
+
 const managerCampaignRowSchema = managerRowSchema.extend({
   accountName: z.string().nullable(),
-  // Null when no search is active; the client only needs it to auto-expand
-  // the branches that contain a search hit.
-  hasMatches: z.boolean().nullable(),
+  ...hasMatchesField,
 });
+
+const managerAdSetRowSchema = managerRowSchema.extend(hasMatchesField);
 
 type AggregateRow = {
   id: string;
@@ -42,9 +46,12 @@ type AggregateRow = {
   has_children: boolean;
 };
 
-type CampaignAggregateRow = AggregateRow & {
-  account_name: string | null;
+type MatchAggregateRow = AggregateRow & {
   has_matches: boolean | null;
+};
+
+type CampaignAggregateRow = MatchAggregateRow & {
+  account_name: string | null;
 };
 
 function mapRow(row: AggregateRow) {
@@ -242,7 +249,7 @@ export const managerRouter = router({
         ...filterInput,
       }),
     )
-    .output(z.array(managerRowSchema))
+    .output(z.array(managerAdSetRowSchema))
     .query(async ({ input, ctx }) => {
       const org = ctx.organizationId;
       const pattern = searchPattern(input.search);
@@ -255,6 +262,18 @@ export const managerRouter = router({
         ? sql`AND (s.unprune OR ${nameMatches("a.name", pattern)})`
         : sql``;
       const adSetSearchKeep = pattern ? sql`s.unprune` : sql`TRUE`;
+      // Same semantics as the campaign level: on a match path either because
+      // the ad set (or its campaign) matches — `unprune` — or because it holds
+      // a matching ad that survived the status filter.
+      const hasMatchesProjection = pattern
+        ? sql`(
+            s.unprune
+            OR EXISTS (
+              SELECT 1 FROM counted_ads ca
+              WHERE ca.ad_set_id = s.id AND ${nameMatches("ca.name", pattern)}
+            )
+          )`
+        : sql`NULL::boolean`;
 
       const result = await db.execute(sql`
         WITH parent AS (
@@ -273,7 +292,7 @@ export const managerRouter = router({
           JOIN ad_set ast ON ast.campaign_id = par.id AND ast.organization_id = ${org}
         ),
         counted_ads AS (
-          SELECT a.id, s.id AS ad_set_id
+          SELECT a.id, a.name, s.id AS ad_set_id
           FROM scoped s
           JOIN ad a ON a.ad_set_id = s.id AND a.organization_id = ${org}
           WHERE ${statusMatches("a.status", input.status)} ${adSearchFilter}
@@ -293,7 +312,8 @@ export const managerRouter = router({
           s.name,
           s.status,
           ${metricProjection},
-          (coalesce(perf.child_count, 0) > 0) AS has_children
+          (coalesce(perf.child_count, 0) > 0) AS has_children,
+          ${hasMatchesProjection} AS has_matches
         FROM scoped s
         LEFT JOIN perf ON perf.id = s.id
         WHERE (${statusMatches("s.status", input.status)} AND ${adSetSearchKeep})
@@ -301,7 +321,10 @@ export const managerRouter = router({
         ORDER BY coalesce(perf.spend_sum, 0) DESC, s.name ASC
       `);
 
-      return (result.rows as AggregateRow[]).map(mapRow);
+      return (result.rows as MatchAggregateRow[]).map((row) => ({
+        ...mapRow(row),
+        hasMatches: row.has_matches,
+      }));
     }),
 
   ads: orgProcedure

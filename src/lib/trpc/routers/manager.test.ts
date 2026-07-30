@@ -566,6 +566,126 @@ describeIfDb("manager router aggregates", () => {
       expect(Number(campaigns[0].spend)).toBe(60);
     });
 
+    // §6: the client auto-expands every campaign/ad set on the path to a match,
+    // so `hasMatches` has to mean "on a match path", not "matches itself".
+    describe("adSets hasMatches", () => {
+      beforeEach(async () => {
+        // A second ad set under cmp_a that survives pruning only because of the
+        // status filter, never because of a search.
+        await seedAdSet("set_a2", "cmp_a", "Broad audience");
+        await seedAd("ad_plain", "set_a2", "Plain creative");
+        await seedPerf({
+          adId: "ad_plain",
+          date: "2026-06-02",
+          spend: 10,
+          purchaseValue: 10,
+          conversions: 1,
+          ctr: 1,
+          impressions: 100,
+        });
+      });
+
+      it("is null when no search is active", async () => {
+        const adSets = await caller.manager.adSets({
+          campaignId: "cmp_a",
+          from: FROM,
+          to: TO,
+        });
+
+        expect(adSets.map((row) => row.id).sort()).toEqual(["set_a", "set_a2"]);
+        expect(adSets.every((row) => row.hasMatches === null)).toBe(true);
+
+        // Status-only filtering leaves it null too — only search auto-expands.
+        const statusOnly = await caller.manager.adSets({
+          campaignId: "cmp_a",
+          from: FROM,
+          to: TO,
+          status: "active",
+        });
+        expect(statusOnly.every((row) => row.hasMatches === null)).toBe(true);
+      });
+
+      it("is true for an ad set matching the search itself", async () => {
+        const adSets = await caller.manager.adSets({
+          campaignId: "cmp_a",
+          from: FROM,
+          to: TO,
+          search: "Lookalike",
+        });
+
+        expect(adSets.map((row) => row.id)).toEqual(["set_a"]);
+        expect(adSets[0].hasMatches).toBe(true);
+      });
+
+      it("is true for every ad set when the ancestor campaign matches", async () => {
+        const adSets = await caller.manager.adSets({
+          campaignId: "cmp_a",
+          from: FROM,
+          to: TO,
+          search: "Retargeting",
+        });
+
+        // The campaign is the match, so the whole subtree is a match path.
+        expect(adSets.map((row) => row.id).sort()).toEqual(["set_a", "set_a2"]);
+        expect(adSets.every((row) => row.hasMatches === true)).toBe(true);
+      });
+
+      it("is true for an ad set holding a matching ad", async () => {
+        const adSets = await caller.manager.adSets({
+          campaignId: "cmp_a",
+          from: FROM,
+          to: TO,
+          search: "winner",
+        });
+
+        expect(adSets.map((row) => row.id)).toEqual(["set_a"]);
+        expect(adSets[0].hasMatches).toBe(true);
+      });
+
+      it("prunes ad sets that are not on a match path instead of returning them false", async () => {
+        // The server already prunes, so an ad set off the match path never
+        // reaches the client: "Plain" only hits ad_plain under set_a2, and
+        // set_a — which survives a status filter happily — is gone entirely.
+        const adSets = await caller.manager.adSets({
+          campaignId: "cmp_a",
+          from: FROM,
+          to: TO,
+          search: "Plain",
+        });
+
+        expect(adSets.map((row) => row.id)).toEqual(["set_a2"]);
+        expect(adSets[0].hasMatches).toBe(true);
+        // Consequently, with a search active every returned row is a match
+        // path: `false` is unreachable, and the client auto-expands all of them.
+        expect(adSets.some((row) => row.hasMatches === false)).toBe(false);
+      });
+
+      it("ignores a match that the status filter drops", async () => {
+        // "Hook" matches both ads in set_a; only the active one counts.
+        const adSets = await caller.manager.adSets({
+          campaignId: "cmp_a",
+          from: FROM,
+          to: TO,
+          status: "active",
+          search: "Hook",
+        });
+
+        expect(adSets.map((row) => row.id)).toEqual(["set_a"]);
+        expect(adSets[0].hasMatches).toBe(true);
+
+        // A search only the paused ad matches: nothing is on a match path once
+        // the status filter has dropped it, so no rows come back at all.
+        const loserOnly = await caller.manager.adSets({
+          campaignId: "cmp_a",
+          from: FROM,
+          to: TO,
+          status: "active",
+          search: "loser",
+        });
+        expect(loserOnly).toEqual([]);
+      });
+    });
+
     it("filters campaigns by account", async () => {
       await seedAccount("acc_x", "Account X");
       await seedCampaign("cmp_x", "Account X campaign", { accountId: "acc_x" });

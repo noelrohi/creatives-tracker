@@ -41,7 +41,7 @@ export function ManagerLedgerRow({
   row: ManagerLedgerRow;
   level: ManagerLevel;
   isExpanded: boolean;
-  onToggle: (id: string) => void;
+  onToggle: () => void;
 }) {
   const chip = LEVEL_CHIPS[level];
   const expandable = row.hasChildren;
@@ -52,7 +52,7 @@ export function ManagerLedgerRow({
         {expandable && (
           <button
             type="button"
-            onClick={() => onToggle(row.id)}
+            onClick={onToggle}
             aria-expanded={isExpanded}
             aria-label={isExpanded ? `Collapse ${row.name}` : `Expand ${row.name}`}
             className="flex size-5 items-center justify-center rounded text-muted-foreground/70 hover:bg-muted hover:text-foreground"

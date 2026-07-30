@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useState } from "react";
+import { Fragment } from "react";
 import {
   Table,
   TableBody,
@@ -15,15 +15,17 @@ import type {
   ManagerCampaignRow,
   ManagerLedgerFilters,
 } from "./manager-ledger-types";
+import { useManagerExpansion } from "./use-manager-expansion";
 
 const HEAD = "h-8 px-2 text-[11px] font-medium text-muted-foreground/70";
 const NUMERIC_HEAD = `${HEAD} text-right`;
 
 const METRIC_HEADERS = ["Spend", "ROAS", "CPA", "CTR", "Conv"] as const;
 
-// Owns the expand/collapse state for the whole tree — ids are globally unique
-// across levels, so one set covers campaigns and ad sets. Children rows mount
-// only while expanded, which is what makes the loading lazy (§6).
+// Owns the expand/collapse state for the whole tree (see useManagerExpansion —
+// ids are globally unique across levels, so one state covers campaigns and ad
+// sets). Children rows mount only while expanded, which is what makes the
+// loading lazy and what makes search auto-expansion fire their queries (§6).
 export function ManagerLedger({
   campaigns,
   filters,
@@ -31,17 +33,7 @@ export function ManagerLedger({
   campaigns: ManagerCampaignRow[];
   filters: ManagerLedgerFilters;
 }) {
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(
-    () => new Set<string>(),
-  );
-
-  const toggle = useCallback((id: string) => {
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (!next.delete(id)) next.add(id);
-      return next;
-    });
-  }, []);
+  const expansion = useManagerExpansion(Boolean(filters.search?.trim()));
 
   return (
     <div className="rounded-lg border">
@@ -60,21 +52,20 @@ export function ManagerLedger({
         </TableHeader>
         <TableBody>
           {campaigns.map((campaign) => {
-            const isExpanded = expanded.has(campaign.id);
+            const isExpanded = expansion.isExpanded(campaign);
             return (
               <Fragment key={campaign.id}>
                 <ManagerLedgerRow
                   row={campaign}
                   level="campaign"
                   isExpanded={isExpanded}
-                  onToggle={toggle}
+                  onToggle={() => expansion.toggle(campaign)}
                 />
                 {isExpanded && (
                   <ManagerAdSetRows
                     campaignId={campaign.id}
                     filters={filters}
-                    expanded={expanded}
-                    onToggle={toggle}
+                    expansion={expansion}
                   />
                 )}
               </Fragment>
