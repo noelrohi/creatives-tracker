@@ -362,6 +362,9 @@ export interface MappedRow {
   landingPageViews?: number;
   costPerLpv?: string;
   purchaseValue?: string;
+  purchaseValue7dClick?: string | null;
+  purchaseValue1dView?: string | null;
+  attributionWindows?: string | null;
   addToCart?: number;
   initiateCheckout?: number;
   costPerAddToCart?: string;

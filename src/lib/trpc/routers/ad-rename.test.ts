@@ -62,7 +62,7 @@ describe("ad.renameMetaAd", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://graph.facebook.com/v22.0/meta-1");
+    expect(url).toBe("https://graph.facebook.com/v25.0/meta-1");
     expect(init.method).toBe("POST");
     const body = init.body as URLSearchParams;
     expect(body.get("access_token")).toBe("token");

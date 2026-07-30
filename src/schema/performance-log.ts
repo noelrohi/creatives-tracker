@@ -42,6 +42,9 @@ export const performanceLogs = pgTable(
     costPerLpv: numeric("cost_per_lpv"),
     // Purchase value
     purchaseValue: numeric("purchase_value"),
+    purchaseValue7dClick: numeric("purchase_value_7d_click"),
+    purchaseValue1dView: numeric("purchase_value_1d_view"),
+    attributionWindows: text("attribution_windows"),
     // Ecom funnel
     addToCart: integer("add_to_cart"),
     initiateCheckout: integer("initiate_checkout"),
