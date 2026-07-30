@@ -4,6 +4,8 @@ import { formatDateOnly } from "./date";
 interface MetaAction {
   action_type: string;
   value: string;
+  "7d_click"?: string;
+  "1d_view"?: string;
 }
 
 interface MetaInsightRow {
@@ -42,8 +44,15 @@ interface MetaInsightRow {
   video_avg_time_watched_actions?: MetaAction[];
 }
 
+function findActionEntry(
+  actions: MetaAction[] | undefined,
+  type: string,
+): MetaAction | undefined {
+  return actions?.find((action) => action.action_type === type);
+}
+
 function findAction(actions: MetaAction[] | undefined, type: string): string | undefined {
-  return actions?.find((a) => a.action_type === type)?.value;
+  return findActionEntry(actions, type)?.value;
 }
 
 export function mapMetaInsightsToRows(
@@ -55,8 +64,11 @@ export function mapMetaInsightsToRows(
 ): MappedRow[] {
   return data.map((row) => {
     const spend = row.spend;
-    const purchaseValue = findAction(row.action_values, "omni_purchase") ??
-      findAction(row.action_values, "purchase");
+    const purchaseValueAction = findActionEntry(row.action_values, "omni_purchase") ??
+      findActionEntry(row.action_values, "purchase");
+    const purchaseValue = purchaseValueAction?.value;
+    const purchaseValue7dClick = purchaseValueAction?.["7d_click"] ?? null;
+    const purchaseValue1dView = purchaseValueAction?.["1d_view"] ?? null;
     const conversions = findAction(row.actions, "omni_purchase") ??
       findAction(row.actions, "purchase");
     const linkClicks = findAction(row.actions, "link_click");
@@ -105,6 +117,9 @@ export function mapMetaInsightsToRows(
         ? Number(landingPageViews)
         : undefined,
       purchaseValue,
+      purchaseValue7dClick,
+      purchaseValue1dView,
+      attributionWindows: "7d_click,1d_view",
       addToCart: addToCart ? Number(addToCart) : undefined,
       initiateCheckout: initiateCheckout
         ? Number(initiateCheckout)
