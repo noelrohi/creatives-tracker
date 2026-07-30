@@ -22,11 +22,12 @@ export function formatRoas(value: string | null): string {
   return `${roas.toFixed(2)}x`;
 }
 
-// The router returns ctr as a 0-1 ratio of sums; display is a percent.
+// performance_log.ctr is percent-scale (Meta's convention), so the weighted
+// rollup already is too — format without rescaling.
 export function formatCtr(value: string | null): string {
-  const ratio = toNumber(value);
-  if (ratio == null) return EM_DASH;
-  return `${(ratio * 100).toFixed(2)}%`;
+  const ctr = toNumber(value);
+  if (ctr == null) return EM_DASH;
+  return `${ctr.toFixed(2)}%`;
 }
 
 export function formatConversions(value: number | null): string {
