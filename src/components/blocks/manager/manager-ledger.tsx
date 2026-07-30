@@ -18,6 +18,10 @@ import {
   STATUS_COLUMN,
 } from "./manager-ledger-row";
 import {
+  ManagerLedgerErrorRow,
+  ManagerLedgerNoResultsRow,
+} from "./manager-ledger-states";
+import {
   MANAGER_SORT_COLUMN_LABELS,
   MANAGER_SORT_COLUMNS,
   type ManagerSort,
@@ -42,12 +46,23 @@ const NUMERIC_HEAD = `${HEAD} text-right`;
 // Sorting (§7) is one rule for the whole tree: campaigns are ordered here and
 // `sort` is handed down so every children query orders its own sibling group
 // the same way — the hierarchy never flattens.
+//
+// §9: the campaigns query's failure and its filtered-to-nothing result both land
+// in the table body, so the header and the filter bar above stay usable. The
+// unfiltered-empty case never reaches here — the page shows the centered empty
+// state in place of the whole ledger.
 export function ManagerLedger({
   campaigns,
   filters,
+  isError,
+  onRetry,
+  onClearFilters,
 }: {
   campaigns: ManagerCampaignRow[];
   filters: ManagerLedgerFilters;
+  isError: boolean;
+  onRetry: () => void;
+  onClearFilters: () => void;
 }) {
   const expansion = useManagerExpansion(Boolean(filters.search?.trim()));
   const { sort, toggleSort } = useManagerSort();
@@ -90,6 +105,15 @@ export function ManagerLedger({
           </TableRow>
         </TableHeader>
         <TableBody>
+          {isError && (
+            <ManagerLedgerErrorRow
+              message="Couldn't load campaigns."
+              onRetry={onRetry}
+            />
+          )}
+          {!isError && rows.length === 0 && (
+            <ManagerLedgerNoResultsRow onClear={onClearFilters} />
+          )}
           {rows.map((campaign) => {
             const isExpanded = expansion.isExpanded(campaign);
             return (

@@ -5,6 +5,7 @@ import { useTRPC } from "@/lib/trpc/client";
 import { ManagerFilterBar } from "@/components/blocks/manager/manager-filter-bar";
 import { ManagerLedger } from "@/components/blocks/manager/manager-ledger";
 import { ManagerLedgerSkeleton } from "@/components/blocks/manager/manager-ledger-skeleton";
+import { ManagerLedgerEmptyState } from "@/components/blocks/manager/manager-ledger-states";
 import {
   MANAGER_STALE_TIME_MS,
   type ManagerLedgerFilters,
@@ -19,6 +20,7 @@ export default function CampaignsPage() {
     search,
     searchInput, setSearchInput,
     fromValue, toValue, fromDate, toDate, setFrom, setTo,
+    clearFilters, hasFilters,
   } = useManagerFilters();
 
   const accountsQuery = useQuery(trpc.adAccount.list.queryOptions());
@@ -40,6 +42,14 @@ export default function CampaignsPage() {
   );
 
   const rows = campaigns.data ?? [];
+
+  // §9 case 1 vs case 2: with no filters active an empty result means there is
+  // nothing to manage at all (no Meta account connected, or never synced) — the
+  // date range can only zero metrics, never hide a row (§6). With filters active
+  // it's a pruned tree, which the ledger reports inline so the filter bar and
+  // headers stay in place. An error outranks both: we don't know either way.
+  const showEmptyState =
+    !campaigns.isError && !campaigns.isLoading && rows.length === 0 && !hasFilters;
 
   return (
     <div className="flex flex-col gap-4">
@@ -70,8 +80,16 @@ export default function CampaignsPage() {
 
       {campaigns.isLoading ? (
         <ManagerLedgerSkeleton />
+      ) : showEmptyState ? (
+        <ManagerLedgerEmptyState />
       ) : (
-        <ManagerLedger campaigns={rows} filters={filters} />
+        <ManagerLedger
+          campaigns={rows}
+          filters={filters}
+          isError={campaigns.isError}
+          onRetry={() => campaigns.refetch()}
+          onClearFilters={clearFilters}
+        />
       )}
     </div>
   );

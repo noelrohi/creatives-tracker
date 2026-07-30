@@ -10,6 +10,10 @@ import {
 } from "./manager-ledger-row";
 import { type ManagerSort, sortManagerRows } from "./manager-ledger-sort";
 import {
+  ManagerLedgerEmptyChildRow,
+  ManagerLedgerErrorRow,
+} from "./manager-ledger-states";
+import {
   MANAGER_STALE_TIME_MS,
   type ManagerAncestorOff,
   type ManagerLedgerFilters,
@@ -28,6 +32,20 @@ function ancestorOffFor(
   if (campaignStatus !== "active") return "campaign";
   if (adSetStatus && adSetStatus !== "active") return "adSet";
   return null;
+}
+
+// §9: an expanded parent with no children to show. Under an active status or
+// search that is the pruned tree working as designed (§6) and the copy says so;
+// the account filter can't prune below a campaign, and the date range never
+// hides a row, so neither counts here. Without filters this shouldn't happen —
+// only a `hasChildren` parent is expandable — so the copy stays neutral.
+function emptyChildLabel(
+  filters: ManagerLedgerFilters,
+  level: "adSets" | "ads",
+) {
+  const pruned = Boolean(filters.status || filters.search);
+  if (level === "adSets") return pruned ? "No matching ad sets" : "No ad sets";
+  return pruned ? "No matching ads" : "No ads";
 }
 
 // Mounted only while its parent is expanded (§6 lazy load): mounting fires the
@@ -62,9 +80,23 @@ export function ManagerAdSetRows({
 
   if (adSets.isPending) return <ManagerLedgerChildSkeletonRow />;
 
+  if (adSets.isError) {
+    return (
+      <ManagerLedgerErrorRow
+        message="Couldn't load ad sets."
+        onRetry={() => adSets.refetch()}
+      />
+    );
+  }
+
+  const adSetRows = adSets.data ?? [];
+  if (adSetRows.length === 0) {
+    return <ManagerLedgerEmptyChildRow label={emptyChildLabel(filters, "adSets")} />;
+  }
+
   return (
     <>
-      {sortManagerRows(adSets.data ?? [], sort).map((adSet) => {
+      {sortManagerRows(adSetRows, sort).map((adSet) => {
         const isExpanded = expansion.isExpanded(adSet);
         return (
           <Fragment key={adSet.id}>
@@ -121,11 +153,25 @@ function ManagerAdRows({
 
   if (ads.isPending) return <ManagerLedgerChildSkeletonRow />;
 
+  if (ads.isError) {
+    return (
+      <ManagerLedgerErrorRow
+        message="Couldn't load ads."
+        onRetry={() => ads.refetch()}
+      />
+    );
+  }
+
+  const adRows = ads.data ?? [];
+  if (adRows.length === 0) {
+    return <ManagerLedgerEmptyChildRow label={emptyChildLabel(filters, "ads")} />;
+  }
+
   const ancestorOff = ancestorOffFor(campaignStatus, adSetStatus);
 
   return (
     <>
-      {sortManagerRows(ads.data ?? [], sort).map((ad) => (
+      {sortManagerRows(adRows, sort).map((ad) => (
         <ManagerLedgerRow
           key={ad.id}
           row={ad}
