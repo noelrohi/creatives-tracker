@@ -10,8 +10,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { useManagerAdActions } from "./manager-ad-actions";
 import { ManagerAdSetRows } from "./manager-ledger-children";
-import { ManagerLedgerRow } from "./manager-ledger-row";
+import {
+  ACTION_COLUMN,
+  ManagerLedgerRow,
+  STATUS_COLUMN,
+} from "./manager-ledger-row";
 import {
   MANAGER_SORT_COLUMN_LABELS,
   MANAGER_SORT_COLUMNS,
@@ -48,6 +53,11 @@ export function ManagerLedger({
   const { sort, toggleSort } = useManagerSort();
   const rows = sortManagerRows(campaigns, sort);
 
+  // §8 actions are owned here so the pause/rename dialogs mount once for the
+  // whole ledger and sit outside the <table>, whatever is expanded below.
+  const { actions: adActions, dialogs: adActionDialogs } =
+    useManagerAdActions(filters);
+
   return (
     <div className="rounded-lg border">
       <Table className="text-[13px]">
@@ -55,7 +65,7 @@ export function ManagerLedger({
           <TableRow className="hover:bg-transparent">
             <TableHead className={cn(HEAD, "w-7")} />
             <TableHead className={HEAD}>Name</TableHead>
-            <TableHead className={cn(HEAD, "w-16")}>Status</TableHead>
+            <TableHead className={cn(HEAD, STATUS_COLUMN)}>Status</TableHead>
             {MANAGER_SORT_COLUMNS.map((column) => (
               <TableHead
                 key={column}
@@ -75,6 +85,8 @@ export function ManagerLedger({
                 />
               </TableHead>
             ))}
+            {/* Row actions (§8) — hover-revealed, so the header stays blank. */}
+            <TableHead className={cn(HEAD, ACTION_COLUMN)} />
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -91,9 +103,11 @@ export function ManagerLedger({
                 {isExpanded && (
                   <ManagerAdSetRows
                     campaignId={campaign.id}
+                    campaignStatus={campaign.status}
                     filters={filters}
                     expansion={expansion}
                     sort={sort}
+                    adActions={adActions}
                   />
                 )}
               </Fragment>
@@ -101,6 +115,7 @@ export function ManagerLedger({
           })}
         </TableBody>
       </Table>
+      {adActionDialogs}
     </div>
   );
 }

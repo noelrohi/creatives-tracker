@@ -20,3 +20,26 @@ export type ManagerLedgerFilters = Omit<
 
 // §4: client-side cache only, staleTime ~3 minutes.
 export const MANAGER_STALE_TIME_MS = 3 * 60 * 1000;
+
+// §8 ancestor provenance. A row always renders its OWN status; this only records
+// which ancestor is switched off so the row can dim and annotate. Derived
+// client-side from rows already in the tree — never fetched.
+export type ManagerAncestorOff = "campaign" | "adSet" | null;
+
+export const MANAGER_ANCESTOR_OFF_LABELS: Record<
+  NonNullable<ManagerAncestorOff>,
+  string
+> = {
+  campaign: "campaign off",
+  adSet: "ad set off",
+};
+
+// §8 actions, ad rows only. Already bound to one ad by the time the row sees
+// them; `null` means the row is read-only (campaign/ad set rows, unprivileged
+// users, or an ad with no Meta id). `onPause` is undefined on an already-paused
+// ad — `ad.pauseMetaAds` only pauses and there is no unpause procedure in v1.
+export type ManagerRowActions = {
+  onPause?: () => void;
+  onRename: () => void;
+  isPending: boolean;
+};

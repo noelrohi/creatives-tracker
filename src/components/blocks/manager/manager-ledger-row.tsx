@@ -1,9 +1,21 @@
 "use client";
 
-import { ChevronRight } from "@/components/icons";
+import { ChevronRight, MoreHorizontal, PauseCircle, Pencil } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TableCell, TableRow } from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import {
   formatConversions,
@@ -12,11 +24,27 @@ import {
   formatRoas,
   roasTintClassName,
 } from "./manager-ledger-format";
-import type { ManagerLedgerRow, ManagerLevel } from "./manager-ledger-types";
+import {
+  MANAGER_ANCESTOR_OFF_LABELS,
+  type ManagerAncestorOff,
+  type ManagerLedgerRow,
+  type ManagerLevel,
+  type ManagerRowActions,
+} from "./manager-ledger-types";
 
 const ROW_HEIGHT = "h-[29px]";
 const CELL = "px-2 py-0 text-[13px]";
 const NUMERIC_CELL = `${CELL} text-right font-mono tabular-nums`;
+
+// Shared with the header in manager-ledger.tsx so the columns line up. Status
+// widened from w-16 to fit the §8 "campaign off" / "ad set off" annotation.
+export const STATUS_COLUMN = "w-28";
+export const ACTION_COLUMN = "w-14";
+
+// Hover-only affordance that still reaches keyboard users, and stays put while
+// its dropdown is open so the menu never detaches from a vanished trigger.
+const HOVER_REVEAL =
+  "opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100";
 
 // Hierarchy encoding (§5): a chip plus a colored inset edge stripe per level,
 // zero indentation so names keep full width.
@@ -37,17 +65,24 @@ export function ManagerLedgerRow({
   level,
   isExpanded,
   onToggle,
+  ancestorOff = null,
+  actions = null,
 }: {
   row: ManagerLedgerRow;
   level: ManagerLevel;
   isExpanded: boolean;
   onToggle: () => void;
+  ancestorOff?: ManagerAncestorOff;
+  actions?: ManagerRowActions | null;
 }) {
   const chip = LEVEL_CHIPS[level];
   const expandable = row.hasChildren;
 
   return (
-    <TableRow className={ROW_HEIGHT}>
+    // `group` drives the §8 hover affordances. The dim is on the row so an
+    // "ON" ad under a switched-off parent never reads as delivering (§8) —
+    // the status tag itself still reports the row's own state.
+    <TableRow className={cn(ROW_HEIGHT, "group", ancestorOff && "opacity-50")}>
       <TableCell className={cn(CELL, "w-7")}>
         {expandable && (
           <button
@@ -83,8 +118,15 @@ export function ManagerLedgerRow({
           <span className="truncate">{row.name}</span>
         </div>
       </TableCell>
-      <TableCell className={cn(CELL, "w-16")}>
-        <ManagerStatusTag status={row.status} />
+      <TableCell className={cn(CELL, STATUS_COLUMN)}>
+        <div className="flex items-center gap-1.5">
+          <ManagerStatusTag status={row.status} />
+          {ancestorOff && (
+            <span className="whitespace-nowrap text-[10px] text-muted-foreground/60">
+              {MANAGER_ANCESTOR_OFF_LABELS[ancestorOff]}
+            </span>
+          )}
+        </div>
       </TableCell>
       <TableCell className={NUMERIC_CELL}>{formatCurrency(row.spend)}</TableCell>
       <TableCell className={cn(NUMERIC_CELL, roasTintClassName(row.roas))}>
@@ -95,7 +137,61 @@ export function ManagerLedgerRow({
       <TableCell className={NUMERIC_CELL}>
         {formatConversions(row.conversions)}
       </TableCell>
+      <TableCell className={cn(CELL, ACTION_COLUMN)}>
+        {actions && <ManagerRowActionButtons row={row} actions={actions} />}
+      </TableCell>
     </TableRow>
+  );
+}
+
+// §8: pause is a direct hover icon (one click from the row), rename sits behind
+// the kebab so the rarer, riskier action is out of mis-click range. Both stay
+// inside the 29px row height.
+function ManagerRowActionButtons({
+  row,
+  actions,
+}: {
+  row: ManagerLedgerRow;
+  actions: ManagerRowActions;
+}) {
+  return (
+    <div className="flex items-center justify-end gap-0.5">
+      {actions.onPause && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className={cn("size-5", HOVER_REVEAL)}
+              disabled={actions.isPending}
+              aria-label={`Pause ${row.name}`}
+              onClick={actions.onPause}
+            >
+              <PauseCircle className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">Pause in Meta</TooltipContent>
+        </Tooltip>
+      )}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className={cn("size-5", HOVER_REVEAL)}
+            disabled={actions.isPending}
+            aria-label={`Actions for ${row.name}`}
+          >
+            <MoreHorizontal className="size-3.5" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onClick={actions.onRename}>
+            <Pencil className="size-3.5" /> Rename
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }
 
@@ -132,6 +228,7 @@ export function ManagerLedgerChildSkeletonRow() {
           <Skeleton className="ml-auto h-3 w-10" />
         </TableCell>
       ))}
+      <TableCell className={cn(CELL, ACTION_COLUMN)} />
     </TableRow>
   );
 }
