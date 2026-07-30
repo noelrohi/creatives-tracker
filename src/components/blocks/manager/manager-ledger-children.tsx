@@ -7,6 +7,7 @@ import {
   ManagerLedgerChildSkeletonRow,
   ManagerLedgerRow,
 } from "./manager-ledger-row";
+import { type ManagerSort, sortManagerRows } from "./manager-ledger-sort";
 import {
   MANAGER_STALE_TIME_MS,
   type ManagerLedgerFilters,
@@ -17,14 +18,19 @@ import type { ManagerExpansion } from "./use-manager-expansion";
 // query, collapsing unmounts without a refetch, re-expanding hits the React
 // Query cache inside staleTime. Ad sets carry their own `hasMatches`, so an
 // auto-expanded campaign cascades down to its matching ad sets from here.
+//
+// `sort` reorders within this parent only (§7) and stays out of the query input,
+// so a header click re-ranks from cache without refetching.
 export function ManagerAdSetRows({
   campaignId,
   filters,
   expansion,
+  sort,
 }: {
   campaignId: string;
   filters: ManagerLedgerFilters;
   expansion: ManagerExpansion;
+  sort: ManagerSort;
 }) {
   const trpc = useTRPC();
   const adSets = useQuery(
@@ -38,7 +44,7 @@ export function ManagerAdSetRows({
 
   return (
     <>
-      {(adSets.data ?? []).map((adSet) => {
+      {sortManagerRows(adSets.data ?? [], sort).map((adSet) => {
         const isExpanded = expansion.isExpanded(adSet);
         return (
           <Fragment key={adSet.id}>
@@ -49,7 +55,11 @@ export function ManagerAdSetRows({
               onToggle={() => expansion.toggle(adSet)}
             />
             {isExpanded && (
-              <ManagerAdRows adSetId={adSet.id} filters={filters} />
+              <ManagerAdRows
+                adSetId={adSet.id}
+                filters={filters}
+                sort={sort}
+              />
             )}
           </Fragment>
         );
@@ -61,9 +71,11 @@ export function ManagerAdSetRows({
 function ManagerAdRows({
   adSetId,
   filters,
+  sort,
 }: {
   adSetId: string;
   filters: ManagerLedgerFilters;
+  sort: ManagerSort;
 }) {
   const trpc = useTRPC();
   const ads = useQuery(
@@ -77,7 +89,7 @@ function ManagerAdRows({
 
   return (
     <>
-      {(ads.data ?? []).map((ad) => (
+      {sortManagerRows(ads.data ?? [], sort).map((ad) => (
         <ManagerLedgerRow
           key={ad.id}
           row={ad}

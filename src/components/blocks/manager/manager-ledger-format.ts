@@ -4,7 +4,9 @@
 
 export const EM_DASH = "—";
 
-function toNumber(value: string | null): number | null {
+// Metric values arrive as numeric strings (Postgres ::text casts) or null.
+// Exported so the sort comparator reads them exactly the way the cells do.
+export function toNumber(value: string | null): number | null {
   if (value == null) return null;
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : null;
