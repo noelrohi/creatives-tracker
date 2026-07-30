@@ -1,14 +1,15 @@
 /**
- * Deep links out of the page. The Shopify admin *Sales over time* report is the
- * official reference for the net-sales total, so the link carries the same day
- * range the page is showing.
+ * Deep links out of the page. The Shopify admin *Total sales over time* report
+ * is the official reference for the net-sales total, so the link carries the
+ * same day range the page is showing.
  *
- * `since` / `until` are the param names the admin analytics reports have used for
- * their date window; they are best-effort. If Shopify ignores them the report
- * still opens on the right screen, just on its own default range.
+ * The path and report id come from Shopify's own Help Center links
+ * (admin.shopify.com/analytics/reports/total_sales_over_time), paste-tested
+ * against a live admin with the `since`/`until` window applied — the
+ * `/store/<handle>` prefix keeps multi-store merchants in the right admin.
  */
 
-const SALES_OVER_TIME_PATH = "/reports/sales_over_time";
+const SALES_OVER_TIME_PATH = "/analytics/reports/total_sales_over_time";
 
 /** `acme-store.myshopify.com` → `acme-store`. */
 export function storeHandle(shopDomain: string | null | undefined): string | null {
