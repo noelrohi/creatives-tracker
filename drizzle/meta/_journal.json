@@ -330,6 +330,13 @@
       "when": 1784104115844,
       "tag": "0046_eminent_goliath",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1785380728760,
+      "tag": "0047_nostalgic_exodus",
+      "breakpoints": true
     }
   ]
 }
