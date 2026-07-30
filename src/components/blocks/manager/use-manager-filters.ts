@@ -13,10 +13,7 @@ const SEARCH_DEBOUNCE_MS = 300;
 
 export function useManagerFilters() {
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
-  const [status, setStatus] = useQueryState(
-    "status",
-    parseAsStringLiteral(MANAGER_STATUSES).withDefault(undefined as unknown as ManagerStatus),
-  );
+  const [status, setStatus] = useQueryState("status", parseAsStringLiteral(MANAGER_STATUSES));
   const [search, setSearch] = useQueryState("q", parseAsString.withDefault(""));
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
   const [to, setTo] = useQueryState("to", parseAsString.withDefault(formatDateOnly(new Date())));
