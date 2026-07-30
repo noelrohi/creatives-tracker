@@ -34,7 +34,7 @@ import { MobileFindingsSheet } from "@/components/blocks/attribution/mobile-find
 import {
   connectionsUrl,
   merRangeUrl,
-  salesOverTimeUrl,
+  financeSummaryUrl,
 } from "@/components/blocks/attribution/shopify-links";
 import { Waterfall } from "@/components/blocks/attribution/waterfall";
 import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role";
@@ -151,7 +151,7 @@ export default function AttributionPage() {
     ? formatMoney(data.pending.revenue, currency)
     : null;
   const shopifyReportUrl = range
-    ? salesOverTimeUrl({
+    ? financeSummaryUrl({
         shopDomain: store.data?.store.shopDomain,
         dateFrom: range.dateFrom,
         dateTo: range.dateTo,
