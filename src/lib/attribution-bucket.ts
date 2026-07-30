@@ -3,7 +3,9 @@
  * BUCKET_RULE_VERSION so stamped orders get re-bucketed.
  */
 
-export const BUCKET_RULE_VERSION = 1;
+import { normalizeLower } from "@/lib/text";
+
+export const BUCKET_RULE_VERSION = 2;
 
 export const META_SOURCES = [
   "facebook",
@@ -16,6 +18,52 @@ export const GOOGLE_SOURCES = ["google", "adwords"] as const;
 export const TIKTOK_SOURCES = ["tiktok"] as const;
 export const KLAVIYO_SOURCES = ["klaviyo"] as const;
 export const PAID_MEDIUMS = ["paid", "cpc", "ppc", "paid_social"] as const;
+
+/**
+ * Mediums that say "we know it wasn't paid" (spec §4.4: the last click is
+ * direct, an organic referrer, or organic-medium traffic). Anything outside
+ * both this table and PAID_MEDIUMS is a tag we have no rule for, so it lands in
+ * unattributed rather than being assumed organic.
+ */
+export const ORGANIC_MEDIUMS = [
+  "organic",
+  "referral",
+  "social",
+  "direct",
+  "none",
+  "(none)",
+  "unpaid",
+] as const;
+
+/**
+ * Source names that can never carry journey data (spec §4.1: POS, draft,
+ * subscription renewal). Every other channel — Shop app, mobile, headless —
+ * does get a journey, so it goes through normal bucketing instead.
+ */
+export const UNTRACKED_SOURCE_NAMES = [
+  "pos",
+  "shopify_draft_order",
+  "draft_order",
+  "subscription_contract",
+] as const;
+
+/**
+ * Substrings that mark a medium as *meant* to be paid even though it matches no
+ * paid-medium rule ("paid-social", "facebook_ads", "cpc "). Finding rule 3 (§8)
+ * counts unattributed orders whose medium looks paid, so the pattern is shared
+ * with the SQL side via PAID_LOOKING_MEDIUM_REGEX_SOURCE.
+ */
+export const PAID_LOOKING_MEDIUM_HINTS = [
+  "paid",
+  "cpc",
+  "ppc",
+  "ads",
+  "sem",
+  "display",
+] as const;
+
+/** Same alternation, for Postgres `~` — keep in step with the hints above. */
+export const PAID_LOOKING_MEDIUM_REGEX_SOURCE = `(${PAID_LOOKING_MEDIUM_HINTS.join("|")})`;
 
 export type AttributionBucket =
   | "meta"
@@ -49,16 +97,11 @@ export type BucketResult = {
   verificationPending: boolean;
 };
 
-function normalize(value: string | null | undefined) {
-  const trimmed = (value ?? "").trim().toLowerCase();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
 function includesInsensitive(
   table: readonly string[],
   value: string | null | undefined,
 ) {
-  const normalized = normalize(value);
+  const normalized = normalizeLower(value);
   if (!normalized) return false;
   return table.some((entry) => entry.toLowerCase() === normalized);
 }
@@ -83,17 +126,25 @@ export function isPaidMedium(value: string | null | undefined) {
   return includesInsensitive(PAID_MEDIUMS, value);
 }
 
-/** A source we have a rule for at all — used by the organic/direct branch. */
-function isRecognizedSource(value: string | null | undefined) {
-  return (
-    isMetaSource(value) ||
-    isGoogleSource(value) ||
-    isTiktokSource(value) ||
-    isKlaviyoSource(value)
-  );
+export function isOrganicMedium(value: string | null | undefined) {
+  return includesInsensitive(ORGANIC_MEDIUMS, value);
 }
 
-const NUMERIC_CAMPAIGN = /^\d+$/;
+/** Paid by intent, whether or not it passes the paid-medium gate. */
+export function isPaidLookingMedium(value: string | null | undefined) {
+  const normalized = normalizeLower(value);
+  if (!normalized) return false;
+  return PAID_LOOKING_MEDIUM_HINTS.some((hint) => normalized.includes(hint));
+}
+
+/** POS, draft and subscription-renewal orders (spec §4.1). */
+export function isUntrackedSourceName(value: string | null | undefined) {
+  const normalized = normalizeLower(value);
+  if (!normalized) return false;
+  if (includesInsensitive(UNTRACKED_SOURCE_NAMES, normalized)) return true;
+  // Apps name their own orders: "…_draft_order", "subscription_…".
+  return normalized.includes("draft") || normalized.includes("subscription");
+}
 
 function result(
   bucket: AttributionBucket | null,
@@ -110,33 +161,37 @@ function result(
 
 /**
  * Evaluation order matters: every order lands in exactly one bucket.
- *   1 untracked (non-web order) → 2 pending (journey not ready)
+ *   1 untracked (POS/draft/subscription) → 2 pending (journey not ready)
  *   → 3 paid UTM buckets → 4 organic/direct → 5 unattributed
  */
 export function assignBucket(input: BucketInput): BucketResult {
-  // 1. Non-web orders (POS, draft, subscription) can never carry journey data.
-  if (normalize(input.orderSourceName) !== "web") return result("untracked");
+  // 1. POS, draft and subscription-renewal orders never carry journey data.
+  if (isUntrackedSourceName(input.orderSourceName)) return result("untracked");
 
   // 2. Journey not ready yet — Shopify still resolving the visit chain.
   if (!input.journeyReady) return result(null);
 
   const lastVisit = input.lastVisit ?? null;
-  const utmSource = normalize(lastVisit?.utmSource);
-  const utmMedium = normalize(lastVisit?.utmMedium);
-  const utmCampaign = normalize(lastVisit?.utmCampaign);
+  const utmSource = normalizeLower(lastVisit?.utmSource);
+  const utmMedium = normalizeLower(lastVisit?.utmMedium);
+  const utmCampaign = normalizeLower(lastVisit?.utmCampaign);
   const hasUtms = Boolean(utmSource || utmMedium || utmCampaign);
+
+  // A journey that reports ready with no visit at all is a journey missing
+  // where it should exist (§4.5) — "we can't tell", not "came on their own".
+  if (!lastVisit) return result("unattributed");
 
   // 3. Paid UTM buckets.
   if (isPaidMedium(utmMedium)) {
     if (isMetaSource(utmSource)) {
-      if (utmCampaign && input.syncedMetaCampaignIds.has(utmCampaign)) {
-        return result("meta", {
-          metaVerified: true,
-          metaCampaignId: utmCampaign,
-        });
-      }
-      if (utmCampaign && NUMERIC_CAMPAIGN.test(utmCampaign)) {
-        // Looks like a Meta campaign id we have not synced yet.
+      if (utmCampaign) {
+        if (input.syncedMetaCampaignIds.has(utmCampaign)) {
+          return result("meta", {
+            metaVerified: true,
+            metaCampaignId: utmCampaign,
+          });
+        }
+        // Any campaign id we have not synced yet — numeric or named (§4.3).
         return result("meta", { verificationPending: true });
       }
       return result("meta");
@@ -148,11 +203,12 @@ export function assignBucket(input: BucketInput): BucketResult {
   // Klaviyo owns any medium (email, sms, flows all tag as klaviyo).
   if (isKlaviyoSource(utmSource)) return result("klaviyo");
 
-  // 4. Organic / direct: no visit, no UTMs, or a known source on a non-paid medium.
-  if (!lastVisit) return result("organic_direct");
+  // 4. Organic / direct: an untagged visit (direct or an organic referrer), or a
+  // visit whose medium says it wasn't paid.
   if (!hasUtms) return result("organic_direct");
-  if (isRecognizedSource(utmSource)) return result("organic_direct");
+  if (isOrganicMedium(utmMedium)) return result("organic_direct");
 
-  // 5. UTMs present that match no rule — mistagged links surface here.
+  // 5. UTMs present that match no rule — mistagged paid links (a recognized
+  // source that failed the paid-medium gate) deliberately surface here.
   return result("unattributed");
 }

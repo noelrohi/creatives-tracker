@@ -17,7 +17,6 @@ import {
   DateRangeChips,
   resolveRange,
 } from "@/components/blocks/attribution/date-range-chips";
-import { addDays } from "@/components/blocks/attribution/days";
 import { FindingsRail } from "@/components/blocks/attribution/findings-rail";
 import { FirstLoadProgress } from "@/components/blocks/attribution/first-load";
 import {
@@ -45,6 +44,21 @@ import { useTRPC } from "@/lib/trpc/client";
 
 const BACKFILL_DAYS = 90;
 const FIRST_LOAD_POLL_MS = 5_000;
+
+type BackfillProgress = { daysLoaded: number; daysTotal: number };
+
+/** The `progress` object the backfill task writes onto its sync-run row. */
+function readSyncRunProgress(
+  meta: Record<string, unknown> | null | undefined,
+): BackfillProgress | null {
+  const progress = meta?.progress;
+  if (!progress || typeof progress !== "object") return null;
+  const { daysLoaded, daysTotal } = progress as Record<string, unknown>;
+  if (typeof daysLoaded !== "number" || typeof daysTotal !== "number") {
+    return null;
+  }
+  return { daysLoaded, daysTotal };
+}
 
 export default function AttributionPage() {
   const trpc = useTRPC();
@@ -116,15 +130,11 @@ export default function AttributionPage() {
     syncStatus.isSuccess &&
     (run === null || (run.phase === "backfill" && run.result === "running"));
 
-  /** Days of orders already landed, which is what "filling in" really means. */
-  const backfillSeries = useQuery({
-    ...trpc.attribution.dailySeries.queryOptions({
-      dateFrom: today ? addDays(today, -(BACKFILL_DAYS - 1)) : browserDay,
-      dateTo: today ?? browserDay,
-    }),
-    enabled: isFirstLoad && today !== null,
-    refetchInterval: isFirstLoad ? FIRST_LOAD_POLL_MS : false,
-  });
+  /**
+   * Progress comes from the backfill's own `shopify_sync_run` row, written as
+   * each Bulk Operation page lands — not inferred from the order rows.
+   */
+  const backfillProgress = readSyncRunProgress(run?.meta);
 
   const health = overview.data?.syncHealth ?? store.data?.syncHealth;
   const frozen = health?.shopify.stale ?? false;
@@ -252,8 +262,8 @@ export default function AttributionPage() {
 
           {isFirstLoad ? (
             <FirstLoadProgress
-              daysLoaded={backfillSeries.data?.days.length ?? 0}
-              daysTotal={BACKFILL_DAYS}
+              daysLoaded={backfillProgress?.daysLoaded ?? 0}
+              daysTotal={backfillProgress?.daysTotal ?? BACKFILL_DAYS}
             />
           ) : null}
 

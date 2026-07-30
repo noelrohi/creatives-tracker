@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ShopifyOrderNode, ShopifyRefund } from "@/lib/shopify-admin";
+import { centsToAmount, toCents } from "@/lib/money";
 import {
-  centsToAmount,
+  cancellationGiveBackCents,
+  cancellationRefundId,
   deriveDayInTimezone,
   groupBulkOrderLines,
   isTestOrder,
@@ -9,7 +11,6 @@ import {
   mapRefundRows,
   netSalesCents,
   refundAmountCents,
-  toCents,
 } from "@/lib/shopify-ingest";
 
 const CONTEXT = {
@@ -147,27 +148,29 @@ describe("refundAmountCents", () => {
   });
 });
 
+// §5.1: "sale = subtotalPriceSet.shopMoney booked on the order's day, minus
+// currentTotalTaxSet-style adjustment only when taxesIncluded: true".
 describe("netSalesCents", () => {
-  it("uses the current subtotal as-is when taxes are excluded", () => {
+  it("books the order-day subtotal as-is when taxes are excluded", () => {
     expect(centsToAmount(netSalesCents(order()))).toBe("100.00");
   });
 
-  it("removes included tax from the current subtotal", () => {
+  it("removes included tax from the subtotal", () => {
     const value = netSalesCents(
       order({
         taxesIncluded: true,
-        currentSubtotalPriceSet: money("107.00"),
-        currentTotalTaxSet: money("7.00"),
+        subtotalPriceSet: money("107.00"),
+        totalTaxSet: money("7.00"),
       }),
     );
     expect(centsToAmount(value)).toBe("100.00");
   });
 
-  it("adds every refund back so the order day keeps its original sale", () => {
+  it("ignores refunds — they book on their own day, never on the order day", () => {
     const value = netSalesCents(
       order({
+        subtotalPriceSet: money("100.00"),
         currentSubtotalPriceSet: money("40.00"),
-        currentTotalTaxSet: money("2.80"),
         refunds: [
           refund("gid://shopify/Refund/1", [{ subtotal: "30.00", tax: "2.10" }]),
           refund("gid://shopify/Refund/2", [{ subtotal: "30.00", tax: "2.10" }]),
@@ -177,42 +180,62 @@ describe("netSalesCents", () => {
     expect(centsToAmount(value)).toBe("100.00");
   });
 
-  it("adds refunds back net of included tax", () => {
+  it("does not let an order edit shrink the order day", () => {
+    // Edited down from 100.00 to 80.00 with no refund recorded: the sale that
+    // happened that day was still 100.00 — past days are immutable (§5.4).
     const value = netSalesCents(
       order({
-        taxesIncluded: true,
-        currentSubtotalPriceSet: money("53.50"),
-        currentTotalTaxSet: money("3.50"),
-        refunds: [
-          refund("gid://shopify/Refund/1", [{ subtotal: "53.50", tax: "3.50" }]),
-        ],
+        subtotalPriceSet: money("100.00"),
+        currentSubtotalPriceSet: money("80.00"),
+        currentTotalTaxSet: money("5.60"),
       }),
     );
     expect(centsToAmount(value)).toBe("100.00");
   });
 
-  it("restates an order edit on the order day (current + refunds back)", () => {
-    // Order was edited down from 100.00 to 80.00 with no refund recorded.
+  it("falls back to the current subtotal when the original is absent", () => {
     const value = netSalesCents(
-      order({
-        currentSubtotalPriceSet: money("80.00"),
-        currentTotalTaxSet: money("5.60"),
-      }),
+      order({ subtotalPriceSet: null, currentSubtotalPriceSet: money("64.00") }),
     );
-    expect(centsToAmount(value)).toBe("80.00");
+    expect(centsToAmount(value)).toBe("64.00");
+  });
+});
+
+// §5.3: "cancelled = sale on order day + refund on cancel day".
+describe("cancellationGiveBackCents", () => {
+  it("is zero for an order that was never cancelled", () => {
+    expect(cancellationGiveBackCents(order())).toBe(0);
   });
 
-  it("nets a VOIDED never-paid cancellation to zero with no special case", () => {
-    const value = netSalesCents(
+  it("gives back the whole sale when Shopify recorded no refund", () => {
+    const value = cancellationGiveBackCents(
+      order({ cancelledAt: "2026-07-02T02:00:00Z", refunds: [] }),
+    );
+    expect(centsToAmount(value)).toBe("100.00");
+  });
+
+  it("gives back only what the real refunds did not cover", () => {
+    const value = cancellationGiveBackCents(
       order({
-        displayFinancialStatus: "VOIDED",
         cancelledAt: "2026-07-02T02:00:00Z",
-        currentSubtotalPriceSet: money("0.00"),
-        currentTotalTaxSet: money("0.00"),
-        refunds: [],
+        refunds: [
+          refund("gid://shopify/Refund/1", [{ subtotal: "30.00", tax: "2.10" }]),
+        ],
       }),
     );
-    expect(centsToAmount(value)).toBe("0.00");
+    expect(centsToAmount(value)).toBe("70.00");
+  });
+
+  it("never goes negative when refunds already covered the sale", () => {
+    const value = cancellationGiveBackCents(
+      order({
+        cancelledAt: "2026-07-02T02:00:00Z",
+        refunds: [
+          refund("gid://shopify/Refund/1", [{ subtotal: "100.00", tax: "7.00" }]),
+        ],
+      }),
+    );
+    expect(value).toBe(0);
   });
 });
 
@@ -273,12 +296,13 @@ describe("mapOrderToRow", () => {
     expect(row.lastClickUtmSource).toBeNull();
   });
 
-  it("carries the cancellation timestamp through", () => {
+  it("carries the cancellation timestamp and reason through (§5.3)", () => {
     const row = mapOrderToRow(
-      order({ cancelledAt: "2026-07-02T02:00:00Z" }),
+      order({ cancelledAt: "2026-07-02T02:00:00Z", cancelReason: "CUSTOMER" }),
       CONTEXT,
     );
     expect(row.cancelledAt).toEqual(new Date("2026-07-02T02:00:00Z"));
+    expect(row.cancelReason).toBe("CUSTOMER");
   });
 
   it("flags test orders so ingest can drop them", () => {
@@ -318,6 +342,56 @@ describe("mapRefundRows", () => {
     );
     expect(rows[0].refundDay).toBe("2026-07-02");
     expect(rows[0].amount).toBe("0.00");
+  });
+
+  it("books a cancelled order's give-back on the cancel day (§5.3)", () => {
+    const rows = mapRefundRows(
+      // Ordered Jul 2 Bangkok, cancelled Jul 20 Bangkok, no Shopify refund.
+      order({ cancelledAt: "2026-07-19T18:00:00Z", refunds: [] }),
+      CONTEXT,
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].kind).toBe("cancellation");
+    expect(rows[0].shopifyRefundId).toBe(
+      cancellationRefundId("gid://shopify/Order/1"),
+    );
+    expect(rows[0].refundDay).toBe("2026-07-20");
+    expect(rows[0].amount).toBe("100.00");
+  });
+
+  it("adds only the uncovered remainder alongside a partial refund", () => {
+    const rows = mapRefundRows(
+      order({
+        cancelledAt: "2026-07-19T18:00:00Z",
+        refunds: [
+          refund(
+            "gid://shopify/Refund/7",
+            [{ subtotal: "40.00", tax: "2.80" }],
+            "2026-07-19T18:00:00Z",
+          ),
+        ],
+      }),
+      CONTEXT,
+    );
+
+    expect(rows.map((row) => [row.kind, row.amount])).toEqual([
+      ["refund", "40.00"],
+      ["cancellation", "60.00"],
+    ]);
+  });
+
+  it("marks ordinary refunds as refunds, not cancellations", () => {
+    const rows = mapRefundRows(
+      order({
+        refunds: [
+          refund("gid://shopify/Refund/7", [{ subtotal: "40.00", tax: "2.80" }]),
+        ],
+      }),
+      CONTEXT,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].kind).toBe("refund");
   });
 });
 

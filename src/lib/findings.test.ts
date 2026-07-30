@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { addDays } from "@/lib/day";
 import {
-  addDays,
   evaluateBrokenUtmTemplate,
   evaluateMetaOverclaim,
   evaluateRoasBelowTarget,
@@ -18,7 +18,7 @@ import {
 const DAY = "2026-07-29";
 
 function claimDays(
-  entries: Array<[claimed: number, verified: number]>,
+  entries: Array<[claimed: number | null, verified: number]>,
 ): ClaimVerifiedDay[] {
   return entries.map(([claimedCents, verifiedCents], index) => ({
     day: addDays(DAY, index - (entries.length - 1)),
@@ -105,6 +105,20 @@ describe("evaluateMetaOverclaim", () => {
       { day: "2026-07-28", claimedCents: 5000, verifiedCents: 1000, gapCents: 4000 },
       { day: "2026-07-29", claimedCents: 4000, verifiedCents: 1000, gapCents: 3000 },
     ]);
+  });
+
+  // §7.2: a Meta outage shows "no data", never $0 — an unlabeled day cannot
+  // over-claim, so it breaks the streak instead of firing on a phantom zero.
+  it("does not fire when a day has no claim data at all", () => {
+    expect(
+      evaluateMetaOverclaim(
+        claimDays([
+          [3000, 1000],
+          [null, 1000],
+          [4000, 1000],
+        ]),
+      ),
+    ).toBeNull();
   });
 
   it("breaks the streak when a day sits exactly at 2×", () => {

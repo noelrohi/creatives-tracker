@@ -17,48 +17,20 @@ import {
   BUCKET_RULE_VERSION,
   type AttributionBucket,
 } from "@/lib/attribution-bucket";
+import { centsToAmount, toCents } from "@/lib/money";
 import {
   fetchOrdersByIds,
   type ShopifyOrderNode,
   type ShopifyRefund,
   type ShopifyRefundLineItem,
 } from "@/lib/shopify-admin";
+import { normalizeLower } from "@/lib/text";
 
 const UPSERT_BATCH_SIZE = 200;
 
-/* ------------------------------------------------------------------ */
-/* Money helpers — integer cents internally, decimal strings at the edge */
-/* ------------------------------------------------------------------ */
-
-const DECIMAL_PATTERN = /^(-?)(\d*)(?:\.(\d+))?$/;
-
-/** Parses a Shopify money string into integer cents without float drift. */
-export function toCents(amount: string | number | null | undefined): number {
-  if (amount === null || amount === undefined) return 0;
-  const raw = String(amount).trim();
-  if (raw.length === 0) return 0;
-
-  const match = DECIMAL_PATTERN.exec(raw);
-  if (!match) {
-    const parsed = Number(raw);
-    return Number.isFinite(parsed) ? Math.round(parsed * 100) : 0;
-  }
-
-  const [, sign, whole, fraction = ""] = match;
-  const padded = `${fraction}00`;
-  const cents =
-    Number(whole || "0") * 100 +
-    Number(padded.slice(0, 2)) +
-    (Number(fraction[2] ?? "0") >= 5 ? 1 : 0);
-
-  return sign === "-" ? -cents : cents;
-}
-
-/** Renders integer cents back into a numeric-column-safe decimal string. */
-export function centsToAmount(cents: number): string {
-  const sign = cents < 0 ? "-" : "";
-  const absolute = Math.abs(Math.round(cents));
-  return `${sign}${Math.floor(absolute / 100)}.${String(absolute % 100).padStart(2, "0")}`;
+/** Refund id for the give-back a cancelled order books with no Shopify refund. */
+export function cancellationRefundId(shopifyOrderId: string) {
+  return `${shopifyOrderId}/cancellation`;
 }
 
 function moneyCents(
@@ -115,21 +87,36 @@ export function refundAmountCents(
 }
 
 /**
- * Net sales as booked on the order day: the *current* subtotal (which already
- * reflects order edits and refunds) plus every refund added back.
+ * The sale as booked on the order day (spec §5.1): `subtotalPriceSet` — item
+ * prices after discounts, excluding shipping — with the tax taken out only when
+ * the order books taxes inside its prices. Deliberately *not* the current
+ * subtotal: a later edit or refund must not reach back and shrink the order day,
+ * because past days are immutable and every give-back books on its own day.
  */
 export function netSalesCents(order: ShopifyOrderNode): number {
   const taxesIncluded = order.taxesIncluded === true;
-  const currentSubtotal =
-    moneyCents(order.currentSubtotalPriceSet) -
-    (taxesIncluded ? moneyCents(order.currentTotalTaxSet) : 0);
+  const subtotal = order.subtotalPriceSet ?? order.currentSubtotalPriceSet;
+  const tax = order.totalTaxSet ?? order.currentTotalTaxSet;
 
-  const refundedBack = (order.refunds ?? []).reduce(
+  return moneyCents(subtotal) - (taxesIncluded ? moneyCents(tax) : 0);
+}
+
+/**
+ * The give-back a cancelled order owes on its cancel day (spec §5.3: "cancelled
+ * = sale on order day + refund on cancel day"). Shopify often cancels without
+ * recording a refund, so whatever the real refunds did not already return is
+ * booked here — never more than the sale itself.
+ */
+export function cancellationGiveBackCents(order: ShopifyOrderNode): number {
+  if (!order.cancelledAt) return 0;
+
+  const taxesIncluded = order.taxesIncluded === true;
+  const refunded = (order.refunds ?? []).reduce(
     (total, refund) => total + refundAmountCents(refund, taxesIncluded),
     0,
   );
 
-  return currentSubtotal + refundedBack;
+  return Math.max(0, netSalesCents(order) - refunded);
 }
 
 /* ------------------------------------------------------------------ */
@@ -152,6 +139,7 @@ export type ShopifyOrderRow = {
   lastClickUtmMedium: string | null;
   lastClickUtmCampaign: string | null;
   cancelledAt: Date | null;
+  cancelReason: string | null;
   orderSourceName: string | null;
 };
 
@@ -163,6 +151,7 @@ export type ShopifyRefundRow = {
   refundDay: string;
   amount: string;
   refundCreatedAt: Date | null;
+  kind: "refund" | "cancellation";
 };
 
 export type MapContext = {
@@ -171,11 +160,6 @@ export type MapContext = {
   storeTimezone: string;
   now?: Date;
 };
-
-function lowercaseOrNull(value: string | null | undefined) {
-  const trimmed = (value ?? "").trim().toLowerCase();
-  return trimmed.length > 0 ? trimmed : null;
-}
 
 function toDateOrNull(value: string | null | undefined) {
   if (!value) return null;
@@ -211,21 +195,28 @@ export function mapOrderToRow(
       : null,
     journeyReady,
     pendingSince: journeyReady ? null : now,
-    lastClickUtmSource: lowercaseOrNull(utm?.source),
-    lastClickUtmMedium: lowercaseOrNull(utm?.medium),
-    lastClickUtmCampaign: lowercaseOrNull(utm?.campaign),
+    lastClickUtmSource: normalizeLower(utm?.source),
+    lastClickUtmMedium: normalizeLower(utm?.medium),
+    lastClickUtmCampaign: normalizeLower(utm?.campaign),
     cancelledAt: toDateOrNull(order.cancelledAt),
+    cancelReason: order.cancelReason ?? null,
     orderSourceName: order.sourceName ?? null,
   };
 }
 
+/**
+ * One row per Shopify refund, plus — for a cancelled order Shopify refunded
+ * only partly or not at all — a `cancellation` row on the cancel day (§5.3).
+ * The synthetic row keeps a derived id, so re-ingesting the same order updates
+ * it (down to 0.00 once real refunds cover the whole sale) instead of stacking.
+ */
 export function mapRefundRows(
   order: ShopifyOrderNode,
   context: MapContext,
 ): ShopifyRefundRow[] {
   const taxesIncluded = order.taxesIncluded === true;
 
-  return (order.refunds ?? []).map((refund) => ({
+  const rows: ShopifyRefundRow[] = (order.refunds ?? []).map((refund) => ({
     organizationId: context.organizationId,
     storeId: context.storeId,
     shopifyOrderId: order.id,
@@ -236,7 +227,23 @@ export function mapRefundRows(
     ),
     amount: centsToAmount(refundAmountCents(refund, taxesIncluded)),
     refundCreatedAt: toDateOrNull(refund.createdAt),
+    kind: "refund",
   }));
+
+  if (order.cancelledAt) {
+    rows.push({
+      organizationId: context.organizationId,
+      storeId: context.storeId,
+      shopifyOrderId: order.id,
+      shopifyRefundId: cancellationRefundId(order.id),
+      refundDay: deriveDayInTimezone(order.cancelledAt, context.storeTimezone),
+      amount: centsToAmount(cancellationGiveBackCents(order)),
+      refundCreatedAt: toDateOrNull(order.cancelledAt),
+      kind: "cancellation",
+    });
+  }
+
+  return rows;
 }
 
 /* ------------------------------------------------------------------ */
@@ -260,9 +267,9 @@ export function groupBulkOrderLines(lines: JsonlLine[]): ShopifyOrderNode[] {
   for (const line of lines) {
     const parentId = line.__parentId;
     if (typeof parentId === "string") {
-      const bucket = childrenByParent.get(parentId) ?? [];
-      bucket.push(line);
-      childrenByParent.set(parentId, bucket);
+      const children = childrenByParent.get(parentId) ?? [];
+      children.push(line);
+      childrenByParent.set(parentId, children);
       continue;
     }
     if (typeof line.id === "string" && line.id.includes("/Order/")) {
@@ -429,6 +436,32 @@ export async function startSyncRun(params: {
   return run;
 }
 
+export type SyncRunProgress = {
+  /** Store-timezone days of orders written so far, out of the window's total. */
+  daysLoaded: number;
+  daysTotal: number;
+  ordersSynced: number;
+};
+
+/**
+ * Mid-run progress for the first-load screen (§2.1: the backfill writes progress
+ * to `shopify_sync_run`; §8 state 5 reads it live). Called after each Bulk
+ * Operation page lands, so the row is never more than one batch behind.
+ */
+export async function updateSyncRunProgress(params: {
+  runId: string;
+  progress: SyncRunProgress;
+  meta?: Record<string, unknown> | null;
+}) {
+  await db
+    .update(shopifySyncRuns)
+    .set({
+      ordersSynced: params.progress.ordersSynced,
+      meta: { ...(params.meta ?? {}), progress: params.progress },
+    })
+    .where(eq(shopifySyncRuns.id, params.runId));
+}
+
 export async function finishSyncRun(params: {
   runId: string;
   result: "success" | "failed";
@@ -510,6 +543,7 @@ async function upsertOrderRows(rows: ShopifyOrderRow[]) {
           lastClickUtmMedium: sql`excluded.last_click_utm_medium`,
           lastClickUtmCampaign: sql`excluded.last_click_utm_campaign`,
           cancelledAt: sql`excluded.cancelled_at`,
+          cancelReason: sql`excluded.cancel_reason`,
           orderSourceName: sql`excluded.order_source_name`,
           updatedAt: new Date(),
         },
@@ -543,6 +577,7 @@ async function upsertRefundRows(
         refundDay: row.refundDay,
         amount: row.amount,
         refundCreatedAt: row.refundCreatedAt,
+        kind: row.kind,
       };
     })
     .filter((value): value is NonNullable<typeof value> => value !== null);
@@ -560,6 +595,7 @@ async function upsertRefundRows(
           refundDay: sql`excluded.refund_day`,
           amount: sql`excluded.amount`,
           refundCreatedAt: sql`excluded.refund_created_at`,
+          kind: sql`excluded.kind`,
         },
       });
   }
@@ -577,6 +613,8 @@ export async function ingestOrderNodes(params: {
   ordersUpserted: number;
   refundsUpserted: number;
   testOrdersSkipped: number;
+  /** Store-timezone order days covered by this page — first-load progress. */
+  orderDays: string[];
 }> {
   const context: MapContext = {
     organizationId: params.organizationId,
@@ -589,7 +627,12 @@ export async function ingestOrderNodes(params: {
   const testOrdersSkipped = params.orders.length - liveOrders.length;
 
   if (liveOrders.length === 0) {
-    return { ordersUpserted: 0, refundsUpserted: 0, testOrdersSkipped };
+    return {
+      ordersUpserted: 0,
+      refundsUpserted: 0,
+      testOrdersSkipped,
+      orderDays: [],
+    };
   }
 
   const orderRows = liveOrders.map((order) => mapOrderToRow(order, context));
@@ -604,6 +647,7 @@ export async function ingestOrderNodes(params: {
     ordersUpserted: orderRows.length,
     refundsUpserted,
     testOrdersSkipped,
+    orderDays: [...new Set(orderRows.map((row) => row.orderDay))],
   };
 }
 
@@ -687,15 +731,18 @@ export async function stampBuckets(params: {
     lt(shopifyOrders.bucketRuleVersion, BUCKET_RULE_VERSION),
   );
 
-  // Non-web orders never get a ready journey, but they are still bucketable
-  // (rule 1 → untracked), so they must not be gated on journeyReady.
+  // POS/draft/subscription orders never get a ready journey, but they are still
+  // bucketable (rule 1 → untracked), so they must not be gated on journeyReady.
+  // Mirrors `isUntrackedSourceName`; every other order waits for its journey.
+  const untrackedSourceName = sql`(
+    lower(${shopifyOrders.orderSourceName}) in ('pos', 'shopify_draft_order', 'draft_order', 'subscription_contract')
+    or lower(${shopifyOrders.orderSourceName}) like '%draft%'
+    or lower(${shopifyOrders.orderSourceName}) like '%subscription%'
+  )`;
+
   const needsFirstStamp = and(
     isNull(shopifyOrders.bucket),
-    or(
-      eq(shopifyOrders.journeyReady, true),
-      isNull(shopifyOrders.orderSourceName),
-      sql`lower(${shopifyOrders.orderSourceName}) <> 'web'`,
-    ),
+    or(eq(shopifyOrders.journeyReady, true), untrackedSourceName),
   );
 
   const where =

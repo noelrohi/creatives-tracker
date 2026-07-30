@@ -81,6 +81,7 @@ export const shopifyOrders = pgTable(
       .default(false)
       .notNull(),
     cancelledAt: timestamp("cancelled_at"),
+    cancelReason: text("cancel_reason"),
     // Shopify source_name: web/pos/draft/subscription detection
     orderSourceName: text("order_source_name"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -126,6 +127,12 @@ export const shopifyRefunds = pgTable(
     refundDay: date("refund_day").notNull(),
     // Σ refundLineItems.subtotalSet, tax-adjusted — computed at ingest
     amount: numeric("amount").notNull(),
+    /**
+     * "refund" = a real Shopify refund; "cancellation" = the give-back a
+     * cancelled order books on its cancel day when Shopify recorded no refund
+     * of its own (spec §5.3). Both sides of the identity read the same column.
+     */
+    kind: text("kind").default("refund").notNull(),
     refundCreatedAt: timestamp("refund_created_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },

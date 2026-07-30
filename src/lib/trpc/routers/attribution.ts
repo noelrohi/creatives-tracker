@@ -1,4 +1,3 @@
-import { TRPCError } from "@trpc/server";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
@@ -11,52 +10,21 @@ import {
   getMetaClaims,
   getMetaVerified,
   getRoasTarget,
-  getStoreForOrg,
   getSyncHealth,
   listBucketOrders,
 } from "@/lib/attribution-queries";
-import { centsToAmount, deriveDayInTimezone } from "@/lib/shopify-ingest";
+// Money crosses the wire as decimal strings, same as the `netSales` column.
+import { centsToAmount } from "@/lib/money";
+import { deriveDayInTimezone } from "@/lib/shopify-ingest";
 import { orgProcedure, router } from "../init";
-
-const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-
-const dateRangeShape = {
-  dateFrom: z.string().regex(DAY_PATTERN, "Expected YYYY-MM-DD"),
-  dateTo: z.string().regex(DAY_PATTERN, "Expected YYYY-MM-DD"),
-};
-
-const orderedRange = {
-  check: (value: { dateFrom: string; dateTo: string }) =>
-    value.dateFrom <= value.dateTo,
-  message: {
-    message: "dateFrom must be on or before dateTo",
-    path: ["dateFrom"],
-  },
-};
-
-const dateRangeSchema = z
-  .object(dateRangeShape)
-  .refine(orderedRange.check, orderedRange.message);
+import {
+  dateRangeSchema,
+  dateRangeShape,
+  orderedRange,
+  requireStore,
+} from "./attribution.shared";
 
 const bucketSchema = z.enum(ATTRIBUTION_BUCKETS);
-
-/** Money crosses the wire as decimal strings, same as `netSales`. */
-const money = centsToAmount;
-
-/**
- * Every read is scoped to the org's single store; `organizationId` always comes
- * from ctx, never from the client.
- */
-async function requireStore(organizationId: string) {
-  const store = await getStoreForOrg(organizationId);
-  if (!store) {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: "No Shopify store is connected for this organization",
-    });
-  }
-  return store;
-}
 
 export const attributionRouter = router({
   overview: orgProcedure
@@ -88,17 +56,17 @@ export const attributionRouter = router({
         range: { dateFrom: input.dateFrom, dateTo: input.dateTo },
         buckets: totals.buckets.map((bucket) => ({
           bucket: bucket.bucket,
-          revenue: money(bucket.revenueCents),
+          revenue: centsToAmount(bucket.revenueCents),
           orderCount: bucket.orderCount,
         })),
         pending: {
           count: totals.pending.count,
-          revenue: money(totals.pending.revenueCents),
+          revenue: centsToAmount(totals.pending.revenueCents),
         },
-        total: money(totals.totalCents),
+        total: centsToAmount(totals.totalCents),
         identity: {
-          sumOfBuckets: money(totals.identity.sumOfBucketsCents),
-          actual: money(totals.identity.actualCents),
+          sumOfBuckets: centsToAmount(totals.identity.sumOfBucketsCents),
+          actual: centsToAmount(totals.identity.actualCents),
           matches: totals.identity.matches,
         },
         syncHealth,
@@ -133,19 +101,21 @@ export const attributionRouter = router({
       return {
         range: { dateFrom: input.dateFrom, dateTo: input.dateTo },
         claims: {
-          claimed: money(claims.claimedCents),
+          // Null, not "0.00": no labeled claim for the range is "no data yet".
+          claimed:
+            claims.claimedCents === null ? null : centsToAmount(claims.claimedCents),
           claimed7dClick:
             claims.claimed7dClickCents === null
               ? null
-              : money(claims.claimed7dClickCents),
+              : centsToAmount(claims.claimed7dClickCents),
           claimed1dView:
             claims.claimed1dViewCents === null
               ? null
-              : money(claims.claimed1dViewCents),
+              : centsToAmount(claims.claimed1dViewCents),
           labeledRowShare: claims.labeledRowShare,
         },
-        spend: money(claims.spendCents),
-        verifiedRevenue: money(verified.verifiedRevenueCents),
+        spend: centsToAmount(claims.spendCents),
+        verifiedRevenue: centsToAmount(verified.verifiedRevenueCents),
         verifiedOrderCount: verified.verifiedOrderCount,
         verificationPendingCount: verified.verificationPendingCount,
         // Null when there is no spend — "can't compute", not zero.
@@ -173,11 +143,11 @@ export const attributionRouter = router({
           buckets: Object.fromEntries(
             ATTRIBUTION_BUCKETS.map((bucket) => [
               bucket,
-              money(point.buckets[bucket]),
+              centsToAmount(point.buckets[bucket]),
             ]),
           ) as Record<(typeof ATTRIBUTION_BUCKETS)[number], string>,
-          pendingNet: money(point.pendingNetCents),
-          totalNet: money(point.totalNetCents),
+          pendingNet: centsToAmount(point.pendingNetCents),
+          totalNet: centsToAmount(point.totalNetCents),
         })),
       };
     }),

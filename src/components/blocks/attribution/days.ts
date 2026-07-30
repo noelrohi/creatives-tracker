@@ -1,19 +1,10 @@
 /**
- * YYYY-MM-DD arithmetic in UTC — the day strings carry no clock, so they can be
- * shifted without ever touching the browser's timezone. Every range on this page
- * is anchored on the store's own "today", never on `new Date()`.
+ * Day helpers the date chips need on top of the shared `@/lib/day` arithmetic.
+ * Every range on this page is anchored on the store's own "today", never on
+ * `new Date()`; only the calendar widget below ever sees browser wall time.
  */
 
-export function addDays(day: string, delta: number): string {
-  const date = new Date(`${day}T00:00:00Z`);
-  if (Number.isNaN(date.getTime())) throw new Error(`Invalid day: ${day}`);
-  date.setUTCDate(date.getUTCDate() + delta);
-  return date.toISOString().slice(0, 10);
-}
-
-export function isDay(value: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}$/.test(value);
-}
+export { addDays, isDay } from "@/lib/day";
 
 /** Inclusive day count, e.g. Jul 1 → Jul 7 is 7. */
 export function dayCount(dateFrom: string, dateTo: string): number {

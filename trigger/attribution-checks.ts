@@ -4,6 +4,7 @@ import {
   getFirstSyncState,
 } from "@/lib/findings";
 import { listShopifyStores, type ShopifyStoreRecord } from "@/lib/shopify-ingest";
+import { ATTRIBUTION_TASK_RETRY } from "./retry";
 
 const ATTRIBUTION_CHECKS_QUEUE = {
   name: "attribution-checks",
@@ -55,12 +56,7 @@ async function runChecksForStore(store: ShopifyStoreRecord) {
 
 export const attributionChecksTask = task({
   id: "attribution-checks",
-  retry: {
-    maxAttempts: 3,
-    factor: 2,
-    minTimeoutInMs: 5000,
-    maxTimeoutInMs: 60000,
-  },
+  retry: ATTRIBUTION_TASK_RETRY,
   queue: ATTRIBUTION_CHECKS_QUEUE,
   run: async (payload: ChecksPayload) => {
     await tags.add(attributionChecksOrgTag(payload.organizationId));

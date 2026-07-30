@@ -11,7 +11,7 @@
 import { and, between, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import type { AttributionBucket } from "@/lib/attribution-bucket";
-import { toCents } from "@/lib/shopify-ingest";
+import { toCents } from "@/lib/money";
 import { orgSettings } from "@/schema/org-settings";
 import { performanceLogs } from "@/schema/performance-log";
 import {
@@ -121,7 +121,12 @@ export type DailyBucketPoint = {
 };
 
 export type MetaClaims = {
-  claimedCents: number;
+  /**
+   * The standard claim (§3.2): `7d_click + 1d_view`, summed from the labeled
+   * columns only. Null when no row in the range carries window labels — "no
+   * data yet", never a $0 that reads like Meta claimed nothing.
+   */
+  claimedCents: number | null;
   claimed7dClickCents: number | null;
   claimed1dViewCents: number | null;
   spendCents: number;
@@ -370,12 +375,31 @@ function baseRowsOnly() {
   );
 }
 
+/**
+ * The standard claim (§3.2): `7d_click + 1d_view`, over labeled rows only. Never
+ * `purchase_value` — that column carries the account's default attribution
+ * setting, so summing it would compare a differently-windowed number against
+ * Shopify. Exported so the contract is testable without a database.
+ */
+export const CLAIMED_WINDOWS_EXPRESSION = sql<string | null>`sum(
+  coalesce(${performanceLogs.purchaseValue7dClick}, 0)
+  + coalesce(${performanceLogs.purchaseValue1dView}, 0)
+) filter (
+  where ${performanceLogs.purchaseValue7dClick} is not null
+     or ${performanceLogs.purchaseValue1dView} is not null
+)`;
+
+/**
+ * What Meta says it made, read from the labeled window columns. Rows that
+ * predate the labels contribute nothing; `labeledRowShare` reports how much of
+ * the range is answerable at all.
+ */
 export async function getMetaClaims(params: {
   organizationId: string;
 } & DateRange): Promise<MetaClaims> {
   const [row] = await db
     .select({
-      claimed: sql<string>`coalesce(sum(${performanceLogs.purchaseValue}), 0)`,
+      claimed: CLAIMED_WINDOWS_EXPRESSION,
       claimed7dClick: sql<
         string | null
       >`sum(${performanceLogs.purchaseValue7dClick})`,
@@ -398,19 +422,34 @@ export async function getMetaClaims(params: {
       ),
     );
 
+  return metaClaimsFromRow(row);
+}
+
+export type MetaClaimsRow = {
+  claimed: string | null;
+  claimed7dClick: string | null;
+  claimed1dView: string | null;
+  spend: string;
+  totalRows: number;
+  labeledRows: number;
+};
+
+/**
+ * Numeric columns arrive as strings and become cents exactly once. With no
+ * labeled row in the range every claim figure is null — "no data yet", never a
+ * $0 that would read as "Meta claimed nothing" (§7.2).
+ */
+export function metaClaimsFromRow(
+  row: MetaClaimsRow | undefined,
+): MetaClaims {
   const labeledRows = row?.labeledRows ?? 0;
+  const labeled = (value: string | null | undefined) =>
+    labeledRows > 0 && value != null ? toCents(value) : null;
 
   return {
-    claimedCents: toCents(row?.claimed),
-    // Null, not 0: history predating the window columns is unlabeled.
-    claimed7dClickCents:
-      labeledRows > 0 && row?.claimed7dClick != null
-        ? toCents(row.claimed7dClick)
-        : null,
-    claimed1dViewCents:
-      labeledRows > 0 && row?.claimed1dView != null
-        ? toCents(row.claimed1dView)
-        : null,
+    claimedCents: labeled(row?.claimed),
+    claimed7dClickCents: labeled(row?.claimed7dClick),
+    claimed1dViewCents: labeled(row?.claimed1dView),
     spendCents: toCents(row?.spend),
     labeledRowShare: labeledShare(labeledRows, row?.totalRows ?? 0),
   };

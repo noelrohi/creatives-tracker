@@ -3,7 +3,6 @@ import { tasks } from "@trigger.dev/sdk";
 import { and, desc, eq, gt, isNotNull, isNull, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { getStoreForOrg } from "@/lib/attribution-queries";
 import {
   FINDING_TYPES,
   getTodaysChecks,
@@ -12,6 +11,7 @@ import {
 } from "@/lib/findings";
 import { findingMutes, findings } from "@/schema/finding";
 import { orgProcedure, orgWriteProcedure, router } from "../init";
+import { requireStore } from "./attribution.shared";
 import type { metaSyncTask } from "../../../../trigger/meta-sync";
 import type { shopifyIncrementalTask } from "../../../../trigger/shopify-sync";
 
@@ -45,18 +45,6 @@ function toItem(
     resolvedAt: row.resolvedAt,
     mutedUntil,
   };
-}
-
-/** Every read is scoped to the org's single store. */
-async function requireStore(organizationId: string) {
-  const store = await getStoreForOrg(organizationId);
-  if (!store) {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: "No Shopify store is connected for this organization",
-    });
-  }
-  return store;
 }
 
 async function activeMutes(organizationId: string, now: Date) {

@@ -11,6 +11,7 @@ import {
 } from "@/lib/shopify-admin";
 import {
   finishSyncRun,
+  updateSyncRunProgress,
   getLastSuccessfulRunStartedAt,
   getShopifyStoreByDomain,
   groupBulkOrderLines,
@@ -26,8 +27,10 @@ import {
   type ShopifyStoreRecord,
 } from "@/lib/shopify-ingest";
 import { BUCKET_RULE_VERSION } from "@/lib/attribution-bucket";
+import { ATTRIBUTION_TASK_RETRY } from "./retry";
 
 const SHOPIFY_SYNC_QUEUE = { name: "shopify-sync", concurrencyLimit: 1 };
+
 const INCREMENTAL_OVERLAP_MS = 15 * 60 * 1000;
 const JOURNEY_REPOLL_DAYS = 3;
 
@@ -144,12 +147,7 @@ async function stampAndLog(params: {
 
 export const shopifyBackfillTask = task({
   id: "shopify-backfill",
-  retry: {
-    maxAttempts: 3,
-    factor: 2,
-    minTimeoutInMs: 5000,
-    maxTimeoutInMs: 60000,
-  },
+  retry: ATTRIBUTION_TASK_RETRY,
   queue: SHOPIFY_SYNC_QUEUE,
   run: async (payload: BackfillPayload) => {
     await tags.add(shopifyOrgTag(payload.organizationId));
@@ -217,7 +215,12 @@ export const shopifyBackfillTask = task({
           runId: run.id,
           result: "success",
           ordersSynced: 0,
-          meta: { bulkOperationId, includesRefundLineItems, orders: 0 },
+          meta: {
+            bulkOperationId,
+            includesRefundLineItems,
+            orders: 0,
+            progress: { daysLoaded: 0, daysTotal: days, ordersSynced: 0 },
+          },
         });
 
         return { ordersSynced: 0, refundsSynced: 0, stamped: 0 };
@@ -241,6 +244,9 @@ export const shopifyBackfillTask = task({
       let refundsSynced = 0;
       let testOrdersSkipped = 0;
       const batchSize = 250;
+      // Store-timezone days seen so far: what "filling in" means on the
+      // first-load screen, and the number it reads out of the sync run.
+      const daysLoaded = new Set<string>();
 
       for (let index = 0; index < orders.length; index += batchSize) {
         const batch = orders.slice(index, index + batchSize);
@@ -259,6 +265,19 @@ export const shopifyBackfillTask = task({
         ordersSynced += result.ordersUpserted;
         refundsSynced += result.refundsUpserted;
         testOrdersSkipped += result.testOrdersSkipped;
+        for (const day of result.orderDays) daysLoaded.add(day);
+
+        // §2.1: progress lands in `shopify_sync_run` as each page is written, so
+        // the screen can show it live instead of guessing from order rows.
+        await updateSyncRunProgress({
+          runId: run.id,
+          progress: {
+            daysLoaded: daysLoaded.size,
+            daysTotal: days,
+            ordersSynced,
+          },
+          meta: { bulkOperationId, includesRefundLineItems },
+        });
       }
 
       metadata.set("status", "stamping");
@@ -280,6 +299,11 @@ export const shopifyBackfillTask = task({
           refundsSynced,
           testOrdersSkipped,
           bucketsStamped: stamped.stamped,
+          progress: {
+            daysLoaded: daysLoaded.size,
+            daysTotal: days,
+            ordersSynced,
+          },
         },
       });
 
@@ -320,12 +344,7 @@ export const shopifyBackfillTask = task({
 
 export const shopifyIncrementalTask = task({
   id: "shopify-incremental",
-  retry: {
-    maxAttempts: 3,
-    factor: 2,
-    minTimeoutInMs: 5000,
-    maxTimeoutInMs: 60000,
-  },
+  retry: ATTRIBUTION_TASK_RETRY,
   queue: SHOPIFY_SYNC_QUEUE,
   run: async (payload: IncrementalPayload) => {
     await tags.add(shopifyOrgTag(payload.organizationId));
@@ -467,12 +486,7 @@ export const shopifyIncrementalTask = task({
 
 export const shopifyRebucketTask = task({
   id: "shopify-rebucket",
-  retry: {
-    maxAttempts: 3,
-    factor: 2,
-    minTimeoutInMs: 5000,
-    maxTimeoutInMs: 60000,
-  },
+  retry: ATTRIBUTION_TASK_RETRY,
   queue: SHOPIFY_SYNC_QUEUE,
   run: async (payload: RebucketPayload) => {
     await tags.add(shopifyOrgTag(payload.organizationId));

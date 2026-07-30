@@ -2,17 +2,10 @@
 
 import { Skeleton } from "@/components/ui/skeleton";
 import type { CheckStatus, FindingType } from "@/lib/findings";
-import { checks as copy, severityByType } from "./copy";
+import { checkStatusColor } from "./colors";
+import { checks as copy } from "./copy";
 
 export type TodaysCheckItem = { type: FindingType; status: CheckStatus };
-
-function statusColor(status: CheckStatus, type: FindingType): string {
-  if (status === "ok") return "var(--attr-good)";
-  if (status === "waiting_for_data") return "var(--muted-foreground)";
-  return severityByType[type] === "critical"
-    ? "var(--attr-critical)"
-    : "var(--attr-warning)";
-}
 
 /** Pinned above the rail footer — all five rules, always visible. */
 export function TodaysChecks({
@@ -46,7 +39,7 @@ export function TodaysChecks({
               </span>
               <span
                 className="shrink-0 font-medium"
-                style={{ color: statusColor(item.status, item.type) }}
+                style={{ color: checkStatusColor(item.status, item.type) }}
               >
                 {copy.status[item.status]}
               </span>

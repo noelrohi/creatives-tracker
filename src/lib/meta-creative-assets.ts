@@ -1,6 +1,6 @@
 import { put } from "@vercel/blob";
 
-const GRAPH_API_VERSION = "v22.0";
+const GRAPH_API_VERSION = "v25.0";
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
 export type MetaCreativePreview = {

@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   assignBucket,
   BUCKET_RULE_VERSION,
+  isPaidLookingMedium,
+  isUntrackedSourceName,
+  PAID_LOOKING_MEDIUM_REGEX_SOURCE,
+  PAID_MEDIUMS,
   type BucketInput,
   type BucketLastVisit,
 } from "@/lib/attribution-bucket";
@@ -37,8 +41,8 @@ function visit(
 }
 
 describe("assignBucket", () => {
-  it("pins the rule version at 1", () => {
-    expect(BUCKET_RULE_VERSION).toBe(1);
+  it("bumps the rule version whenever the tables below change", () => {
+    expect(BUCKET_RULE_VERSION).toBe(2);
   });
 
   describe("rule 1 — untracked", () => {
@@ -57,10 +61,38 @@ describe("assignBucket", () => {
       ).toBe("untracked");
     });
 
-    it("buckets a missing source name as untracked", () => {
-      expect(assignBucket(input({ orderSourceName: null })).bucket).toBe(
-        "untracked",
-      );
+    // §4.1: "order types that can never carry journey data: POS, draft,
+    // subscription-renewal" — every other channel does get a journey.
+    it("does not treat other non-web channels as untracked", () => {
+      for (const sourceName of ["shop_app", "iphone", "android", "1830279"]) {
+        expect(
+          assignBucket(
+            input({
+              orderSourceName: sourceName,
+              lastVisit: visit({ source: "facebook", medium: "paid" }),
+            }),
+          ).bucket,
+        ).toBe("meta");
+      }
+    });
+
+    it("leaves a non-web order with an unresolved journey pending", () => {
+      expect(
+        assignBucket(
+          input({ orderSourceName: "shop_app", journeyReady: false }),
+        ).bucket,
+      ).toBeNull();
+    });
+
+    it("buckets a missing source name through the journey, not as untracked", () => {
+      expect(
+        assignBucket(
+          input({
+            orderSourceName: null,
+            lastVisit: visit({ source: "klaviyo", medium: "email" }),
+          }),
+        ).bucket,
+      ).toBe("klaviyo");
     });
 
     it("wins over a paid UTM journey", () => {
@@ -133,7 +165,9 @@ describe("assignBucket", () => {
       });
     });
 
-    it("keeps a non-numeric unmatched campaign in meta without flags", () => {
+    // §4.3: "A campaign ID we haven't synced yet still lands in Meta, flagged
+    // verification pending" — named campaigns included.
+    it("flags a named unmatched campaign as verification pending too", () => {
       const result = assignBucket(
         input({
           lastVisit: visit({
@@ -147,7 +181,7 @@ describe("assignBucket", () => {
         bucket: "meta",
         metaVerified: false,
         metaCampaignId: null,
-        verificationPending: false,
+        verificationPending: true,
       });
     });
 
@@ -227,12 +261,6 @@ describe("assignBucket", () => {
   });
 
   describe("rule 4 — organic_direct", () => {
-    it("buckets a ready journey with no last visit as organic_direct", () => {
-      expect(assignBucket(input({ lastVisit: null })).bucket).toBe(
-        "organic_direct",
-      );
-    });
-
     it("buckets an organic referrer with no UTMs as organic_direct", () => {
       expect(
         assignBucket(
@@ -249,7 +277,9 @@ describe("assignBucket", () => {
       ).toBe("organic_direct");
     });
 
-    it("buckets a recognized source on a non-paid medium as organic_direct", () => {
+    // §4.4: "organic-medium traffic from a recognized source (including
+    // organic-medium Meta/Google/TikTok)".
+    it("buckets organic-medium traffic from a recognized source as organic_direct", () => {
       expect(
         assignBucket(
           input({
@@ -264,14 +294,47 @@ describe("assignBucket", () => {
       ).toBe("organic_direct");
     });
 
-    it("buckets a recognized source with no medium as organic_direct", () => {
+    it("buckets an organic medium from an unrecognized source as organic_direct", () => {
       expect(
-        assignBucket(input({ lastVisit: visit({ source: "tiktok" }) })).bucket,
+        assignBucket(
+          input({ lastVisit: visit({ source: "partner-blog", medium: "referral" }) }),
+        ).bucket,
       ).toBe("organic_direct");
     });
   });
 
   describe("rule 5 — unattributed", () => {
+    // §4.5: "journey missing where it should exist" — a ready journey with no
+    // visit at all is "we can't tell", never "came on their own".
+    it("surfaces a ready journey that carries no visit", () => {
+      expect(assignBucket(input({ lastVisit: null })).bucket).toBe(
+        "unattributed",
+      );
+    });
+
+    // §4.5: "Mistagged links deliberately surface here so they get noticed."
+    it("surfaces a recognized source whose paid medium fails the gate", () => {
+      for (const medium of ["paid-social", "Paid Social", "facebook_ads", "cpc-lowercase"]) {
+        expect(
+          assignBucket(
+            input({
+              lastVisit: visit({
+                source: "facebook",
+                medium,
+                campaign: "120210000000123",
+              }),
+            }),
+          ).bucket,
+        ).toBe("unattributed");
+      }
+    });
+
+    it("surfaces a recognized source tagged with no medium at all", () => {
+      expect(
+        assignBucket(input({ lastVisit: visit({ source: "tiktok" }) })).bucket,
+      ).toBe("unattributed");
+    });
+
     it("surfaces mistagged UTMs", () => {
       expect(
         assignBucket(
@@ -295,5 +358,75 @@ describe("assignBucket", () => {
         assignBucket(input({ lastVisit: visit({ medium: "cpc" }) })).bucket,
       ).toBe("unattributed");
     });
+  });
+});
+
+describe("isUntrackedSourceName (§4.1)", () => {
+  it("covers POS, draft and subscription orders", () => {
+    for (const sourceName of [
+      "pos",
+      "POS",
+      "shopify_draft_order",
+      "draft_order",
+      "subscription_contract",
+      "recharge_subscription",
+    ]) {
+      expect(isUntrackedSourceName(sourceName)).toBe(true);
+    }
+  });
+
+  it("leaves every other channel to normal bucketing", () => {
+    for (const sourceName of ["web", "shop_app", "iphone", "android", "1830279", null]) {
+      expect(isUntrackedSourceName(sourceName)).toBe(false);
+    }
+  });
+});
+
+// §8 rule 3: "5+ orders in one day with paid-looking UTMs matching no rule".
+// The bucket rule files those orders as unattributed (§4.5), and the findings
+// query has to be able to find them again — same pattern on both sides.
+describe("paid-looking mediums (§8 rule 3)", () => {
+  const MISTAGS = [
+    "paid-social",
+    "Paid Social",
+    "paidsocial",
+    "facebook_ads",
+    "cpc-lowercase",
+    "display",
+    "sem",
+  ];
+
+  it("recognizes mistags that fail the paid-medium gate", () => {
+    for (const medium of MISTAGS) {
+      expect(isPaidLookingMedium(medium)).toBe(true);
+      expect(
+        assignBucket(input({ lastVisit: visit({ source: "facebook", medium }) }))
+          .bucket,
+      ).toBe("unattributed");
+    }
+  });
+
+  it("still recognizes the exact paid mediums", () => {
+    for (const medium of PAID_MEDIUMS) {
+      expect(isPaidLookingMedium(medium)).toBe(true);
+    }
+  });
+
+  it("leaves organic and untagged mediums alone", () => {
+    for (const medium of ["organic", "referral", "email", "social", null, ""]) {
+      expect(isPaidLookingMedium(medium)).toBe(false);
+    }
+  });
+
+  it("keeps the SQL pattern in step with the predicate", () => {
+    const pattern = new RegExp(PAID_LOOKING_MEDIUM_REGEX_SOURCE);
+    for (const medium of [...MISTAGS, ...PAID_MEDIUMS]) {
+      expect(pattern.test(medium.toLowerCase())).toBe(
+        isPaidLookingMedium(medium),
+      );
+    }
+    for (const medium of ["organic", "referral", "email"]) {
+      expect(pattern.test(medium)).toBe(false);
+    }
   });
 });

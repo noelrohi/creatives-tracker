@@ -10,9 +10,13 @@
  * re-derived when the feed is read.
  */
 
-import { and, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { PAID_MEDIUMS } from "@/lib/attribution-bucket";
+import {
+  PAID_LOOKING_MEDIUM_HINTS,
+  PAID_LOOKING_MEDIUM_REGEX_SOURCE,
+} from "@/lib/attribution-bucket";
+import { addDays } from "@/lib/day";
 import {
   computeRoas,
   getDailyBucketSeries,
@@ -71,14 +75,6 @@ export type FindingDraft = {
 /* Pure day + statistics helpers                                       */
 /* ------------------------------------------------------------------ */
 
-/** YYYY-MM-DD arithmetic in UTC — the day strings carry no clock. */
-export function addDays(day: string, delta: number): string {
-  const date = new Date(`${day}T00:00:00Z`);
-  if (Number.isNaN(date.getTime())) throw new Error(`Invalid day: ${day}`);
-  date.setUTCDate(date.getUTCDate() + delta);
-  return date.toISOString().slice(0, 10);
-}
-
 /** The last complete day in the store's timezone. */
 export function evaluationDayFor(now: Date, ianaTimezone: string): string {
   return addDays(deriveDayInTimezone(now, ianaTimezone), -1);
@@ -119,13 +115,14 @@ function trailingWindow<T>(series: T[], length: number): T[] | null {
 
 export type ClaimVerifiedDay = {
   day: string;
-  claimedCents: number;
+  /** Null when Meta sent no labeled claim for the day — nothing to compare. */
+  claimedCents: number | null;
   verifiedCents: number;
 };
 
 /** Claimed with nothing verified is the worst case, so it counts as over. */
 export function isOverclaimDay(day: ClaimVerifiedDay): boolean {
-  if (day.claimedCents <= 0) return false;
+  if (day.claimedCents === null || day.claimedCents <= 0) return false;
   return day.claimedCents > OVERCLAIM_MULTIPLE * day.verifiedCents;
 }
 
@@ -143,11 +140,12 @@ export function evaluateMetaOverclaim(
     payload: {
       multiple: OVERCLAIM_MULTIPLE,
       consecutiveDays: OVERCLAIM_CONSECUTIVE_DAYS,
+      // Every day in a firing window is an overclaim day, so it has a claim.
       days: window.map((day) => ({
         day: day.day,
         claimedCents: day.claimedCents,
         verifiedCents: day.verifiedCents,
-        gapCents: day.claimedCents - day.verifiedCents,
+        gapCents: (day.claimedCents ?? 0) - day.verifiedCents,
       })),
     },
   };
@@ -239,7 +237,7 @@ export function evaluateBrokenUtmTemplate(params: {
       threshold: BROKEN_UTM_MIN_ORDERS,
       day: params.day,
       orderCount: params.orderCount,
-      paidMediums: [...PAID_MEDIUMS],
+      paidMediums: [...PAID_LOOKING_MEDIUM_HINTS],
       samples: params.samples.slice(0, BROKEN_UTM_SAMPLE_LIMIT),
     },
   };
@@ -394,8 +392,10 @@ export async function getFirstSyncState(params: {
 
 /**
  * The one query this module owns: unattributed orders on the evaluation day
- * that nonetheless carry a paid medium — the signature of a broken UTM
- * template. Mediums are matched case-insensitively, same as the bucket rule.
+ * whose medium *looks* paid — "5+ orders in one day with paid-looking UTMs
+ * matching no rule" (§8 rule 3). Paid-looking is deliberately wider than the
+ * paid-medium gate: `paid-social` and `facebook_ads` are exactly the mistags
+ * this rule exists to catch, and the bucket rule files them as unattributed.
  */
 async function getBrokenUtmOrders(params: {
   organizationId: string;
@@ -407,7 +407,7 @@ async function getBrokenUtmOrders(params: {
     eq(shopifyOrders.storeId, params.storeId),
     eq(shopifyOrders.orderDay, params.day),
     eq(shopifyOrders.bucket, "unattributed"),
-    inArray(sql`lower(${shopifyOrders.lastClickUtmMedium})`, [...PAID_MEDIUMS]),
+    sql`lower(${shopifyOrders.lastClickUtmMedium}) ~ ${PAID_LOOKING_MEDIUM_REGEX_SOURCE}`,
   );
 
   const [[countRow], samples] = await Promise.all([

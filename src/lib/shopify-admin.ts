@@ -53,6 +53,7 @@ export type ShopifyOrderNode = {
   createdAt: string;
   updatedAt?: string | null;
   cancelledAt?: string | null;
+  cancelReason?: string | null;
   test?: boolean | null;
   taxesIncluded?: boolean | null;
   displayFinancialStatus?: string | null;
@@ -94,6 +95,7 @@ const ORDER_CORE_FIELDS = `
   createdAt
   updatedAt
   cancelledAt
+  cancelReason
   test
   taxesIncluded
   displayFinancialStatus

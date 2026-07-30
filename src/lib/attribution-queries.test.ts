@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CLAIMED_WINDOWS_EXPRESSION,
   computeRoas,
   decodeOrderCursor,
   encodeOrderCursor,
@@ -7,6 +8,7 @@ import {
   isConnectorStale,
   labeledShare,
   META_SYNC_CYCLE_MS,
+  metaClaimsFromRow,
   SHOPIFY_SYNC_CYCLE_MS,
 } from "./attribution-queries";
 
@@ -118,5 +120,68 @@ describe("order cursor", () => {
     expect(decodeOrderCursor("nonsense")).toBeNull();
     expect(decodeOrderCursor("not-a-date|order_1")).toBeNull();
     expect(decodeOrderCursor(`${NOW.toISOString()}|`)).toBeNull();
+  });
+});
+
+// §3.2: "The standard claim = 7d_click + 1d_view" — and §3.4 keeps
+// `purchase_value` as Meta's own default-window number, which the checker must
+// not read: it would compare a differently-windowed claim against Shopify.
+describe("Meta claim reads (§3.2)", () => {
+  function columnNames(expression: { queryChunks: unknown[] }): string[] {
+    return expression.queryChunks
+      .map((chunk) => (chunk as { name?: unknown })?.name)
+      .filter((name): name is string => typeof name === "string");
+  }
+
+  it("sums the per-window columns and never purchase_value", () => {
+    const names = columnNames(CLAIMED_WINDOWS_EXPRESSION);
+    expect(names).toContain("purchase_value_7d_click");
+    expect(names).toContain("purchase_value_1d_view");
+    expect(names).not.toContain("purchase_value");
+  });
+
+  it("reports the combined claim from the window columns", () => {
+    const claims = metaClaimsFromRow({
+      claimed: "6200.00",
+      claimed7dClick: "5800.00",
+      claimed1dView: "400.00",
+      spend: "1800.00",
+      totalRows: 40,
+      labeledRows: 40,
+    });
+
+    expect(claims.claimedCents).toBe(620_000);
+    expect(claims.claimed7dClickCents).toBe(580_000);
+    expect(claims.claimed1dViewCents).toBe(40_000);
+    expect(claims.spendCents).toBe(180_000);
+    expect(claims.labeledRowShare).toBe(1);
+  });
+
+  it("returns no claim at all when the range predates the window labels", () => {
+    const claims = metaClaimsFromRow({
+      claimed: null,
+      claimed7dClick: null,
+      claimed1dView: null,
+      spend: "1800.00",
+      totalRows: 40,
+      labeledRows: 0,
+    });
+
+    expect(claims.claimedCents).toBeNull();
+    expect(claims.claimed7dClickCents).toBeNull();
+    expect(claims.claimed1dViewCents).toBeNull();
+    // Spend is a base-row sum, unaffected by the claim labels (§3.7).
+    expect(claims.spendCents).toBe(180_000);
+    expect(claims.labeledRowShare).toBe(0);
+  });
+
+  it("keeps spend readable when no rows exist at all", () => {
+    expect(metaClaimsFromRow(undefined)).toEqual({
+      claimedCents: null,
+      claimed7dClickCents: null,
+      claimed1dViewCents: null,
+      spendCents: 0,
+      labeledRowShare: 0,
+    });
   });
 });

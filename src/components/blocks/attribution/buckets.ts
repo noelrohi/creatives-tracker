@@ -1,7 +1,6 @@
 /**
- * Segment order and color, left to right. Known sources ride the green ramp,
- * "Source unknown" wears the amber, "No tracking info" the neutral edge — the
- * values themselves live in `globals.css`, never as literals in a component.
+ * Segment order, left to right: known sources first, then "Source unknown" and
+ * "No tracking info" on the edge. The colours live in `./colors`.
  */
 
 import type { AttributionBucket } from "@/lib/attribution-bucket";
@@ -16,19 +15,7 @@ export const BUCKET_ORDER: readonly AttributionBucket[] = [
   "untracked",
 ];
 
-const BUCKET_COLOR_VARS: Record<AttributionBucket, string> = {
-  meta: "--attr-bucket-meta",
-  google: "--attr-bucket-google",
-  klaviyo: "--attr-bucket-klaviyo",
-  tiktok: "--attr-bucket-tiktok",
-  organic_direct: "--attr-bucket-organic",
-  unattributed: "--attr-bucket-unknown",
-  untracked: "--attr-bucket-none",
-};
-
-export function bucketColor(bucket: AttributionBucket): string {
-  return `var(${BUCKET_COLOR_VARS[bucket]})`;
-}
+export { bucketColor } from "./colors";
 
 /** Sort API rows into display order without trusting the server's ordering. */
 export function inBucketOrder<T extends { bucket: AttributionBucket }>(

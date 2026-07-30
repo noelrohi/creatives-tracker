@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { AttributionBucket } from "@/lib/attribution-bucket";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { severityColor } from "./colors";
 import {
   actions as actionCopy,
   canRerun,
@@ -16,32 +17,35 @@ import {
 } from "./copy";
 import { formatAge, formatDateInZone } from "./format";
 
-export function FindingRow({
-  item,
-  expanded,
-  onToggle,
-  ctx,
-  frozen,
-  canAct,
-  busy,
-  links,
-  onResolve,
-  onSnooze,
-  onRerun,
-  onSeeOrders,
-}: {
-  item: FindingItem;
-  expanded: boolean;
-  onToggle: () => void;
+/** What the row needs to know about the page it sits in. */
+export type FindingRowContext = {
   ctx: VoiceContext;
   frozen: boolean;
   canAct: boolean;
   busy: boolean;
   links: { metaVsShopify: string; connections: string };
+};
+
+/** The three actions from §8, plus the evidence jump. */
+export type FindingRowHandlers = {
   onResolve: () => void;
   onSnooze: () => void;
   onRerun: () => void;
   onSeeOrders: (bucket: AttributionBucket) => void;
+};
+
+export function FindingRow({
+  item,
+  expanded,
+  onToggle,
+  context: { ctx, frozen, canAct, busy, links },
+  handlers: { onResolve, onSnooze, onRerun, onSeeOrders },
+}: {
+  item: FindingItem;
+  expanded: boolean;
+  onToggle: () => void;
+  context: FindingRowContext;
+  handlers: FindingRowHandlers;
 }) {
   const severity = severityByType[item.type];
   const isConnectionRow = item.type === "sync_failure";
@@ -75,12 +79,7 @@ export function FindingRow({
       >
         <span
           className="mt-[5px] size-2 shrink-0 rounded-full"
-          style={{
-            backgroundColor:
-              severity === "critical"
-                ? "var(--attr-critical)"
-                : "var(--attr-warning)",
-          }}
+          style={{ backgroundColor: severityColor(severity) }}
         />
         <span className="min-w-0 flex-1 text-[13px] font-medium leading-snug">
           {findingHeadline(item, ctx)}

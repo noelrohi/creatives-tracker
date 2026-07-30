@@ -187,17 +187,20 @@ export function FindingsRail({
                 item={item}
                 expanded={openId === key}
                 onToggle={() => setOpenId(openId === key ? null : key)}
-                ctx={ctx}
-                frozen={frozen}
-                canAct={canAct && status === "open"}
-                busy={busy}
-                links={links}
-                onSeeOrders={onSeeOrders}
-                onResolve={() =>
-                  item.id && resolve.mutate({ findingId: item.id })
-                }
-                onSnooze={() => mute.mutate({ type: item.type })}
-                onRerun={() => item.id && rerun.mutate({ findingId: item.id })}
+                context={{
+                  ctx,
+                  frozen,
+                  canAct: canAct && status === "open",
+                  busy,
+                  links,
+                }}
+                handlers={{
+                  onSeeOrders,
+                  onResolve: () =>
+                    item.id && resolve.mutate({ findingId: item.id }),
+                  onSnooze: () => mute.mutate({ type: item.type }),
+                  onRerun: () => item.id && rerun.mutate({ findingId: item.id }),
+                }}
               />
             );
           })
