@@ -20,6 +20,7 @@ export const performanceLogs = pgTable(
     adId: text("ad_id")
       .notNull()
       .references(() => ads.id, { onDelete: "cascade" }),
+    metaAdId: text("meta_ad_id"),
     // Core metrics
     roas: numeric("roas"),
     cpa: numeric("cpa"),
@@ -70,6 +71,7 @@ export const performanceLogs = pgTable(
   (table) => [
     index("performance_log_ad_id_idx").on(table.adId),
     index("performance_log_organization_id_idx").on(table.organizationId),
+    index("performance_log_meta_ad_id_idx").on(table.metaAdId),
     index("performance_log_org_ad_date_idx").on(
       table.organizationId,
       table.adId,
