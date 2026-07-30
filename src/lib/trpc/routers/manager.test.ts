@@ -530,7 +530,9 @@ describeIfDb("manager router aggregates", () => {
       });
 
       expect(campaigns.map((row) => row.id)).toEqual(["cmp_a"]);
-      expect(campaigns[0].hasMatches).toBe(true);
+      // The campaign row IS the match — visible without expanding, and nothing
+      // beneath matches, so it must not auto-expand (§6).
+      expect(campaigns[0].hasMatches).toBe(false);
       // Both ads count even though neither name matches "Retargeting".
       expect(Number(campaigns[0].spend)).toBe(100);
 
@@ -605,16 +607,25 @@ describeIfDb("manager router aggregates", () => {
         expect(statusOnly.every((row) => row.hasMatches === null)).toBe(true);
       });
 
-      it("is true for an ad set matching the search itself", async () => {
+      it("stays false for an ad set matching by its own name — its ancestor reveals it", async () => {
+        // The matched ad set is the endpoint of the path, not part of it:
+        // expanding it would show only non-matching ads (or, under a status
+        // filter, possibly nothing). Its campaign carries the auto-expand.
+        const campaigns = await caller.manager.campaigns({
+          from: FROM,
+          to: TO,
+          search: "Lookalike",
+        });
+        expect(campaigns.find((row) => row.id === "cmp_a")?.hasMatches).toBe(true);
+
         const adSets = await caller.manager.adSets({
           campaignId: "cmp_a",
           from: FROM,
           to: TO,
           search: "Lookalike",
         });
-
         expect(adSets.map((row) => row.id)).toEqual(["set_a"]);
-        expect(adSets[0].hasMatches).toBe(true);
+        expect(adSets[0].hasMatches).toBe(false);
       });
 
       it("stays false under a matching ancestor campaign — unpruned, not a path", async () => {
@@ -657,9 +668,6 @@ describeIfDb("manager router aggregates", () => {
 
         expect(adSets.map((row) => row.id)).toEqual(["set_a2"]);
         expect(adSets[0].hasMatches).toBe(true);
-        // Consequently, with a search active every returned row is a match
-        // path: `false` is unreachable, and the client auto-expands all of them.
-        expect(adSets.some((row) => row.hasMatches === false)).toBe(false);
       });
 
       it("ignores a match that the status filter drops", async () => {

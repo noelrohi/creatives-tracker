@@ -159,10 +159,14 @@ export const managerRouter = router({
         : sql``;
       const campaignSearchKeep = pattern ? sql`s.unprune` : sql`TRUE`;
       const adSetSearchKeep = pattern ? sql`sas.unprune` : sql`TRUE`;
+      // Auto-expansion reveals matches BELOW a row (§6 "path to a match") —
+      // a campaign that matches by its own name is already revealed, and under
+      // an active status filter it may have nothing visible beneath, so its
+      // own match must not expand it. Both EXISTS terms only count children
+      // the current filters would actually show.
       const hasMatchesProjection = pattern
         ? sql`(
-            s.unprune
-            OR EXISTS (
+            EXISTS (
               SELECT 1 FROM scoped_ad_sets sas
               WHERE sas.campaign_id = s.id
                 AND ${nameMatches("sas.name", pattern)}
@@ -262,18 +266,15 @@ export const managerRouter = router({
         ? sql`AND (s.unprune OR ${nameMatches("a.name", pattern)})`
         : sql``;
       const adSetSearchKeep = pattern ? sql`s.unprune` : sql`TRUE`;
-      // On the path to a match only if the ad set itself matches or holds a
-      // matching ad. An ancestor-campaign match deliberately does NOT count:
-      // it unprunes the subtree for display (§4's counting rule) but must not
-      // auto-expand every ad set in the campaign (§6's expansion rule) — the
-      // matched campaign row already reveals the match.
+      // On the path to a match only if a matching ad sits beneath (§6).
+      // Neither an ancestor-campaign match nor the ad set's OWN name match
+      // counts: both are already revealed without expanding this row, and
+      // expanding on a self-match can open onto nothing when the status
+      // filter hides every ad. `counted_ads` is already filter-aware.
       const hasMatchesProjection = pattern
-        ? sql`(
-            ${nameMatches("s.name", pattern)}
-            OR EXISTS (
-              SELECT 1 FROM counted_ads ca
-              WHERE ca.ad_set_id = s.id AND ${nameMatches("ca.name", pattern)}
-            )
+        ? sql`EXISTS (
+            SELECT 1 FROM counted_ads ca
+            WHERE ca.ad_set_id = s.id AND ${nameMatches("ca.name", pattern)}
           )`
         : sql`NULL::boolean`;
 
