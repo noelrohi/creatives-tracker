@@ -12,6 +12,11 @@ import {
 } from "@/lib/attribution-bucket";
 
 const SYNCED = new Set(["120210000000123", "120219999999888"]);
+/** Ad set id → the campaign it belongs to, as the ingest loads them. */
+const SYNCED_AD_SETS = new Map([
+  ["23851234567890111", "120210000000123"],
+  ["23859876543210222", "120219999999888"],
+]);
 
 function input(overrides: Partial<BucketInput> = {}): BucketInput {
   return {
@@ -19,6 +24,7 @@ function input(overrides: Partial<BucketInput> = {}): BucketInput {
     journeyReady: true,
     lastVisit: null,
     syncedMetaCampaignIds: SYNCED,
+    syncedMetaAdSets: SYNCED_AD_SETS,
     ...overrides,
   };
 }
@@ -28,6 +34,7 @@ function visit(
     source?: string | null;
     medium?: string | null;
     campaign?: string | null;
+    term?: string | null;
   },
   extra: Partial<NonNullable<BucketLastVisit>> = {},
 ): BucketLastVisit {
@@ -35,6 +42,7 @@ function visit(
     utmSource: utm.source ?? null,
     utmMedium: utm.medium ?? null,
     utmCampaign: utm.campaign ?? null,
+    utmTerm: utm.term ?? null,
     referrerUrl: null,
     source: null,
     ...extra,
@@ -144,6 +152,113 @@ describe("assignBucket", () => {
         bucket: "meta",
         metaVerified: true,
         metaCampaignId: "120210000000123",
+        verificationPending: false,
+      });
+    });
+
+    // The ad set id in utm_term is the reliable side of the link, and an ad
+    // set names its campaign — so a matched term verifies the order.
+    it("verifies through the ad set in utm_term when there is no campaign tag", () => {
+      const result = assignBucket(
+        input({
+          lastVisit: visit({
+            source: "facebook",
+            medium: "paid",
+            term: "23851234567890111",
+          }),
+        }),
+      );
+      expect(result).toEqual({
+        bucket: "meta",
+        metaVerified: true,
+        metaCampaignId: "120210000000123",
+        verificationPending: false,
+      });
+    });
+
+    it("matches a term with a click id glued onto the end", () => {
+      const result = assignBucket(
+        input({
+          lastVisit: visit({
+            source: "fb_reviv3",
+            medium: "paid",
+            term: "23859876543210222?fbclid=IwAR-abc123",
+          }),
+        }),
+      );
+      expect(result.metaVerified).toBe(true);
+      expect(result.metaCampaignId).toBe("120219999999888");
+    });
+
+    // The case this rule exists for: about a fifth of these links carry the
+    // campaign's name where its id belongs, and a name never matches an id.
+    it("verifies through the term when the campaign tag is a name", () => {
+      const result = assignBucket(
+        input({
+          lastVisit: visit({
+            source: "instagram",
+            medium: "paid_social",
+            campaign: "summer-sale-retarget",
+            term: "23851234567890111",
+          }),
+        }),
+      );
+      expect(result).toEqual({
+        bucket: "meta",
+        metaVerified: true,
+        metaCampaignId: "120210000000123",
+        verificationPending: false,
+      });
+    });
+
+    it("keeps a matching campaign id ahead of the term", () => {
+      const result = assignBucket(
+        input({
+          lastVisit: visit({
+            source: "facebook",
+            medium: "paid",
+            campaign: "120210000000123",
+            term: "23859876543210222",
+          }),
+        }),
+      );
+      expect(result.metaCampaignId).toBe("120210000000123");
+      expect(result.metaVerified).toBe(true);
+    });
+
+    it("leaves a term matching nothing pending when a campaign tag is present", () => {
+      const result = assignBucket(
+        input({
+          lastVisit: visit({
+            source: "facebook",
+            medium: "paid",
+            campaign: "spring-prospecting",
+            term: "23850000000000999",
+          }),
+        }),
+      );
+      expect(result).toEqual({
+        bucket: "meta",
+        metaVerified: false,
+        metaCampaignId: null,
+        verificationPending: true,
+      });
+    });
+
+    it("leaves a term matching nothing as plain meta when no campaign tag is present", () => {
+      const result = assignBucket(
+        input({
+          lastVisit: visit({
+            source: "facebook",
+            medium: "paid",
+            term: "23850000000000999",
+          }),
+        }),
+      );
+      expect(result).toEqual({
+        bucket: "meta",
+        metaVerified: false,
+        metaCampaignId: null,
         verificationPending: false,
       });
     });
