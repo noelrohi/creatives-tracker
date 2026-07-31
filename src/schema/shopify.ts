@@ -18,6 +18,7 @@ export const attributionBucketEnum = pgEnum("attribution_bucket", [
   "google",
   "klaviyo",
   "tiktok",
+  "ai",
   "organic_direct",
   "unattributed",
   "untracked",

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AI_SOURCES,
   assignBucket,
   BUCKET_RULE_VERSION,
   isPaidLookingMedium,
@@ -42,7 +43,7 @@ function visit(
 
 describe("assignBucket", () => {
   it("bumps the rule version whenever the tables below change", () => {
-    expect(BUCKET_RULE_VERSION).toBe(2);
+    expect(BUCKET_RULE_VERSION).toBe(3);
   });
 
   describe("rule 1 — untracked", () => {
@@ -202,6 +203,36 @@ describe("assignBucket", () => {
       }
     });
 
+    // Link builders name the source after the campaign, not the platform.
+    it("recognizes prefixed meta sources", () => {
+      expect(
+        assignBucket(
+          input({ lastVisit: visit({ source: "fb_reviv3", medium: "paid" }) }),
+        ).bucket,
+      ).toBe("meta");
+      expect(
+        assignBucket(
+          input({
+            lastVisit: visit({
+              source: "meta-websitekeyinfo",
+              medium: "paid_social",
+            }),
+          }),
+        ).bucket,
+      ).toBe("meta");
+    });
+
+    // Delimiter forms only, so an unrelated word starting "fb" or "meta"
+    // cannot be claimed as Meta traffic.
+    it("does not claim words that merely start with fb or meta", () => {
+      for (const source of ["fbook", "metabolism", "metaphor"]) {
+        expect(
+          assignBucket(input({ lastVisit: visit({ source, medium: "cpc" }) }))
+            .bucket,
+        ).toBe("unattributed");
+      }
+    });
+
     it("buckets google paid clicks", () => {
       for (const source of ["google", "adwords"]) {
         expect(
@@ -209,6 +240,25 @@ describe("assignBucket", () => {
             .bucket,
         ).toBe("google");
       }
+    });
+
+    // Google Shopping's free listing feed is unpaid, but it is Google traffic.
+    it("buckets the google product feed as google", () => {
+      expect(
+        assignBucket(
+          input({ lastVisit: visit({ source: "google", medium: "product_sync" }) }),
+        ).bucket,
+      ).toBe("google");
+    });
+
+    // The feed rule is gated on the medium as well as the source, so Google
+    // does not get to own every medium: organic search stays organic.
+    it("leaves organic google search as organic_direct", () => {
+      expect(
+        assignBucket(
+          input({ lastVisit: visit({ source: "google", medium: "organic" }) }),
+        ).bucket,
+      ).toBe("organic_direct");
     });
 
     it("buckets tiktok paid clicks", () => {
@@ -241,6 +291,26 @@ describe("assignBucket", () => {
             input({ lastVisit: visit({ source: "klaviyo", medium }) }),
           ).bucket,
         ).toBe("klaviyo");
+      }
+    });
+
+    // An assistant tags its links however it likes: chatgpt.com arrives with no
+    // medium at all and with `feed`, and both are the same traffic.
+    it("buckets an AI assistant on any medium", () => {
+      for (const medium of [null, "feed", "referral"]) {
+        expect(
+          assignBucket(
+            input({ lastVisit: visit({ source: "chatgpt.com", medium }) }),
+          ).bucket,
+        ).toBe("ai");
+      }
+    });
+
+    it("recognizes every AI source", () => {
+      for (const source of AI_SOURCES) {
+        expect(
+          assignBucket(input({ lastVisit: visit({ source }) })).bucket,
+        ).toBe("ai");
       }
     });
 
@@ -332,6 +402,16 @@ describe("assignBucket", () => {
     it("surfaces a recognized source tagged with no medium at all", () => {
       expect(
         assignBucket(input({ lastVisit: visit({ source: "tiktok" }) })).bucket,
+      ).toBe("unattributed");
+    });
+
+    // Deliberate: `feedback` is 1,205 orders and $93,845 over three months,
+    // always the bare homepage with no referrer and no medium, at every hour
+    // of the day. Nobody has identified what writes it, so it stays unknown
+    // rather than being guessed into a channel. Do not "fix" this.
+    it("leaves feedback traffic unattributed on purpose", () => {
+      expect(
+        assignBucket(input({ lastVisit: visit({ source: "feedback" }) })).bucket,
       ).toBe("unattributed");
     });
 

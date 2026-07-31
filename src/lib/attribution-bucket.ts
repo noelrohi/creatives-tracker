@@ -5,7 +5,7 @@
 
 import { normalizeLower } from "@/lib/text";
 
-export const BUCKET_RULE_VERSION = 2;
+export const BUCKET_RULE_VERSION = 3;
 
 export const META_SOURCES = [
   "facebook",
@@ -14,10 +14,35 @@ export const META_SOURCES = [
   "ig",
   "meta",
 ] as const;
+/**
+ * Link builders name Meta sources after the campaign as often as after the
+ * platform: `fb_reviv3`, `meta-websitekeyinfo`. Only the delimiter forms count
+ * — a bare `fb`/`meta` prefix would swallow unrelated words like "fbook" or
+ * "metabolism".
+ */
+export const META_SOURCE_PREFIXES = ["fb_", "meta_", "meta-"] as const;
 export const GOOGLE_SOURCES = ["google", "adwords"] as const;
 export const TIKTOK_SOURCES = ["tiktok"] as const;
 export const KLAVIYO_SOURCES = ["klaviyo"] as const;
+/**
+ * Assistants that send shoppers on. Only `chatgpt.com` appears in this store's
+ * data so far; the other three are the same kind of referrer under different
+ * names, listed so the next one to show up is already covered.
+ */
+export const AI_SOURCES = [
+  "chatgpt.com",
+  "perplexity.ai",
+  "claude.ai",
+  "gemini.google.com",
+] as const;
 export const PAID_MEDIUMS = ["paid", "cpc", "ppc", "paid_social"] as const;
+/**
+ * Google Shopping's free listing feed. Not paid search, so it never passes the
+ * paid-medium gate, but it is Google traffic and belongs in the Google row.
+ * Gated on the source too: Google must not own any medium, or `google` /
+ * `organic` — organic search — would stop being organic_direct.
+ */
+export const GOOGLE_FEED_MEDIUMS = ["product_sync"] as const;
 
 /**
  * Mediums that say "we know it wasn't paid" (spec §4.4: the last click is
@@ -70,6 +95,7 @@ export type AttributionBucket =
   | "google"
   | "klaviyo"
   | "tiktok"
+  | "ai"
   | "organic_direct"
   | "unattributed"
   | "untracked";
@@ -107,7 +133,10 @@ function includesInsensitive(
 }
 
 export function isMetaSource(value: string | null | undefined) {
-  return includesInsensitive(META_SOURCES, value);
+  if (includesInsensitive(META_SOURCES, value)) return true;
+  const normalized = normalizeLower(value);
+  if (!normalized) return false;
+  return META_SOURCE_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
 export function isGoogleSource(value: string | null | undefined) {
@@ -120,6 +149,14 @@ export function isTiktokSource(value: string | null | undefined) {
 
 export function isKlaviyoSource(value: string | null | undefined) {
   return includesInsensitive(KLAVIYO_SOURCES, value);
+}
+
+export function isAiSource(value: string | null | undefined) {
+  return includesInsensitive(AI_SOURCES, value);
+}
+
+export function isGoogleFeedMedium(value: string | null | undefined) {
+  return includesInsensitive(GOOGLE_FEED_MEDIUMS, value);
 }
 
 export function isPaidMedium(value: string | null | undefined) {
@@ -200,8 +237,19 @@ export function assignBucket(input: BucketInput): BucketResult {
     if (isTiktokSource(utmSource)) return result("tiktok");
   }
 
+  // Google Shopping's free listing feed: unpaid, so it never reaches the gate
+  // above, but it is still Google sending the shopper.
+  if (isGoogleSource(utmSource) && isGoogleFeedMedium(utmMedium)) {
+    return result("google");
+  }
+
   // Klaviyo owns any medium (email, sms, flows all tag as klaviyo).
   if (isKlaviyoSource(utmSource)) return result("klaviyo");
+
+  // AI assistants own any medium too — an assistant tags its outbound links
+  // however it likes, and chatgpt.com arrives here with both no medium at all
+  // and `feed`.
+  if (isAiSource(utmSource)) return result("ai");
 
   // 4. Organic / direct: an untagged visit (direct or an organic referrer), or a
   // visit whose medium says it wasn't paid.
@@ -210,5 +258,13 @@ export function assignBucket(input: BucketInput): BucketResult {
 
   // 5. UTMs present that match no rule — mistagged paid links (a recognized
   // source that failed the paid-medium gate) deliberately surface here.
+  //
+  // `feedback` lands here on purpose and gets no rule of its own, despite being
+  // 1,205 orders and $93,845 over three months. Every one of those visits is
+  // the bare homepage with no referrer and no medium — only a utm_source — and
+  // the visit hours are flat across all 24, so it is not a scheduled send.
+  // Nobody has identified what writes it. Naming a channel for it would put
+  // real money behind a guess; "we don't know" is the true answer until someone
+  // finds the source.
   return result("unattributed");
 }

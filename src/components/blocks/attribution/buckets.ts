@@ -10,6 +10,7 @@ import {
   Mail,
   MousePointerClick,
   Search,
+  Sparkles,
   Video,
 } from "@/components/icons";
 import type { AttributionBucket } from "@/lib/attribution-bucket";
@@ -27,6 +28,7 @@ export const BUCKET_ICON: Record<
   google: Search,
   klaviyo: Mail,
   tiktok: Video,
+  ai: Sparkles,
   organic_direct: Leaf,
   unattributed: CircleHelp,
   untracked: Ban,
@@ -37,6 +39,7 @@ export const BUCKET_ORDER: readonly AttributionBucket[] = [
   "google",
   "klaviyo",
   "tiktok",
+  "ai",
   "organic_direct",
   "unattributed",
   "untracked",

@@ -13,6 +13,7 @@ const BUCKET_COLOR_VARS: Record<AttributionBucket, string> = {
   google: "--attr-bucket-google",
   klaviyo: "--attr-bucket-klaviyo",
   tiktok: "--attr-bucket-tiktok",
+  ai: "--attr-bucket-ai",
   organic_direct: "--attr-bucket-organic",
   unattributed: "--attr-bucket-unknown",
   untracked: "--attr-bucket-none",
