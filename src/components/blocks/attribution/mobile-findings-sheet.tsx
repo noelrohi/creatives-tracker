@@ -19,7 +19,7 @@ import { FindingsRail, useOpenFindingsCount, type FindingsRailProps } from "./fi
  */
 export function MobileFindingsSheet(props: Omit<FindingsRailProps, "variant">) {
   const [open, setOpen] = useState(false);
-  const { count, critical } = useOpenFindingsCount();
+  const { count, critical } = useOpenFindingsCount(props.ctx);
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>

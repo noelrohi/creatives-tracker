@@ -5,7 +5,7 @@ import { firstLoad as copy } from "./copy";
 
 /**
  * Before the first 90-day load finishes: a bar that fills as days of orders land,
- * with the waterfall below it filling in at the same time.
+ * with the channel ledger below it filling in at the same time.
  */
 export function FirstLoadProgress({
   daysLoaded,

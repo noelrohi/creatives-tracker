@@ -7,6 +7,13 @@
  * Path and `since`/`until` params verified against a live admin: selecting a
  * range in the report's own date picker produces exactly this URL. The
  * `/store/<handle>` prefix keeps multi-store merchants in the right admin.
+ *
+ * The report's sales-channel filter is deliberately absent, because it cannot
+ * be carried: switching to "All channels" in the admin produces this exact URL
+ * with no extra parameter — the filter is remembered per user, not encoded. A
+ * merchant who last viewed one channel therefore lands on a smaller Net sales
+ * figure than ours, which counts every channel, so the copy beside the link
+ * says which basis to compare on.
  */
 
 const FINANCE_SUMMARY_PATH = "/analytics/reports/finance_summary";

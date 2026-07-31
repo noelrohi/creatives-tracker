@@ -98,13 +98,19 @@
 
 /* One ramp off the known-source green so the seven segments stay separable,
    plus the two off-ramp colors the buckets decision fixes. Declared once: both
-   modes resolve them against whichever --attr-known / --card is in force. */
+   modes resolve them against whichever --attr-known / --card is in force.
+
+   The ramp bottoms out at 62%, not near-zero: these colors are painted as a
+   low-opacity tint behind a channel row, so a step mixed most of the way into
+   the card disappears entirely once that opacity is applied. Separability
+   inside the paid family is carried by the ramp; the icon and the edge carry
+   identity. */
 :root {
   --attr-bucket-meta: var(--attr-known);
-  --attr-bucket-google: color-mix(in oklab, var(--attr-known) 78%, var(--card));
-  --attr-bucket-klaviyo: color-mix(in oklab, var(--attr-known) 58%, var(--card));
-  --attr-bucket-tiktok: color-mix(in oklab, var(--attr-known) 42%, var(--card));
-  --attr-bucket-organic: color-mix(in oklab, var(--attr-known) 28%, var(--card));
+  --attr-bucket-google: color-mix(in oklab, var(--attr-known) 88%, var(--card));
+  --attr-bucket-klaviyo: color-mix(in oklab, var(--attr-known) 78%, var(--card));
+  --attr-bucket-tiktok: color-mix(in oklab, var(--attr-known) 70%, var(--card));
+  --attr-bucket-organic: color-mix(in oklab, var(--attr-known) 62%, var(--card));
   --attr-bucket-unknown: var(--attr-unknown);
   --attr-bucket-none: var(--attr-neutral);
 }

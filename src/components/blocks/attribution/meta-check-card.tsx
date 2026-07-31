@@ -23,7 +23,15 @@ export function NoDataChip({ className }: { className?: string }) {
   );
 }
 
-export function MetaCheckCard({
+/**
+ * The body of the "Meta check" fold. The card chrome and the heading are gone —
+ * the fold row above provides both, and its summary already carries the two
+ * figures — so this is the detail you get when you ask for it.
+ *
+ * This is the one place on the screen where "Meta says" is printed, which is why
+ * its footnote sits directly underneath.
+ */
+export function MetaCheckDetail({
   data,
   loading,
   metaDown,
@@ -37,17 +45,7 @@ export function MetaCheckCard({
   detailHref: string;
 }) {
   return (
-    <section className="flex flex-col gap-3 rounded-md border border-border bg-card p-4">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-[13px] font-semibold tracking-tight">{copy.title}</h2>
-        <Link
-          href={detailHref}
-          className="text-[12px] font-medium text-primary hover:underline"
-        >
-          {copy.seeDetail}
-        </Link>
-      </div>
-
+    <div className="flex flex-col gap-3">
       {loading || !data ? (
         <div className="flex flex-col gap-2">
           <Skeleton className="h-12 w-full" />
@@ -61,7 +59,14 @@ export function MetaCheckCard({
       <p className="text-[11px] leading-relaxed text-muted-foreground/60">
         {copy.footnote}
       </p>
-    </section>
+
+      <Link
+        href={detailHref}
+        className="text-[12px] font-medium text-primary hover:underline"
+      >
+        {copy.seeDetail}
+      </Link>
+    </div>
   );
 }
 

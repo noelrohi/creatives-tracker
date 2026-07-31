@@ -50,11 +50,18 @@ export const page = {
    */
   navLabel: "Attribution",
   title: "Where your sales came from",
-  heroSubtitle: (orderCount: number) =>
-    `Total sales in Shopify · ${formatCount(orderCount)} ${
-      orderCount === 1 ? "order" : "orders"
-    }`,
-  correctUpTo: (clock: string) => `· correct up to ${clock}`,
+  /**
+   * Comparison lines. They sit on their own line under the figure they belong
+   * to, so they carry no leading separator — the caller joins them.
+   */
+  previousTotal: (money: string, days: number) =>
+    days === 1
+      ? `${money} the day before`
+      : `${money} the ${formatCount(days)} days before`,
+  previousBack: (money: string, days: number) =>
+    days === 1
+      ? `was ${money} the day before`
+      : `was ${money} the ${formatCount(days)} days before`,
   kicker: (rangeLabel: string, dayLabel: string, timeZone: string) =>
     `${rangeLabel} · ${dayLabel} · ${timeZone}`,
   noDataYet: "no data yet",
@@ -114,18 +121,72 @@ export const bucketLabels: Record<AttributionBucket, string> = {
   untracked: "No tracking info",
 };
 
-export const waterfall = {
-  totalLabel: "Total sales",
-  caption: "Tap a piece to see the orders behind it",
-  addsUp: (sum: string, total: string, matches: boolean) =>
-    matches
-      ? `These add up to ${sum} — exactly your Shopify total ✓`
-      : `These add up to ${sum}, and your Shopify total is ${total}. We're looking into the difference.`,
-  checkInShopify: "Check in Shopify →",
+/**
+ * The channel list and the tie-out under it. The tie-out is the product's
+ * differentiator, so it is not a caption: `ledgerLines` in `./ledger` names the
+ * lines of a totals block drawn in the same columns as the channels.
+ */
+export const ledger = {
+  totalLabel: "Net sales",
+  caption: "Tap a row to see the orders behind it",
+  /** The totals block: what each ruled line is called. */
+  piecesLabel: "The pieces",
+  /**
+   * Our own Net sales for the range — deliberately not called "Shopify Net
+   * sales". We do not read Shopify's reported figure, so nothing on this screen
+   * may claim the two agree; the sentence below says what was actually checked
+   * (every order landed somewhere) and sends the reader to Shopify to compare.
+   */
+  ourNetSalesLabel: "Net sales",
+  tooNewLabel: "Too new to place",
+  gapLabel: "Gap we're looking into",
+  shareLabel: "100%",
+  addsUp: (
+    sum: string,
+    total: string,
+    matches: boolean,
+    pendingMoney: string | null,
+    difference: string | null,
+  ) => {
+    if (matches && pendingMoney) {
+      return `Every order landed in one piece: these hold ${sum}, another ${pendingMoney} is still being filed, and together that's our ${total}.`;
+    }
+    if (matches) {
+      return `Every order landed in exactly one piece — they add up to our ${sum}.`;
+    }
+    return difference
+      ? `These add up to ${sum}, but our Net sales for the same days are ${total} — a gap of ${difference} we're looking into.`
+      : `These add up to ${sum}, and our Net sales for the same days are ${total}. We're looking into the difference.`;
+  },
+  checkInShopify: "Check the Net sales row in Shopify (all channels) →",
   pending: (orderCount: number, money: string) =>
     `${formatCount(orderCount)} ${
       orderCount === 1 ? "order" : "orders"
     } (${money}) ${orderCount === 1 ? "is" : "are"} too new to place — they'll be filed later today.`,
+  hiddenChannels: (count: number) =>
+    `${formatCount(count)} ${
+      count === 1 ? "channel" : "channels"
+    } with no sales hidden`,
+  emptyChannelsShown: (count: number) =>
+    `${formatCount(count)} ${
+      count === 1 ? "channel has" : "channels have"
+    } no sales.`,
+  showHidden: "Show them",
+  hideEmpty: "Hide them",
+};
+
+/**
+ * The four figures in the panel header, read left to right as the story:
+ * what came in, what went out on Meta, what we could match, what came back.
+ * "Meta says" is deliberately absent — it appears once, inside the Meta check.
+ */
+export const headerRail = {
+  netSales: "Net sales",
+  spend: "spent on Meta",
+  confirm: "we confirm in Shopify",
+  back: "back per $1 on Meta",
+  orders: (orderCount: number) =>
+    `${formatCount(orderCount)} ${orderCount === 1 ? "order" : "orders"}`,
 };
 
 const CHANNEL_BUCKETS: readonly AttributionBucket[] = [
@@ -144,6 +205,15 @@ export const orders = {
     return `Orders filed under ${bucketLabels[bucket]}`;
   },
   close: "Close",
+  download: "Download CSV",
+  csvColumns: [
+    "Order",
+    "Day",
+    "Time",
+    "Net sales",
+    "Where it came from",
+    "Link tags",
+  ],
   empty: "No orders in this piece for these days.",
   more: "Show more orders",
   loading: "Getting the orders…",
@@ -183,51 +253,102 @@ export const metaCheck = {
       orderCount === 1 ? "order is" : "orders are"
     } still too new to place, so this can still move.`,
   footnote:
-    "Meta's own reports count differently, so its numbers won't match Ads Manager exactly.",
+    "Meta counts a sale when someone buys within 7 days of clicking or 1 day of seeing one of its ads, so \"Meta says\" always reads higher than what we can match to a real order. A steady gap is normal — the daily checks watch for it widening.",
 };
 
 /* ------------------------------------------------------------------ */
 /* How we count                                                        */
 /* ------------------------------------------------------------------ */
 
+/**
+ * One sentence per idea, written once. The glossary prints them in full; the
+ * `?` marks on the screen hand the same sentence to a tooltip, so a long
+ * explanation is always reachable without being printed beside every figure.
+ */
+const glossary = {
+  netSales:
+    "Sales after discounts and refunds, before shipping and tax — the same as the Net sales row in Shopify's Finances summary. Two things move that row: Shopify's own \"Total sales\" line adds shipping and tax on top, so it reads higher, and the report remembers the last sales channel you looked at. We count every channel, so set it to \"All channels\" to compare.",
+  unattributed:
+    "The order had tracking info, but it didn't match any ad or email we know.",
+  untracked: "The order arrived with nothing we could read — no link tags at all.",
+  organicDirect:
+    "Nothing paid in the shopper's last visit. They came to you by themselves.",
+  meta: "An order files under Meta ads when the shopper's last visit before checkout came from a Meta ad. We then look for that exact ad on the order to call it confirmed.",
+  confirmed:
+    "We found the real Shopify order behind what Meta says its ads made, by matching the ad on the order.",
+  refunds:
+    "A refund counts on the day the money went back, not on the day of the original order.",
+  days: (timeZone: string) =>
+    `A day starts and ends in your store's own time (${timeZone}), so it matches what you see in Shopify.`,
+  tooNew:
+    "Shopify hasn't finished telling us how a very new order arrived. Those orders are counted in your total but kept out of the pieces until we know.",
+};
+
+/** What each `?` on the screen says when you reach for it. */
+export const help = {
+  netSales: glossary.netSales,
+  unattributed: glossary.unattributed,
+  untracked: glossary.untracked,
+  tooNew: glossary.tooNew,
+  metaSays: metaCheck.footnote,
+  back: (back: string, goal: string | null) =>
+    goal
+      ? `For every $1 spent on Meta you got ${back} back · your goal is ${goal}.`
+      : `For every $1 spent on Meta you got ${back} back.`,
+  backUnknown: metaCheck.paybackUnknown,
+  confirm: glossary.confirmed,
+};
+
+/** Per-bucket help, so a row can explain itself without a caption. */
+export const bucketHelp: Partial<Record<AttributionBucket, string>> = {
+  meta: glossary.meta,
+  organic_direct: glossary.organicDirect,
+  unattributed: glossary.unattributed,
+  untracked: glossary.untracked,
+};
+
 export const howWeCount = {
   trigger: "How we count",
+  summary: "Net sales, days, refunds, too new to place",
   entries: (timeZone: string) => [
-    {
-      term: bucketLabels.unattributed,
-      body:
-        "The order had tracking info, but it didn't match any ad or email we know.",
-    },
-    {
-      term: bucketLabels.untracked,
-      body:
-        "The order arrived with nothing we could read — no link tags at all.",
-    },
-    {
-      term: bucketLabels.organic_direct,
-      body:
-        "Nothing paid in the shopper's last visit. They came to you by themselves.",
-    },
-    {
-      term: "Confirmed",
-      body:
-        "We found the real Shopify order behind what Meta says its ads made, by matching the ad on the order.",
-    },
-    {
-      term: "Refunds",
-      body:
-        "A refund counts on the day the money went back, not on the day of the original order.",
-    },
-    {
-      term: "Days",
-      body: `A day starts and ends in your store's own time (${timeZone}), so it matches what you see in Shopify.`,
-    },
-    {
-      term: "Too new to place",
-      body:
-        "Shopify hasn't finished telling us how a very new order arrived. Those orders are counted in your total but kept out of the pieces until we know.",
-    },
+    { term: "Net sales", body: glossary.netSales },
+    { term: bucketLabels.unattributed, body: glossary.unattributed },
+    { term: bucketLabels.untracked, body: glossary.untracked },
+    { term: bucketLabels.organic_direct, body: glossary.organicDirect },
+    { term: bucketLabels.meta, body: glossary.meta },
+    { term: "Confirmed", body: glossary.confirmed },
+    { term: "Refunds", body: glossary.refunds },
+    { term: "Days", body: glossary.days(timeZone) },
+    { term: "Too new to place", body: glossary.tooNew },
   ],
+};
+
+/**
+ * The three folds under the ledger. Each summary carries its own answer, so on
+ * a quiet morning none of them has to be opened.
+ */
+export const folds = {
+  attention: "Needs your attention",
+  attentionOpen: (openCount: number, headline: string) =>
+    `${formatCount(openCount)} open · ${headline}`,
+  attentionAllClear: (checkCount: number) =>
+    `all clear · all ${formatCount(checkCount)} daily checks passed`,
+  // The banner above already carries the clock; repeating it here says the same
+  // thing a third time on the same screen.
+  attentionFrozen: "paused while numbers are frozen",
+  attentionFirstLoad: "checks start after the first load",
+  meta: metaCheck.title,
+  metaSummary: (metaSays: string | null, confirm: string, back: string | null) =>
+    [
+      metaSays ? `Meta says ${metaSays}` : null,
+      `we confirm ${confirm}`,
+      back ? `${back} back per $1` : null,
+    ]
+      .filter((part): part is string => part !== null)
+      .join(" · "),
+  metaSummaryNoData: "no data yet",
+  how: "How we count",
+  howSummary: "Net sales, days, refunds, too new to place",
 };
 
 /* ------------------------------------------------------------------ */
@@ -353,6 +474,11 @@ export function findingHeadline(item: FindingItem, ctx: VoiceContext): string {
 
   switch (item.type) {
     case "meta_overclaim": {
+      const windowMultiple = num(payload, "windowMultiple");
+      const baselineMultiple = num(payload, "baselineMultiple");
+      if (windowMultiple !== null && baselineMultiple !== null) {
+        return `Meta is running ${windowMultiple}× ahead — its usual is ${baselineMultiple}×`;
+      }
       const multiple = num(payload, "multiple");
       if (multiple === 2) return "Meta says it made twice what we can confirm";
       return multiple === null
@@ -415,7 +541,7 @@ export function findingBody(item: FindingItem, ctx: VoiceContext): string[] {
         gap === null
           ? "The two numbers are far apart."
           : `That leaves ${money(gap)} we can't put behind a Shopify order.`,
-        "Meta counts a sale when someone saw or clicked an ad, so part of that belongs to other channels — but a gap this wide usually means the ads are being given credit twice.",
+        "Meta counts a sale when someone buys within 7 days of clicking or 1 day of seeing one of its ads — across devices — so its number always runs ahead of the orders we can match. A steady gap is normal. This fired because the gap is wider than yours usually is.",
       ];
     }
 

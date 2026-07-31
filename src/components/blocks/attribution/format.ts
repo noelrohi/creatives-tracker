@@ -65,9 +65,12 @@ export function formatCount(value: number | null | undefined): string {
   return value.toLocaleString("en-US");
 }
 
+/** A share that is small but real reads "<1%" — never a flat 0% beside money. */
 export function formatPercent(share: number | null | undefined): string | null {
   if (share == null || !Number.isFinite(share)) return null;
-  return `${Math.round(share * 100)}%`;
+  const percent = Math.round(share * 100);
+  if (percent === 0 && share > 0) return "<1%";
+  return `${percent}%`;
 }
 
 /* ------------------------------------------------------------------ */
