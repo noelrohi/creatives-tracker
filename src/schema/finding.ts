@@ -19,6 +19,12 @@ export const findingTypeEnum = pgEnum("finding_type", [
   "roas_below_target",
 ]);
 
+/** How a finding closed: someone dealt with it, or its rule stopped holding. */
+export const findingResolutionEnum = pgEnum("finding_resolution", [
+  "handled",
+  "retired",
+]);
+
 export const findings = pgTable(
   "finding",
   {
@@ -36,6 +42,8 @@ export const findings = pgTable(
     // Numbers frozen at fire time
     payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
     resolvedAt: timestamp("resolved_at"),
+    // Null on rows closed before the distinction existed — they say nothing.
+    resolution: findingResolutionEnum("resolution"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [

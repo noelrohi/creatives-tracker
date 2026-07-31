@@ -694,7 +694,7 @@ export async function evaluateFindingsForStore(params: {
 
     const retired = await db
       .update(findings)
-      .set({ resolvedAt: now })
+      .set({ resolvedAt: now, resolution: "retired" })
       .where(
         and(
           eq(findings.organizationId, params.organizationId),
