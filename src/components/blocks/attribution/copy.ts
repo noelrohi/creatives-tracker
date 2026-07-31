@@ -34,6 +34,8 @@ export type FindingItem = {
   periodEnd: string | null;
   payload: Record<string, unknown> | null;
   resolvedAt: Date | string | null;
+  /** How it closed. Null on rows closed before the two were told apart. */
+  resolution: "handled" | "retired" | null;
   mutedUntil: Date | string | null;
 };
 
@@ -441,6 +443,9 @@ export const actions = {
   frozenCaption: "paused while numbers are frozen",
   readOnlyCaption: "ask an admin to act on this",
   snoozed: (clock: string) => `Snoozed until ${clock}`,
+  resolvedHandled: "Marked handled by your team",
+  // Nobody closed this one; the rule that raised it stopped holding.
+  resolvedRetired: "Closed itself once the rule no longer held",
 };
 
 export const checks = {

@@ -58,6 +58,12 @@ export function FindingRow({
   const snoozedUntil = item.mutedUntil
     ? formatDateInZone(item.mutedUntil, ctx.timeZone)
     : null;
+  const closedBy =
+    item.resolution === "handled"
+      ? actionCopy.resolvedHandled
+      : item.resolution === "retired"
+        ? actionCopy.resolvedRetired
+        : null;
 
   return (
     <div
@@ -165,6 +171,11 @@ export function FindingRow({
             <p className="text-[11px] text-muted-foreground/60">
               {actionCopy.snoozed(snoozedUntil)}
             </p>
+          ) : null}
+
+          {/* A row closed before the two were told apart says neither. */}
+          {closedBy ? (
+            <p className="text-[11px] text-muted-foreground/60">{closedBy}</p>
           ) : null}
         </div>
       ) : null}

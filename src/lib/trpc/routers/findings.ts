@@ -28,6 +28,8 @@ type FindingListItem = {
   periodEnd: string | null;
   payload: Record<string, unknown> | null;
   resolvedAt: Date | null;
+  /** How it closed. Null on rows closed before the two were told apart. */
+  resolution: FindingRow["resolution"];
   mutedUntil: Date | null;
 };
 
@@ -43,6 +45,7 @@ function toItem(
     periodEnd: row.periodEnd,
     payload: row.payload,
     resolvedAt: row.resolvedAt,
+    resolution: row.resolution,
     mutedUntil,
   };
 }
@@ -96,6 +99,7 @@ export const findingsRouter = router({
                   periodEnd: null,
                   payload: null,
                   resolvedAt: null,
+                  resolution: null,
                   mutedUntil: mute.mutedUntil,
                 };
           }),
@@ -158,7 +162,7 @@ export const findingsRouter = router({
       const resolvedAt = new Date();
       await db
         .update(findings)
-        .set({ resolvedAt })
+        .set({ resolvedAt, resolution: "handled" })
         .where(eq(findings.id, row.id));
 
       return { findingId: row.id, resolvedAt };

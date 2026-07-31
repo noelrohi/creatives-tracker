@@ -27,6 +27,21 @@ function claimDays(
   }));
 }
 
+/** Days at a flat 1x, to give the overclaim rule a normal to compare against. */
+function flatBaseline(
+  days: number,
+): Array<[claimed: number | null, verified: number]> {
+  return Array.from({ length: days }, () => [1000, 1000]);
+}
+
+/** Days at one flat share, to give the spike rule a normal to compare against. */
+function flatShareDays(
+  days: number,
+  [unattributedCents, totalCents]: [unattributed: number, total: number],
+): Array<[unattributed: number, total: number]> {
+  return Array.from({ length: days }, () => [unattributedCents, totalCents]);
+}
+
 function spikeDays(shares: Array<[unattributed: number, total: number]>) {
   return shares.map(([unattributedCents, totalCents], index) => ({
     day: addDays(DAY, index - (shares.length - 1)),
@@ -88,9 +103,37 @@ describe("evaluateMetaOverclaim", () => {
     ).toBeNull();
   });
 
-  it("fires with no baseline history", () => {
+  // A store with no history has no normal to be wide of. The rule reports a
+  // widening gap, so with nothing to compare against it says nothing at all.
+  it("stays quiet with no baseline history, however wide the gap", () => {
+    expect(
+      evaluateMetaOverclaim(
+        claimDays([
+          [3000, 1000],
+          [5000, 1000],
+          [4000, 1000],
+        ]),
+      ),
+    ).toBeNull();
+  });
+
+  it("stays quiet until the baseline is long enough to trust", () => {
+    expect(
+      evaluateMetaOverclaim(
+        claimDays([
+          ...flatBaseline(13),
+          [3000, 1000],
+          [5000, 1000],
+          [4000, 1000],
+        ]),
+      ),
+    ).toBeNull();
+  });
+
+  it("carries the firing window's own days in the payload", () => {
     const finding = evaluateMetaOverclaim(
       claimDays([
+        ...flatBaseline(14),
         [3000, 1000],
         [5000, 1000],
         [4000, 1000],
@@ -101,7 +144,7 @@ describe("evaluateMetaOverclaim", () => {
     expect(finding?.periodStart).toBe("2026-07-27");
     expect(finding?.periodEnd).toBe(DAY);
     expect(finding?.payload.windowMultiple).toBe(4);
-    expect(finding?.payload.baselineMultiple).toBeNull();
+    expect(finding?.payload.baselineMultiple).toBe(1);
     expect(finding?.payload.days).toEqual([
       { day: "2026-07-27", claimedCents: 3000, verifiedCents: 1000, gapCents: 2000 },
       { day: "2026-07-28", claimedCents: 5000, verifiedCents: 1000, gapCents: 4000 },
@@ -160,13 +203,10 @@ describe("evaluateMetaOverclaim", () => {
   });
 
   it("counts claims against zero verified as over", () => {
+    // Baseline days first, else the rule stays quiet for want of a normal.
     expect(
       evaluateMetaOverclaim(
-        claimDays([
-          [1, 0],
-          [1, 0],
-          [1, 0],
-        ]),
+        claimDays([...flatBaseline(14), [1, 0], [1, 0], [1, 0]]),
       ),
     ).not.toBeNull();
   });
@@ -186,6 +226,7 @@ describe("evaluateMetaOverclaim", () => {
   it("ignores days before the trailing window", () => {
     const finding = evaluateMetaOverclaim(
       claimDays([
+        ...flatBaseline(14),
         [0, 5000],
         [3000, 1000],
         [3000, 1000],
@@ -193,15 +234,14 @@ describe("evaluateMetaOverclaim", () => {
       ]),
     );
 
+    // The window is the last three days; the quiet day before it sets no bound.
     expect(finding?.periodStart).toBe("2026-07-27");
   });
 });
 
 describe("evaluateUnattributedSpike", () => {
   /** 28 quiet baseline days at a 5% unattributed share. */
-  const baseline: Array<[number, number]> = Array.from({ length: 28 }, () => [
-    500, 10_000,
-  ]);
+  const baseline = flatShareDays(28, [500, 10_000]);
 
   it("fires when both days clear 10% and 2× the median", () => {
     const finding = evaluateUnattributedSpike(
@@ -223,9 +263,7 @@ describe("evaluateUnattributedSpike", () => {
 
   it("does not fire above the median but under 10%", () => {
     // 9% is 4.5× a 2% median, but still under the absolute floor.
-    const quiet: Array<[number, number]> = Array.from({ length: 28 }, () => [
-      200, 10_000,
-    ]);
+    const quiet = flatShareDays(28, [200, 10_000]);
     expect(
       evaluateUnattributedSpike(
         spikeDays([...quiet, [900, 10_000], [900, 10_000]]),
@@ -234,9 +272,7 @@ describe("evaluateUnattributedSpike", () => {
   });
 
   it("does not fire above 10% when the median is already that high", () => {
-    const noisy: Array<[number, number]> = Array.from({ length: 28 }, () => [
-      2000, 10_000,
-    ]);
+    const noisy = flatShareDays(28, [2000, 10_000]);
     expect(
       evaluateUnattributedSpike(
         spikeDays([...noisy, [3000, 10_000], [3000, 10_000]]),
@@ -245,20 +281,47 @@ describe("evaluateUnattributedSpike", () => {
   });
 
   it("uses a sparse history as the baseline", () => {
-    // Only three days ever had revenue: median share is 5%.
+    // Days with no revenue are no part of the baseline; the fourteen that could
+    // be measured are, at a 5% median.
     const sparse: Array<[number, number]> = [
       [0, 0],
-      [500, 10_000],
+      ...flatShareDays(13, [500, 10_000]),
       [400, 10_000],
-      [600, 10_000],
       [0, 0],
     ];
     const finding = evaluateUnattributedSpike(
       spikeDays([...sparse, [3000, 10_000], [3000, 10_000]]),
     );
 
-    expect(finding?.payload.baselineDays).toBe(3);
+    expect(finding?.payload.baselineDays).toBe(14);
     expect(finding?.payload.baselineMedianShare).toBeCloseTo(0.05);
+  });
+
+  // A median over a handful of days is not a habit, so the rule waits for two
+  // weeks of measurable days before it calls anything unusual.
+  it("stays quiet with thirteen measurable baseline days", () => {
+    expect(
+      evaluateUnattributedSpike(
+        spikeDays([
+          ...flatShareDays(13, [500, 10_000]),
+          [3000, 10_000],
+          [3000, 10_000],
+        ]),
+      ),
+    ).toBeNull();
+  });
+
+  it("fires once the fourteenth measurable day lands", () => {
+    const finding = evaluateUnattributedSpike(
+      spikeDays([
+        ...flatShareDays(14, [500, 10_000]),
+        [3000, 10_000],
+        [3000, 10_000],
+      ]),
+    );
+
+    expect(finding?.type).toBe("unattributed_spike");
+    expect(finding?.payload.baselineDays).toBe(14);
   });
 
   it("does not fire without any baseline at all", () => {

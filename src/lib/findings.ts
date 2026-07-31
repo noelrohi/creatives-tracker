@@ -50,6 +50,12 @@ export const SPIKE_MIN_SHARE = 0.1;
 export const SPIKE_MEDIAN_MULTIPLE = 2;
 export const SPIKE_CONSECUTIVE_DAYS = 2;
 export const SPIKE_BASELINE_DAYS = 28;
+/**
+ * Two weeks before a store is credited with having a normal — the same bar the
+ * overclaim rule sets, for the same reason: a median over a handful of days is
+ * not a habit, and calling a store unusual against one is guesswork.
+ */
+export const SPIKE_MIN_BASELINE_DAYS = 14;
 
 /** Five unattributed orders in one day that carry a paid medium. */
 export const BROKEN_UTM_MIN_ORDERS = 5;
@@ -169,8 +175,13 @@ export function evaluateMetaOverclaim(
       ? null
       : multipleFor(baselineDays);
 
+  // The rule reports movement, so it stays quiet until it can see movement. A
+  // store with too little history has no normal to be wide of, and firing on
+  // size alone would greet every new store with a critical alert for a gap that
+  // may be entirely ordinary for it.
+  if (baselineMultipleRaw === null) return null;
+
   const movedWider =
-    baselineMultipleRaw === null ||
     windowMultipleRaw === null ||
     windowMultipleRaw >= OVERCLAIM_MOVEMENT_MULTIPLE * baselineMultipleRaw;
   if (!movedWider) return null;
@@ -223,6 +234,9 @@ export function evaluateUnattributedSpike(
   const baselineShares = baseline
     .map(unattributedShare)
     .filter((share): share is number => share !== null);
+  // Qualifying days, not calendar days: a day with no revenue has no share, so
+  // fourteen here means fourteen days that could actually be measured.
+  if (baselineShares.length < SPIKE_MIN_BASELINE_DAYS) return null;
   const baselineMedian = median(baselineShares);
   if (baselineMedian === null) return null;
 
@@ -537,6 +551,7 @@ async function getActiveMutedTypes(params: {
 export type FindingsRunSummary = {
   fired: FindingType[];
   refreshed: FindingType[];
+  resolved: FindingType[];
   skippedMuted: FindingType[];
 };
 
@@ -549,6 +564,7 @@ export async function evaluateFindingsForStore(params: {
   const summary: FindingsRunSummary = {
     fired: [],
     refreshed: [],
+    resolved: [],
     skippedMuted: [],
   };
 
@@ -592,18 +608,21 @@ export async function evaluateFindingsForStore(params: {
     };
   });
 
-  const drafts = [
-    evaluateMetaOverclaim(
+  // Every rule the run evaluates, under the type it can raise. The keys are
+  // exhaustive over FindingType, so the list of types a run covers cannot drift
+  // from the rules it actually ran.
+  const evaluated: Record<FindingType, FindingDraft | null> = {
+    meta_overclaim: evaluateMetaOverclaim(
       claimVerified.map((entry) => ({
         day: entry.day,
         claimedCents: entry.claimedCents,
         verifiedCents: entry.verifiedCents,
       })),
     ),
-    evaluateUnattributedSpike(unattributedSeries),
-    evaluateBrokenUtmTemplate({ day, ...brokenUtm }),
-    evaluateSyncFailure({ health, day, now }),
-    evaluateRoasBelowTarget({
+    unattributed_spike: evaluateUnattributedSpike(unattributedSeries),
+    broken_utm_template: evaluateBrokenUtmTemplate({ day, ...brokenUtm }),
+    sync_failure: evaluateSyncFailure({ health, day, now }),
+    roas_below_target: evaluateRoasBelowTarget({
       series: claimVerified.slice(-ROAS_CONSECUTIVE_DAYS).map((entry) => ({
         day: entry.day,
         verifiedRevenueCents: entry.verifiedCents,
@@ -611,7 +630,11 @@ export async function evaluateFindingsForStore(params: {
       })),
       target: roasTarget,
     }),
-  ].filter((draft): draft is FindingDraft => draft !== null);
+  };
+
+  const drafts = Object.values(evaluated).filter(
+    (draft): draft is FindingDraft => draft !== null,
+  );
 
   for (const draft of drafts) {
     if (mutedTypes.has(draft.type)) {
@@ -658,6 +681,31 @@ export async function evaluateFindingsForStore(params: {
       payload: draft.payload,
     });
     summary.fired.push(draft.type);
+  }
+
+  // A finding that no longer holds is not news the reader still has to dismiss.
+  // A rule that stopped firing takes its own alert back, so the store is not
+  // left staring at a gap the rule itself has since decided it cannot call
+  // unusual. A muted type is left alone in both directions: a mute means "don't
+  // touch this type", not "don't raise it".
+  for (const type of FINDING_TYPES) {
+    if (evaluated[type] !== null) continue;
+    if (mutedTypes.has(type)) continue;
+
+    const retired = await db
+      .update(findings)
+      .set({ resolvedAt: now, resolution: "retired" })
+      .where(
+        and(
+          eq(findings.organizationId, params.organizationId),
+          eq(findings.storeId, params.storeId),
+          eq(findings.type, type),
+          isNull(findings.resolvedAt),
+        ),
+      )
+      .returning({ id: findings.id });
+
+    if (retired.length > 0) summary.resolved.push(type);
   }
 
   return summary;
