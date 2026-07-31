@@ -542,6 +542,7 @@ async function getActiveMutedTypes(params: {
 export type FindingsRunSummary = {
   fired: FindingType[];
   refreshed: FindingType[];
+  resolved: FindingType[];
   skippedMuted: FindingType[];
 };
 
@@ -554,6 +555,7 @@ export async function evaluateFindingsForStore(params: {
   const summary: FindingsRunSummary = {
     fired: [],
     refreshed: [],
+    resolved: [],
     skippedMuted: [],
   };
 
@@ -597,18 +599,21 @@ export async function evaluateFindingsForStore(params: {
     };
   });
 
-  const drafts = [
-    evaluateMetaOverclaim(
+  // Every rule the run evaluates, under the type it can raise. The keys are
+  // exhaustive over FindingType, so the list of types a run covers cannot drift
+  // from the rules it actually ran.
+  const evaluated: Record<FindingType, FindingDraft | null> = {
+    meta_overclaim: evaluateMetaOverclaim(
       claimVerified.map((entry) => ({
         day: entry.day,
         claimedCents: entry.claimedCents,
         verifiedCents: entry.verifiedCents,
       })),
     ),
-    evaluateUnattributedSpike(unattributedSeries),
-    evaluateBrokenUtmTemplate({ day, ...brokenUtm }),
-    evaluateSyncFailure({ health, day, now }),
-    evaluateRoasBelowTarget({
+    unattributed_spike: evaluateUnattributedSpike(unattributedSeries),
+    broken_utm_template: evaluateBrokenUtmTemplate({ day, ...brokenUtm }),
+    sync_failure: evaluateSyncFailure({ health, day, now }),
+    roas_below_target: evaluateRoasBelowTarget({
       series: claimVerified.slice(-ROAS_CONSECUTIVE_DAYS).map((entry) => ({
         day: entry.day,
         verifiedRevenueCents: entry.verifiedCents,
@@ -616,7 +621,11 @@ export async function evaluateFindingsForStore(params: {
       })),
       target: roasTarget,
     }),
-  ].filter((draft): draft is FindingDraft => draft !== null);
+  };
+
+  const drafts = Object.values(evaluated).filter(
+    (draft): draft is FindingDraft => draft !== null,
+  );
 
   for (const draft of drafts) {
     if (mutedTypes.has(draft.type)) {
@@ -663,6 +672,31 @@ export async function evaluateFindingsForStore(params: {
       payload: draft.payload,
     });
     summary.fired.push(draft.type);
+  }
+
+  // A finding that no longer holds is not news the reader still has to dismiss.
+  // A rule that stopped firing takes its own alert back, so the store is not
+  // left staring at a gap the rule itself has since decided it cannot call
+  // unusual. A muted type is left alone in both directions: a mute means "don't
+  // touch this type", not "don't raise it".
+  for (const type of FINDING_TYPES) {
+    if (evaluated[type] !== null) continue;
+    if (mutedTypes.has(type)) continue;
+
+    const retired = await db
+      .update(findings)
+      .set({ resolvedAt: now })
+      .where(
+        and(
+          eq(findings.organizationId, params.organizationId),
+          eq(findings.storeId, params.storeId),
+          eq(findings.type, type),
+          isNull(findings.resolvedAt),
+        ),
+      )
+      .returning({ id: findings.id });
+
+    if (retired.length > 0) summary.resolved.push(type);
   }
 
   return summary;
