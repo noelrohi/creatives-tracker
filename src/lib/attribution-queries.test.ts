@@ -6,11 +6,15 @@ import {
   encodeOrderCursor,
   identityMatches,
   isConnectorStale,
+  labeledClaimCents,
   labeledShare,
+  mergeCampaignLedger,
   META_SYNC_CYCLE_MS,
   metaClaimsFromRow,
   SHOPIFY_SYNC_CYCLE_MS,
+  sortCampaignLedger,
   summarizeMetaFreshness,
+  type CampaignLedgerRow,
 } from "./attribution-queries";
 
 const NOW = new Date("2026-07-30T12:00:00.000Z");
@@ -227,5 +231,208 @@ describe("Meta claim reads (§3.2)", () => {
       spendCents: 0,
       labeledRowShare: 0,
     });
+  });
+
+  it("reads a claim as unknown, not zero, when nothing was labeled", () => {
+    expect(labeledClaimCents("400.00", 0)).toBeNull();
+    expect(labeledClaimCents(null, 12)).toBeNull();
+    expect(labeledClaimCents("400.00", 12)).toBe(40_000);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Per-campaign ledger                                                 */
+/* ------------------------------------------------------------------ */
+
+function metaSideRow(overrides: Partial<{
+  campaignId: string;
+  name: string;
+  spend: string;
+  claimed: string | null;
+  totalRows: number;
+  labeledRows: number;
+}> = {}) {
+  return {
+    campaignId: "camp_1",
+    name: "Trybe Campaign",
+    spend: "100.00",
+    claimed: "80.00",
+    totalRows: 7,
+    labeledRows: 7,
+    ...overrides,
+  };
+}
+
+describe("mergeCampaignLedger", () => {
+  it("joins the two sides on the campaign", () => {
+    const ledger = mergeCampaignLedger({
+      metaSide: [metaSideRow()],
+      orderSide: [
+        {
+          campaignId: "camp_1",
+          name: "Trybe Campaign",
+          gross: "90.00",
+          orderCount: 3,
+        },
+      ],
+      refundSide: [{ campaignId: "camp_1", refunded: "15.00" }],
+    });
+
+    expect(ledger.campaigns).toEqual([
+      {
+        campaignId: "camp_1",
+        name: "Trybe Campaign",
+        spendCents: 10_000,
+        claimedCents: 8_000,
+        labeledRowShare: 1,
+        confirmedRevenueCents: 7_500,
+        orderCount: 3,
+        roas: 0.75,
+      },
+    ]);
+    expect(ledger.unresolved).toBeNull();
+  });
+
+  // The whole point of the outer join: money spent on nothing is the cut list.
+  it("keeps a campaign that spent and sold nothing", () => {
+    const ledger = mergeCampaignLedger({
+      metaSide: [metaSideRow({ campaignId: "camp_dead", name: "Special Creators" })],
+      orderSide: [],
+      refundSide: [],
+    });
+
+    expect(ledger.campaigns).toHaveLength(1);
+    expect(ledger.campaigns[0].confirmedRevenueCents).toBe(0);
+    expect(ledger.campaigns[0].orderCount).toBe(0);
+    // Spend with no revenue is a real 0 back per $1, not "can't tell".
+    expect(ledger.campaigns[0].roas).toBe(0);
+  });
+
+  it("keeps a campaign that sold with no spend in the range", () => {
+    const ledger = mergeCampaignLedger({
+      metaSide: [],
+      orderSide: [
+        { campaignId: "camp_2", name: "All UGC", gross: "185.00", orderCount: 3 },
+      ],
+      refundSide: [],
+    });
+
+    expect(ledger.campaigns[0]).toMatchObject({
+      name: "All UGC",
+      spendCents: null,
+      claimedCents: null,
+      confirmedRevenueCents: 18_500,
+      roas: null,
+    });
+  });
+
+  it("reports a campaign Meta has not labeled as no claim, never $0", () => {
+    const ledger = mergeCampaignLedger({
+      metaSide: [metaSideRow({ claimed: null, labeledRows: 0 })],
+      orderSide: [],
+      refundSide: [],
+    });
+
+    expect(ledger.campaigns[0].claimedCents).toBeNull();
+    expect(ledger.campaigns[0].spendCents).toBe(10_000);
+    expect(ledger.campaigns[0].labeledRowShare).toBe(0);
+  });
+
+  it("collects orders that resolved to no campaign into one row", () => {
+    const ledger = mergeCampaignLedger({
+      metaSide: [],
+      orderSide: [
+        { campaignId: null, name: null, gross: "244.50", orderCount: 2 },
+      ],
+      refundSide: [{ campaignId: null, refunded: "4.50" }],
+    });
+
+    expect(ledger.campaigns).toEqual([]);
+    expect(ledger.unresolved).toEqual({
+      confirmedRevenueCents: 24_000,
+      orderCount: 2,
+    });
+  });
+
+  // The reconciliation the screen rests on, in miniature: campaign rows plus
+  // the unresolved row are every Meta order minus every Meta refund.
+  it("sums to the same money the two sides carried in", () => {
+    const ledger = mergeCampaignLedger({
+      metaSide: [metaSideRow(), metaSideRow({ campaignId: "camp_2", name: "Bundles" })],
+      orderSide: [
+        { campaignId: "camp_1", name: "Trybe Campaign", gross: "90.00", orderCount: 3 },
+        { campaignId: "camp_2", name: "Bundles", gross: "120.57", orderCount: 2 },
+        { campaignId: null, name: null, gross: "244.50", orderCount: 2 },
+      ],
+      refundSide: [
+        { campaignId: "camp_1", refunded: "15.00" },
+        { campaignId: null, refunded: "4.50" },
+      ],
+    });
+
+    const total =
+      ledger.campaigns.reduce((sum, row) => sum + row.confirmedRevenueCents, 0) +
+      (ledger.unresolved?.confirmedRevenueCents ?? 0);
+
+    expect(total).toBe(9_000 + 12_057 + 24_450 - 1_500 - 450);
+  });
+
+  it("ignores a refund whose campaign has no orders in the range", () => {
+    const ledger = mergeCampaignLedger({
+      metaSide: [],
+      orderSide: [],
+      refundSide: [{ campaignId: "camp_gone", refunded: "15.00" }],
+    });
+
+    expect(ledger.campaigns).toEqual([]);
+    expect(ledger.unresolved).toBeNull();
+  });
+});
+
+describe("sortCampaignLedger", () => {
+  function row(
+    name: string,
+    roas: number | null,
+    confirmedRevenueCents = 0,
+  ): CampaignLedgerRow {
+    return {
+      campaignId: name,
+      name,
+      spendCents: roas === null ? null : 10_000,
+      claimedCents: null,
+      labeledRowShare: 1,
+      confirmedRevenueCents,
+      orderCount: 0,
+      roas,
+    };
+  }
+
+  // It is a cut list, so the worst row is the first row.
+  it("puts the lowest payback first", () => {
+    const sorted = sortCampaignLedger([
+      row("Trybe", 0.82),
+      row("Bundles", 0.11),
+      row("Special Creators", 0),
+    ]);
+
+    expect(sorted.map((entry) => entry.name)).toEqual([
+      "Special Creators",
+      "Bundles",
+      "Trybe",
+    ]);
+  });
+
+  it("drops the campaigns with no spend to the bottom, biggest first", () => {
+    const sorted = sortCampaignLedger([
+      row("No spend, small", null, 5_000),
+      row("Trybe", 0.82),
+      row("No spend, big", null, 40_000),
+    ]);
+
+    expect(sorted.map((entry) => entry.name)).toEqual([
+      "Trybe",
+      "No spend, big",
+      "No spend, small",
+    ]);
   });
 });
