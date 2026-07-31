@@ -50,6 +50,12 @@ export const SPIKE_MIN_SHARE = 0.1;
 export const SPIKE_MEDIAN_MULTIPLE = 2;
 export const SPIKE_CONSECUTIVE_DAYS = 2;
 export const SPIKE_BASELINE_DAYS = 28;
+/**
+ * Two weeks before a store is credited with having a normal — the same bar the
+ * overclaim rule sets, for the same reason: a median over a handful of days is
+ * not a habit, and calling a store unusual against one is guesswork.
+ */
+export const SPIKE_MIN_BASELINE_DAYS = 14;
 
 /** Five unattributed orders in one day that carry a paid medium. */
 export const BROKEN_UTM_MIN_ORDERS = 5;
@@ -228,6 +234,9 @@ export function evaluateUnattributedSpike(
   const baselineShares = baseline
     .map(unattributedShare)
     .filter((share): share is number => share !== null);
+  // Qualifying days, not calendar days: a day with no revenue has no share, so
+  // fourteen here means fourteen days that could actually be measured.
+  if (baselineShares.length < SPIKE_MIN_BASELINE_DAYS) return null;
   const baselineMedian = median(baselineShares);
   if (baselineMedian === null) return null;
 
