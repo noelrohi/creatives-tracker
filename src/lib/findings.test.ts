@@ -88,7 +88,7 @@ describe("evaluateMetaOverclaim", () => {
     ).toBeNull();
   });
 
-  it("fires on three consecutive over days", () => {
+  it("fires with no baseline history", () => {
     const finding = evaluateMetaOverclaim(
       claimDays([
         [3000, 1000],
@@ -100,11 +100,37 @@ describe("evaluateMetaOverclaim", () => {
     expect(finding?.type).toBe("meta_overclaim");
     expect(finding?.periodStart).toBe("2026-07-27");
     expect(finding?.periodEnd).toBe(DAY);
+    expect(finding?.payload.windowMultiple).toBe(4);
+    expect(finding?.payload.baselineMultiple).toBeNull();
     expect(finding?.payload.days).toEqual([
       { day: "2026-07-27", claimedCents: 3000, verifiedCents: 1000, gapCents: 2000 },
       { day: "2026-07-28", claimedCents: 5000, verifiedCents: 1000, gapCents: 4000 },
       { day: "2026-07-29", claimedCents: 4000, verifiedCents: 1000, gapCents: 3000 },
     ]);
+  });
+
+  it("does not fire when the baseline is about the window multiple", () => {
+    const baseline: Array<[number, number]> = Array.from({ length: 14 }, () => [
+      3000, 1000,
+    ]);
+
+    expect(
+      evaluateMetaOverclaim(
+        claimDays([...baseline, [3000, 1000], [3000, 1000], [3000, 1000]]),
+      ),
+    ).toBeNull();
+  });
+
+  it("fires when the window is at least 1.4× the baseline", () => {
+    const baseline: Array<[number, number]> = Array.from({ length: 14 }, () => [
+      2100, 1000,
+    ]);
+    const finding = evaluateMetaOverclaim(
+      claimDays([...baseline, [3000, 1000], [3000, 1000], [3000, 1000]]),
+    );
+
+    expect(finding?.payload.windowMultiple).toBe(3);
+    expect(finding?.payload.baselineMultiple).toBe(2.1);
   });
 
   // §7.2: a Meta outage shows "no data", never $0 — an unlabeled day cannot

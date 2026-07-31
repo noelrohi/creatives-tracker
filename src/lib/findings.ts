@@ -34,9 +34,16 @@ import { shopifyOrders, shopifyStores, shopifySyncRuns } from "@/schema/shopify"
 /* Thresholds (frozen — spec §8; not configurable, by decision)        */
 /* ------------------------------------------------------------------ */
 
-/** Meta claiming more than 2× what Shopify verified, three days running. */
+/**
+ * Meta claiming more than 2× what Shopify verified, three days running — and
+ * the gap at least 1.4× wider than the store's own baseline, so the steady
+ * view-through/cross-device gap every account carries never fires on its own.
+ */
 export const OVERCLAIM_MULTIPLE = 2;
 export const OVERCLAIM_CONSECUTIVE_DAYS = 3;
+export const OVERCLAIM_BASELINE_DAYS = 28;
+const OVERCLAIM_MIN_BASELINE_DAYS = 14;
+const OVERCLAIM_MOVEMENT_MULTIPLE = 1.4;
 
 /** Unattributed above 10% of the day and above 2× its own 28-day median. */
 export const SPIKE_MIN_SHARE = 0.1;
@@ -133,6 +140,41 @@ export function evaluateMetaOverclaim(
   if (!window) return null;
   if (!window.every(isOverclaimDay)) return null;
 
+  const multipleFor = (days: ClaimVerifiedDay[]): number | null => {
+    const verifiedCents = days.reduce(
+      (total, day) => total + day.verifiedCents,
+      0,
+    );
+    if (verifiedCents === 0) return null;
+    const claimedCents = days.reduce(
+      (total, day) => total + (day.claimedCents ?? 0),
+      0,
+    );
+    return claimedCents / verifiedCents;
+  };
+  const roundMultiple = (value: number | null) =>
+    value === null ? null : Math.round(value * 10) / 10;
+
+  const windowMultipleRaw = multipleFor(window);
+  const baselineDays = series
+    .slice(0, -OVERCLAIM_CONSECUTIVE_DAYS)
+    .filter(
+      (day) =>
+        day.claimedCents !== null &&
+        day.claimedCents > 0 &&
+        day.verifiedCents > 0,
+    );
+  const baselineMultipleRaw =
+    baselineDays.length < OVERCLAIM_MIN_BASELINE_DAYS
+      ? null
+      : multipleFor(baselineDays);
+
+  const movedWider =
+    baselineMultipleRaw === null ||
+    windowMultipleRaw === null ||
+    windowMultipleRaw >= OVERCLAIM_MOVEMENT_MULTIPLE * baselineMultipleRaw;
+  if (!movedWider) return null;
+
   return {
     type: "meta_overclaim",
     periodStart: window[0].day,
@@ -140,6 +182,8 @@ export function evaluateMetaOverclaim(
     payload: {
       multiple: OVERCLAIM_MULTIPLE,
       consecutiveDays: OVERCLAIM_CONSECUTIVE_DAYS,
+      windowMultiple: roundMultiple(windowMultipleRaw),
+      baselineMultiple: roundMultiple(baselineMultipleRaw),
       // Every day in a firing window is an overclaim day, so it has a claim.
       days: window.map((day) => ({
         day: day.day,
@@ -512,12 +556,15 @@ export async function evaluateFindingsForStore(params: {
   if (!store) return summary;
 
   const day = evaluationDayFor(now, store.ianaTimezone);
-  const roasDays = daysEndingOn(day, ROAS_CONSECUTIVE_DAYS);
+  const claimDays = daysEndingOn(
+    day,
+    OVERCLAIM_CONSECUTIVE_DAYS + OVERCLAIM_BASELINE_DAYS,
+  );
   const bucketFrom = addDays(day, -(SPIKE_BASELINE_DAYS + SPIKE_CONSECUTIVE_DAYS - 1));
 
   const [claimVerified, bucketSeries, brokenUtm, health, roasTarget, mutedTypes] =
     await Promise.all([
-      getClaimVerifiedSeries({ ...params, days: roasDays }),
+      getClaimVerifiedSeries({ ...params, days: claimDays }),
       getDailyBucketSeries({
         organizationId: params.organizationId,
         storeId: params.storeId,
@@ -547,7 +594,7 @@ export async function evaluateFindingsForStore(params: {
 
   const drafts = [
     evaluateMetaOverclaim(
-      claimVerified.slice(-OVERCLAIM_CONSECUTIVE_DAYS).map((entry) => ({
+      claimVerified.map((entry) => ({
         day: entry.day,
         claimedCents: entry.claimedCents,
         verifiedCents: entry.verifiedCents,
@@ -557,7 +604,7 @@ export async function evaluateFindingsForStore(params: {
     evaluateBrokenUtmTemplate({ day, ...brokenUtm }),
     evaluateSyncFailure({ health, day, now }),
     evaluateRoasBelowTarget({
-      series: claimVerified.map((entry) => ({
+      series: claimVerified.slice(-ROAS_CONSECUTIVE_DAYS).map((entry) => ({
         day: entry.day,
         verifiedRevenueCents: entry.verifiedCents,
         spendCents: entry.spendCents,
