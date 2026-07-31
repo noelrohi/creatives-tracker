@@ -819,6 +819,9 @@ export function mergeCampaignLedger(params: {
 
 /**
  * Lowest payback first — this is a cut list, so the worst row is the first row.
+ * Two campaigns paying back the same are ranked by what they spent doing it:
+ * $1,367 returning nothing is a bigger decision than $250 returning nothing.
+ *
  * A campaign with no spend has no payback to rank on and sits at the bottom,
  * biggest first, rather than being read as the best or the worst.
  */
@@ -826,12 +829,17 @@ export function sortCampaignLedger(
   rows: readonly CampaignLedgerRow[],
 ): CampaignLedgerRow[] {
   return [...rows].sort((a, b) => {
-    if (a.roas !== null && b.roas !== null) {
-      if (a.roas !== b.roas) return a.roas - b.roas;
-    } else if (a.roas !== null) return -1;
-    else if (b.roas !== null) return 1;
-    else if (a.confirmedRevenueCents !== b.confirmedRevenueCents) {
-      return b.confirmedRevenueCents - a.confirmedRevenueCents;
+    if (a.roas === null || b.roas === null) {
+      if (a.roas !== b.roas) return a.roas === null ? 1 : -1;
+      if (a.confirmedRevenueCents !== b.confirmedRevenueCents) {
+        return b.confirmedRevenueCents - a.confirmedRevenueCents;
+      }
+      return a.name.localeCompare(b.name);
+    }
+
+    if (a.roas !== b.roas) return a.roas - b.roas;
+    if (a.spendCents !== b.spendCents) {
+      return (b.spendCents ?? 0) - (a.spendCents ?? 0);
     }
     return a.name.localeCompare(b.name);
   });

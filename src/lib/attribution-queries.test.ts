@@ -394,11 +394,12 @@ describe("sortCampaignLedger", () => {
     name: string,
     roas: number | null,
     confirmedRevenueCents = 0,
+    spendCents: number | null = roas === null ? null : 10_000,
   ): CampaignLedgerRow {
     return {
       campaignId: name,
       name,
-      spendCents: roas === null ? null : 10_000,
+      spendCents,
       claimedCents: null,
       labeledRowShare: 1,
       confirmedRevenueCents,
@@ -418,6 +419,21 @@ describe("sortCampaignLedger", () => {
     expect(sorted.map((entry) => entry.name)).toEqual([
       "Special Creators",
       "Bundles",
+      "Trybe",
+    ]);
+  });
+
+  // Two campaigns returning nothing are not equally urgent.
+  it("ranks the bigger spend first when the payback is the same", () => {
+    const sorted = sortCampaignLedger([
+      row("Small burn", 0, 0, 25_001),
+      row("Big burn", 0, 0, 136_713),
+      row("Trybe", 0.82),
+    ]);
+
+    expect(sorted.map((entry) => entry.name)).toEqual([
+      "Big burn",
+      "Small burn",
       "Trybe",
     ]);
   });
