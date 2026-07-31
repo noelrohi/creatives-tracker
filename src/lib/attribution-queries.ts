@@ -203,13 +203,18 @@ export type CampaignLedgerRow = {
 };
 
 /**
- * Meta orders whose campaign could not be resolved from either the stamped
- * campaign id or the ad set id on the link. They exist so the campaign rows
- * plus this one still sum to the Meta bucket for the range.
+ * What could not be put behind a campaign, on both sides of the ledger: Meta
+ * orders whose campaign the stamped id and the ad set on the link both failed
+ * to name, and spend whose ad has been orphaned from its ad set. They exist so
+ * the campaign rows plus this one still sum to the Meta bucket for the range.
  */
 export type CampaignLedgerUnresolved = {
   confirmedRevenueCents: number;
   orderCount: number;
+  /** Null when every performance row reached a campaign. */
+  spendCents: number | null;
+  /** Null when no orphaned row carries window labels — never a fake $0. */
+  claimedCents: number | null;
 };
 
 export type CampaignLedger = {
@@ -610,8 +615,9 @@ const JOURNEY_AD_SET_ID_EXPRESSION = sql`lower(split_part(
 ))`;
 
 export type CampaignMetaSideRow = {
-  campaignId: string;
-  name: string;
+  /** Null when the ad behind the row has been orphaned from its ad set. */
+  campaignId: string | null;
+  name: string | null;
   spend: string;
   claimed: string | null;
   totalRows: number;
@@ -677,7 +683,11 @@ export async function getCampaignLedger(
 
   const [metaSide, orderSide, refundSide] = await Promise.all([
     // Meta's own side: the `getMetaClaims` aggregation, base rows only, reached
-    // through the hierarchy because `performance_log` carries no campaign.
+    // through the hierarchy because `performance_log` carries no campaign. The
+    // hierarchy is walked with left joins: `ad.ad_set_id` is nullable and
+    // deleting an ad set orphans its ads while their performance rows live on,
+    // so inner joins would drop that spend from the ledger while the Meta total
+    // above it still counted the money.
     db
       .select({
         campaignId: campaigns.id,
@@ -691,9 +701,9 @@ export async function getCampaignLedger(
         )::int`,
       })
       .from(performanceLogs)
-      .innerJoin(ads, eq(ads.id, performanceLogs.adId))
-      .innerJoin(adSets, eq(adSets.id, ads.adSetId))
-      .innerJoin(campaigns, eq(campaigns.id, adSets.campaignId))
+      .leftJoin(ads, eq(ads.id, performanceLogs.adId))
+      .leftJoin(adSets, eq(adSets.id, ads.adSetId))
+      .leftJoin(campaigns, eq(campaigns.id, adSets.campaignId))
       .where(
         and(
           eq(performanceLogs.organizationId, scope.organizationId),
@@ -741,8 +751,8 @@ export async function getCampaignLedger(
 /**
  * The full outer join, done where it can be tested without a database: a
  * campaign with spend and no orders stays visible, an unspent campaign that
- * converted stays visible, and the orders that resolved to neither become the
- * `unresolved` row.
+ * converted stays visible, and whatever named no campaign at all — orders on
+ * one side, orphaned spend on the other — becomes the `unresolved` row.
  *
  * Money arrives as numeric strings and becomes cents exactly once, here.
  */
@@ -755,6 +765,8 @@ export function mergeCampaignLedger(params: {
   const unresolved: CampaignLedgerUnresolved = {
     confirmedRevenueCents: 0,
     orderCount: 0,
+    spendCents: null,
+    claimedCents: null,
   };
   let sawUnresolved = false;
 
@@ -780,7 +792,19 @@ export function mergeCampaignLedger(params: {
   }
 
   for (const entry of params.metaSide) {
-    const row = rowFor(entry.campaignId, entry.name);
+    if (!entry.campaignId) {
+      // Spend whose ad no longer hangs off an ad set. It is real money and it
+      // is in the Meta total above, so it belongs in the unresolved row rather
+      // than nowhere.
+      unresolved.spendCents = (unresolved.spendCents ?? 0) + toCents(entry.spend);
+      const claimed = labeledClaimCents(entry.claimed, entry.labeledRows);
+      if (claimed !== null) {
+        unresolved.claimedCents = (unresolved.claimedCents ?? 0) + claimed;
+      }
+      sawUnresolved = true;
+      continue;
+    }
+    const row = rowFor(entry.campaignId, entry.name ?? "");
     row.spendCents = toCents(entry.spend);
     row.claimedCents = labeledClaimCents(entry.claimed, entry.labeledRows);
     row.labeledRowShare = labeledShare(entry.labeledRows, entry.totalRows);

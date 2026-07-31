@@ -167,6 +167,16 @@ export const attributionRouter = router({
                 ledger.unresolved.confirmedRevenueCents,
               ),
               orderCount: ledger.unresolved.orderCount,
+              // Null when no spend was orphaned, and a claim stays null unless
+              // an orphaned row was labeled.
+              spend:
+                ledger.unresolved.spendCents === null
+                  ? null
+                  : centsToAmount(ledger.unresolved.spendCents),
+              claimed:
+                ledger.unresolved.claimedCents === null
+                  ? null
+                  : centsToAmount(ledger.unresolved.claimedCents),
             }
           : null,
         roasTarget,

@@ -77,23 +77,11 @@ export function CampaignTable({
             ))}
 
             {data.unresolved ? (
-              <tr className="border-b border-border/50 text-muted-foreground/70 last:border-0">
-                <th
-                  scope="row"
-                  className="max-w-0 px-3 py-2 text-left font-normal"
-                >
-                  <span className="block truncate">{copy.unresolvedLabel}</span>
-                  <span className="block truncate text-[10.5px] text-muted-foreground/60">
-                    {copy.orders(data.unresolved.orderCount)}
-                  </span>
-                </th>
-                <Cell>—</Cell>
-                <Cell>—</Cell>
-                <Cell>
-                  {formatMoneyExact(data.unresolved.confirmedRevenue, currency)}
-                </Cell>
-                <Cell>—</Cell>
-              </tr>
+              <UnresolvedRowCells
+                row={data.unresolved}
+                metaDown={metaDown}
+                currency={currency}
+              />
             ) : null}
           </tbody>
         </table>
@@ -150,6 +138,41 @@ function CampaignRowCells({
       >
         {back}
       </Cell>
+    </tr>
+  );
+}
+
+/**
+ * The last row: everything we could not put behind a campaign. Its spend is
+ * real money Meta charged for an ad whose ad set has since gone, so it is
+ * printed like any other figure rather than dashed out — the column has to add
+ * up to the Meta total above. There is no payback to state for it.
+ */
+function UnresolvedRowCells({
+  row,
+  metaDown,
+  currency,
+}: {
+  row: NonNullable<CampaignLedgerData["unresolved"]>;
+  metaDown: boolean;
+  currency: string;
+}) {
+  const spent = metaDown ? null : formatMoneyExact(row.spend, currency);
+  const metaSays = metaDown ? null : formatMoneyExact(row.claimed, currency);
+
+  return (
+    <tr className="border-b border-border/50 text-muted-foreground/70 last:border-0">
+      <th scope="row" className="max-w-0 px-3 py-2 text-left font-normal">
+        <span className="block truncate">{copy.unresolvedLabel}</span>
+        <span className="block truncate text-[10.5px] text-muted-foreground/60">
+          {copy.orders(row.orderCount)}
+        </span>
+      </th>
+
+      <Cell>{spent}</Cell>
+      <Cell>{metaSays}</Cell>
+      <Cell>{formatMoneyExact(row.confirmedRevenue, currency)}</Cell>
+      <Cell>—</Cell>
     </tr>
   );
 }

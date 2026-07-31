@@ -245,8 +245,8 @@ describe("Meta claim reads (§3.2)", () => {
 /* ------------------------------------------------------------------ */
 
 function metaSideRow(overrides: Partial<{
-  campaignId: string;
-  name: string;
+  campaignId: string | null;
+  name: string | null;
   spend: string;
   claimed: string | null;
   totalRows: number;
@@ -377,6 +377,59 @@ describe("mergeCampaignLedger", () => {
     expect(ledger.unresolved).toEqual({
       confirmedRevenueCents: 24_000,
       orderCount: 2,
+      spendCents: null,
+      claimedCents: null,
+    });
+  });
+
+  // Deleting an ad set sets `ad.ad_set_id` to null and leaves the ad's
+  // performance rows behind, so this spend reaches no campaign. It is still in
+  // the Meta total on the screen above, so it has to land somewhere.
+  it("collects the spend of an orphaned ad into the unresolved row", () => {
+    const ledger = mergeCampaignLedger({
+      metaSide: [
+        metaSideRow(),
+        metaSideRow({ campaignId: null, name: null, spend: "37.50", claimed: "12.00" }),
+      ],
+      orderSide: [],
+      refundSide: [],
+    });
+
+    expect(ledger.campaigns).toHaveLength(1);
+    expect(ledger.unresolved).toMatchObject({
+      spendCents: 3_750,
+      claimedCents: 1_200,
+    });
+  });
+
+  it("reports an unlabeled orphaned claim as no claim, never $0", () => {
+    const ledger = mergeCampaignLedger({
+      metaSide: [
+        metaSideRow({ campaignId: null, name: null, claimed: null, labeledRows: 0 }),
+      ],
+      orderSide: [],
+      refundSide: [],
+    });
+
+    expect(ledger.unresolved?.spendCents).toBe(10_000);
+    expect(ledger.unresolved?.claimedCents).toBeNull();
+  });
+
+  // Orphaned spend on its own still has to draw the row, or the money leaves
+  // the ledger without the screen saying so.
+  it("renders an unresolved row for a range whose only leftover is spend", () => {
+    const ledger = mergeCampaignLedger({
+      metaSide: [metaSideRow({ campaignId: null, name: null })],
+      orderSide: [],
+      refundSide: [],
+    });
+
+    expect(ledger.campaigns).toEqual([]);
+    expect(ledger.unresolved).toEqual({
+      confirmedRevenueCents: 0,
+      orderCount: 0,
+      spendCents: 10_000,
+      claimedCents: 8_000,
     });
   });
 
