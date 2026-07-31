@@ -23,6 +23,10 @@ const eslintConfig = defineConfig([
   },
   // Override default ignores of eslint-config-next.
   globalIgnores([
+    // Installed skills are vendored from other repos and follow their authors'
+    // conventions, not ours — linting them only ever reports someone else's
+    // house style back at us.
+    ".agents/skills/**",
     // Default ignores of eslint-config-next:
     ".claude/worktrees/**",
     ".next/**",
