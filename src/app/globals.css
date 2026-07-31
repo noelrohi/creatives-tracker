@@ -80,6 +80,39 @@
   --sidebar-accent-foreground: oklch(0.228 0.013 107.4);
   --sidebar-border: oklch(0.93 0.007 106.5);
   --sidebar-ring: oklch(0.737 0.021 106.9);
+
+  /* Attribution screens palette — validated for contrast + CVD in both modes.
+     Components read these through var(); no hex literals live in JSX. */
+  --attr-known: #00805f;
+  --attr-claim: #5a5fc7;
+  --attr-unknown: #9a5b1f;
+  --attr-neutral: #6f6f66;
+  --attr-critical: #b4291e;
+  --attr-warning: #b07d1a;
+  --attr-good: #1f7a5c;
+  --attr-critical-soft: color-mix(in oklab, var(--attr-critical) 12%, var(--card));
+  --attr-warning-soft: color-mix(in oklab, var(--attr-warning) 12%, var(--card));
+  --attr-good-soft: color-mix(in oklab, var(--attr-good) 12%, var(--card));
+  --attr-claim-soft: color-mix(in oklab, var(--attr-claim) 12%, var(--card));
+}
+
+/* One ramp off the known-source green so the seven segments stay separable,
+   plus the two off-ramp colors the buckets decision fixes. Declared once: both
+   modes resolve them against whichever --attr-known / --card is in force.
+
+   The ramp bottoms out at 62%, not near-zero: these colors are painted as a
+   low-opacity tint behind a channel row, so a step mixed most of the way into
+   the card disappears entirely once that opacity is applied. Separability
+   inside the paid family is carried by the ramp; the icon and the edge carry
+   identity. */
+:root {
+  --attr-bucket-meta: var(--attr-known);
+  --attr-bucket-google: color-mix(in oklab, var(--attr-known) 88%, var(--card));
+  --attr-bucket-klaviyo: color-mix(in oklab, var(--attr-known) 78%, var(--card));
+  --attr-bucket-tiktok: color-mix(in oklab, var(--attr-known) 70%, var(--card));
+  --attr-bucket-organic: color-mix(in oklab, var(--attr-known) 62%, var(--card));
+  --attr-bucket-unknown: var(--attr-unknown);
+  --attr-bucket-none: var(--attr-neutral);
 }
 
 .dark {
@@ -114,6 +147,19 @@
   --sidebar-accent-foreground: oklch(0.988 0.003 106.5);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.58 0.031 107.3);
+
+  /* Dark halves of the attribution palette pairs. */
+  --attr-known: #149b7c;
+  --attr-claim: #7b80e2;
+  --attr-unknown: #bd8440;
+  --attr-neutral: #9a9a90;
+  --attr-critical: #e07b6d;
+  --attr-warning: #d9a05b;
+  --attr-good: #3cc5a3;
+  --attr-critical-soft: color-mix(in oklab, var(--attr-critical) 16%, var(--card));
+  --attr-warning-soft: color-mix(in oklab, var(--attr-warning) 16%, var(--card));
+  --attr-good-soft: color-mix(in oklab, var(--attr-good) 16%, var(--card));
+  --attr-claim-soft: color-mix(in oklab, var(--attr-claim) 16%, var(--card));
 }
 
 @layer base {

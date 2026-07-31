@@ -31,6 +31,9 @@ export function mapRowsForImport(rows: MappedRow[]) {
       r.landingPageViews != null ? Number(r.landingPageViews) : undefined,
     costPerLpv: r.costPerLpv,
     purchaseValue: r.purchaseValue,
+    purchaseValue7dClick: r.purchaseValue7dClick,
+    purchaseValue1dView: r.purchaseValue1dView,
+    attributionWindows: r.attributionWindows,
     addToCart: r.addToCart != null ? Number(r.addToCart) : undefined,
     initiateCheckout:
       r.initiateCheckout != null ? Number(r.initiateCheckout) : undefined,

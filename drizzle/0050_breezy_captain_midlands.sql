@@ -1,0 +1,1 @@
+ALTER TABLE "shopify_order" ADD COLUMN "order_name" text;

@@ -8,7 +8,7 @@ import { fetchMetaCreativePreviewsForAds } from "@/lib/meta-creative-assets";
 import type { MappedRow } from "@/lib/csv-parser";
 import { adAccounts } from "@/schema/account";
 
-const GRAPH_API_VERSION = "v22.0";
+const GRAPH_API_VERSION = "v25.0";
 export const META_GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
 const INSIGHT_FIELDS = [
@@ -223,6 +223,8 @@ export async function requestMetaInsightsReport(input: {
     time_increment: "1",
     limit: "500",
     async: "true",
+    action_attribution_windows: JSON.stringify(["7d_click", "1d_view"]),
+    action_report_time: "conversion",
   });
 
   if (input.breakdowns?.length) {

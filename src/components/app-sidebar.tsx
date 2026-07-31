@@ -45,9 +45,20 @@ import { AdsoluteMark } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { isImageStudioEnabled } from "@/lib/image-studio-enabled";
 
-const dashboardSubItems = [
+const dashboardSubItems: Array<{
+  label: string;
+  href: string;
+  icon: string;
+  badge?: string;
+}> = [
   { label: "Dashboard", href: "/", icon: "solar:widget-5-linear" },
   { label: "MER", href: "/mer", icon: "solar:graph-up-linear" },
+  {
+    label: "Attribution",
+    href: "/attribution",
+    icon: "solar:pie-chart-2-linear",
+    badge: "Beta",
+  },
 ];
 
 const navItems: Array<{
@@ -272,12 +283,22 @@ export function AppSidebar() {
                       : pathname === item.href || pathname.startsWith(`${item.href}/`);
                   return (
                     <SidebarMenuItem key={item.href}>
-                      <SidebarMenuButton asChild tooltip={item.label} isActive={isActive}>
+                      <SidebarMenuButton
+                        asChild
+                        tooltip={item.label}
+                        isActive={isActive}
+                        className={item.badge ? "pr-14" : undefined}
+                      >
                         <Link href={item.href}>
                           <Icon icon={item.icon} className="size-4" />
                           <span>{item.label}</span>
                         </Link>
                       </SidebarMenuButton>
+                      {item.badge ? (
+                        <SidebarMenuBadge className="rounded-full border border-sidebar-border bg-sidebar-accent/80 px-2 text-[10px] font-semibold uppercase tracking-wide text-sidebar-accent-foreground">
+                          {item.badge}
+                        </SidebarMenuBadge>
+                      ) : null}
                     </SidebarMenuItem>
                   );
                 })}
