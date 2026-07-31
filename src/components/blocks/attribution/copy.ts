@@ -257,6 +257,52 @@ export const metaCheck = {
 };
 
 /* ------------------------------------------------------------------ */
+/* Campaigns                                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The cut list. "Meta says" appears here as a column head because the row it
+ * labels is Meta's own number for that campaign — the footnote under the table
+ * says why it always reads higher than what we confirm.
+ */
+export const campaigns = {
+  title: "Campaign by campaign",
+  /**
+   * The worst payback first, because that is the row worth acting on. Named so
+   * the fold does not have to be opened to know which campaign to look at.
+   */
+  summary: (worstName: string, back: string, campaignCount: number) =>
+    `${worstName} gives back ${back} per $1 · ${formatCount(campaignCount)} ${
+      campaignCount === 1 ? "campaign" : "campaigns"
+    }`,
+  /** Spend with nothing behind it is the sharpest version of the same list. */
+  summaryNoBack: (worstName: string, spent: string, campaignCount: number) =>
+    `${worstName} spent ${spent} with no orders behind it · ${formatCount(
+      campaignCount,
+    )} ${campaignCount === 1 ? "campaign" : "campaigns"}`,
+  columns: {
+    campaign: "Campaign",
+    spent: "Spent",
+    metaSays: "Meta says",
+    weConfirm: "We confirm",
+    back: "Back per $1",
+  },
+  orders: (orderCount: number) =>
+    `${formatCount(orderCount)} ${orderCount === 1 ? "order" : "orders"}`,
+  noOrders: "no orders",
+  empty: "No Meta campaigns ran on these days.",
+  unresolvedLabel: "Couldn't tell which campaign",
+  unresolvedNote: (orderCount: number) =>
+    `${formatCount(orderCount)} Meta ${
+      orderCount === 1 ? "order" : "orders"
+    } came in with link tags that don't name a campaign, so we can't put ${
+      orderCount === 1 ? "it" : "them"
+    } behind one. ${orderCount === 1 ? "It is" : "They are"} still counted in your Meta total.`,
+  footnote:
+    "\"We confirm\" is the real Shopify orders behind each campaign, so it always reads lower than \"Meta says\" — the two count different things, and a steady gap is normal. Every row plus the last one adds up to your Meta ads total above.",
+};
+
+/* ------------------------------------------------------------------ */
 /* How we count                                                        */
 /* ------------------------------------------------------------------ */
 

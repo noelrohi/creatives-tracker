@@ -7,6 +7,7 @@ import { useBreadcrumbs } from "@/components/breadcrumbs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BucketOrdersPanel } from "@/components/blocks/attribution/bucket-orders-panel";
 import { ChannelLedger } from "@/components/blocks/attribution/channel-ledger";
+import { paybackColor } from "@/components/blocks/attribution/colors";
 import {
   page as copy,
   headerRail as railCopy,
@@ -137,6 +138,14 @@ export default function AttributionPage() {
     enabled: range !== null,
   });
 
+  const campaignLedger = useQuery({
+    ...trpc.attribution.campaignLedger.queryOptions({
+      dateFrom: range?.dateFrom ?? browserDay,
+      dateTo: range?.dateTo ?? browserDay,
+    }),
+    enabled: range !== null,
+  });
+
   const previousOverview = useQuery({
     ...trpc.attribution.overview.queryOptions({
       dateFrom: previousRange?.dateFrom ?? browserDay,
@@ -195,13 +204,7 @@ export default function AttributionPage() {
   const paybackGoal = metaCheck.data
     ? formatMoneyExact(metaCheck.data.roasTarget, currency)
     : null;
-  /** Green is for clearing the goal. Under it, the figure reads as a warning. */
-  const paybackTone =
-    meta?.verifiedRoas == null
-      ? undefined
-      : meta.verifiedRoas >= meta.roasTarget
-        ? "var(--attr-good)"
-        : "var(--attr-warning)";
+  const paybackTone = paybackColor(meta?.verifiedRoas, meta?.roasTarget);
   const confirmedMoney = metaCheck.data
     ? formatMoneyExact(metaCheck.data.verifiedRevenue, currency)
     : null;
@@ -395,6 +398,8 @@ export default function AttributionPage() {
         metaCheck={metaCheck.data}
         metaLoading={metaCheck.isPending || !range}
         metaDown={metaDown}
+        campaignLedger={campaignLedger.data}
+        campaignsLoading={campaignLedger.isPending || !range}
         currency={currency}
         timeZone={timeZone}
         detailHref={links.metaVsShopify}
