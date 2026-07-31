@@ -19,6 +19,7 @@ import {
   ingestOrderNodes,
   listOrdersNeedingJourneyRepoll,
   listShopifyStores,
+  loadSyncedMetaAdSets,
   loadSyncedMetaCampaignIds,
   stampBuckets,
   startSyncRun,
@@ -127,11 +128,13 @@ async function stampAndLog(params: {
   const syncedMetaCampaignIds = await loadSyncedMetaCampaignIds(
     params.organizationId,
   );
+  const syncedMetaAdSets = await loadSyncedMetaAdSets(params.organizationId);
   const result = await stampBuckets({
     organizationId: params.organizationId,
     storeId: params.storeId,
     scope: params.scope,
     syncedMetaCampaignIds,
+    syncedMetaAdSets,
   });
 
   logger.info("Stamped attribution buckets", {
@@ -139,6 +142,7 @@ async function stampAndLog(params: {
     scope: params.scope,
     bucketRuleVersion: BUCKET_RULE_VERSION,
     syncedMetaCampaigns: syncedMetaCampaignIds.size,
+    syncedMetaAdSets: syncedMetaAdSets.size,
     ...result,
   });
 

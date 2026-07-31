@@ -5,6 +5,7 @@
 
 import { and, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
 import {
   shopifyOrders,
@@ -520,6 +521,31 @@ export async function loadSyncedMetaCampaignIds(
   return ids;
 }
 
+/**
+ * Ad set Meta id → the Meta id of the campaign it belongs to. `utm_term` names
+ * the ad set, and verification needs the campaign behind it.
+ */
+export async function loadSyncedMetaAdSets(
+  organizationId: string,
+): Promise<Map<string, string>> {
+  const rows = await db
+    .select({ adSetMetaId: adSets.metaId, campaignMetaId: campaigns.metaId })
+    .from(adSets)
+    .innerJoin(campaigns, eq(adSets.campaignId, campaigns.id))
+    .where(eq(adSets.organizationId, organizationId));
+
+  const byAdSet = new Map<string, string>();
+  for (const row of rows) {
+    const adSetMetaId = row.adSetMetaId?.trim().toLowerCase();
+    const campaignMetaId = row.campaignMetaId?.trim().toLowerCase();
+    // An ad set we cannot name, or one whose campaign we cannot name, verifies
+    // nothing — skip it rather than stamping a blank campaign id.
+    if (!adSetMetaId || !campaignMetaId) continue;
+    byAdSet.set(adSetMetaId, campaignMetaId);
+  }
+  return byAdSet;
+}
+
 async function upsertOrderRows(rows: ShopifyOrderRow[]) {
   const idByShopifyOrderId = new Map<string, string>();
 
@@ -691,7 +717,11 @@ type BucketCandidate = {
 
 function candidateLastVisit(candidate: BucketCandidate) {
   const journey = candidate.customerJourney as
-    | { lastVisit?: Record<string, unknown> | null }
+    | {
+        lastVisit?: (Record<string, unknown> & {
+          utmParameters?: { term?: string | null } | null;
+        }) | null;
+      }
     | null;
   const lastVisit = journey?.lastVisit ?? null;
 
@@ -708,6 +738,8 @@ function candidateLastVisit(candidate: BucketCandidate) {
     utmSource: candidate.lastClickUtmSource,
     utmMedium: candidate.lastClickUtmMedium,
     utmCampaign: candidate.lastClickUtmCampaign,
+    // No column of its own: the term is read straight off the stored journey.
+    utmTerm: lastVisit?.utmParameters?.term ?? null,
     referrerUrl: (lastVisit?.referrerUrl as string | null) ?? null,
     source: (lastVisit?.source as string | null) ?? null,
   };
@@ -723,11 +755,15 @@ export async function stampBuckets(params: {
   storeId: string;
   scope?: "pending" | "rebucket";
   syncedMetaCampaignIds?: ReadonlySet<string>;
+  syncedMetaAdSets?: ReadonlyMap<string, string>;
 }): Promise<{ scanned: number; stamped: number }> {
   const scope = params.scope ?? "pending";
   const syncedMetaCampaignIds =
     params.syncedMetaCampaignIds ??
     (await loadSyncedMetaCampaignIds(params.organizationId));
+  const syncedMetaAdSets =
+    params.syncedMetaAdSets ??
+    (await loadSyncedMetaAdSets(params.organizationId));
 
   const staleVersion = or(
     isNull(shopifyOrders.bucketRuleVersion),
@@ -791,6 +827,7 @@ export async function stampBuckets(params: {
       journeyReady: candidate.journeyReady,
       lastVisit: candidateLastVisit(candidate),
       syncedMetaCampaignIds,
+      syncedMetaAdSets,
     });
 
     // Still pending: leave the row unbucketed for the next run.

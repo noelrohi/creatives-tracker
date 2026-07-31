@@ -5,7 +5,7 @@
 
 import { normalizeLower } from "@/lib/text";
 
-export const BUCKET_RULE_VERSION = 3;
+export const BUCKET_RULE_VERSION = 4;
 
 export const META_SOURCES = [
   "facebook",
@@ -104,6 +104,8 @@ export type BucketLastVisit = {
   utmSource?: string | null;
   utmMedium?: string | null;
   utmCampaign?: string | null;
+  /** The ad set id Meta writes into the link. */
+  utmTerm?: string | null;
   referrerUrl?: string | null;
   source?: string | null;
 } | null;
@@ -113,6 +115,8 @@ export type BucketInput = {
   journeyReady: boolean;
   lastVisit?: BucketLastVisit;
   syncedMetaCampaignIds: ReadonlySet<string>;
+  /** Ad set Meta id → the Meta id of the campaign it belongs to. */
+  syncedMetaAdSets: ReadonlyMap<string, string>;
 };
 
 export type BucketResult = {
@@ -174,6 +178,19 @@ export function isPaidLookingMedium(value: string | null | undefined) {
   return PAID_LOOKING_MEDIUM_HINTS.some((hint) => normalized.includes(hint));
 }
 
+/**
+ * The ad set id out of `utm_term`. One order arrived with `?fbclid=…` glued
+ * onto the end of the term, so everything from the first `?` is dropped — the
+ * same rule the campaign ledger applies in SQL.
+ */
+export function normalizeMetaAdSetTerm(value: string | null | undefined) {
+  const normalized = normalizeLower(value);
+  if (!normalized) return null;
+  const [beforeQuery] = normalized.split("?");
+  const term = beforeQuery.trim();
+  return term.length > 0 ? term : null;
+}
+
 /** POS, draft and subscription-renewal orders (spec §4.1). */
 export function isUntrackedSourceName(value: string | null | undefined) {
   const normalized = normalizeLower(value);
@@ -221,16 +238,30 @@ export function assignBucket(input: BucketInput): BucketResult {
   // 3. Paid UTM buckets.
   if (isPaidMedium(utmMedium)) {
     if (isMetaSource(utmSource)) {
-      if (utmCampaign) {
-        if (input.syncedMetaCampaignIds.has(utmCampaign)) {
-          return result("meta", {
-            metaVerified: true,
-            metaCampaignId: utmCampaign,
-          });
-        }
-        // Any campaign id we have not synced yet — numeric or named (§4.3).
-        return result("meta", { verificationPending: true });
+      if (utmCampaign && input.syncedMetaCampaignIds.has(utmCampaign)) {
+        return result("meta", {
+          metaVerified: true,
+          metaCampaignId: utmCampaign,
+        });
       }
+
+      // About a fifth of these links carry the campaign's *name* where its id
+      // belongs, and a name can never match an id. `utm_term` carries the ad
+      // set id — the reliable side of the link — and an ad set names the
+      // campaign it belongs to, so a matched term verifies the order too.
+      const adSetTerm = normalizeMetaAdSetTerm(lastVisit.utmTerm);
+      const campaignOfAdSet = adSetTerm
+        ? (input.syncedMetaAdSets.get(adSetTerm) ?? null)
+        : null;
+      if (campaignOfAdSet) {
+        return result("meta", {
+          metaVerified: true,
+          metaCampaignId: campaignOfAdSet,
+        });
+      }
+
+      // Any campaign id we have not synced yet — numeric or named (§4.3).
+      if (utmCampaign) return result("meta", { verificationPending: true });
       return result("meta");
     }
     if (isGoogleSource(utmSource)) return result("google");
