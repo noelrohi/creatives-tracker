@@ -34,6 +34,19 @@ export function bucketColor(bucket: AttributionBucket): string {
   return `var(${BUCKET_COLOR_VARS[bucket]})`;
 }
 
+/**
+ * Green is for clearing the goal. Under it, the figure reads as a warning.
+ * One rule, so the header figure and every campaign row agree on what a
+ * payback is worth — undefined when there is nothing to judge.
+ */
+export function paybackColor(
+  back: number | null | undefined,
+  goal: number | null | undefined,
+): string | undefined {
+  if (back == null || goal == null) return undefined;
+  return back >= goal ? "var(--attr-good)" : "var(--attr-warning)";
+}
+
 export function severityColor(severity: Severity): string {
   return `var(${SEVERITY_COLOR_VARS[severity]})`;
 }

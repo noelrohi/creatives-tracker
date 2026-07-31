@@ -6,6 +6,7 @@ import {
   ATTRIBUTION_BUCKETS,
   computeRoas,
   getBucketTotals,
+  getCampaignLedger,
   getDailyBucketSeries,
   getMetaClaims,
   getMetaVerified,
@@ -121,6 +122,62 @@ export const attributionRouter = router({
         verificationPendingCount: verified.verificationPendingCount,
         // Null when there is no spend — "can't compute", not zero.
         verifiedRoas,
+        roasTarget,
+      };
+    }),
+
+  /**
+   * The same range, cut by campaign: what each one spent, what Meta claims for
+   * it, and which orders we can actually put behind it. Read-only over data
+   * already stamped — it widens nothing.
+   */
+  campaignLedger: orgProcedure
+    .input(dateRangeSchema)
+    .query(async ({ input, ctx }) => {
+      const store = await requireStore(ctx.organizationId);
+
+      const [ledger, roasTarget] = await Promise.all([
+        getCampaignLedger({
+          organizationId: ctx.organizationId,
+          storeId: store.id,
+          dateFrom: input.dateFrom,
+          dateTo: input.dateTo,
+        }),
+        getRoasTarget(ctx.organizationId),
+      ]);
+
+      return {
+        range: { dateFrom: input.dateFrom, dateTo: input.dateTo },
+        campaigns: ledger.campaigns.map((row) => ({
+          campaignId: row.campaignId,
+          name: row.name,
+          // Null, not "0.00": Meta reported nothing for this campaign at all.
+          spend: row.spendCents === null ? null : centsToAmount(row.spendCents),
+          claimed:
+            row.claimedCents === null ? null : centsToAmount(row.claimedCents),
+          confirmedRevenue: centsToAmount(row.confirmedRevenueCents),
+          orderCount: row.orderCount,
+          // Null when there is no spend — "can't compute", not zero.
+          roas: row.roas,
+        })),
+        unresolved: ledger.unresolved
+          ? {
+              confirmedRevenue: centsToAmount(
+                ledger.unresolved.confirmedRevenueCents,
+              ),
+              orderCount: ledger.unresolved.orderCount,
+              // Null when no spend was orphaned, and a claim stays null unless
+              // an orphaned row was labeled.
+              spend:
+                ledger.unresolved.spendCents === null
+                  ? null
+                  : centsToAmount(ledger.unresolved.spendCents),
+              claimed:
+                ledger.unresolved.claimedCents === null
+                  ? null
+                  : centsToAmount(ledger.unresolved.claimedCents),
+            }
+          : null,
         roasTarget,
       };
     }),

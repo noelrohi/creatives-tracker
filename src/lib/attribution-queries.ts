@@ -18,10 +18,14 @@ import {
   isNull,
   sql,
 } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { db } from "@/db";
 import type { AttributionBucket } from "@/lib/attribution-bucket";
 import { toCents } from "@/lib/money";
 import { adAccounts } from "@/schema/account";
+import { adSets } from "@/schema/ad-set";
+import { ads } from "@/schema/ad";
+import { campaigns } from "@/schema/campaign";
 import { orgSettings } from "@/schema/org-settings";
 import { performanceLogs } from "@/schema/performance-log";
 import {
@@ -181,6 +185,40 @@ export type MetaVerified = {
   verifiedRevenueCents: number;
   verifiedOrderCount: number;
   verificationPendingCount: number;
+};
+
+export type CampaignLedgerRow = {
+  /** Our own campaign row id — a join/render key, never a printed figure. */
+  campaignId: string;
+  name: string;
+  /** Null when Meta reported no rows for this campaign in the range. */
+  spendCents: number | null;
+  /** Null when no row in the range carries window labels (§3.2). */
+  claimedCents: number | null;
+  confirmedRevenueCents: number;
+  orderCount: number;
+  /** Payback per $1 — null without spend, never a fake 0. */
+  roas: number | null;
+};
+
+/**
+ * What could not be put behind a campaign, on both sides of the ledger: Meta
+ * orders whose campaign the stamped id and the ad set on the link both failed
+ * to name, and spend whose ad has been orphaned from its ad set. They exist so
+ * the campaign rows plus this one still sum to the Meta bucket for the range.
+ */
+export type CampaignLedgerUnresolved = {
+  confirmedRevenueCents: number;
+  orderCount: number;
+  /** Null when every performance row reached a campaign. */
+  spendCents: number | null;
+  /** Null when no orphaned row carries window labels — never a fake $0. */
+  claimedCents: number | null;
+};
+
+export type CampaignLedger = {
+  campaigns: CampaignLedgerRow[];
+  unresolved: CampaignLedgerUnresolved | null;
 };
 
 export type SyncHealth = {
@@ -480,6 +518,19 @@ export type MetaClaimsRow = {
 };
 
 /**
+ * The null-not-zero rule for a claim, in one place: with no labeled row behind
+ * it a claim is unknown — "no data yet", never a $0 that would read as "Meta
+ * claimed nothing" (§7.2). The per-campaign ledger reads claims through the
+ * same rule.
+ */
+export function labeledClaimCents(
+  value: string | null | undefined,
+  labeledRows: number,
+): number | null {
+  return labeledRows > 0 && value != null ? toCents(value) : null;
+}
+
+/**
  * Numeric columns arrive as strings and become cents exactly once. With no
  * labeled row in the range every claim figure is null — "no data yet", never a
  * $0 that would read as "Meta claimed nothing" (§7.2).
@@ -489,7 +540,7 @@ export function metaClaimsFromRow(
 ): MetaClaims {
   const labeledRows = row?.labeledRows ?? 0;
   const labeled = (value: string | null | undefined) =>
-    labeledRows > 0 && value != null ? toCents(value) : null;
+    labeledClaimCents(value, labeledRows);
 
   return {
     claimedCents: labeled(row?.claimed),
@@ -544,6 +595,278 @@ export async function getMetaVerified(scope: StoreScope): Promise<MetaVerified> 
     verifiedOrderCount: orderRow?.orderCount ?? 0,
     verificationPendingCount: pendingRow?.pendingCount ?? 0,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Per-campaign ledger                                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The ad set id Shopify carries on the last visit. Two things about it: it is
+ * the reliable side of the link (the campaign tag is a name as often as an id),
+ * and one order arrived with a `?fbclid=…` glued onto the end, so everything
+ * from the `?` on is dropped before the join.
+ */
+const JOURNEY_AD_SET_ID_EXPRESSION = sql`lower(split_part(
+  ${shopifyOrders.customerJourney}->'lastVisit'->'utmParameters'->>'term',
+  '?',
+  1
+))`;
+
+export type CampaignMetaSideRow = {
+  /** Null when the ad behind the row has been orphaned from its ad set. */
+  campaignId: string | null;
+  name: string | null;
+  spend: string;
+  claimed: string | null;
+  /** Only what `labeledClaimCents` needs to tell a real $0 from no data. */
+  labeledRows: number;
+};
+
+export type CampaignOrderSideRow = {
+  campaignId: string | null;
+  name: string | null;
+  gross: string;
+  orderCount: number;
+};
+
+export type CampaignRefundSideRow = {
+  campaignId: string | null;
+  name: string | null;
+  refunded: string;
+};
+
+/**
+ * Spend and claims per campaign, against the orders we can actually put behind
+ * each one — the cut list. Read-only over data already stamped: nothing here
+ * widens verification, so a campaign's confirmed revenue is every Meta-bucket
+ * order that resolves to it, not only the ones `meta_verified` covers.
+ *
+ * An order resolves through the stamped `meta_campaign_id` first and through the
+ * ad set id on the link second. The two paths never disagreed on the measured
+ * range; the second one simply reaches the four campaigns in five whose links
+ * are tagged with a name rather than an id.
+ */
+export async function getCampaignLedger(
+  scope: StoreScope,
+): Promise<CampaignLedger> {
+  // The campaign an order names outright, and the campaign its ad set belongs
+  // to. Both are left joins: an order that resolves through neither is counted
+  // as unresolved rather than dropped.
+  const stampedCampaign = alias(campaigns, "stamped_campaign");
+  const journeyAdSet = alias(adSets, "journey_ad_set");
+  const journeyCampaign = alias(campaigns, "journey_campaign");
+
+  const resolvedCampaignId = sql<string | null>`coalesce(
+    ${stampedCampaign.id}, ${journeyCampaign.id}
+  )`;
+  const resolvedCampaignName = sql<string | null>`coalesce(
+    ${stampedCampaign.name}, ${journeyCampaign.name}
+  )`;
+
+  /**
+   * `meta_campaign_id` is only ever stamped from this org's own campaign ids,
+   * so scoping the lookup by org loses nothing and keeps the ad set join's
+   * scoping rule (globally unique column, still scoped) consistent.
+   */
+  const stampedJoin = and(
+    eq(stampedCampaign.organizationId, scope.organizationId),
+    sql`lower(${stampedCampaign.metaId}) = ${shopifyOrders.metaCampaignId}`,
+  );
+  const journeyAdSetJoin = and(
+    eq(journeyAdSet.organizationId, scope.organizationId),
+    sql`lower(${journeyAdSet.metaId}) = ${JOURNEY_AD_SET_ID_EXPRESSION}`,
+  );
+
+  const metaOrders = and(orderRangeWhere(scope), eq(shopifyOrders.bucket, "meta"));
+
+  const [metaSide, orderSide, refundSide] = await Promise.all([
+    // Meta's own side: the `getMetaClaims` aggregation, base rows only, reached
+    // through the hierarchy because `performance_log` carries no campaign. The
+    // hierarchy is walked with left joins: `ad.ad_set_id` is nullable and
+    // deleting an ad set orphans its ads while their performance rows live on,
+    // so inner joins would drop that spend from the ledger while the Meta total
+    // above it still counted the money.
+    db
+      .select({
+        campaignId: campaigns.id,
+        name: campaigns.name,
+        spend: sql<string>`coalesce(sum(${performanceLogs.spend}), 0)`,
+        claimed: CLAIMED_WINDOWS_EXPRESSION,
+        labeledRows: sql<number>`count(*) filter (
+          where ${performanceLogs.purchaseValue7dClick} is not null
+             or ${performanceLogs.purchaseValue1dView} is not null
+        )::int`,
+      })
+      .from(performanceLogs)
+      .leftJoin(ads, eq(ads.id, performanceLogs.adId))
+      .leftJoin(adSets, eq(adSets.id, ads.adSetId))
+      .leftJoin(campaigns, eq(campaigns.id, adSets.campaignId))
+      .where(
+        and(
+          eq(performanceLogs.organizationId, scope.organizationId),
+          between(performanceLogs.dateStart, scope.dateFrom, scope.dateTo),
+          baseRowsOnly(),
+        ),
+      )
+      .groupBy(campaigns.id, campaigns.name),
+
+    db
+      .select({
+        campaignId: resolvedCampaignId,
+        name: resolvedCampaignName,
+        gross: sql<string>`coalesce(sum(${shopifyOrders.netSales}), 0)`,
+        orderCount: sql<number>`count(*)::int`,
+      })
+      .from(shopifyOrders)
+      .leftJoin(stampedCampaign, stampedJoin)
+      .leftJoin(journeyAdSet, journeyAdSetJoin)
+      .leftJoin(journeyCampaign, eq(journeyCampaign.id, journeyAdSet.campaignId))
+      .where(metaOrders)
+      .groupBy(resolvedCampaignId, resolvedCampaignName),
+
+    // Refunds carry no campaign of their own — they inherit their order's, and
+    // book on `refund_day`, exactly as the bucket totals do. Without that these
+    // rows stop summing to the Meta bucket.
+    db
+      .select({
+        campaignId: resolvedCampaignId,
+        name: resolvedCampaignName,
+        refunded: sql<string>`coalesce(sum(${shopifyRefunds.amount}), 0)`,
+      })
+      .from(shopifyRefunds)
+      .innerJoin(shopifyOrders, eq(shopifyOrders.id, shopifyRefunds.orderId))
+      .leftJoin(stampedCampaign, stampedJoin)
+      .leftJoin(journeyAdSet, journeyAdSetJoin)
+      .leftJoin(journeyCampaign, eq(journeyCampaign.id, journeyAdSet.campaignId))
+      .where(and(refundRangeWhere(scope), eq(shopifyOrders.bucket, "meta")))
+      .groupBy(resolvedCampaignId, resolvedCampaignName),
+  ]);
+
+  return mergeCampaignLedger({ metaSide, orderSide, refundSide });
+}
+
+/**
+ * The full outer join, done where it can be tested without a database: a
+ * campaign with spend and no orders stays visible, an unspent campaign that
+ * converted stays visible, and whatever named no campaign at all — orders on
+ * one side, orphaned spend on the other — becomes the `unresolved` row.
+ *
+ * Money arrives as numeric strings and becomes cents exactly once, here.
+ */
+export function mergeCampaignLedger(params: {
+  metaSide: readonly CampaignMetaSideRow[];
+  orderSide: readonly CampaignOrderSideRow[];
+  refundSide: readonly CampaignRefundSideRow[];
+}): CampaignLedger {
+  const rows = new Map<string, CampaignLedgerRow>();
+  const unresolved: CampaignLedgerUnresolved = {
+    confirmedRevenueCents: 0,
+    orderCount: 0,
+    spendCents: null,
+    claimedCents: null,
+  };
+  let sawUnresolved = false;
+
+  function rowFor(campaignId: string, name: string): CampaignLedgerRow {
+    const existing = rows.get(campaignId);
+    if (existing) {
+      // A name is only missing on the side that did not resolve one.
+      if (existing.name.length === 0 && name.length > 0) existing.name = name;
+      return existing;
+    }
+    const created: CampaignLedgerRow = {
+      campaignId,
+      name,
+      spendCents: null,
+      claimedCents: null,
+      confirmedRevenueCents: 0,
+      orderCount: 0,
+      roas: null,
+    };
+    rows.set(campaignId, created);
+    return created;
+  }
+
+  for (const entry of params.metaSide) {
+    if (!entry.campaignId) {
+      // Spend whose ad no longer hangs off an ad set. It is real money and it
+      // is in the Meta total above, so it belongs in the unresolved row rather
+      // than nowhere.
+      unresolved.spendCents = (unresolved.spendCents ?? 0) + toCents(entry.spend);
+      const claimed = labeledClaimCents(entry.claimed, entry.labeledRows);
+      if (claimed !== null) {
+        unresolved.claimedCents = (unresolved.claimedCents ?? 0) + claimed;
+      }
+      sawUnresolved = true;
+      continue;
+    }
+    const row = rowFor(entry.campaignId, entry.name ?? "");
+    row.spendCents = toCents(entry.spend);
+    row.claimedCents = labeledClaimCents(entry.claimed, entry.labeledRows);
+  }
+
+  for (const entry of params.orderSide) {
+    if (!entry.campaignId) {
+      unresolved.confirmedRevenueCents += toCents(entry.gross);
+      unresolved.orderCount += entry.orderCount;
+      sawUnresolved = true;
+      continue;
+    }
+    const row = rowFor(entry.campaignId, entry.name ?? "");
+    row.confirmedRevenueCents += toCents(entry.gross);
+    row.orderCount += entry.orderCount;
+  }
+
+  for (const entry of params.refundSide) {
+    if (!entry.campaignId) {
+      unresolved.confirmedRevenueCents -= toCents(entry.refunded);
+      sawUnresolved = true;
+      continue;
+    }
+    // A refund can be the only thing a campaign has in the range — a paused
+    // campaign, no spend, its old order given back today. Creating the row
+    // rather than skipping it keeps the rows summing to the Meta bucket.
+    const row = rowFor(entry.campaignId, entry.name ?? "");
+    row.confirmedRevenueCents -= toCents(entry.refunded);
+  }
+
+  for (const row of rows.values()) {
+    row.roas = computeRoas(row.confirmedRevenueCents, row.spendCents ?? 0);
+  }
+
+  return {
+    campaigns: sortCampaignLedger([...rows.values()]),
+    unresolved: sawUnresolved ? unresolved : null,
+  };
+}
+
+/**
+ * Lowest payback first — this is a cut list, so the worst row is the first row.
+ * Two campaigns paying back the same are ranked by what they spent doing it:
+ * $1,367 returning nothing is a bigger decision than $250 returning nothing.
+ *
+ * A campaign with no spend has no payback to rank on and sits at the bottom,
+ * biggest first, rather than being read as the best or the worst.
+ */
+export function sortCampaignLedger(
+  rows: readonly CampaignLedgerRow[],
+): CampaignLedgerRow[] {
+  return [...rows].sort((a, b) => {
+    if (a.roas === null || b.roas === null) {
+      if (a.roas !== b.roas) return a.roas === null ? 1 : -1;
+      if (a.confirmedRevenueCents !== b.confirmedRevenueCents) {
+        return b.confirmedRevenueCents - a.confirmedRevenueCents;
+      }
+      return a.name.localeCompare(b.name);
+    }
+
+    if (a.roas !== b.roas) return a.roas - b.roas;
+    if (a.spendCents !== b.spendCents) {
+      return (b.spendCents ?? 0) - (a.spendCents ?? 0);
+    }
+    return a.name.localeCompare(b.name);
+  });
 }
 
 /* ------------------------------------------------------------------ */

@@ -6,12 +6,14 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { RouterOutputs } from "@/lib/trpc/client";
 import {
+  campaigns as campaignCopy,
   findingHeadline,
   folds as copy,
   howWeCount,
   page,
   rail as railCopy,
 } from "./copy";
+import { CampaignTable, type CampaignLedgerData } from "./campaign-table";
 import {
   FindingsBody,
   FindingsStatusFooter,
@@ -24,11 +26,11 @@ import { TodaysChecks } from "./todays-checks";
 import { formatMoneyExact } from "./format";
 
 type MetaCheckData = RouterOutputs["attribution"]["metaCheck"];
-type FoldKey = "attention" | "meta" | "how";
+type FoldKey = "attention" | "meta" | "campaigns" | "how";
 
 /**
  * Everything that used to shout from a right-hand rail and two cards, folded
- * into three rows. Each summary carries its own answer, so on a quiet morning
+ * into four rows. Each summary carries its own answer, so on a quiet morning
  * none of them has to be opened.
  */
 export function DetailFolds({
@@ -36,6 +38,8 @@ export function DetailFolds({
   metaCheck,
   metaLoading,
   metaDown,
+  campaignLedger,
+  campaignsLoading,
   currency,
   timeZone,
   detailHref,
@@ -46,6 +50,8 @@ export function DetailFolds({
   metaCheck: MetaCheckData | undefined;
   metaLoading: boolean;
   metaDown: boolean;
+  campaignLedger: CampaignLedgerData | undefined;
+  campaignsLoading: boolean;
   currency: string;
   timeZone: string;
   detailHref: string;
@@ -86,6 +92,11 @@ export function DetailFolds({
     : confirmed
       ? copy.metaSummary(claimed, confirmed, back)
       : copy.metaSummaryNoData;
+
+  const campaignSummary =
+    campaignsLoading || metaDown
+      ? null
+      : campaignSummaryFor(campaignLedger, currency);
 
   return (
     <div className="overflow-hidden rounded-md border border-border bg-card">
@@ -151,6 +162,21 @@ export function DetailFolds({
       </Fold>
 
       <Fold
+        foldKey="campaigns"
+        title={campaignCopy.title}
+        summary={campaignSummary}
+        open={open === "campaigns"}
+        onToggle={setOpen}
+      >
+        <CampaignTable
+          data={campaignLedger}
+          loading={campaignsLoading}
+          metaDown={metaDown}
+          currency={currency}
+        />
+      </Fold>
+
+      <Fold
         foldKey="how"
         title={howWeCount.trigger}
         summary={copy.howSummary}
@@ -162,6 +188,29 @@ export function DetailFolds({
       </Fold>
     </div>
   );
+}
+
+/**
+ * The worst payback, named — the line that means the fold need not be opened.
+ * The rows arrive worst-first, so the first one is the answer; a campaign that
+ * spent and sold nothing says that outright instead of reading "$0.00 back".
+ */
+function campaignSummaryFor(
+  data: CampaignLedgerData | undefined,
+  currency: string,
+): string | null {
+  const worst = data?.campaigns[0];
+  if (!worst) return null;
+
+  const count = data.campaigns.length;
+
+  if (worst.orderCount === 0 && worst.spend !== null) {
+    const spent = formatMoneyExact(worst.spend, currency);
+    if (spent) return campaignCopy.summaryNoBack(worst.name, spent, count);
+  }
+
+  const back = formatMoneyExact(worst.roas, currency);
+  return back ? campaignCopy.summary(worst.name, back, count) : null;
 }
 
 function Fold({
