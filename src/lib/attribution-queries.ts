@@ -8,10 +8,20 @@
  * strings; they are never parsed into floats).
  */
 
-import { and, between, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import {
+  and,
+  between,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  sql,
+} from "drizzle-orm";
 import { db } from "@/db";
 import type { AttributionBucket } from "@/lib/attribution-bucket";
 import { toCents } from "@/lib/money";
+import { adAccounts } from "@/schema/account";
 import { orgSettings } from "@/schema/org-settings";
 import { performanceLogs } from "@/schema/performance-log";
 import {
@@ -21,7 +31,7 @@ import {
   shopifyStores,
   shopifySyncRuns,
 } from "@/schema/shopify";
-import { orgSyncRuns } from "@/schema/sync-run";
+import { accountSyncRuns } from "@/schema/sync-run";
 
 export const ATTRIBUTION_BUCKETS = attributionBucketEnum.enumValues;
 
@@ -34,12 +44,45 @@ export const SHOPIFY_SYNC_CYCLE_MS = 1 * HOUR_MS;
 export const META_SYNC_CYCLE_MS = 24 * HOUR_MS;
 
 /**
- * Meta freshness reads `org_sync_run` (the org-level table; `account_sync_run`
- * is per ad account and would report "fresh" whenever any single account ran).
- * `partial_success` counts as successful: some accounts landed rows, so the org
- * did receive data that cycle.
+ * Meta freshness is the freshness of the account that ran least recently: the
+ * org has heard from Meta only once every connected account has. Reading the
+ * newest run instead would report "fresh" whenever any single account synced,
+ * which is the failure this rule exists to avoid.
+ *
+ * (`org_sync_run` would say this in one row, but nothing writes that table —
+ * `createOrgSyncRun` and `refreshOrgSyncRunAggregate` have no callers — so an
+ * org-level read reports "never connected" forever.)
+ *
+ * `partial_success` counts as successful: the account landed rows that cycle.
  */
 const META_SUCCESS_RESULTS = ["success", "partial_success"] as const;
+
+export type AccountFreshness = { lastSuccessAt: Date | null };
+
+/**
+ * An org with no Meta accounts connected is not "disconnected from Meta" — it
+ * simply does not use Meta, and must never raise a connection alert. One that
+ * has accounts but has never synced one of them is genuinely never-connected.
+ */
+export function summarizeMetaFreshness(
+  accounts: readonly AccountFreshness[],
+  now: Date = new Date(),
+): { lastSuccessAt: Date | null; stale: boolean } {
+  if (accounts.length === 0) return { lastSuccessAt: null, stale: false };
+
+  let oldest: Date | null = null;
+  for (const account of accounts) {
+    if (!account.lastSuccessAt) return { lastSuccessAt: null, stale: true };
+    if (!oldest || account.lastSuccessAt < oldest) {
+      oldest = account.lastSuccessAt;
+    }
+  }
+
+  return {
+    lastSuccessAt: oldest,
+    stale: isConnectorStale(oldest, META_SYNC_CYCLE_MS, now),
+  };
+}
 
 /* ------------------------------------------------------------------ */
 /* Pure helpers (unit-tested — no DB)                                  */
@@ -514,7 +557,7 @@ export async function getSyncHealth(params: {
 }): Promise<SyncHealth> {
   const now = params.now ?? new Date();
 
-  const [[shopifyRun], [metaRun]] = await Promise.all([
+  const [[shopifyRun], metaAccounts] = await Promise.all([
     db
       .select({ finishedAt: shopifySyncRuns.finishedAt })
       .from(shopifySyncRuns)
@@ -528,31 +571,42 @@ export async function getSyncHealth(params: {
       .orderBy(desc(shopifySyncRuns.finishedAt))
       .limit(1),
 
+    // One row per connected Meta account, carrying its own newest good run.
+    // `mapWith` reads the aggregate through the column's own driver mapping:
+    // Postgres hands back a bare "2026-07-27 18:07:55.172" for max() over a
+    // timestamp, and parsing that by hand would read UTC as local time.
     db
-      .select({ finishedAt: orgSyncRuns.finishedAt })
-      .from(orgSyncRuns)
-      .where(
+      .select({
+        lastSuccessAt: sql<Date | null>`max(${accountSyncRuns.finishedAt})`.mapWith(
+          accountSyncRuns.finishedAt,
+        ),
+      })
+      .from(adAccounts)
+      .leftJoin(
+        accountSyncRuns,
         and(
-          eq(orgSyncRuns.organizationId, params.organizationId),
-          inArray(orgSyncRuns.result, [...META_SUCCESS_RESULTS]),
+          eq(accountSyncRuns.accountId, adAccounts.id),
+          inArray(accountSyncRuns.result, [...META_SUCCESS_RESULTS]),
         ),
       )
-      .orderBy(desc(orgSyncRuns.finishedAt))
-      .limit(1),
+      .where(
+        and(
+          eq(adAccounts.organizationId, params.organizationId),
+          isNotNull(adAccounts.metaAccessToken),
+          eq(adAccounts.isDisabled, false),
+        ),
+      )
+      .groupBy(adAccounts.id),
   ]);
 
   const shopifyLastSuccessAt = shopifyRun?.finishedAt ?? null;
-  const metaLastSuccessAt = metaRun?.finishedAt ?? null;
 
   return {
     shopify: {
       lastSuccessAt: shopifyLastSuccessAt,
       stale: isConnectorStale(shopifyLastSuccessAt, SHOPIFY_SYNC_CYCLE_MS, now),
     },
-    meta: {
-      lastSuccessAt: metaLastSuccessAt,
-      stale: isConnectorStale(metaLastSuccessAt, META_SYNC_CYCLE_MS, now),
-    },
+    meta: summarizeMetaFreshness(metaAccounts, now),
   };
 }
 

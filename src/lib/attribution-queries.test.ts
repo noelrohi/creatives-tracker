@@ -10,6 +10,7 @@ import {
   META_SYNC_CYCLE_MS,
   metaClaimsFromRow,
   SHOPIFY_SYNC_CYCLE_MS,
+  summarizeMetaFreshness,
 } from "./attribution-queries";
 
 const NOW = new Date("2026-07-30T12:00:00.000Z");
@@ -49,6 +50,49 @@ describe("isConnectorStale", () => {
     expect(isConnectorStale(agoMs(49 * 60 * 60 * 1000), META_SYNC_CYCLE_MS, NOW)).toBe(
       true,
     );
+  });
+});
+
+describe("summarizeMetaFreshness", () => {
+  // An org that does not use Meta must never raise a connection alert.
+  it("reports an org with no connected accounts as fresh, not disconnected", () => {
+    expect(summarizeMetaFreshness([], NOW)).toEqual({
+      lastSuccessAt: null,
+      stale: false,
+    });
+  });
+
+  it("is never-connected while any one account has never synced", () => {
+    const recent = agoMs(60 * 60 * 1000);
+    expect(
+      summarizeMetaFreshness(
+        [{ lastSuccessAt: recent }, { lastSuccessAt: null }],
+        NOW,
+      ),
+    ).toEqual({ lastSuccessAt: null, stale: true });
+  });
+
+  // The whole point of the rule: one busy account cannot cover for a quiet one.
+  it("takes the account that ran least recently", () => {
+    const oldest = agoMs(20 * 60 * 60 * 1000);
+    expect(
+      summarizeMetaFreshness(
+        [{ lastSuccessAt: agoMs(60 * 60 * 1000) }, { lastSuccessAt: oldest }],
+        NOW,
+      ),
+    ).toEqual({ lastSuccessAt: oldest, stale: false });
+  });
+
+  it("goes stale once the quietest account passes 48h", () => {
+    const result = summarizeMetaFreshness(
+      [
+        { lastSuccessAt: agoMs(60 * 60 * 1000) },
+        { lastSuccessAt: agoMs(49 * 60 * 60 * 1000) },
+      ],
+      NOW,
+    );
+
+    expect(result.stale).toBe(true);
   });
 });
 
