@@ -127,6 +127,7 @@ export type ShopifyOrderRow = {
   organizationId: string;
   storeId: string;
   shopifyOrderId: string;
+  orderName: string | null;
   orderCreatedAt: Date;
   orderUpdatedAt: Date | null;
   orderDay: string;
@@ -185,6 +186,7 @@ export function mapOrderToRow(
     organizationId: context.organizationId,
     storeId: context.storeId,
     shopifyOrderId: order.id,
+    orderName: order.name ?? null,
     orderCreatedAt: new Date(order.createdAt),
     orderUpdatedAt: toDateOrNull(order.updatedAt),
     orderDay: deriveDayInTimezone(order.createdAt, context.storeTimezone),
@@ -530,6 +532,7 @@ async function upsertOrderRows(rows: ShopifyOrderRow[]) {
         target: [shopifyOrders.storeId, shopifyOrders.shopifyOrderId],
         set: {
           organizationId: sql`excluded.organization_id`,
+          orderName: sql`excluded.order_name`,
           orderCreatedAt: sql`excluded.order_created_at`,
           orderUpdatedAt: sql`excluded.order_updated_at`,
           orderDay: sql`excluded.order_day`,

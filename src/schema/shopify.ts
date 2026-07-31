@@ -56,6 +56,7 @@ export const shopifyOrders = pgTable(
       .notNull()
       .references(() => shopifyStores.id, { onDelete: "cascade" }),
     shopifyOrderId: text("shopify_order_id").notNull(),
+    orderName: text("order_name"),
     // Shopify createdAt, UTC
     orderCreatedAt: timestamp("order_created_at").notNull(),
     orderUpdatedAt: timestamp("order_updated_at"),

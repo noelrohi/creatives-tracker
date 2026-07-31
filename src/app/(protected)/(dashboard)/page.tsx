@@ -268,11 +268,13 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {!isReadOnly ? (
-        <StaleDataBanner
-          account={accountId ? accounts.data?.find((a) => a.id === accountId) : accounts.data?.[0]}
-        />
-      ) : null}
+      <section id="connections">
+        {!isReadOnly ? (
+          <StaleDataBanner
+            account={accountId ? accounts.data?.find((a) => a.id === accountId) : accounts.data?.[0]}
+          />
+        ) : null}
+      </section>
 
       {/* KPI cards — always visible */}
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">

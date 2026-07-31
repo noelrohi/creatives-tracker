@@ -19,6 +19,17 @@ export function storeHandle(shopDomain: string | null | undefined): string | nul
   return handle && handle.length > 0 ? handle : null;
 }
 
+export function orderAdminUrl(params: {
+  shopDomain: string | null | undefined;
+  shopifyOrderId: string;
+}): string | null {
+  const handle = storeHandle(params.shopDomain);
+  if (!handle) return null;
+  const orderId =
+    params.shopifyOrderId.split("/").pop() ?? params.shopifyOrderId;
+  return `https://admin.shopify.com/store/${handle}/orders/${orderId}`;
+}
+
 export function financeSummaryUrl(params: {
   shopDomain: string | null | undefined;
   dateFrom: string;
@@ -46,5 +57,5 @@ export function merRangeUrl(params: { dateFrom: string; dateTo: string }): strin
 
 /** Connector state lives on the dashboard's freshness panel. */
 export function connectionsUrl(): string {
-  return "/";
+  return "/#connections";
 }

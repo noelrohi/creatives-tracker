@@ -109,6 +109,7 @@ export type BucketTotals = {
   identity: {
     sumOfBucketsCents: number;
     actualCents: number;
+    differenceCents: number;
     matches: boolean;
   };
 };
@@ -282,6 +283,7 @@ export async function getBucketTotals(
     identity: {
       sumOfBucketsCents,
       actualCents,
+      differenceCents: actualCents - sumOfBucketsCents - pendingCents,
       matches: identityMatches({
         sumOfBucketsCents,
         pendingCents,
@@ -574,6 +576,7 @@ export async function getRoasTarget(organizationId: string): Promise<number> {
 export type BucketOrderRow = {
   id: string;
   shopifyOrderId: string;
+  orderName: string | null;
   orderDay: string;
   orderCreatedAt: Date;
   netSales: string;
@@ -618,6 +621,7 @@ export async function listBucketOrders(
     .select({
       id: shopifyOrders.id,
       shopifyOrderId: shopifyOrders.shopifyOrderId,
+      orderName: shopifyOrders.orderName,
       orderDay: shopifyOrders.orderDay,
       orderCreatedAt: shopifyOrders.orderCreatedAt,
       netSales: shopifyOrders.netSales,

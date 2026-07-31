@@ -1,15 +1,16 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState, useTransition } from "react";
 import { X } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AttributionBucket } from "@/lib/attribution-bucket";
-import { useTRPC } from "@/lib/trpc/client";
+import { useTRPC, type RouterOutputs } from "@/lib/trpc/client";
 import { bucketColor } from "./buckets";
 import { bucketLabels, orders as copy, page } from "./copy";
 import { formatClock, formatDay, formatMoney } from "./format";
+import { orderAdminUrl } from "./shopify-links";
 
 const PAGE_SIZE = 25;
 
@@ -19,11 +20,12 @@ type PanelProps = {
   dateTo: string;
   currency: string;
   timeZone: string;
+  shopDomain: string | null;
   onClose: () => void;
 };
 
 /**
- * The bucket click-through: an inline list under the waterfall, one child query
+ * The bucket click-through: an inline list under the channel row, one child query
  * per cursor page so "show more" never has to merge pages by hand.
  */
 export function BucketOrdersPanel({
@@ -32,11 +34,53 @@ export function BucketOrdersPanel({
   dateTo,
   currency,
   timeZone,
+  shopDomain,
   onClose,
 }: PanelProps) {
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
   const [cursors, setCursors] = useState<Array<string | null>>([null]);
+  const [downloading, startDownload] = useTransition();
 
   const key = `${bucket}:${dateFrom}:${dateTo}`;
+
+  const downloadCsv = () => {
+    startDownload(async () => {
+      const allRows: BucketOrder[] = [];
+      let cursor: string | null = null;
+
+      do {
+        const pageData: BucketOrdersOutput = await queryClient.fetchQuery(
+          trpc.attribution.bucketOrders.queryOptions({
+            bucket,
+            dateFrom,
+            dateTo,
+            cursor,
+            limit: Math.min(100, 5_000 - allRows.length),
+          }),
+        );
+        allRows.push(...pageData.orders);
+        cursor = pageData.nextCursor;
+      } while (cursor && allRows.length < 5_000);
+
+      const csv = [
+        copy.csvColumns,
+        ...allRows.map((row) => csvRow(row, bucket, timeZone)),
+      ]
+        .map((row) => row.map(csvField).join(","))
+        .join("\n");
+      const url = URL.createObjectURL(
+        new Blob([csv], { type: "text/csv;charset=utf-8" }),
+      );
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `orders-${bucket}-${dateFrom}-${dateTo}.csv`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    });
+  };
 
   return (
     <div className="rounded-md border border-border bg-card">
@@ -52,15 +96,26 @@ export function BucketOrdersPanel({
             {dateFrom === dateTo ? "" : ` – ${formatDay(dateTo)}`}
           </span>
         </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 shrink-0 px-2 text-[12px]"
-          onClick={onClose}
-          aria-label={copy.close}
-        >
-          <X className="size-3.5" />
-        </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-[12px]"
+            onClick={downloadCsv}
+            disabled={downloading}
+          >
+            {copy.download}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-[12px]"
+            onClick={onClose}
+            aria-label={copy.close}
+          >
+            <X className="size-3.5" />
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-[minmax(0,1fr)_92px_92px_minmax(0,1.1fr)_minmax(0,1.1fr)] gap-3 border-b border-border bg-muted/30 px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground/50">
@@ -80,6 +135,7 @@ export function BucketOrdersPanel({
           cursor={cursor}
           currency={currency}
           timeZone={timeZone}
+          shopDomain={shopDomain}
           isFirst={index === 0}
           isLast={index === cursors.length - 1}
           onMore={(next) => setCursors((current) => [...current, next])}
@@ -96,6 +152,7 @@ function OrdersPage({
   cursor,
   currency,
   timeZone,
+  shopDomain,
   isFirst,
   isLast,
   onMore,
@@ -106,6 +163,7 @@ function OrdersPage({
   cursor: string | null;
   currency: string;
   timeZone: string;
+  shopDomain: string | null;
   isFirst: boolean;
   isLast: boolean;
   onMore: (cursor: string) => void;
@@ -154,22 +212,18 @@ function OrdersPage({
   return (
     <>
       {rows.map((row) => {
-        const tags = [
-          row.lastClickUtmSource,
-          row.lastClickUtmMedium,
-          row.lastClickUtmCampaign,
-        ]
-          .filter((part): part is string => !!part && part.length > 0)
-          .join(" / ");
+        const tags = orderTags(row);
 
         return (
           <div
             key={row.id}
             className="grid grid-cols-[minmax(0,1fr)_92px_92px_minmax(0,1.1fr)_minmax(0,1.1fr)] items-center gap-3 border-b border-border/50 px-3 py-2 text-[12px] last:border-0"
           >
-            <span className="truncate tabular-nums">
-              {orderNumber(row.shopifyOrderId)}
-            </span>
+            <OrderLink
+              orderName={row.orderName}
+              shopifyOrderId={row.shopifyOrderId}
+              shopDomain={shopDomain}
+            />
             <span className="tabular-nums text-muted-foreground/80">
               {formatDay(row.orderDay)}
               {" · "}
@@ -179,11 +233,7 @@ function OrdersPage({
               {formatMoney(row.netSales, currency) ?? page.noDataYet}
             </span>
             <span className="truncate text-muted-foreground/80">
-              {row.verificationPending
-                ? copy.tooNew
-                : row.metaVerified
-                  ? copy.matchedMeta
-                  : (row.orderSourceName ?? bucketLabels[bucket])}
+              {orderSource(row, bucket)}
             </span>
             <span className="truncate text-muted-foreground/70">
               {tags.length > 0 ? tags : copy.noTags}
@@ -208,8 +258,74 @@ function OrdersPage({
   );
 }
 
-/** `gid://shopify/Order/123` and bare ids both read as `#123`. */
-function orderNumber(shopifyOrderId: string): string {
+type BucketOrdersOutput =
+  RouterOutputs["attribution"]["bucketOrders"];
+type BucketOrder = BucketOrdersOutput["orders"][number];
+
+function orderNumber(
+  orderName: string | null,
+  shopifyOrderId: string,
+): string {
   const tail = shopifyOrderId.split("/").pop() ?? shopifyOrderId;
-  return `#${tail}`;
+  return orderName ?? `#${tail}`;
+}
+
+function orderSource(row: BucketOrder, bucket: AttributionBucket): string {
+  if (row.verificationPending) return copy.tooNew;
+  if (row.metaVerified) return copy.matchedMeta;
+  return row.orderSourceName ?? bucketLabels[bucket];
+}
+
+function orderTags(row: BucketOrder): string {
+  return [
+    row.lastClickUtmSource,
+    row.lastClickUtmMedium,
+    row.lastClickUtmCampaign,
+  ]
+    .filter((part): part is string => !!part && part.length > 0)
+    .join(" / ");
+}
+
+function csvRow(
+  row: BucketOrder,
+  bucket: AttributionBucket,
+  timeZone: string,
+): string[] {
+  return [
+    orderNumber(row.orderName, row.shopifyOrderId),
+    row.orderDay,
+    formatClock(row.orderCreatedAt, timeZone) ?? "",
+    row.netSales,
+    orderSource(row, bucket),
+    orderTags(row),
+  ];
+}
+
+function csvField(value: string): string {
+  return /[,"\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+function OrderLink({
+  orderName,
+  shopifyOrderId,
+  shopDomain,
+}: {
+  orderName: string | null;
+  shopifyOrderId: string;
+  shopDomain: string | null;
+}) {
+  const label = orderNumber(orderName, shopifyOrderId);
+  const href = orderAdminUrl({ shopDomain, shopifyOrderId });
+  if (!href) return <span className="truncate tabular-nums">{label}</span>;
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="truncate tabular-nums hover:underline"
+    >
+      {label}
+    </a>
+  );
 }

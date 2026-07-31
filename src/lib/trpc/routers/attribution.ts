@@ -67,6 +67,7 @@ export const attributionRouter = router({
         identity: {
           sumOfBuckets: centsToAmount(totals.identity.sumOfBucketsCents),
           actual: centsToAmount(totals.identity.actualCents),
+          difference: centsToAmount(totals.identity.differenceCents),
           matches: totals.identity.matches,
         },
         syncHealth,

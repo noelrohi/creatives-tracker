@@ -266,6 +266,7 @@ describe("mapOrderToRow", () => {
     );
 
     expect(row.orderDay).toBe("2026-07-02");
+    expect(row.orderName).toBe("#1001");
     expect(row.netSales).toBe("100.00");
     expect(row.journeyReady).toBe(true);
     expect(row.pendingSince).toBeNull();
