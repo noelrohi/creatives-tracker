@@ -169,8 +169,13 @@ export function evaluateMetaOverclaim(
       ? null
       : multipleFor(baselineDays);
 
+  // The rule reports movement, so it stays quiet until it can see movement. A
+  // store with too little history has no normal to be wide of, and firing on
+  // size alone would greet every new store with a critical alert for a gap that
+  // may be entirely ordinary for it.
+  if (baselineMultipleRaw === null) return null;
+
   const movedWider =
-    baselineMultipleRaw === null ||
     windowMultipleRaw === null ||
     windowMultipleRaw >= OVERCLAIM_MOVEMENT_MULTIPLE * baselineMultipleRaw;
   if (!movedWider) return null;

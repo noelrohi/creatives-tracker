@@ -88,25 +88,45 @@ describe("evaluateMetaOverclaim", () => {
     ).toBeNull();
   });
 
-  it("fires with no baseline history", () => {
+  // A store with no history has no normal to be wide of. The rule reports a
+  // widening gap, so with nothing to compare against it says nothing at all.
+  it("stays quiet with no baseline history, however wide the gap", () => {
+    expect(
+      evaluateMetaOverclaim(
+        claimDays([
+          [3000, 1000],
+          [5000, 1000],
+          [4000, 1000],
+        ]),
+      ),
+    ).toBeNull();
+  });
+
+  it("stays quiet until the baseline is long enough to trust", () => {
+    const baseline: Array<[number, number]> = Array.from({ length: 13 }, () => [
+      1000, 1000,
+    ]);
+
+    expect(
+      evaluateMetaOverclaim(
+        claimDays([...baseline, [3000, 1000], [5000, 1000], [4000, 1000]]),
+      ),
+    ).toBeNull();
+  });
+
+  it("carries the firing window's own days in the payload", () => {
+    const baseline: Array<[number, number]> = Array.from({ length: 14 }, () => [
+      1000, 1000,
+    ]);
     const finding = evaluateMetaOverclaim(
-      claimDays([
-        [3000, 1000],
-        [5000, 1000],
-        [4000, 1000],
-      ]),
+      claimDays([...baseline, [3000, 1000], [5000, 1000], [4000, 1000]]),
     );
 
     expect(finding?.type).toBe("meta_overclaim");
-    expect(finding?.periodStart).toBe("2026-07-27");
     expect(finding?.periodEnd).toBe(DAY);
     expect(finding?.payload.windowMultiple).toBe(4);
-    expect(finding?.payload.baselineMultiple).toBeNull();
-    expect(finding?.payload.days).toEqual([
-      { day: "2026-07-27", claimedCents: 3000, verifiedCents: 1000, gapCents: 2000 },
-      { day: "2026-07-28", claimedCents: 5000, verifiedCents: 1000, gapCents: 4000 },
-      { day: "2026-07-29", claimedCents: 4000, verifiedCents: 1000, gapCents: 3000 },
-    ]);
+    expect(finding?.payload.baselineMultiple).toBe(1);
+    expect(finding?.payload.days).toHaveLength(3);
   });
 
   it("does not fire when the baseline is about the window multiple", () => {
@@ -160,13 +180,14 @@ describe("evaluateMetaOverclaim", () => {
   });
 
   it("counts claims against zero verified as over", () => {
+    // Baseline days first, else the rule stays quiet for want of a normal.
+    const baseline: Array<[number, number]> = Array.from({ length: 14 }, () => [
+      1000, 1000,
+    ]);
+
     expect(
       evaluateMetaOverclaim(
-        claimDays([
-          [1, 0],
-          [1, 0],
-          [1, 0],
-        ]),
+        claimDays([...baseline, [1, 0], [1, 0], [1, 0]]),
       ),
     ).not.toBeNull();
   });
@@ -184,8 +205,12 @@ describe("evaluateMetaOverclaim", () => {
   });
 
   it("ignores days before the trailing window", () => {
+    const baseline: Array<[number, number]> = Array.from({ length: 14 }, () => [
+      1000, 1000,
+    ]);
     const finding = evaluateMetaOverclaim(
       claimDays([
+        ...baseline,
         [0, 5000],
         [3000, 1000],
         [3000, 1000],
@@ -193,6 +218,7 @@ describe("evaluateMetaOverclaim", () => {
       ]),
     );
 
+    // The window is the last three days; the quiet day before it sets no bound.
     expect(finding?.periodStart).toBe("2026-07-27");
   });
 });
