@@ -27,6 +27,13 @@ function claimDays(
   }));
 }
 
+/** Days at a flat 1x, to give the overclaim rule a normal to compare against. */
+function flatBaseline(
+  days: number,
+): Array<[claimed: number | null, verified: number]> {
+  return Array.from({ length: days }, () => [1000, 1000]);
+}
+
 function spikeDays(shares: Array<[unattributed: number, total: number]>) {
   return shares.map(([unattributedCents, totalCents], index) => ({
     day: addDays(DAY, index - (shares.length - 1)),
@@ -103,30 +110,38 @@ describe("evaluateMetaOverclaim", () => {
   });
 
   it("stays quiet until the baseline is long enough to trust", () => {
-    const baseline: Array<[number, number]> = Array.from({ length: 13 }, () => [
-      1000, 1000,
-    ]);
-
     expect(
       evaluateMetaOverclaim(
-        claimDays([...baseline, [3000, 1000], [5000, 1000], [4000, 1000]]),
+        claimDays([
+          ...flatBaseline(13),
+          [3000, 1000],
+          [5000, 1000],
+          [4000, 1000],
+        ]),
       ),
     ).toBeNull();
   });
 
   it("carries the firing window's own days in the payload", () => {
-    const baseline: Array<[number, number]> = Array.from({ length: 14 }, () => [
-      1000, 1000,
-    ]);
     const finding = evaluateMetaOverclaim(
-      claimDays([...baseline, [3000, 1000], [5000, 1000], [4000, 1000]]),
+      claimDays([
+        ...flatBaseline(14),
+        [3000, 1000],
+        [5000, 1000],
+        [4000, 1000],
+      ]),
     );
 
     expect(finding?.type).toBe("meta_overclaim");
+    expect(finding?.periodStart).toBe("2026-07-27");
     expect(finding?.periodEnd).toBe(DAY);
     expect(finding?.payload.windowMultiple).toBe(4);
     expect(finding?.payload.baselineMultiple).toBe(1);
-    expect(finding?.payload.days).toHaveLength(3);
+    expect(finding?.payload.days).toEqual([
+      { day: "2026-07-27", claimedCents: 3000, verifiedCents: 1000, gapCents: 2000 },
+      { day: "2026-07-28", claimedCents: 5000, verifiedCents: 1000, gapCents: 4000 },
+      { day: "2026-07-29", claimedCents: 4000, verifiedCents: 1000, gapCents: 3000 },
+    ]);
   });
 
   it("does not fire when the baseline is about the window multiple", () => {
@@ -181,13 +196,9 @@ describe("evaluateMetaOverclaim", () => {
 
   it("counts claims against zero verified as over", () => {
     // Baseline days first, else the rule stays quiet for want of a normal.
-    const baseline: Array<[number, number]> = Array.from({ length: 14 }, () => [
-      1000, 1000,
-    ]);
-
     expect(
       evaluateMetaOverclaim(
-        claimDays([...baseline, [1, 0], [1, 0], [1, 0]]),
+        claimDays([...flatBaseline(14), [1, 0], [1, 0], [1, 0]]),
       ),
     ).not.toBeNull();
   });
@@ -205,12 +216,9 @@ describe("evaluateMetaOverclaim", () => {
   });
 
   it("ignores days before the trailing window", () => {
-    const baseline: Array<[number, number]> = Array.from({ length: 14 }, () => [
-      1000, 1000,
-    ]);
     const finding = evaluateMetaOverclaim(
       claimDays([
-        ...baseline,
+        ...flatBaseline(14),
         [0, 5000],
         [3000, 1000],
         [3000, 1000],
