@@ -292,6 +292,13 @@ export const campaigns = {
   noOrders: "no orders",
   empty: "No Meta campaigns ran on these days.",
   unresolvedLabel: "Couldn't tell which campaign",
+  /**
+   * The row can hold money without holding a single order: a refund of an order
+   * from before the range, or spend on an ad whose ad set has been deleted. The
+   * note has to stop short of claiming orders it does not have.
+   */
+  unresolvedNoteNoOrders:
+    "This is Meta money we can't put behind a campaign: a refund of an older order, or spend on an ad whose ad set was deleted. It is still counted in your Meta total.",
   unresolvedNote: (orderCount: number) =>
     `${formatCount(orderCount)} Meta ${
       orderCount === 1 ? "order" : "orders"

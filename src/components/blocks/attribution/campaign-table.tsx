@@ -89,7 +89,9 @@ export function CampaignTable({
 
       {data.unresolved ? (
         <p className="text-[11px] text-muted-foreground/70">
-          {copy.unresolvedNote(data.unresolved.orderCount)}
+          {data.unresolved.orderCount > 0
+            ? copy.unresolvedNote(data.unresolved.orderCount)
+            : copy.unresolvedNoteNoOrders}
         </p>
       ) : null}
 
@@ -165,7 +167,7 @@ function UnresolvedRowCells({
       <th scope="row" className="max-w-0 px-3 py-2 text-left font-normal">
         <span className="block truncate">{copy.unresolvedLabel}</span>
         <span className="block truncate text-[10.5px] text-muted-foreground/60">
-          {copy.orders(row.orderCount)}
+          {row.orderCount > 0 ? copy.orders(row.orderCount) : copy.noOrders}
         </span>
       </th>
 
