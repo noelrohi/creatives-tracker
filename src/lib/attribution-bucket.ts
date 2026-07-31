@@ -14,6 +14,13 @@ export const META_SOURCES = [
   "ig",
   "meta",
 ] as const;
+/**
+ * Link builders name Meta sources after the campaign as often as after the
+ * platform: `fb_reviv3`, `meta-websitekeyinfo`. Only the delimiter forms count
+ * — a bare `fb`/`meta` prefix would swallow unrelated words like "fbook" or
+ * "metabolism".
+ */
+export const META_SOURCE_PREFIXES = ["fb_", "meta_", "meta-"] as const;
 export const GOOGLE_SOURCES = ["google", "adwords"] as const;
 export const TIKTOK_SOURCES = ["tiktok"] as const;
 export const KLAVIYO_SOURCES = ["klaviyo"] as const;
@@ -126,7 +133,10 @@ function includesInsensitive(
 }
 
 export function isMetaSource(value: string | null | undefined) {
-  return includesInsensitive(META_SOURCES, value);
+  if (includesInsensitive(META_SOURCES, value)) return true;
+  const normalized = normalizeLower(value);
+  if (!normalized) return false;
+  return META_SOURCE_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
 export function isGoogleSource(value: string | null | undefined) {

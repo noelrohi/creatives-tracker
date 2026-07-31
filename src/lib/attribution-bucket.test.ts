@@ -203,6 +203,36 @@ describe("assignBucket", () => {
       }
     });
 
+    // Link builders name the source after the campaign, not the platform.
+    it("recognizes prefixed meta sources", () => {
+      expect(
+        assignBucket(
+          input({ lastVisit: visit({ source: "fb_reviv3", medium: "paid" }) }),
+        ).bucket,
+      ).toBe("meta");
+      expect(
+        assignBucket(
+          input({
+            lastVisit: visit({
+              source: "meta-websitekeyinfo",
+              medium: "paid_social",
+            }),
+          }),
+        ).bucket,
+      ).toBe("meta");
+    });
+
+    // Delimiter forms only, so an unrelated word starting "fb" or "meta"
+    // cannot be claimed as Meta traffic.
+    it("does not claim words that merely start with fb or meta", () => {
+      for (const source of ["fbook", "metabolism", "metaphor"]) {
+        expect(
+          assignBucket(input({ lastVisit: visit({ source, medium: "cpc" }) }))
+            .bucket,
+        ).toBe("unattributed");
+      }
+    });
+
     it("buckets google paid clicks", () => {
       for (const source of ["google", "adwords"]) {
         expect(
