@@ -96,7 +96,7 @@
   --attr-claim-soft: color-mix(in oklab, var(--attr-claim) 12%, var(--card));
 }
 
-/* One ramp off the known-source green so the seven segments stay separable,
+/* One ramp off the known-source green so the eight segments stay separable,
    plus the two off-ramp colors the buckets decision fixes. Declared once: both
    modes resolve them against whichever --attr-known / --card is in force.
 
@@ -107,9 +107,10 @@
    identity. */
 :root {
   --attr-bucket-meta: var(--attr-known);
-  --attr-bucket-google: color-mix(in oklab, var(--attr-known) 88%, var(--card));
-  --attr-bucket-klaviyo: color-mix(in oklab, var(--attr-known) 78%, var(--card));
-  --attr-bucket-tiktok: color-mix(in oklab, var(--attr-known) 70%, var(--card));
+  --attr-bucket-google: color-mix(in oklab, var(--attr-known) 92%, var(--card));
+  --attr-bucket-klaviyo: color-mix(in oklab, var(--attr-known) 85%, var(--card));
+  --attr-bucket-tiktok: color-mix(in oklab, var(--attr-known) 77%, var(--card));
+  --attr-bucket-ai: color-mix(in oklab, var(--attr-known) 70%, var(--card));
   --attr-bucket-organic: color-mix(in oklab, var(--attr-known) 62%, var(--card));
   --attr-bucket-unknown: var(--attr-unknown);
   --attr-bucket-none: var(--attr-neutral);

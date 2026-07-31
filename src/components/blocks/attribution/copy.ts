@@ -118,6 +118,7 @@ export const bucketLabels: Record<AttributionBucket, string> = {
   google: "Google ads",
   klaviyo: "Klaviyo email",
   tiktok: "TikTok ads",
+  ai: "AI assistants",
   organic_direct: "Came on their own",
   unattributed: "Source unknown",
   untracked: "No tracking info",
@@ -196,6 +197,7 @@ const CHANNEL_BUCKETS: readonly AttributionBucket[] = [
   "google",
   "klaviyo",
   "tiktok",
+  "ai",
 ];
 
 export const orders = {
@@ -329,6 +331,7 @@ const glossary = {
   organicDirect:
     "Nothing paid in the shopper's last visit. They came to you by themselves.",
   meta: "An order files under Meta ads when the shopper's last visit before checkout came from a Meta ad. We then look for that exact ad on the order to call it confirmed.",
+  ai: "The shopper's last visit came from an AI assistant — ChatGPT and the like — sending them to your store.",
   confirmed:
     "We found the real Shopify order behind what Meta says its ads made, by matching the ad on the order.",
   refunds:
@@ -357,6 +360,7 @@ export const help = {
 /** Per-bucket help, so a row can explain itself without a caption. */
 export const bucketHelp: Partial<Record<AttributionBucket, string>> = {
   meta: glossary.meta,
+  ai: glossary.ai,
   organic_direct: glossary.organicDirect,
   unattributed: glossary.unattributed,
   untracked: glossary.untracked,
@@ -371,6 +375,7 @@ export const howWeCount = {
     { term: bucketLabels.untracked, body: glossary.untracked },
     { term: bucketLabels.organic_direct, body: glossary.organicDirect },
     { term: bucketLabels.meta, body: glossary.meta },
+    { term: bucketLabels.ai, body: glossary.ai },
     { term: "Confirmed", body: glossary.confirmed },
     { term: "Refunds", body: glossary.refunds },
     { term: "Days", body: glossary.days(timeZone) },

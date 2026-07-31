@@ -5,7 +5,7 @@
 
 import { normalizeLower } from "@/lib/text";
 
-export const BUCKET_RULE_VERSION = 2;
+export const BUCKET_RULE_VERSION = 3;
 
 export const META_SOURCES = [
   "facebook",
@@ -258,5 +258,13 @@ export function assignBucket(input: BucketInput): BucketResult {
 
   // 5. UTMs present that match no rule — mistagged paid links (a recognized
   // source that failed the paid-medium gate) deliberately surface here.
+  //
+  // `feedback` lands here on purpose and gets no rule of its own, despite being
+  // 1,205 orders and $93,845 over three months. Every one of those visits is
+  // the bare homepage with no referrer and no medium — only a utm_source — and
+  // the visit hours are flat across all 24, so it is not a scheduled send.
+  // Nobody has identified what writes it. Naming a channel for it would put
+  // real money behind a guess; "we don't know" is the true answer until someone
+  // finds the source.
   return result("unattributed");
 }

@@ -43,7 +43,7 @@ function visit(
 
 describe("assignBucket", () => {
   it("bumps the rule version whenever the tables below change", () => {
-    expect(BUCKET_RULE_VERSION).toBe(2);
+    expect(BUCKET_RULE_VERSION).toBe(3);
   });
 
   describe("rule 1 — untracked", () => {
@@ -402,6 +402,16 @@ describe("assignBucket", () => {
     it("surfaces a recognized source tagged with no medium at all", () => {
       expect(
         assignBucket(input({ lastVisit: visit({ source: "tiktok" }) })).bucket,
+      ).toBe("unattributed");
+    });
+
+    // Deliberate: `feedback` is 1,205 orders and $93,845 over three months,
+    // always the bare homepage with no referrer and no medium, at every hour
+    // of the day. Nobody has identified what writes it, so it stays unknown
+    // rather than being guessed into a channel. Do not "fix" this.
+    it("leaves feedback traffic unattributed on purpose", () => {
+      expect(
+        assignBucket(input({ lastVisit: visit({ source: "feedback" }) })).bucket,
       ).toBe("unattributed");
     });
 

@@ -1,0 +1,1 @@
+ALTER TYPE "public"."attribution_bucket" ADD VALUE 'ai' BEFORE 'organic_direct';
