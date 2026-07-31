@@ -627,6 +627,7 @@ export type CampaignOrderSideRow = {
 
 export type CampaignRefundSideRow = {
   campaignId: string | null;
+  name: string | null;
   refunded: string;
 };
 
@@ -722,6 +723,7 @@ export async function getCampaignLedger(
     db
       .select({
         campaignId: resolvedCampaignId,
+        name: resolvedCampaignName,
         refunded: sql<string>`coalesce(sum(${shopifyRefunds.amount}), 0)`,
       })
       .from(shopifyRefunds)
@@ -730,7 +732,7 @@ export async function getCampaignLedger(
       .leftJoin(journeyAdSet, journeyAdSetJoin)
       .leftJoin(journeyCampaign, eq(journeyCampaign.id, journeyAdSet.campaignId))
       .where(and(refundRangeWhere(scope), eq(shopifyOrders.bucket, "meta")))
-      .groupBy(resolvedCampaignId),
+      .groupBy(resolvedCampaignId, resolvedCampaignName),
   ]);
 
   return mergeCampaignLedger({ metaSide, orderSide, refundSide });
@@ -802,8 +804,10 @@ export function mergeCampaignLedger(params: {
       sawUnresolved = true;
       continue;
     }
-    const row = rows.get(entry.campaignId);
-    if (!row) continue;
+    // A refund can be the only thing a campaign has in the range — a paused
+    // campaign, no spend, its old order given back today. Creating the row
+    // rather than skipping it keeps the rows summing to the Meta bucket.
+    const row = rowFor(entry.campaignId, entry.name ?? "");
     row.confirmedRevenueCents -= toCents(entry.refunded);
   }
 

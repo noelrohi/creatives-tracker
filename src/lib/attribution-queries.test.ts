@@ -275,7 +275,7 @@ describe("mergeCampaignLedger", () => {
           orderCount: 3,
         },
       ],
-      refundSide: [{ campaignId: "camp_1", refunded: "15.00" }],
+      refundSide: [{ campaignId: "camp_1", name: "Trybe Campaign", refunded: "15.00" }],
     });
 
     expect(ledger.campaigns).toEqual([
@@ -288,6 +288,32 @@ describe("mergeCampaignLedger", () => {
         confirmedRevenueCents: 7_500,
         orderCount: 3,
         roas: 0.75,
+      },
+    ]);
+    expect(ledger.unresolved).toBeNull();
+  });
+
+  // A paused campaign can have nothing in the range but a refund of an older
+  // order. Dropping it would break the one guarantee the ledger makes.
+  it("keeps a campaign whose only movement in the range is a refund", () => {
+    const ledger = mergeCampaignLedger({
+      metaSide: [],
+      orderSide: [],
+      refundSide: [
+        { campaignId: "camp_paused", name: "Winter Sale", refunded: "40.00" },
+      ],
+    });
+
+    expect(ledger.campaigns).toEqual([
+      {
+        campaignId: "camp_paused",
+        name: "Winter Sale",
+        spendCents: null,
+        claimedCents: null,
+        labeledRowShare: 0,
+        confirmedRevenueCents: -4_000,
+        orderCount: 0,
+        roas: null,
       },
     ]);
     expect(ledger.unresolved).toBeNull();
@@ -344,7 +370,7 @@ describe("mergeCampaignLedger", () => {
       orderSide: [
         { campaignId: null, name: null, gross: "244.50", orderCount: 2 },
       ],
-      refundSide: [{ campaignId: null, refunded: "4.50" }],
+      refundSide: [{ campaignId: null, name: null, refunded: "4.50" }],
     });
 
     expect(ledger.campaigns).toEqual([]);
@@ -365,8 +391,8 @@ describe("mergeCampaignLedger", () => {
         { campaignId: null, name: null, gross: "244.50", orderCount: 2 },
       ],
       refundSide: [
-        { campaignId: "camp_1", refunded: "15.00" },
-        { campaignId: null, refunded: "4.50" },
+        { campaignId: "camp_1", name: "Trybe Campaign", refunded: "15.00" },
+        { campaignId: null, name: null, refunded: "4.50" },
       ],
     });
 
@@ -377,16 +403,6 @@ describe("mergeCampaignLedger", () => {
     expect(total).toBe(9_000 + 12_057 + 24_450 - 1_500 - 450);
   });
 
-  it("ignores a refund whose campaign has no orders in the range", () => {
-    const ledger = mergeCampaignLedger({
-      metaSide: [],
-      orderSide: [],
-      refundSide: [{ campaignId: "camp_gone", refunded: "15.00" }],
-    });
-
-    expect(ledger.campaigns).toEqual([]);
-    expect(ledger.unresolved).toBeNull();
-  });
 });
 
 describe("sortCampaignLedger", () => {
