@@ -51,7 +51,7 @@ function visit(
 
 describe("assignBucket", () => {
   it("bumps the rule version whenever the tables below change", () => {
-    expect(BUCKET_RULE_VERSION).toBe(3);
+    expect(BUCKET_RULE_VERSION).toBe(4);
   });
 
   describe("rule 1 — untracked", () => {

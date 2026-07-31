@@ -5,7 +5,7 @@
 
 import { normalizeLower } from "@/lib/text";
 
-export const BUCKET_RULE_VERSION = 3;
+export const BUCKET_RULE_VERSION = 4;
 
 export const META_SOURCES = [
   "facebook",
