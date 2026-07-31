@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AI_SOURCES,
   assignBucket,
   BUCKET_RULE_VERSION,
   isPaidLookingMedium,
@@ -241,6 +242,26 @@ describe("assignBucket", () => {
             input({ lastVisit: visit({ source: "klaviyo", medium }) }),
           ).bucket,
         ).toBe("klaviyo");
+      }
+    });
+
+    // An assistant tags its links however it likes: chatgpt.com arrives with no
+    // medium at all and with `feed`, and both are the same traffic.
+    it("buckets an AI assistant on any medium", () => {
+      for (const medium of [null, "feed", "referral"]) {
+        expect(
+          assignBucket(
+            input({ lastVisit: visit({ source: "chatgpt.com", medium }) }),
+          ).bucket,
+        ).toBe("ai");
+      }
+    });
+
+    it("recognizes every AI source", () => {
+      for (const source of AI_SOURCES) {
+        expect(
+          assignBucket(input({ lastVisit: visit({ source }) })).bucket,
+        ).toBe("ai");
       }
     });
 

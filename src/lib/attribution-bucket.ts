@@ -17,6 +17,17 @@ export const META_SOURCES = [
 export const GOOGLE_SOURCES = ["google", "adwords"] as const;
 export const TIKTOK_SOURCES = ["tiktok"] as const;
 export const KLAVIYO_SOURCES = ["klaviyo"] as const;
+/**
+ * Assistants that send shoppers on. Only `chatgpt.com` appears in this store's
+ * data so far; the other three are the same kind of referrer under different
+ * names, listed so the next one to show up is already covered.
+ */
+export const AI_SOURCES = [
+  "chatgpt.com",
+  "perplexity.ai",
+  "claude.ai",
+  "gemini.google.com",
+] as const;
 export const PAID_MEDIUMS = ["paid", "cpc", "ppc", "paid_social"] as const;
 
 /**
@@ -70,6 +81,7 @@ export type AttributionBucket =
   | "google"
   | "klaviyo"
   | "tiktok"
+  | "ai"
   | "organic_direct"
   | "unattributed"
   | "untracked";
@@ -120,6 +132,10 @@ export function isTiktokSource(value: string | null | undefined) {
 
 export function isKlaviyoSource(value: string | null | undefined) {
   return includesInsensitive(KLAVIYO_SOURCES, value);
+}
+
+export function isAiSource(value: string | null | undefined) {
+  return includesInsensitive(AI_SOURCES, value);
 }
 
 export function isPaidMedium(value: string | null | undefined) {
@@ -202,6 +218,11 @@ export function assignBucket(input: BucketInput): BucketResult {
 
   // Klaviyo owns any medium (email, sms, flows all tag as klaviyo).
   if (isKlaviyoSource(utmSource)) return result("klaviyo");
+
+  // AI assistants own any medium too — an assistant tags its outbound links
+  // however it likes, and chatgpt.com arrives here with both no medium at all
+  // and `feed`.
+  if (isAiSource(utmSource)) return result("ai");
 
   // 4. Organic / direct: an untagged visit (direct or an organic referrer), or a
   // visit whose medium says it wasn't paid.
