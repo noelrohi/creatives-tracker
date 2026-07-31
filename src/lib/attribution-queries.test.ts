@@ -249,7 +249,6 @@ function metaSideRow(overrides: Partial<{
   name: string | null;
   spend: string;
   claimed: string | null;
-  totalRows: number;
   labeledRows: number;
 }> = {}) {
   return {
@@ -257,7 +256,6 @@ function metaSideRow(overrides: Partial<{
     name: "Trybe Campaign",
     spend: "100.00",
     claimed: "80.00",
-    totalRows: 7,
     labeledRows: 7,
     ...overrides,
   };
@@ -284,7 +282,6 @@ describe("mergeCampaignLedger", () => {
         name: "Trybe Campaign",
         spendCents: 10_000,
         claimedCents: 8_000,
-        labeledRowShare: 1,
         confirmedRevenueCents: 7_500,
         orderCount: 3,
         roas: 0.75,
@@ -310,7 +307,6 @@ describe("mergeCampaignLedger", () => {
         name: "Winter Sale",
         spendCents: null,
         claimedCents: null,
-        labeledRowShare: 0,
         confirmedRevenueCents: -4_000,
         orderCount: 0,
         roas: null,
@@ -361,7 +357,6 @@ describe("mergeCampaignLedger", () => {
 
     expect(ledger.campaigns[0].claimedCents).toBeNull();
     expect(ledger.campaigns[0].spendCents).toBe(10_000);
-    expect(ledger.campaigns[0].labeledRowShare).toBe(0);
   });
 
   it("collects orders that resolved to no campaign into one row", () => {
@@ -470,7 +465,6 @@ describe("sortCampaignLedger", () => {
       name,
       spendCents,
       claimedCents: null,
-      labeledRowShare: 1,
       confirmedRevenueCents,
       orderCount: 0,
       roas,

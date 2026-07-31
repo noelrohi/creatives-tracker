@@ -195,7 +195,6 @@ export type CampaignLedgerRow = {
   spendCents: number | null;
   /** Null when no row in the range carries window labels (§3.2). */
   claimedCents: number | null;
-  labeledRowShare: number;
   confirmedRevenueCents: number;
   orderCount: number;
   /** Payback per $1 — null without spend, never a fake 0. */
@@ -620,7 +619,7 @@ export type CampaignMetaSideRow = {
   name: string | null;
   spend: string;
   claimed: string | null;
-  totalRows: number;
+  /** Only what `labeledClaimCents` needs to tell a real $0 from no data. */
   labeledRows: number;
 };
 
@@ -694,7 +693,6 @@ export async function getCampaignLedger(
         name: campaigns.name,
         spend: sql<string>`coalesce(sum(${performanceLogs.spend}), 0)`,
         claimed: CLAIMED_WINDOWS_EXPRESSION,
-        totalRows: sql<number>`count(*)::int`,
         labeledRows: sql<number>`count(*) filter (
           where ${performanceLogs.purchaseValue7dClick} is not null
              or ${performanceLogs.purchaseValue1dView} is not null
@@ -782,7 +780,6 @@ export function mergeCampaignLedger(params: {
       name,
       spendCents: null,
       claimedCents: null,
-      labeledRowShare: 0,
       confirmedRevenueCents: 0,
       orderCount: 0,
       roas: null,
@@ -807,7 +804,6 @@ export function mergeCampaignLedger(params: {
     const row = rowFor(entry.campaignId, entry.name ?? "");
     row.spendCents = toCents(entry.spend);
     row.claimedCents = labeledClaimCents(entry.claimed, entry.labeledRows);
-    row.labeledRowShare = labeledShare(entry.labeledRows, entry.totalRows);
   }
 
   for (const entry of params.orderSide) {

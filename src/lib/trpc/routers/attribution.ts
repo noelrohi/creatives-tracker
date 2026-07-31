@@ -155,7 +155,6 @@ export const attributionRouter = router({
           spend: row.spendCents === null ? null : centsToAmount(row.spendCents),
           claimed:
             row.claimedCents === null ? null : centsToAmount(row.claimedCents),
-          labeledRowShare: row.labeledRowShare,
           confirmedRevenue: centsToAmount(row.confirmedRevenueCents),
           orderCount: row.orderCount,
           // Null when there is no spend — "can't compute", not zero.
