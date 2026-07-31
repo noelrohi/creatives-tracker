@@ -29,6 +29,13 @@ export const AI_SOURCES = [
   "gemini.google.com",
 ] as const;
 export const PAID_MEDIUMS = ["paid", "cpc", "ppc", "paid_social"] as const;
+/**
+ * Google Shopping's free listing feed. Not paid search, so it never passes the
+ * paid-medium gate, but it is Google traffic and belongs in the Google row.
+ * Gated on the source too: Google must not own any medium, or `google` /
+ * `organic` — organic search — would stop being organic_direct.
+ */
+export const GOOGLE_FEED_MEDIUMS = ["product_sync"] as const;
 
 /**
  * Mediums that say "we know it wasn't paid" (spec §4.4: the last click is
@@ -138,6 +145,10 @@ export function isAiSource(value: string | null | undefined) {
   return includesInsensitive(AI_SOURCES, value);
 }
 
+export function isGoogleFeedMedium(value: string | null | undefined) {
+  return includesInsensitive(GOOGLE_FEED_MEDIUMS, value);
+}
+
 export function isPaidMedium(value: string | null | undefined) {
   return includesInsensitive(PAID_MEDIUMS, value);
 }
@@ -214,6 +225,12 @@ export function assignBucket(input: BucketInput): BucketResult {
     }
     if (isGoogleSource(utmSource)) return result("google");
     if (isTiktokSource(utmSource)) return result("tiktok");
+  }
+
+  // Google Shopping's free listing feed: unpaid, so it never reaches the gate
+  // above, but it is still Google sending the shopper.
+  if (isGoogleSource(utmSource) && isGoogleFeedMedium(utmMedium)) {
+    return result("google");
   }
 
   // Klaviyo owns any medium (email, sms, flows all tag as klaviyo).

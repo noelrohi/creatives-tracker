@@ -212,6 +212,25 @@ describe("assignBucket", () => {
       }
     });
 
+    // Google Shopping's free listing feed is unpaid, but it is Google traffic.
+    it("buckets the google product feed as google", () => {
+      expect(
+        assignBucket(
+          input({ lastVisit: visit({ source: "google", medium: "product_sync" }) }),
+        ).bucket,
+      ).toBe("google");
+    });
+
+    // The feed rule is gated on the medium as well as the source, so Google
+    // does not get to own every medium: organic search stays organic.
+    it("leaves organic google search as organic_direct", () => {
+      expect(
+        assignBucket(
+          input({ lastVisit: visit({ source: "google", medium: "organic" }) }),
+        ).bucket,
+      ).toBe("organic_direct");
+    });
+
     it("buckets tiktok paid clicks", () => {
       expect(
         assignBucket(
