@@ -479,6 +479,11 @@ export function findingHeadline(item: FindingItem, ctx: VoiceContext): string {
       if (windowMultiple !== null && baselineMultiple !== null) {
         return `Meta is running ${windowMultiple}× ahead — its usual is ${baselineMultiple}×`;
       }
+      // No baseline yet: the measured multiple is still known, and saying it
+      // beats falling back to the rule's threshold as though it were measured.
+      if (windowMultiple !== null) {
+        return `Meta is running ${windowMultiple}× ahead of the orders we can match`;
+      }
       const multiple = num(payload, "multiple");
       if (multiple === 2) return "Meta says it made twice what we can confirm";
       return multiple === null
@@ -541,7 +546,12 @@ export function findingBody(item: FindingItem, ctx: VoiceContext): string[] {
         gap === null
           ? "The two numbers are far apart."
           : `That leaves ${money(gap)} we can't put behind a Shopify order.`,
-        "Meta counts a sale when someone buys within 7 days of clicking or 1 day of seeing one of its ads — across devices — so its number always runs ahead of the orders we can match. A steady gap is normal. This fired because the gap is wider than yours usually is.",
+        // Only the first sentence is always true. Whether the gap is unusual
+        // is a claim we can only make once there is a baseline to compare it
+        // against — without one, the rule fired on size alone and says so.
+        num(payload, "baselineMultiple") === null
+          ? "Meta counts a sale when someone buys within 7 days of clicking or 1 day of seeing one of its ads — across devices — so its number always runs ahead of the orders we can match. We don't have enough weeks behind you yet to know what a normal gap looks like for your store, so this one is flagged on size alone."
+          : "Meta counts a sale when someone buys within 7 days of clicking or 1 day of seeing one of its ads — across devices — so its number always runs ahead of the orders we can match. A steady gap is normal. This fired because the gap is wider than yours usually is.",
       ];
     }
 
