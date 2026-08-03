@@ -3,6 +3,7 @@ import {
   assertValidIanaTimezone,
   assertValidStoreDay,
   deriveShopifyEvidenceWindow,
+  formatStoreDayAtInstant,
   inclusiveStoreDaysToHalfOpenUtc,
 } from "@/lib/evidence-window";
 
@@ -110,6 +111,42 @@ describe("Shopify evidence windows", () => {
     expect(initial.to.toISOString()).toBe("2026-07-31T16:00:00.000Z");
     expect(incremental.from.toISOString()).toBe("2026-07-24T16:00:00.000Z");
     expect(incremental.to.toISOString()).toBe("2026-07-31T16:00:00.000Z");
+  });
+
+  it("derives 90 inclusive store days across spring DST", () => {
+    const anchorStoreDay = formatStoreDayAtInstant(
+      new Date("2026-03-09T04:30:00.000Z"),
+      "America/New_York",
+    );
+    const window = deriveShopifyEvidenceWindow({
+      mode: "initial_90d",
+      anchorStoreDay,
+      timeZone: "America/New_York",
+    });
+    expect(anchorStoreDay).toBe("2026-03-09");
+    expect(window.from.toISOString()).toBe("2025-12-10T05:00:00.000Z");
+    expect(window.to.toISOString()).toBe("2026-03-10T04:00:00.000Z");
+  });
+
+  it("derives seven inclusive store days across fall DST", () => {
+    const anchorStoreDay = formatStoreDayAtInstant(
+      new Date("2026-11-02T05:30:00.000Z"),
+      "America/New_York",
+    );
+    const window = deriveShopifyEvidenceWindow({
+      mode: "incremental_7d",
+      anchorStoreDay,
+      timeZone: "America/New_York",
+    });
+    expect(anchorStoreDay).toBe("2026-11-02");
+    expect(window.from.toISOString()).toBe("2026-10-27T04:00:00.000Z");
+    expect(window.to.toISOString()).toBe("2026-11-03T05:00:00.000Z");
+  });
+
+  it("rejects invalid instants before formatting a store day", () => {
+    expect(() =>
+      formatStoreDayAtInstant(new Date(Number.NaN), "UTC"),
+    ).toThrow("valid date");
   });
 
   it("does not depend on the process timezone", () => {

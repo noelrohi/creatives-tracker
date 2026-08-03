@@ -51,9 +51,13 @@ const {
   failShopifyEvidenceRunAfterRetryExhaustion,
   finishShopifyEvidenceRun,
   listEvidenceOrderBatch,
+  loadShopifyEvidenceRun,
   loadEvidenceStore,
+  loadEvidenceRunByStartTriggerId,
   persistShopifyIdentityEvidence,
+  reconcileShopifyEvidenceStoreForStart,
   recordFirstBatchTriggerRunId,
+  resolveConfiguredEvidenceStore,
   renewShopifyEvidenceRunHeartbeat,
   replaceCompleteShopifyLineSet,
   startShopifyEvidenceRun,
@@ -450,6 +454,122 @@ describeIfDb("Shopify evidence persistence", () => {
     expect(second.nextCursor).toBeNull();
     await expect(countEvidenceOrders(scope, window)).resolves.toBe(2);
     await expect(countEvidenceOrders(otherScope, window)).resolves.toBe(1);
+  });
+
+  it("resolves exactly one normalized configured store and fails closed otherwise", async () => {
+    await expect(
+      resolveConfiguredEvidenceStore("  STORE-A.MYSHOPIFY.COM  "),
+    ).resolves.toMatchObject({
+      id: "store_a",
+      organizationId: "org_a",
+      shopDomain: "store-a.myshopify.com",
+      ianaTimezone: "UTC",
+    });
+    await expect(
+      resolveConfiguredEvidenceStore("missing.myshopify.com"),
+    ).rejects.toThrow("exactly one configured Shopify evidence store");
+
+    await testPool!.query(
+      `INSERT INTO shopify_store (
+         id, organization_id, shop_domain, iana_timezone, currency
+       ) VALUES (
+         'store_case_duplicate', 'org_b', 'STORE-A.MYSHOPIFY.COM', 'UTC', 'USD'
+       )`,
+    );
+    await expect(
+      resolveConfiguredEvidenceStore("store-a.myshopify.com"),
+    ).rejects.toThrow("exactly one configured Shopify evidence store");
+    await expect(resolveConfiguredEvidenceStore("not a domain")).rejects.toThrow(
+      "invalid",
+    );
+  });
+
+  it("reloads complete persisted run authority and decodes only a valid cursor", async () => {
+    const run = await startRun("trigger-load-authority");
+    await checkpointShopifyEvidenceRun(scope, run.id, null, FIRST_CURSOR, {
+      counts: { ...ZERO_COUNTS, ordersRead: 1 },
+      identityCapability: "available",
+      lineCompleteness: "complete",
+    });
+    const loaded = await loadShopifyEvidenceRun(run.id);
+    expect(loaded).toMatchObject({
+      id: run.id,
+      startTriggerRunId: "trigger-load-authority",
+      scope,
+      organizationId: scope.organizationId,
+      storeId: scope.storeId,
+      mode: "incremental_7d",
+      storeTimezone: "UTC",
+      anchorStoreDay: "2026-07-31",
+      status: "running",
+      cursor: FIRST_CURSOR,
+      counts: { ...ZERO_COUNTS, ordersRead: 1 },
+      identityCapability: "available",
+      lineCompleteness: "complete",
+    });
+    expect(loaded!.window).toEqual({
+      from: new Date("2026-07-25T00:00:00.000Z"),
+      to: new Date("2026-08-01T00:00:00.000Z"),
+    });
+    await expect(
+      loadEvidenceRunByStartTriggerId("trigger-load-authority"),
+    ).resolves.toEqual(loaded);
+    await expect(loadShopifyEvidenceRun("missing-run")).resolves.toBeNull();
+
+    await testPool!.query(
+      `UPDATE shopify_evidence_sync_run SET cursor = 'not-base64-json' WHERE id = $1`,
+      [run.id],
+    );
+    await expect(loadShopifyEvidenceRun(run.id)).rejects.toThrow(
+      "persisted cursor is invalid",
+    );
+  });
+
+  it("rejects unsafe persisted lifecycle identifiers and error text on reload", async () => {
+    const run = await startRun("trigger-load-lifecycle");
+    await testPool!.query(
+      `UPDATE shopify_evidence_sync_run SET finished_at = now() WHERE id = $1`,
+      [run.id],
+    );
+    await expect(loadShopifyEvidenceRun(run.id)).rejects.toThrow(
+      "persisted lifecycle is invalid",
+    );
+
+    await testPool!.query(
+      `UPDATE shopify_evidence_sync_run
+       SET finished_at = null, first_batch_trigger_run_id = '' WHERE id = $1`,
+      [run.id],
+    );
+    await expect(loadShopifyEvidenceRun(run.id)).rejects.toThrow(
+      "persisted trigger ID is invalid",
+    );
+
+    await testPool!.query(
+      `UPDATE shopify_evidence_sync_run
+       SET first_batch_trigger_run_id = null, error = 'raw provider detail'
+       WHERE id = $1`,
+      [run.id],
+    );
+    await expect(loadShopifyEvidenceRun(run.id)).rejects.toThrow(
+      "persisted error code is invalid",
+    );
+  });
+
+  it("reconciles expired store leases before a probe and rejects live ownership", async () => {
+    const now = new Date("2026-08-01T00:00:00.000Z");
+    const live = await startRun("trigger-preflight-live", now);
+    await expect(
+      reconcileShopifyEvidenceStoreForStart(scope, now),
+    ).rejects.toThrow("already owns this store");
+    const expiredNow = new Date(
+      now.getTime() + SHOPIFY_EVIDENCE_STALE_AFTER_MS,
+    );
+    await expect(
+      reconcileShopifyEvidenceStoreForStart(scope, expiredNow),
+    ).resolves.toEqual({ expiredRunId: live.id });
+    await expect(
+      reconcileShopifyEvidenceStoreForStart(scope, expiredNow),
+    ).resolves.toEqual({ expiredRunId: null });
   });
 
   it("replaces complete lines, clears with complete empty, and rolls back invalid insertion", async () => {
@@ -2478,6 +2598,73 @@ describeIfDb("Shopify evidence persistence", () => {
       orders_read: 1,
       line_completeness: "complete",
     });
+  });
+
+  it("records a terminal first-batch handoff without changing terminal state", async () => {
+    const run = await startRun("trigger-terminal-handoff");
+    await finishShopifyEvidenceRun({
+      scope,
+      runId: run.id,
+      expectedCursor: null,
+      status: "success",
+      progress: {
+        counts: ZERO_COUNTS,
+        identityCapability: "unknown",
+        lineCompleteness: "unknown",
+      },
+      now: new Date("2026-08-01T00:01:00.000Z"),
+    });
+    const before = await testPool!.query(
+      `SELECT
+         to_jsonb(run_row) - 'first_batch_trigger_run_id' AS stable,
+         to_jsonb(run_row) AS run,
+         first_batch_trigger_run_id
+       FROM shopify_evidence_sync_run AS run_row WHERE id = $1`,
+      [run.id],
+    );
+
+    await recordFirstBatchTriggerRunId({
+      scope,
+      runId: run.id,
+      triggerRunId: "terminal-batch-trigger",
+    });
+    const recorded = await testPool!.query(
+      `SELECT
+         to_jsonb(run_row) - 'first_batch_trigger_run_id' AS stable,
+         to_jsonb(run_row) AS run,
+         first_batch_trigger_run_id
+       FROM shopify_evidence_sync_run AS run_row WHERE id = $1`,
+      [run.id],
+    );
+    expect(recorded.rows[0].stable).toEqual(before.rows[0].stable);
+    expect(recorded.rows[0].first_batch_trigger_run_id).toBe(
+      "terminal-batch-trigger",
+    );
+
+    await recordFirstBatchTriggerRunId({
+      scope,
+      runId: run.id,
+      triggerRunId: "terminal-batch-trigger",
+    });
+    const replayed = await testPool!.query(
+      `SELECT to_jsonb(run_row) AS run
+       FROM shopify_evidence_sync_run AS run_row WHERE id = $1`,
+      [run.id],
+    );
+    expect(replayed.rows[0].run).toEqual(recorded.rows[0].run);
+    await expect(
+      recordFirstBatchTriggerRunId({
+        scope,
+        runId: run.id,
+        triggerRunId: "conflicting-terminal-trigger",
+      }),
+    ).rejects.toThrow("handoff conflicts");
+    const afterConflict = await testPool!.query(
+      `SELECT to_jsonb(run_row) AS run
+       FROM shopify_evidence_sync_run AS run_row WHERE id = $1`,
+      [run.id],
+    );
+    expect(afterConflict.rows).toEqual(replayed.rows);
   });
 
   it("enforces scoped run lifecycle CAS, monotonic progress, and terminal idempotency", async () => {

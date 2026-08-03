@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   IncompleteShopifyLineSetError,
@@ -693,6 +695,16 @@ describe("fetchShopifyIdentityEvidence", () => {
 });
 
 describe("probeShopifyEvidenceCapabilities", () => {
+  it("keeps raw scope handles in memory and outside the persisted Trigger boundary", () => {
+    const source = readFileSync(
+      path.resolve(process.cwd(), "trigger/shopify-evidence-sync.ts"),
+      "utf8",
+    );
+    expect(source).not.toContain("capabilities.scopes");
+    expect(source).not.toContain("scopes:");
+    expect(source).not.toContain("logger.info(capabilities");
+  });
+
   it("distinguishes exact order, historical, and identity scope handles", async () => {
     const graphql = mockGraphql().mockResolvedValue({
       currentAppInstallation: {

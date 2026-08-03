@@ -20,6 +20,16 @@ import type {
   EvidenceOrderBatch,
   EvidenceOrderCursor,
 } from "@/lib/shopify-evidence-store";
+import {
+  assertExactEvidenceContinuationPayload,
+  assertExactEvidenceStartPayload,
+  executeShopifyEvidenceBatch,
+  executeShopifyEvidenceStart,
+  handleShopifyEvidenceBatchTerminalFailure,
+  handleShopifyEvidenceStartTerminalFailure,
+  type ShopifyEvidenceBatchOrchestrationDependencies,
+  type ShopifyEvidenceStartOrchestrationDependencies,
+} from "../../trigger/shopify-evidence-sync";
 
 const NOW = new Date("2026-07-31T01:00:00Z");
 const ZERO_COUNTS = {
@@ -720,5 +730,1046 @@ describe("runShopifyEvidenceBatch", () => {
       }),
     );
     expect(result.committedCursor).toEqual(ORDER_CURSOR);
+  });
+});
+
+const ORCHESTRATION_CURSOR = {
+  orderCreatedAt: new Date("2026-07-30T01:00:00.000Z"),
+  id: "order_internal_1",
+};
+
+function orchestrationRun(
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    id: "evidence_run_1",
+    startTriggerRunId: "trigger_start_1",
+    firstBatchTriggerRunId: "trigger_batch_1",
+    organizationId: "org_a",
+    storeId: "store_a",
+    mode: "incremental_7d" as const,
+    storeTimezone: "UTC",
+    anchorStoreDay: "2026-07-31",
+    requestedFrom: new Date("2026-07-25T00:00:00.000Z"),
+    requestedTo: new Date("2026-08-01T00:00:00.000Z"),
+    cursor: ORCHESTRATION_CURSOR,
+    status: "running" as const,
+    identityCapability: "available" as const,
+    lineCompleteness: "complete" as const,
+    ordersRead: 4,
+    ordersEnriched: 4,
+    ordersPartial: 0,
+    ordersUnavailable: 0,
+    warnings: 0,
+    failures: 0,
+    error: null,
+    heartbeatAt: new Date("2026-07-31T23:55:00.000Z"),
+    startedAt: new Date("2026-07-31T23:50:00.000Z"),
+    finishedAt: null,
+    scope: { organizationId: "org_a", storeId: "store_a" },
+    window: {
+      from: new Date("2026-07-25T00:00:00.000Z"),
+      to: new Date("2026-08-01T00:00:00.000Z"),
+    },
+    counts: {
+      ordersRead: 4,
+      ordersEnriched: 4,
+      ordersPartial: 0,
+      ordersUnavailable: 0,
+      warnings: 0,
+      failures: 0,
+    },
+    ...overrides,
+  };
+}
+
+function batchOrchestrationDeps(input: {
+  run?: ReturnType<typeof orchestrationRun> | null;
+  result?: Awaited<ReturnType<typeof runShopifyEvidenceBatch>>;
+} = {}) {
+  const run = input.run === undefined ? orchestrationRun() : input.run;
+  const result =
+    input.result ??
+    ({
+      kind: "terminal",
+      status: "success",
+      nextCursor: null,
+      committedCursor: ORCHESTRATION_CURSOR,
+      counts: orchestrationRun().counts,
+      identityCapability: "available",
+      lineCompleteness: "complete",
+    } as const);
+  const mocks = {
+    loadRun: vi.fn(async () => run),
+    renewHeartbeat: vi.fn(async () => undefined),
+    runBatch: vi.fn(async () => result),
+    enqueue: vi.fn(async () => ({ id: "next_trigger" })),
+    finishRun: vi.fn(async () => undefined),
+    setMetadata: vi.fn(),
+  };
+  return {
+    mocks,
+    deps: mocks as unknown as ShopifyEvidenceBatchOrchestrationDependencies,
+  };
+}
+
+function startOrchestrationDeps(input: {
+  existing?: ReturnType<typeof orchestrationRun> | null;
+  reloaded?: ReturnType<typeof orchestrationRun> | null;
+  expired?: boolean;
+  capabilities?: {
+    orderScope: "available" | "unavailable";
+    historicalOrders: "available" | "unavailable";
+    identityScope: "declared" | "missing";
+    scopes: string[];
+  };
+  insertedStatus?: "running" | "success" | "partial" | "failed";
+} = {}) {
+  const existing = input.existing ?? null;
+  const reloaded =
+    input.reloaded === undefined ? orchestrationRun() : input.reloaded;
+  const validateSecretPolicy = vi.fn();
+  const mocks = {
+    loadByStartTriggerId: vi.fn(async () => existing),
+    loadRun: vi.fn(async () => reloaded),
+    failExpiredRun: vi.fn(async () => ({ changed: input.expired ?? false })),
+    captureSecretPolicy: vi.fn(() => validateSecretPolicy),
+    validateSecretPolicy,
+    getConfiguredDomain: vi.fn(() => "store-a.myshopify.com"),
+    resolveStore: vi.fn(async () => ({
+      id: "store_a",
+      organizationId: "org_a",
+      shopDomain: "store-a.myshopify.com",
+      ianaTimezone: "UTC",
+    })),
+    reconcileStore: vi.fn(async () => ({ expiredRunId: null })),
+    probeCapabilities: vi.fn(
+      async () =>
+        input.capabilities ?? {
+          orderScope: "available" as const,
+          historicalOrders: "available" as const,
+          identityScope: "declared" as const,
+          scopes: ["read_orders", "read_all_orders", "read_customers"],
+        },
+    ),
+    countOrders: vi.fn(async () => 3),
+    startRun: vi.fn(async () => ({
+      id: "evidence_run_1",
+      status: input.insertedStatus ?? ("running" as const),
+      firstBatchTriggerRunId: null,
+      replayed: false,
+    })),
+    enqueue: vi.fn(async () => ({ id: "trigger_batch_1" })),
+    recordFirstBatch: vi.fn(async () => undefined),
+    logTerminal: vi.fn(),
+  };
+  return {
+    mocks,
+    deps: mocks as unknown as ShopifyEvidenceStartOrchestrationDependencies,
+  };
+}
+
+describe("Shopify evidence Trigger orchestration", () => {
+  it("accepts only exact allowlisted start and continuation payloads", () => {
+    expect(() => assertExactEvidenceStartPayload({ mode: "initial_90d" })).not.toThrow();
+    expect(() =>
+      assertExactEvidenceStartPayload({
+        mode: "initial_90d",
+        organizationId: "org_a",
+      }),
+    ).toThrow("only an approved mode");
+    expect(() => assertExactEvidenceStartPayload({ mode: "all_time" })).toThrow();
+    expect(() => assertExactEvidenceContinuationPayload({ runId: "run_1" })).not.toThrow();
+    for (const payload of [
+      { runId: "run_1", cursor: null },
+      { runId: "run_1", from: "2026-01-01" },
+      { runId: "" },
+      null,
+    ]) {
+      expect(() => assertExactEvidenceContinuationPayload(payload)).toThrow(
+        "only a run ID",
+      );
+    }
+  });
+
+  it("reloads continuation authority and renews heartbeat before runner work", async () => {
+    const { deps, mocks } = batchOrchestrationDeps();
+    const now = new Date("2026-08-01T00:00:00.000Z");
+    await executeShopifyEvidenceBatch({ runId: "evidence_run_1" }, now, deps);
+    expect(mocks.loadRun).toHaveBeenCalledWith("evidence_run_1");
+    expect(mocks.renewHeartbeat).toHaveBeenCalledWith(
+      { organizationId: "org_a", storeId: "store_a" },
+      "evidence_run_1",
+      now,
+    );
+    expect(mocks.renewHeartbeat.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.runBatch.mock.invocationCallOrder[0],
+    );
+    expect(mocks.runBatch).toHaveBeenCalledWith({
+      organizationId: "org_a",
+      storeId: "store_a",
+      from: new Date("2026-07-25T00:00:00.000Z"),
+      to: new Date("2026-08-01T00:00:00.000Z"),
+      runId: "evidence_run_1",
+      cursor: ORCHESTRATION_CURSOR,
+      counts: orchestrationRun().counts,
+      identityCapability: "available",
+      lineCompleteness: "complete",
+    });
+  });
+
+  it("rejects a persisted window with the wrong floor before heartbeat or remote work", async () => {
+    const run = orchestrationRun({
+      window: {
+        from: new Date("2026-07-24T00:00:00.000Z"),
+        to: new Date("2026-08-01T00:00:00.000Z"),
+      },
+    });
+    const { deps, mocks } = batchOrchestrationDeps({ run });
+    await expect(
+      executeShopifyEvidenceBatch({ runId: run.id }, NOW, deps),
+    ).rejects.toThrow("persisted window is invalid");
+    expect(mocks.renewHeartbeat).not.toHaveBeenCalled();
+    expect(mocks.runBatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a persisted window beyond the anchor next-midnight before any work", async () => {
+    const run = orchestrationRun({
+      window: {
+        from: new Date("2026-07-25T00:00:00.000Z"),
+        to: new Date("2026-08-01T00:00:00.001Z"),
+      },
+    });
+    const { deps, mocks } = batchOrchestrationDeps({ run });
+
+    await expect(
+      executeShopifyEvidenceBatch({ runId: run.id }, NOW, deps),
+    ).rejects.toThrow("persisted window is invalid");
+    expect(mocks.renewHeartbeat).not.toHaveBeenCalled();
+    expect(mocks.runBatch).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.finishRun).not.toHaveBeenCalled();
+  });
+
+  it("enqueues one stable cursor-qualified continuation without finishing", async () => {
+    const result = {
+      kind: "continue" as const,
+      nextCursor: ORCHESTRATION_CURSOR,
+      committedCursor: { ...ORCHESTRATION_CURSOR },
+      counts: orchestrationRun().counts,
+      identityCapability: "available" as const,
+      lineCompleteness: "complete" as const,
+    };
+    const { deps, mocks } = batchOrchestrationDeps({ result });
+    await expect(
+      executeShopifyEvidenceBatch({ runId: "evidence_run_1" }, NOW, deps),
+    ).resolves.toEqual({ kind: "continue", runId: "evidence_run_1" });
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      { runId: "evidence_run_1" },
+      "shopify-evidence:batch:evidence_run_1:2026-07-30T01:00:00.000Z:order_internal_1",
+    );
+    expect(mocks.finishRun).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the runner continuation differs from its committed cursor", async () => {
+    const { deps, mocks } = batchOrchestrationDeps({
+      result: {
+        kind: "continue",
+        nextCursor: ORCHESTRATION_CURSOR,
+        committedCursor: { ...ORCHESTRATION_CURSOR, id: "different" },
+        counts: orchestrationRun().counts,
+        identityCapability: "available",
+        lineCompleteness: "complete",
+      },
+    });
+    await expect(
+      executeShopifyEvidenceBatch({ runId: "evidence_run_1" }, NOW, deps),
+    ).rejects.toThrow("cursor conflicts");
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.finishRun).not.toHaveBeenCalled();
+  });
+
+  it("finishes once with exact terminal progress and preserves unknown empty-window completeness", async () => {
+    const counts = orchestrationRun().counts;
+    const { deps, mocks } = batchOrchestrationDeps({
+      run: orchestrationRun({
+        cursor: null,
+        lineCompleteness: "unknown",
+        counts,
+      }),
+      result: {
+        kind: "terminal",
+        status: "success",
+        nextCursor: null,
+        committedCursor: null,
+        counts,
+        identityCapability: "available",
+        lineCompleteness: "unknown",
+      },
+    });
+    await executeShopifyEvidenceBatch({ runId: "evidence_run_1" }, NOW, deps);
+    expect(mocks.finishRun).toHaveBeenCalledTimes(1);
+    expect(mocks.finishRun).toHaveBeenCalledWith({
+      scope: { organizationId: "org_a", storeId: "store_a" },
+      runId: "evidence_run_1",
+      expectedCursor: null,
+      status: "success",
+      progress: {
+        counts,
+        identityCapability: "available",
+        lineCompleteness: "unknown",
+      },
+      error: null,
+      now: NOW,
+    });
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("derives a new start only after secret validation store reconciliation and capability probe", async () => {
+    const { deps, mocks } = startOrchestrationDeps();
+    await executeShopifyEvidenceStart(
+      { mode: "incremental_7d" },
+      "trigger_start_1",
+      new Date("2026-07-31T23:59:00.000Z"),
+      deps,
+    );
+    expect(mocks.startRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startTriggerRunId: "trigger_start_1",
+        scope: { organizationId: "org_a", storeId: "store_a" },
+        mode: "incremental_7d",
+        storeTimezone: "UTC",
+        anchorStoreDay: "2026-07-31",
+        window: {
+          from: new Date("2026-07-25T00:00:00.000Z"),
+          to: new Date("2026-08-01T00:00:00.000Z"),
+        },
+        disposition: { kind: "running", identityCapability: "unknown" },
+      }),
+    );
+    expect(mocks.reconcileStore.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.probeCapabilities.mock.invocationCallOrder[0],
+    );
+    expect(mocks.captureSecretPolicy.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.resolveStore.mock.invocationCallOrder[0],
+    );
+    expect(mocks.resolveStore.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.validateSecretPolicy.mock.invocationCallOrder[0],
+    );
+    expect(mocks.validateSecretPolicy.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.reconcileStore.mock.invocationCallOrder[0],
+    );
+    expect(mocks.probeCapabilities.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.startRun.mock.invocationCallOrder[0],
+    );
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      { runId: "evidence_run_1" },
+      "shopify-evidence:first:evidence_run_1",
+    );
+  });
+
+  it("performs no database write or provider call when secret validation fails", async () => {
+    const { deps, mocks } = startOrchestrationDeps();
+    mocks.captureSecretPolicy.mockImplementation(() => {
+      throw new Error("invalid private key environment");
+    });
+    await expect(
+      executeShopifyEvidenceStart(
+        { mode: "incremental_7d" },
+        "trigger_start_1",
+        NOW,
+        deps,
+      ),
+    ).rejects.toThrow("invalid private key environment");
+    expect(mocks.resolveStore).not.toHaveBeenCalled();
+    expect(mocks.reconcileStore).not.toHaveBeenCalled();
+    expect(mocks.probeCapabilities).not.toHaveBeenCalled();
+    expect(mocks.startRun).not.toHaveBeenCalled();
+  });
+
+  it("uses one secret snapshot across configured-store resolution", async () => {
+    const { deps, mocks } = startOrchestrationDeps();
+    let activeSecretSet = "keys-a";
+    const observedSecretSets: string[] = [];
+    mocks.captureSecretPolicy.mockImplementation(() => {
+      const capturedSecretSet = activeSecretSet;
+      observedSecretSets.push(`validated:${capturedSecretSet}`);
+      return vi.fn(() => {
+        observedSecretSets.push(`policy:${capturedSecretSet}`);
+      });
+    });
+    mocks.resolveStore.mockImplementation(async () => {
+      activeSecretSet = "keys-b";
+      return {
+        id: "store_a",
+        organizationId: "org_a",
+        shopDomain: "store-a.myshopify.com",
+        ianaTimezone: "UTC",
+      };
+    });
+
+    await executeShopifyEvidenceStart(
+      { mode: "incremental_7d" },
+      "trigger_secret_snapshot",
+      NOW,
+      deps,
+    );
+
+    expect(observedSecretSets).toEqual([
+      "validated:keys-a",
+      "policy:keys-a",
+    ]);
+  });
+
+  it("leaves no run when the capability probe has a retryable failure", async () => {
+    const { deps, mocks } = startOrchestrationDeps();
+    mocks.probeCapabilities.mockRejectedValue(
+      new Error("sanitized retryable capability failure"),
+    );
+    await expect(
+      executeShopifyEvidenceStart(
+        { mode: "incremental_7d" },
+        "trigger_start_1",
+        NOW,
+        deps,
+      ),
+    ).rejects.toThrow("sanitized retryable capability failure");
+    expect(mocks.startRun).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("requires read_orders for incremental mode even when historical access exists", async () => {
+    const { deps, mocks } = startOrchestrationDeps({
+      capabilities: {
+        orderScope: "unavailable",
+        historicalOrders: "available",
+        identityScope: "declared",
+        scopes: ["read_all_orders", "read_customers"],
+      },
+      insertedStatus: "partial",
+    });
+    await executeShopifyEvidenceStart(
+      { mode: "incremental_7d" },
+      "trigger_no_orders",
+      NOW,
+      deps,
+    );
+    expect(mocks.startRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        disposition: expect.objectContaining({
+          kind: "terminal_unavailable",
+          identityCapability: "unknown",
+        }),
+      }),
+    );
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("finishes initial mode as measurable terminal unavailable without enqueue", async () => {
+    const { deps, mocks } = startOrchestrationDeps({
+      capabilities: {
+        orderScope: "available",
+        historicalOrders: "unavailable",
+        identityScope: "missing",
+        scopes: ["read_orders"],
+      },
+      insertedStatus: "partial",
+    });
+    await expect(
+      executeShopifyEvidenceStart(
+        { mode: "initial_90d" },
+        "trigger_denied",
+        NOW,
+        deps,
+      ),
+    ).resolves.toEqual({
+      evidenceRunId: "evidence_run_1",
+      triggerRunId: "trigger_denied",
+      terminal: true,
+    });
+    expect(mocks.countOrders).toHaveBeenCalledTimes(1);
+    expect(mocks.startRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        disposition: {
+          kind: "terminal_unavailable",
+          identityCapability: "unavailable",
+          counts: {
+            ordersRead: 0,
+            ordersEnriched: 0,
+            ordersPartial: 0,
+            ordersUnavailable: 3,
+            warnings: 1,
+            failures: 0,
+          },
+          errorCode: "required_order_scope_unavailable",
+        },
+      }),
+    );
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("reuses a terminal start without secrets probes dates or handoff", async () => {
+    const terminal = orchestrationRun({ status: "partial" as const });
+    const { deps, mocks } = startOrchestrationDeps({ existing: terminal });
+    await expect(
+      executeShopifyEvidenceStart(
+        { mode: "incremental_7d" },
+        "trigger_start_1",
+        NOW,
+        deps,
+      ),
+    ).resolves.toEqual({
+      evidenceRunId: "evidence_run_1",
+      triggerRunId: "trigger_start_1",
+      terminal: true,
+    });
+    expect(mocks.captureSecretPolicy).not.toHaveBeenCalled();
+    expect(mocks.probeCapabilities).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("reaps an expired replay without inventing a child and repairs a live missing handoff", async () => {
+    const missingHandoff = orchestrationRun({ firstBatchTriggerRunId: null });
+    const expiredTerminal = orchestrationRun({
+      firstBatchTriggerRunId: null,
+      status: "failed" as const,
+      error: "lease_expired",
+      finishedAt: NOW,
+    });
+    const expired = startOrchestrationDeps({
+      existing: missingHandoff,
+      reloaded: expiredTerminal,
+      expired: true,
+    });
+    await expect(
+      executeShopifyEvidenceStart(
+        { mode: "incremental_7d" },
+        "trigger_start_1",
+        NOW,
+        expired.deps,
+      ),
+    ).resolves.toMatchObject({ terminal: true });
+    expect(expired.mocks.enqueue).not.toHaveBeenCalled();
+    expect(expired.mocks.recordFirstBatch).not.toHaveBeenCalled();
+
+    const live = startOrchestrationDeps({
+      existing: missingHandoff,
+      reloaded: missingHandoff,
+    });
+    await executeShopifyEvidenceStart(
+      { mode: "incremental_7d" },
+      "trigger_start_1",
+      NOW,
+      live.deps,
+    );
+    expect(live.mocks.enqueue).toHaveBeenCalledWith(
+      { runId: "evidence_run_1" },
+      "shopify-evidence:first:evidence_run_1",
+    );
+    expect(live.mocks.recordFirstBatch).toHaveBeenCalledWith({
+      scope: { organizationId: "org_a", storeId: "store_a" },
+      runId: "evidence_run_1",
+      triggerRunId: "trigger_batch_1",
+    });
+    expect(live.mocks.probeCapabilities).not.toHaveBeenCalled();
+  });
+
+  it("reloads after lease finalization and repairs terminal traceability from authoritative scope", async () => {
+    const initiallyRunning = orchestrationRun({
+      firstBatchTriggerRunId: null,
+      scope: { organizationId: "stale_org", storeId: "stale_store" },
+    });
+    const concurrentlyTerminal = orchestrationRun({
+      firstBatchTriggerRunId: null,
+      status: "success" as const,
+      finishedAt: NOW,
+    });
+    const { deps, mocks } = startOrchestrationDeps({
+      existing: initiallyRunning,
+      reloaded: concurrentlyTerminal,
+      expired: false,
+    });
+
+    await expect(
+      executeShopifyEvidenceStart(
+        { mode: "incremental_7d" },
+        "trigger_start_1",
+        NOW,
+        deps,
+      ),
+    ).resolves.toEqual({
+      evidenceRunId: "evidence_run_1",
+      triggerRunId: "trigger_start_1",
+      terminal: true,
+    });
+    expect(mocks.loadRun).toHaveBeenCalledWith("evidence_run_1");
+    expect(mocks.loadRun.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.enqueue.mock.invocationCallOrder[0],
+    );
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      { runId: "evidence_run_1" },
+      "shopify-evidence:first:evidence_run_1",
+    );
+    expect(mocks.recordFirstBatch).toHaveBeenCalledWith({
+      scope: { organizationId: "org_a", storeId: "store_a" },
+      runId: "evidence_run_1",
+      triggerRunId: "trigger_batch_1",
+    });
+    expect(mocks.probeCapabilities).not.toHaveBeenCalled();
+  });
+
+  it("repairs a terminal crash-ambiguous missing handoff but not capability denial", async () => {
+    const terminalMissingHandoff = orchestrationRun({
+      firstBatchTriggerRunId: null,
+      status: "success" as const,
+      finishedAt: NOW,
+    });
+    const crash = startOrchestrationDeps({
+      existing: terminalMissingHandoff,
+      reloaded: terminalMissingHandoff,
+    });
+    await expect(
+      executeShopifyEvidenceStart(
+        { mode: "incremental_7d" },
+        "trigger_start_1",
+        NOW,
+        crash.deps,
+      ),
+    ).resolves.toMatchObject({ terminal: true });
+    expect(crash.mocks.enqueue).toHaveBeenCalledWith(
+      { runId: "evidence_run_1" },
+      "shopify-evidence:first:evidence_run_1",
+    );
+    expect(crash.mocks.recordFirstBatch).toHaveBeenCalledTimes(1);
+
+    const unavailable = orchestrationRun({
+      firstBatchTriggerRunId: null,
+      status: "partial" as const,
+      lineCompleteness: "unavailable" as const,
+      error: "required_order_scope_unavailable",
+      finishedAt: NOW,
+    });
+    const denied = startOrchestrationDeps({ existing: unavailable });
+    await expect(
+      executeShopifyEvidenceStart(
+        { mode: "incremental_7d" },
+        "trigger_denied",
+        NOW,
+        denied.deps,
+      ),
+    ).resolves.toMatchObject({ terminal: true });
+    expect(denied.mocks.enqueue).not.toHaveBeenCalled();
+    expect(denied.mocks.recordFirstBatch).not.toHaveBeenCalled();
+  });
+
+  it("does not invent a child for start retry exhaustion", async () => {
+    const terminal = orchestrationRun({
+      firstBatchTriggerRunId: null,
+      status: "failed" as const,
+      error: "start_retries_exhausted",
+      finishedAt: NOW,
+    });
+    const { deps, mocks } = startOrchestrationDeps({ existing: terminal });
+
+    await expect(
+      executeShopifyEvidenceStart(
+        { mode: "incremental_7d" },
+        "trigger_start_1",
+        NOW,
+        deps,
+      ),
+    ).resolves.toMatchObject({ terminal: true });
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.recordFirstBatch).not.toHaveBeenCalled();
+    expect(mocks.probeCapabilities).not.toHaveBeenCalled();
+  });
+
+  it("does not repair another terminal state without batch proof", async () => {
+    const terminal = orchestrationRun({
+      firstBatchTriggerRunId: null,
+      status: "partial" as const,
+      error: "protected_identity_unavailable",
+      finishedAt: NOW,
+    });
+    const { deps, mocks } = startOrchestrationDeps({ existing: terminal });
+
+    await expect(
+      executeShopifyEvidenceStart(
+        { mode: "incremental_7d" },
+        "trigger_start_1",
+        NOW,
+        deps,
+      ),
+    ).resolves.toMatchObject({ terminal: true });
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.recordFirstBatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: "partial" as const, error: "incomplete_line_set" },
+    { status: "failed" as const, error: "batch_retries_exhausted" },
+    { status: "failed" as const, error: "evidence_batch_failed" },
+  ])("repairs a missing handoff for batch-proven $error", async (terminal) => {
+    const run = orchestrationRun({
+      firstBatchTriggerRunId: null,
+      status: terminal.status,
+      error: terminal.error,
+      finishedAt: NOW,
+    });
+    const { deps, mocks } = startOrchestrationDeps({
+      existing: run,
+      reloaded: run,
+    });
+
+    await expect(
+      executeShopifyEvidenceStart(
+        { mode: "incremental_7d" },
+        "trigger_start_1",
+        NOW,
+        deps,
+      ),
+    ).resolves.toMatchObject({ terminal: true });
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      { runId: "evidence_run_1" },
+      "shopify-evidence:first:evidence_run_1",
+    );
+    expect(mocks.recordFirstBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses one run after a crash immediately after insertion before trigger", async () => {
+    const missingHandoff = orchestrationRun({ firstBatchTriggerRunId: null });
+    const { deps, mocks } = startOrchestrationDeps({
+      reloaded: missingHandoff,
+    });
+    mocks.loadByStartTriggerId
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(missingHandoff);
+    mocks.enqueue
+      .mockRejectedValueOnce(new Error("simulated crash after insertion"))
+      .mockResolvedValueOnce({ id: "trigger_batch_1" });
+
+    await expect(
+      executeShopifyEvidenceStart(
+        { mode: "incremental_7d" },
+        "trigger_start_1",
+        NOW,
+        deps,
+      ),
+    ).rejects.toThrow("simulated crash after insertion");
+    await expect(
+      executeShopifyEvidenceStart(
+        { mode: "incremental_7d" },
+        "trigger_start_1",
+        NOW,
+        deps,
+      ),
+    ).resolves.toMatchObject({ evidenceRunId: "evidence_run_1" });
+    expect(mocks.startRun).toHaveBeenCalledTimes(1);
+    expect(mocks.enqueue).toHaveBeenNthCalledWith(
+      1,
+      { runId: "evidence_run_1" },
+      "shopify-evidence:first:evidence_run_1",
+    );
+    expect(mocks.enqueue).toHaveBeenNthCalledWith(
+      2,
+      { runId: "evidence_run_1" },
+      "shopify-evidence:first:evidence_run_1",
+    );
+  });
+
+  it("reuses one idempotent child after trigger succeeds before handoff CAS returns", async () => {
+    const missingHandoff = orchestrationRun({ firstBatchTriggerRunId: null });
+    const { deps, mocks } = startOrchestrationDeps({
+      existing: missingHandoff,
+      reloaded: missingHandoff,
+    });
+    mocks.recordFirstBatch
+      .mockRejectedValueOnce(new Error("simulated crash before start return"))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(
+      executeShopifyEvidenceStart(
+        { mode: "incremental_7d" },
+        "trigger_start_1",
+        NOW,
+        deps,
+      ),
+    ).rejects.toThrow("simulated crash before start return");
+    await expect(
+      executeShopifyEvidenceStart(
+        { mode: "incremental_7d" },
+        "trigger_start_1",
+        NOW,
+        deps,
+      ),
+    ).resolves.toMatchObject({ evidenceRunId: "evidence_run_1" });
+    expect(mocks.enqueue).toHaveBeenCalledTimes(2);
+    expect(mocks.enqueue.mock.calls[0]).toEqual(mocks.enqueue.mock.calls[1]);
+    expect(mocks.recordFirstBatch).toHaveBeenNthCalledWith(2, {
+      scope: { organizationId: "org_a", storeId: "store_a" },
+      runId: "evidence_run_1",
+      triggerRunId: "trigger_batch_1",
+    });
+  });
+
+  it("repairs traceability when the child terminalizes between trigger and start retry", async () => {
+    const runningMissingHandoff = orchestrationRun({
+      firstBatchTriggerRunId: null,
+    });
+    const terminalMissingHandoff = orchestrationRun({
+      firstBatchTriggerRunId: null,
+      status: "success" as const,
+      finishedAt: NOW,
+    });
+    const { deps, mocks } = startOrchestrationDeps({
+      existing: runningMissingHandoff,
+      reloaded: terminalMissingHandoff,
+    });
+    mocks.loadByStartTriggerId
+      .mockResolvedValueOnce(runningMissingHandoff)
+      .mockResolvedValueOnce(terminalMissingHandoff);
+    mocks.loadRun
+      .mockResolvedValueOnce(runningMissingHandoff)
+      .mockResolvedValueOnce(terminalMissingHandoff);
+    mocks.recordFirstBatch
+      .mockRejectedValueOnce(new Error("simulated crash before handoff CAS"))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(
+      executeShopifyEvidenceStart(
+        { mode: "incremental_7d" },
+        "trigger_start_1",
+        NOW,
+        deps,
+      ),
+    ).rejects.toThrow("simulated crash before handoff CAS");
+    await expect(
+      executeShopifyEvidenceStart(
+        { mode: "incremental_7d" },
+        "trigger_start_1",
+        NOW,
+        deps,
+      ),
+    ).resolves.toEqual({
+      evidenceRunId: "evidence_run_1",
+      triggerRunId: "trigger_start_1",
+      terminal: true,
+    });
+    expect(mocks.enqueue).toHaveBeenCalledTimes(2);
+    expect(mocks.enqueue.mock.calls[0]).toEqual(mocks.enqueue.mock.calls[1]);
+    expect(mocks.recordFirstBatch).toHaveBeenCalledTimes(2);
+    expect(mocks.probeCapabilities).not.toHaveBeenCalled();
+  });
+
+  it("resumes a retried batch from the freshly reloaded cursor and counts", async () => {
+    const firstRun = orchestrationRun();
+    const resumedCursor = {
+      orderCreatedAt: new Date("2026-07-30T02:00:00.000Z"),
+      id: "order_internal_2",
+    };
+    const resumedCounts = {
+      ...firstRun.counts,
+      ordersRead: 5,
+      ordersEnriched: 5,
+    };
+    const resumedRun = orchestrationRun({
+      cursor: resumedCursor,
+      counts: resumedCounts,
+    });
+    const { deps, mocks } = batchOrchestrationDeps();
+    mocks.loadRun
+      .mockResolvedValueOnce(firstRun)
+      .mockResolvedValueOnce(resumedRun);
+    mocks.runBatch
+      .mockRejectedValueOnce(new Error("retryable later-order failure"))
+      .mockResolvedValueOnce({
+        kind: "terminal",
+        status: "success",
+        nextCursor: null,
+        committedCursor: resumedCursor,
+        counts: resumedCounts,
+        identityCapability: "available",
+        lineCompleteness: "complete",
+      });
+
+    await expect(
+      executeShopifyEvidenceBatch({ runId: "evidence_run_1" }, NOW, deps),
+    ).rejects.toThrow("retryable later-order failure");
+    await executeShopifyEvidenceBatch(
+      { runId: "evidence_run_1" },
+      NOW,
+      deps,
+    );
+    expect(mocks.runBatch).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        cursor: resumedCursor,
+        counts: resumedCounts,
+      }),
+    );
+    expect(mocks.finishRun).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedCursor: resumedCursor }),
+    );
+  });
+
+  it("keeps a live completed handoff intact without enqueueing or probing", async () => {
+    const existing = orchestrationRun({
+      firstBatchTriggerRunId: "already_handed_off",
+    });
+    const { deps, mocks } = startOrchestrationDeps({ existing });
+    await executeShopifyEvidenceStart(
+      { mode: "incremental_7d" },
+      "trigger_start_1",
+      NOW,
+      deps,
+    );
+    expect(mocks.failExpiredRun).toHaveBeenCalledTimes(1);
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.probeCapabilities).not.toHaveBeenCalled();
+  });
+
+  it("fails a stable start ID reused with another mode before side effects", async () => {
+    const existing = orchestrationRun({ mode: "initial_90d" as const });
+    const { deps, mocks } = startOrchestrationDeps({ existing });
+    await expect(
+      executeShopifyEvidenceStart(
+        { mode: "incremental_7d" },
+        "trigger_start_1",
+        NOW,
+        deps,
+      ),
+    ).rejects.toThrow("idempotency conflict");
+    expect(mocks.failExpiredRun).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("uses only persisted scope in terminal failure hooks and tolerates no inserted start", async () => {
+    const loadRun = vi.fn(async () => orchestrationRun());
+    const failRun = vi.fn(async () => ({ changed: true }));
+    await handleShopifyEvidenceBatchTerminalFailure(
+      { runId: "evidence_run_1" },
+      {
+        loadRun: loadRun as never,
+        failRun: failRun as never,
+      },
+    );
+    expect(failRun).toHaveBeenCalledWith(
+      { organizationId: "org_a", storeId: "store_a" },
+      "evidence_run_1",
+      "batch",
+    );
+
+    const loadByStartTriggerId = vi.fn(async () => null);
+    await handleShopifyEvidenceStartTerminalFailure(
+      { mode: "incremental_7d" },
+      "missing-trigger",
+      {
+        loadByStartTriggerId: loadByStartTriggerId as never,
+        failRun: failRun as never,
+      },
+    );
+    expect(loadByStartTriggerId).toHaveBeenCalledWith("missing-trigger");
+    expect(failRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies fixed start and batch retry-exhaustion stages on hook replay", async () => {
+    const loadRun = vi.fn(async () => orchestrationRun());
+    const loadByStartTriggerId = vi.fn(async () => orchestrationRun());
+    const failRun = vi
+      .fn()
+      .mockResolvedValueOnce({ changed: true })
+      .mockResolvedValue({ changed: false });
+    const batchDeps = {
+      loadRun: loadRun as never,
+      failRun: failRun as never,
+    };
+    await handleShopifyEvidenceBatchTerminalFailure(
+      { runId: "evidence_run_1" },
+      batchDeps,
+    );
+    await handleShopifyEvidenceBatchTerminalFailure(
+      { runId: "evidence_run_1" },
+      batchDeps,
+    );
+    await handleShopifyEvidenceStartTerminalFailure(
+      { mode: "incremental_7d" },
+      "trigger_start_1",
+      {
+        loadByStartTriggerId: loadByStartTriggerId as never,
+        failRun: failRun as never,
+      },
+    );
+    expect(failRun.mock.calls).toEqual([
+      [{ organizationId: "org_a", storeId: "store_a" }, "evidence_run_1", "batch"],
+      [{ organizationId: "org_a", storeId: "store_a" }, "evidence_run_1", "batch"],
+      [{ organizationId: "org_a", storeId: "store_a" }, "evidence_run_1", "start"],
+    ]);
+  });
+});
+
+describe("Shopify evidence Trigger orchestration boundary", () => {
+  const triggerSource = () =>
+    readFileSync(
+      path.resolve(process.cwd(), "trigger/shopify-evidence-sync.ts"),
+      "utf8",
+    );
+
+  it("keeps the Trigger wrapper outside monetary ingestion", () => {
+    const source = triggerSource();
+    expect(source).not.toContain("ingestOrderNodes");
+    expect(source).not.toContain("stampBuckets");
+    expect(source).not.toContain("upsertShopifyStore");
+    expect(source).not.toContain("startSyncRun");
+    expect(source).not.toContain("finishSyncRun");
+  });
+
+  it("exports separate bounded start and continuation tasks without a schedule", () => {
+    const source = triggerSource();
+    expect(source).toContain('id: "shopify-evidence-start"');
+    expect(source).toContain('id: "shopify-evidence-batch"');
+    expect(source.match(/maxDuration: 600/g)).toHaveLength(2);
+    expect(source.match(/retry: ATTRIBUTION_TASK_RETRY/g)).toHaveLength(2);
+    expect(source.match(/onFailure:/g)).toHaveLength(2);
+    expect(source).not.toContain("schedules.");
+  });
+
+  it("uses global idempotency keys with an explicit seven-day TTL", () => {
+    const source = triggerSource();
+    expect(source.match(/scope: "global"/g)).toHaveLength(1);
+    expect(source).toContain('const IDEMPOTENCY_KEY_TTL = "7d"');
+    expect(source).toContain("idempotencyKeyTTL: IDEMPOTENCY_KEY_TTL");
+    expect(source).toContain("shopify-evidence:first:");
+    expect(source).toContain("shopify-evidence:batch:");
+  });
+
+  it("keeps all persisted authority out of Trigger payloads", () => {
+    const source = triggerSource();
+    expect(source).toContain("Object.keys(input).length !== 1");
+    expect(source).toContain("ShopifyEvidenceStartPayload");
+    expect(source).toContain("ShopifyEvidenceContinuationPayload");
+    for (const forbidden of [
+      "organizationId:",
+      "storeId:",
+      "anchorStoreDay:",
+      "requestedFrom:",
+      "requestedTo:",
+      "cursor:",
+      "counts:",
+    ]) {
+      expect(
+        source.slice(
+          source.indexOf("export type ShopifyEvidenceStartPayload"),
+          source.indexOf("export type ShopifyEvidenceStartResult"),
+        ),
+      ).not.toContain(forbidden);
+    }
+  });
+
+  it("uses fixed terminal failure codes without inspecting raw errors", () => {
+    const source = triggerSource();
+    expect(source).toMatch(/deps\.failRun\([\s\S]*?"batch"/);
+    expect(source).toMatch(/deps\.failRun\([\s\S]*?"start"/);
+    expect(source).not.toContain("error.message");
+    expect(source).not.toContain("String(error)");
   });
 });

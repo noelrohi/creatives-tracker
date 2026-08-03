@@ -174,6 +174,17 @@ export function assertValidIanaTimezone(value: string): void {
   }
 }
 
+export function formatStoreDayAtInstant(
+  instant: Date,
+  timeZone: string,
+): string {
+  if (!(instant instanceof Date) || Number.isNaN(instant.getTime())) {
+    throw new Error("Store-day instant must be a valid date");
+  }
+  assertValidIanaTimezone(timeZone);
+  return formatStoreDay(localPartsAt(instant, timeZone));
+}
+
 export function inclusiveStoreDaysToHalfOpenUtc(input: {
   dateFrom: string;
   dateTo: string;

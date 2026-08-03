@@ -114,6 +114,13 @@ const SAFE_FINISH_ERRORS = new Set([
   "evidence_batch_failed",
 ]);
 
+const SAFE_PERSISTED_ERRORS = new Set([
+  ...SAFE_FINISH_ERRORS,
+  "start_retries_exhausted",
+  "batch_retries_exhausted",
+  "lease_expired",
+]);
+
 function assertValidDate(value: Date, label: string): void {
   if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
     throw new Error(`${label} must be a valid date`);
@@ -144,6 +151,35 @@ function encodeEvidenceOrderCursor(cursor: EvidenceOrderCursor): string {
     }),
     "utf8",
   ).toString("base64url");
+}
+
+function decodeEvidenceOrderCursor(encoded: string): EvidenceOrderCursor {
+  try {
+    const decoded = Buffer.from(encoded, "base64url").toString("utf8");
+    if (Buffer.from(decoded, "utf8").toString("base64url") !== encoded) {
+      throw new Error("non-canonical encoding");
+    }
+    const input = JSON.parse(decoded) as Record<string, unknown> | null;
+    if (
+      !input ||
+      Object.keys(input).length !== 2 ||
+      typeof input.orderCreatedAt !== "string" ||
+      typeof input.id !== "string"
+    ) {
+      throw new Error("invalid cursor shape");
+    }
+    const cursor = {
+      orderCreatedAt: new Date(input.orderCreatedAt),
+      id: input.id,
+    };
+    assertValidCursor(cursor, "Persisted Shopify evidence cursor");
+    if (cursor.orderCreatedAt.toISOString() !== input.orderCreatedAt) {
+      throw new Error("non-canonical cursor timestamp");
+    }
+    return cursor;
+  } catch {
+    throw new Error("Shopify evidence persisted cursor is invalid");
+  }
 }
 
 function assertForwardEvidenceCursor(
@@ -294,6 +330,35 @@ export async function loadEvidenceStore(scope: IdentityScope) {
     )
     .limit(1);
   if (!store) throw new Error("Shopify evidence store binding was not found");
+  return store;
+}
+
+export async function resolveConfiguredEvidenceStore(shopDomain: string) {
+  const normalizedDomain = shopDomain.trim().toLowerCase();
+  if (
+    !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.myshopify\.com$/.test(
+      normalizedDomain,
+    )
+  ) {
+    throw new Error("Configured Shopify evidence domain is invalid");
+  }
+  const matches = await db
+    .select({
+      id: shopifyStores.id,
+      organizationId: shopifyStores.organizationId,
+      shopDomain: shopifyStores.shopDomain,
+      ianaTimezone: shopifyStores.ianaTimezone,
+    })
+    .from(shopifyStores)
+    .where(sql`lower(btrim(${shopifyStores.shopDomain})) = ${normalizedDomain}`)
+    .limit(2);
+  if (matches.length !== 1) {
+    throw new Error(
+      "Expected exactly one configured Shopify evidence store",
+    );
+  }
+  const store = matches[0];
+  assertValidIanaTimezone(store.ianaTimezone);
   return store;
 }
 
@@ -1364,21 +1429,135 @@ export async function commitShopifyEvidenceOrder(
   });
 }
 
+type PersistedEvidenceRun = typeof shopifyEvidenceSyncRuns.$inferSelect;
+
+function decodePersistedEvidenceRun(run: PersistedEvidenceRun) {
+  if (
+    run.id.length === 0 ||
+    run.startTriggerRunId.length === 0 ||
+    run.organizationId.length === 0 ||
+    run.storeId.length === 0 ||
+    run.firstBatchTriggerRunId === ""
+  ) {
+    throw new Error("Shopify evidence persisted trigger ID is invalid");
+  }
+  if (run.mode !== "initial_90d" && run.mode !== "incremental_7d") {
+    throw new Error("Shopify evidence persisted mode is invalid");
+  }
+  const mode: ShopifyEvidenceMode = run.mode;
+  assertValidIanaTimezone(run.storeTimezone);
+  assertValidStoreDay(run.anchorStoreDay);
+  assertValidWindow({ from: run.requestedFrom, to: run.requestedTo });
+  const expectedWindow = deriveShopifyEvidenceWindow({
+    mode,
+    anchorStoreDay: run.anchorStoreDay,
+    timeZone: run.storeTimezone,
+  });
+  if (
+    expectedWindow.from.getTime() !== run.requestedFrom.getTime() ||
+    expectedWindow.to.getTime() !== run.requestedTo.getTime()
+  ) {
+    throw new Error("Shopify evidence persisted window is invalid");
+  }
+  if (
+    run.status !== "running" &&
+    run.status !== "success" &&
+    run.status !== "partial" &&
+    run.status !== "failed"
+  ) {
+    throw new Error("Shopify evidence persisted status is invalid");
+  }
+  if (
+    run.identityCapability !== "unknown" &&
+    run.identityCapability !== "available" &&
+    run.identityCapability !== "unavailable"
+  ) {
+    throw new Error("Shopify evidence persisted identity state is invalid");
+  }
+  if (
+    run.lineCompleteness !== "unknown" &&
+    run.lineCompleteness !== "complete" &&
+    run.lineCompleteness !== "partial" &&
+    run.lineCompleteness !== "unavailable"
+  ) {
+    throw new Error("Shopify evidence persisted line state is invalid");
+  }
+  if (run.error !== null && !SAFE_PERSISTED_ERRORS.has(run.error)) {
+    throw new Error("Shopify evidence persisted error code is invalid");
+  }
+  assertValidDate(run.startedAt, "Shopify evidence persisted start time");
+  assertValidDate(run.heartbeatAt, "Shopify evidence persisted heartbeat");
+  if (run.finishedAt) {
+    assertValidDate(run.finishedAt, "Shopify evidence persisted finish time");
+  }
+  if (
+    (run.status === "running" &&
+      (run.finishedAt !== null || run.error !== null)) ||
+    (run.status !== "running" && run.finishedAt === null)
+  ) {
+    throw new Error("Shopify evidence persisted lifecycle is invalid");
+  }
+  const counts = currentCounts(run);
+  assertNondecreasingEvidenceCounts(
+    {
+      ordersRead: 0,
+      ordersEnriched: 0,
+      ordersPartial: 0,
+      ordersUnavailable: 0,
+      warnings: 0,
+      failures: 0,
+    },
+    counts,
+  );
+  const cursor = run.cursor ? decodeEvidenceOrderCursor(run.cursor) : null;
+  if (
+    cursor &&
+    (cursor.orderCreatedAt.getTime() < run.requestedFrom.getTime() ||
+      cursor.orderCreatedAt.getTime() >= run.requestedTo.getTime())
+  ) {
+    throw new Error("Shopify evidence persisted cursor is outside its window");
+  }
+  return {
+    ...run,
+    mode,
+    scope: {
+      organizationId: run.organizationId,
+      storeId: run.storeId,
+    },
+    window: { from: run.requestedFrom, to: run.requestedTo },
+    cursor,
+    counts,
+  };
+}
+
+export async function loadShopifyEvidenceRun(runId: string) {
+  if (typeof runId !== "string" || runId.length === 0) {
+    throw new Error("Shopify evidence run ID is invalid");
+  }
+  const [run] = await db
+    .select()
+    .from(shopifyEvidenceSyncRuns)
+    .where(eq(shopifyEvidenceSyncRuns.id, runId))
+    .limit(1);
+  return run ? decodePersistedEvidenceRun(run) : null;
+}
+
 export async function loadEvidenceRunByStartTriggerId(
   startTriggerRunId: string,
 ) {
+  if (typeof startTriggerRunId !== "string" || startTriggerRunId.length === 0) {
+    throw new Error("Shopify evidence start trigger ID is invalid");
+  }
   const [run] = await db
     .select()
     .from(shopifyEvidenceSyncRuns)
     .where(eq(shopifyEvidenceSyncRuns.startTriggerRunId, startTriggerRunId))
     .limit(1);
-  return run ?? null;
+  return run ? decodePersistedEvidenceRun(run) : null;
 }
 
 function assertSameEvidenceStart(
-  existing: NonNullable<
-    Awaited<ReturnType<typeof loadEvidenceRunByStartTriggerId>>
-  >,
+  existing: PersistedEvidenceRun,
   params: {
     scope: IdentityScope;
     mode: ShopifyEvidenceMode;
@@ -1428,6 +1607,38 @@ function assertStartDisposition(
       disposition.counts,
     );
   }
+}
+
+export async function reconcileShopifyEvidenceStoreForStart(
+  scope: IdentityScope,
+  now: Date,
+): Promise<{ expiredRunId: string | null }> {
+  assertValidDate(now, "Shopify evidence lease reconciliation time");
+  return db.transaction(async (tx) => {
+    await lockEvidenceStore(tx, scope);
+    const [active] = await tx
+      .select({ id: shopifyEvidenceSyncRuns.id })
+      .from(shopifyEvidenceSyncRuns)
+      .where(
+        and(
+          eq(shopifyEvidenceSyncRuns.organizationId, scope.organizationId),
+          eq(shopifyEvidenceSyncRuns.storeId, scope.storeId),
+          eq(shopifyEvidenceSyncRuns.status, "running"),
+        ),
+      )
+      .limit(1);
+    if (!active) return { expiredRunId: null };
+    const recovery = await failExpiredShopifyEvidenceRun(
+      scope,
+      active.id,
+      now,
+      tx,
+    );
+    if (!recovery.changed) {
+      throw new Error("A live Shopify evidence run already owns this store");
+    }
+    return { expiredRunId: active.id };
+  });
 }
 
 export async function startShopifyEvidenceRun(params: {
@@ -1557,25 +1768,61 @@ export async function recordFirstBatchTriggerRunId(params: {
   if (!params.triggerRunId) {
     throw new Error("Shopify evidence first-batch trigger ID is invalid");
   }
-  const rows = await db
-    .update(shopifyEvidenceSyncRuns)
-    .set({ firstBatchTriggerRunId: params.triggerRunId, heartbeatAt: new Date() })
-    .where(
-      and(
-        eq(shopifyEvidenceSyncRuns.id, params.runId),
-        eq(shopifyEvidenceSyncRuns.organizationId, params.scope.organizationId),
-        eq(shopifyEvidenceSyncRuns.storeId, params.scope.storeId),
-        eq(shopifyEvidenceSyncRuns.status, "running"),
-        or(
-          isNull(shopifyEvidenceSyncRuns.firstBatchTriggerRunId),
-          eq(shopifyEvidenceSyncRuns.firstBatchTriggerRunId, params.triggerRunId),
+  await db.transaction(async (tx) => {
+    const [current] = await tx
+      .select({
+        id: shopifyEvidenceSyncRuns.id,
+        status: shopifyEvidenceSyncRuns.status,
+        firstBatchTriggerRunId:
+          shopifyEvidenceSyncRuns.firstBatchTriggerRunId,
+      })
+      .from(shopifyEvidenceSyncRuns)
+      .where(
+        and(
+          eq(shopifyEvidenceSyncRuns.id, params.runId),
+          eq(
+            shopifyEvidenceSyncRuns.organizationId,
+            params.scope.organizationId,
+          ),
+          eq(shopifyEvidenceSyncRuns.storeId, params.scope.storeId),
         ),
-      ),
-    )
-    .returning({ id: shopifyEvidenceSyncRuns.id });
-  if (rows.length !== 1) {
-    throw new Error("Shopify evidence first-batch handoff conflicts");
-  }
+      )
+      .limit(1)
+      .for("update");
+    if (
+      !current ||
+      (current.firstBatchTriggerRunId !== null &&
+        current.firstBatchTriggerRunId !== params.triggerRunId)
+    ) {
+      throw new Error("Shopify evidence first-batch handoff conflicts");
+    }
+    const rows = await tx
+      .update(shopifyEvidenceSyncRuns)
+      .set({
+        firstBatchTriggerRunId: params.triggerRunId,
+        ...(current.status === "running" ? { heartbeatAt: new Date() } : {}),
+      })
+      .where(
+        and(
+          eq(shopifyEvidenceSyncRuns.id, current.id),
+          eq(
+            shopifyEvidenceSyncRuns.organizationId,
+            params.scope.organizationId,
+          ),
+          eq(shopifyEvidenceSyncRuns.storeId, params.scope.storeId),
+          current.firstBatchTriggerRunId === null
+            ? isNull(shopifyEvidenceSyncRuns.firstBatchTriggerRunId)
+            : eq(
+                shopifyEvidenceSyncRuns.firstBatchTriggerRunId,
+                params.triggerRunId,
+              ),
+        ),
+      )
+      .returning({ id: shopifyEvidenceSyncRuns.id });
+    if (rows.length !== 1) {
+      throw new Error("Shopify evidence first-batch handoff conflicts");
+    }
+  });
 }
 
 async function renewHeartbeatWithExecutor(
