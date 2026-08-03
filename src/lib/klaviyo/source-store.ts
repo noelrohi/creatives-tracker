@@ -48,6 +48,8 @@ import type {
   KlaviyoMetricKind,
   NormalizedKlaviyoEvent,
   OrderCoreSourceContract,
+  PropertyFingerprintEntry,
+  RedactedProbeExample,
 } from "@/lib/klaviyo/types";
 
 type TransactionWork = Parameters<typeof db.transaction>[0];
@@ -1070,6 +1072,18 @@ export async function failKlaviyoSyncRunAfterRetryExhaustion(input: {
   });
 }
 
+export type ProbePersistence = {
+  bindingOverlapCount: number;
+  keyTypeShapes: PropertyFingerprintEntry[];
+  identifierCoverage: Record<string, number>;
+  collisionSummary: Record<string, number>;
+  unmatchedSummary: Record<string, number>;
+  unmatchedExamples: RedactedProbeExample[];
+  productCoverage: Record<string, number>;
+  attributionCoverage: Record<string, number>;
+  redactionVerified: boolean;
+};
+
 export type KlaviyoHealth = {
   configured: boolean;
   store: {
@@ -1172,38 +1186,19 @@ export function summarizeCheckpoint(
   operation: string,
   checkpoint: unknown,
 ): CheckpointSummary | null {
-  if (typeof checkpoint !== "object" || checkpoint === null || Array.isArray(checkpoint)) {
-    return null;
-  }
-  const value = checkpoint as Record<string, unknown>;
-  const page =
-    Number.isInteger(value.page) && (value.page as number) >= 0
-      ? (value.page as number)
-      : null;
   if (operation !== "events") {
-    return page === null
-      ? null
-      : { sourceMode: null, metricIndex: null, page };
-  }
-  const sourceMode = value.sourceMode;
-  const metricIndex = value.metricIndex;
-  if (
-    (sourceMode !== "order_core" && sourceMode !== "journey") ||
-    !Number.isInteger(metricIndex) ||
-    (metricIndex as number) < 0 ||
-    page === null
-  ) {
     return null;
   }
-  if (sourceMode === "order_core") {
-    try {
-      assertOrderCoreSourceContract(value);
-    } catch {
-      return null;
-    }
-    if ((metricIndex as number) > 1) return null;
+  try {
+    assertExactEventCheckpoint(checkpoint);
+  } catch {
+    return null;
   }
-  return { sourceMode, metricIndex: metricIndex as number, page };
+  return {
+    sourceMode: checkpoint.sourceMode,
+    metricIndex: checkpoint.metricIndex,
+    page: checkpoint.page,
+  };
 }
 
 type SyncRunCursor = { startedAt: string; id: string };
@@ -1357,7 +1352,13 @@ export async function listKlaviyoProbeReview(input: {
       ),
     )
     .orderBy(asc(klaviyoJoinRules.createdAt), asc(klaviyoJoinRules.id));
-  return { reports, rules };
+  return {
+    reports: reports.map((report) => ({
+      ...report,
+      redactionVerified: report.redactionVerified === 1,
+    })),
+    rules,
+  };
 }
 
 export { klaviyoJoinRules, klaviyoProbeReports };

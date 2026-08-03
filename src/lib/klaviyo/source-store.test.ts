@@ -4,6 +4,7 @@ import {
   safeSyncError,
   sameCheckpoint,
   summarizeCheckpoint,
+  type ProbePersistence,
 } from "@/lib/klaviyo/source-store";
 import { orderCoreSourceContract } from "@/lib/klaviyo/types";
 
@@ -49,12 +50,52 @@ describe("Klaviyo source store helpers", () => {
       page: 7,
     });
     expect(JSON.stringify(summary)).not.toContain(hostile);
-    expect(summarizeCheckpoint("probe", { page: 3, cursor: hostile })).toEqual({
-      sourceMode: null,
-      metricIndex: null,
-      page: 3,
-    });
+    expect(summarizeCheckpoint("probe", { page: 3, cursor: hostile })).toBeNull();
     expect(summarizeCheckpoint("events", { ...orderCoreSourceContract(), cursor: hostile })).toBeNull();
+  });
+
+  it("fails closed on malformed or unsupported event checkpoint contracts", () => {
+    expect(
+      summarizeCheckpoint("events", {
+        ...orderCoreSourceContract(),
+        metricIndex: 0,
+        cursor: null,
+        page: 1,
+        unsafeExtra: true,
+      }),
+    ).toBeNull();
+    expect(
+      summarizeCheckpoint("events", {
+        ...orderCoreSourceContract(),
+        metricKinds: ["placed_order", "clicked_email"],
+        metricIndex: 0,
+        cursor: null,
+        page: 1,
+      }),
+    ).toBeNull();
+    expect(
+      summarizeCheckpoint("events", {
+        sourceMode: "journey",
+        metricIndex: 0,
+        cursor: "private",
+        page: 1,
+      }),
+    ).toBeNull();
+  });
+
+  it("exports the exact redacted probe persistence contract", () => {
+    const persistence: ProbePersistence = {
+      bindingOverlapCount: 1,
+      keyTypeShapes: [],
+      identifierCoverage: { orderId: 1 },
+      collisionSummary: { orderId: 0 },
+      unmatchedSummary: { count: 0 },
+      unmatchedExamples: [],
+      productCoverage: { comparable: 1 },
+      attributionCoverage: { campaign: 1 },
+      redactionVerified: true,
+    };
+    expect(persistence.redactionVerified).toBe(true);
   });
 
   it("fails HMAC and private-key validation before opening a transaction", async () => {
