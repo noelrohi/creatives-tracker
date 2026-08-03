@@ -1,0 +1,907 @@
+<title>Creative insights — round 5: the per-ad funnel view</title>
+<style>
+  /* ============ App tokens, lifted from src/app/globals.css ============ */
+  :root {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.153 0.006 107.1);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.153 0.006 107.1);
+    --primary: oklch(0.52 0.105 223.128);
+    --primary-foreground: oklch(0.984 0.019 200.873);
+    --muted: oklch(0.966 0.005 106.5);
+    --muted-foreground: oklch(0.58 0.031 107.3);
+    --border: oklch(0.93 0.007 106.5);
+    --sidebar: oklch(0.988 0.003 106.5);
+    --sidebar-foreground: oklch(0.153 0.006 107.1);
+    --sidebar-accent: oklch(0.945 0.006 106.5);
+    --sidebar-border: oklch(0.93 0.007 106.5);
+    --radius: 0.625rem;
+    --attr-known: #00805f;
+    --attr-claim: #5a5fc7;
+    --attr-unknown: #9a5b1f;
+    --attr-neutral: #6f6f66;
+    --attr-critical: #b4291e;
+    --attr-warning: #b07d1a;
+    --attr-good: #1f7a5c;
+    --attr-warning-soft: color-mix(in oklab, var(--attr-warning) 12%, var(--card));
+    --attr-good-soft: color-mix(in oklab, var(--attr-good) 12%, var(--card));
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --background: oklch(0.153 0.006 107.1);
+      --foreground: oklch(0.988 0.003 106.5);
+      --card: oklch(0.228 0.013 107.4);
+      --card-foreground: oklch(0.988 0.003 106.5);
+      --primary: oklch(0.609 0.126 221.723);
+      --primary-foreground: oklch(0.984 0.019 200.873);
+      --muted: oklch(0.286 0.016 107.4);
+      --muted-foreground: oklch(0.737 0.021 106.9);
+      --border: oklch(1 0 0 / 10%);
+      --sidebar: oklch(0.19 0.01 107.4);
+      --sidebar-foreground: oklch(0.988 0.003 106.5);
+      --sidebar-accent: oklch(0.286 0.016 107.4);
+      --sidebar-border: oklch(1 0 0 / 10%);
+      --attr-known: #149b7c;
+      --attr-claim: #7b80e2;
+      --attr-unknown: #bd8440;
+      --attr-neutral: #9a9a90;
+      --attr-critical: #e07b6d;
+      --attr-warning: #d9a05b;
+      --attr-good: #3cc5a3;
+      --attr-warning-soft: color-mix(in oklab, var(--attr-warning) 16%, var(--card));
+      --attr-good-soft: color-mix(in oklab, var(--attr-good) 16%, var(--card));
+    }
+  }
+  :root[data-theme="light"] {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.153 0.006 107.1);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.153 0.006 107.1);
+    --primary: oklch(0.52 0.105 223.128);
+    --primary-foreground: oklch(0.984 0.019 200.873);
+    --muted: oklch(0.966 0.005 106.5);
+    --muted-foreground: oklch(0.58 0.031 107.3);
+    --border: oklch(0.93 0.007 106.5);
+    --sidebar: oklch(0.988 0.003 106.5);
+    --sidebar-foreground: oklch(0.153 0.006 107.1);
+    --sidebar-accent: oklch(0.945 0.006 106.5);
+    --sidebar-border: oklch(0.93 0.007 106.5);
+    --attr-known: #00805f;
+    --attr-claim: #5a5fc7;
+    --attr-unknown: #9a5b1f;
+    --attr-neutral: #6f6f66;
+    --attr-critical: #b4291e;
+    --attr-warning: #b07d1a;
+    --attr-good: #1f7a5c;
+    --attr-warning-soft: color-mix(in oklab, var(--attr-warning) 12%, var(--card));
+    --attr-good-soft: color-mix(in oklab, var(--attr-good) 12%, var(--card));
+  }
+  :root[data-theme="dark"] {
+    --background: oklch(0.153 0.006 107.1);
+    --foreground: oklch(0.988 0.003 106.5);
+    --card: oklch(0.228 0.013 107.4);
+    --card-foreground: oklch(0.988 0.003 106.5);
+    --primary: oklch(0.609 0.126 221.723);
+    --primary-foreground: oklch(0.984 0.019 200.873);
+    --muted: oklch(0.286 0.016 107.4);
+    --muted-foreground: oklch(0.737 0.021 106.9);
+    --border: oklch(1 0 0 / 10%);
+    --sidebar: oklch(0.19 0.01 107.4);
+    --sidebar-foreground: oklch(0.988 0.003 106.5);
+    --sidebar-accent: oklch(0.286 0.016 107.4);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --attr-known: #149b7c;
+    --attr-claim: #7b80e2;
+    --attr-unknown: #bd8440;
+    --attr-neutral: #9a9a90;
+    --attr-critical: #e07b6d;
+    --attr-warning: #d9a05b;
+    --attr-good: #3cc5a3;
+    --attr-warning-soft: color-mix(in oklab, var(--attr-warning) 16%, var(--card));
+    --attr-good-soft: color-mix(in oklab, var(--attr-good) 16%, var(--card));
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: "Figtree", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; color: inherit; background: none; border: none; padding: 0; cursor: pointer; }
+  .tn { font-variant-numeric: tabular-nums; }
+
+  /* ============ App shell ============ */
+  .shell { display: flex; min-height: 100vh; }
+  .sidebar {
+    width: 232px; flex-shrink: 0;
+    background: var(--sidebar); color: var(--sidebar-foreground);
+    border-right: 1px solid var(--sidebar-border);
+    padding: 10px 8px; display: flex; flex-direction: column; gap: 14px;
+    position: sticky; top: 0; height: 100vh;
+  }
+  .side-brand { display: flex; align-items: center; gap: 8px; padding: 2px 8px; font-weight: 600; font-size: 14px; letter-spacing: -0.01em; }
+  .side-brand .logo { width: 20px; height: 20px; border-radius: 6px; background: var(--primary); display: inline-flex; align-items: center; justify-content: center; color: var(--primary-foreground); font-size: 11px; font-weight: 700; }
+  .side-group-label { padding: 0 8px; font-size: 11px; color: var(--muted-foreground); font-weight: 500; margin-bottom: 2px; }
+  .side-nav { display: flex; flex-direction: column; gap: 1px; }
+  .side-item {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+    border-radius: calc(var(--radius) * 0.8); font-size: 13px; color: var(--sidebar-foreground);
+    text-decoration: none;
+  }
+  .side-item svg { width: 15px; height: 15px; opacity: 0.75; flex-shrink: 0; }
+  .side-item.active { background: var(--sidebar-accent); font-weight: 600; }
+  .side-item .new-dot { margin-left: auto; font-size: 9px; font-weight: 700; letter-spacing: 0.08em; color: var(--primary); }
+
+  .main-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .topbar {
+    display: flex; align-items: center; gap: 8px; padding: 10px 20px;
+    border-bottom: 1px solid var(--border); font-size: 13px; color: var(--muted-foreground);
+    position: sticky; top: 0; background: var(--background); z-index: 5;
+  }
+  .topbar b { color: var(--foreground); font-weight: 500; }
+  .content { padding: 16px 20px 120px; }
+  .page { margin: 0 auto; width: 100%; max-width: 1180px; display: flex; flex-direction: column; gap: 12px; }
+
+  /* ============ Page furniture (matches /attribution) ============ */
+  .page-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 16px; }
+  .page-title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+  .freshness { font-size: 11px; color: color-mix(in oklab, var(--muted-foreground) 75%, transparent); }
+  .kicker-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+  .kicker { font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: color-mix(in oklab, var(--muted-foreground) 60%, transparent); }
+  .chips { display: flex; gap: 4px; flex-wrap: wrap; }
+  .chip {
+    font-size: 12px; padding: 3px 9px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--muted-foreground);
+  }
+  .chip.on { background: var(--foreground); color: var(--background); border-color: var(--foreground); font-weight: 500; }
+
+  .card { border: 1px solid var(--border); border-radius: calc(var(--radius) * 0.8); background: var(--card); overflow: hidden; }
+
+  /* header rail */
+  .rail { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--border); }
+  .rail.cols3 { grid-template-columns: repeat(3, 1fr); }
+  .rail-fig { padding: 12px 16px 10px; border-right: 1px solid var(--border); min-width: 0; }
+  .rail-fig:last-child { border-right: none; }
+  .rail-val { font-size: 19px; font-weight: 600; letter-spacing: -0.02em; }
+  .rail-lab { font-size: 11px; color: var(--muted-foreground); margin-top: 1px; }
+  .rail-sub { font-size: 11px; color: color-mix(in oklab, var(--muted-foreground) 70%, transparent); margin-top: 2px; }
+
+  /* ledger rows (channel-ledger style) */
+  .ledger { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 2px; }
+  .lrow { display: grid; grid-template-columns: 170px 1fr 92px 78px; align-items: center; gap: 10px; padding: 4px 6px; border-radius: 6px; }
+  .lrow:hover { background: var(--muted); }
+  .lrow.sel { background: var(--muted); outline: 1px solid var(--border); }
+  .lrow .lname { font-size: 13px; display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .lrow .lname span.txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 999px; flex-shrink: 0; }
+  .barwrap { height: 14px; display: flex; align-items: center; }
+  .bar { height: 8px; border-radius: 4px; min-width: 2px; }
+  .lmoney { text-align: right; font-size: 13px; font-weight: 500; }
+  .lsub { text-align: right; font-size: 11px; color: var(--muted-foreground); }
+  .lrow.veiled .bar { opacity: 0.25; }
+  .lrow.veiled .lmoney, .lrow.veiled .lsub { opacity: 0.45; }
+  .gate-note {
+    margin: 4px 6px 0; padding: 8px 10px; border-radius: 6px;
+    background: var(--attr-warning-soft); font-size: 12px; color: var(--foreground);
+  }
+  .gate-note b { font-weight: 600; }
+
+  /* findings */
+  .fold { border: 1px solid var(--border); border-radius: calc(var(--radius) * 0.8); background: var(--card); }
+  .fold-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; font-size: 13px; font-weight: 600; gap: 8px; }
+  .fold-head .count { font-size: 11px; color: var(--muted-foreground); font-weight: 400; }
+  .frow { border-top: 1px solid color-mix(in oklab, var(--border) 60%, transparent); }
+  .frow-btn { display: flex; align-items: flex-start; gap: 8px; width: 100%; text-align: left; padding: 10px 14px; }
+  .fdot { width: 8px; height: 8px; border-radius: 999px; margin-top: 5px; flex-shrink: 0; }
+  .fhead { flex: 1; font-size: 13px; font-weight: 500; line-height: 1.4; }
+  .fage { font-size: 11px; color: color-mix(in oklab, var(--muted-foreground) 65%, transparent); margin-top: 1px; }
+  .fbody { padding: 0 14px 12px 30px; display: flex; flex-direction: column; gap: 8px; }
+  .fbody p { margin: 0; font-size: 12px; line-height: 1.55; color: var(--muted-foreground); }
+  .fbody .evidence { font-size: 12px; font-weight: 500; color: var(--primary); }
+  .factions { display: flex; gap: 6px; }
+  .btn { font-size: 12px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border); }
+  .btn.ghost { border-color: transparent; color: var(--muted-foreground); }
+
+  /* slice chips */
+  .slice-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+  .slice-chip { font-size: 12px; padding: 4px 11px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted-foreground); }
+  .slice-chip.on { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); font-weight: 500; }
+
+  /* drill-in table */
+  .adtable { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .adtable th { text-align: left; font-size: 11px; font-weight: 500; color: var(--muted-foreground); padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .adtable td { padding: 6px 10px; border-bottom: 1px solid color-mix(in oklab, var(--border) 60%, transparent); white-space: nowrap; }
+  .adtable td.r, .adtable th.r { text-align: right; }
+  .adtable tr:last-child td { border-bottom: none; }
+  .tablewrap { overflow-x: auto; }
+  .pill { display: inline-block; font-size: 10px; font-weight: 600; letter-spacing: 0.06em; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted-foreground); }
+  .pill.warn { color: var(--attr-warning); border-color: color-mix(in oklab, var(--attr-warning) 40%, transparent); background: var(--attr-warning-soft); }
+
+  /* matrix */
+  .matrix { border-collapse: separate; border-spacing: 2px; width: 100%; }
+  .matrix th { font-size: 11px; font-weight: 500; color: var(--muted-foreground); padding: 4px 8px; text-align: right; white-space: nowrap; }
+  .matrix th.rowh { text-align: left; font-size: 12px; color: var(--foreground); }
+  .matrix td { border-radius: 5px; padding: 9px 8px; text-align: right; font-size: 12px; font-weight: 500; cursor: pointer; min-width: 72px; }
+  .matrix td.deep { color: #fff; }
+  .matrix td.sel { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+  /* insight cards */
+  .insight { border: 1px solid var(--border); border-radius: calc(var(--radius) * 0.8); background: var(--card); padding: 13px 15px; display: flex; flex-direction: column; gap: 8px; }
+  .insight .lede { font-size: 14px; font-weight: 500; line-height: 1.45; margin: 0; }
+  .insight .why { font-size: 12px; color: var(--muted-foreground); margin: 0; line-height: 1.55; }
+  .minibars { display: flex; flex-direction: column; gap: 3px; margin-top: 2px; }
+  .minibar { display: grid; grid-template-columns: 120px 1fr 60px; gap: 8px; align-items: center; font-size: 11px; color: var(--muted-foreground); }
+  .minibar .mb { height: 6px; border-radius: 3px; background: var(--attr-known); min-width: 2px; }
+  .minibar .mv { text-align: right; color: var(--foreground); }
+  .insight .see { font-size: 12px; font-weight: 500; color: var(--primary); }
+
+  .footnote { font-size: 11px; color: color-mix(in oklab, var(--muted-foreground) 70%, transparent); line-height: 1.6; }
+  .two-col { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; align-items: start; }
+  .master-detail { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 12px; align-items: start; }
+  .mini-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 900px) {
+    .two-col, .master-detail, .mini-grid { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+    .lrow { grid-template-columns: 120px 1fr 80px 64px; }
+  }
+  .sec-title { font-size: 12px; font-weight: 600; margin: 2px 0 0; }
+  .muted { color: var(--muted-foreground); }
+  .mini-head { display: flex; align-items: baseline; justify-content: space-between; padding: 10px 14px 4px; }
+  .mini-head .t { font-size: 12px; font-weight: 600; }
+  .mini-head .m { font-size: 11px; color: var(--primary); font-weight: 500; }
+  .dim-list { display: flex; flex-direction: column; }
+  .dim-group { padding: 8px 0 2px; }
+  .dim-group > .g { padding: 2px 14px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: color-mix(in oklab, var(--muted-foreground) 70%, transparent); }
+  .dim-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 5px 14px; font-size: 12.5px; }
+  .dim-row:hover { background: var(--muted); }
+  .dim-row.sel { background: var(--muted); font-weight: 600; box-shadow: inset 2px 0 0 var(--primary); }
+  .dim-row .amt { margin-left: auto; font-size: 11.5px; color: var(--muted-foreground); }
+
+  /* ============ Picker ============ */
+  .picker {
+    position: fixed; right: 18px; bottom: 18px; z-index: 50;
+    background: var(--foreground); color: var(--background);
+    border-radius: 14px; padding: 10px 12px; width: 250px;
+    box-shadow: 0 8px 28px rgb(0 0 0 / 0.28);
+    user-select: none; touch-action: none;
+    font-size: 12px;
+  }
+  .picker .grip { display: flex; align-items: center; justify-content: space-between; cursor: grab; margin-bottom: 6px; }
+  .picker .grip:active { cursor: grabbing; }
+  .picker .round-lab { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.55; }
+  .picker .dots { display: flex; gap: 4px; }
+  .picker .pdot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; opacity: 0.25; }
+  .picker .pdot.on { opacity: 1; }
+  .picker .nav { display: flex; align-items: center; gap: 8px; }
+  .picker .arrow {
+    width: 26px; height: 26px; border-radius: 8px; flex-shrink: 0;
+    background: color-mix(in oklab, var(--background) 14%, transparent);
+    color: var(--background); display: inline-flex; align-items: center; justify-content: center; font-size: 13px;
+  }
+  .picker .vname { flex: 1; text-align: center; font-weight: 600; font-size: 13px; line-height: 1.2; }
+  .picker .vsub { text-align: center; opacity: 0.6; font-size: 10.5px; margin-top: 2px; }
+  .picker .states { display: flex; gap: 4px; margin-top: 9px; background: color-mix(in oklab, var(--background) 10%, transparent); border-radius: 8px; padding: 3px; }
+  .picker .st { flex: 1; text-align: center; padding: 4px 2px; border-radius: 6px; font-size: 11px; opacity: 0.65; color: var(--background); }
+  .picker .st.on { background: color-mix(in oklab, var(--background) 22%, transparent); opacity: 1; font-weight: 600; }
+  .picker .hint { text-align: center; opacity: 0.4; font-size: 10px; margin-top: 7px; }
+</style>
+
+<div class="shell">
+  <nav class="sidebar" id="sidebar"></nav>
+  <div class="main-col">
+    <div class="topbar" id="topbar"></div>
+    <div class="content"><div class="page" id="main"></div></div>
+  </div>
+</div>
+
+<div class="picker" id="picker">
+  <div class="grip" id="grip">
+    <span class="round-lab">Round 5 · The per-ad funnel</span>
+    <span class="dots" id="pdots"></span>
+  </div>
+  <div class="nav">
+    <button class="arrow" id="prev" aria-label="Previous design">←</button>
+    <div style="min-width:0; flex:1">
+      <div class="vname" id="vname"></div>
+      <div class="vsub" id="vsub"></div>
+    </div>
+    <button class="arrow" id="next" aria-label="Next design">→</button>
+  </div>
+  <div class="states" id="states">
+    <button class="st" data-state="healthy">Tagged 84%</button>
+    <button class="st" data-state="low">Tagged 58%</button>
+  </div>
+  <div class="hint">←/→ keys switch designs · drag to move</div>
+</div>
+
+<script>
+/* =================== mock data (Reviv, last 7 days) =================== */
+const money = n => "$" + n.toLocaleString("en-US");
+
+const ANGLES = [
+  { name: "Problem–solution", rev: 6940, back: 4.9, ads: 26 },
+  { name: "Transformation",   rev: 3610, back: 3.1, ads: 14 },
+  { name: "Social proof",     rev: 2880, back: 2.2, ads: 19 },
+  { name: "Offer / promo",    rev: 2140, back: 2.8, ads: 9 },
+  { name: "Comparison",       rev: 980,  back: 1.4, ads: 6 },
+  { name: "Skepticism",       rev: 610,  back: 1.1, ads: 4 },
+  { name: "Education",        rev: 260,  back: 0.6, ads: 5 },
+];
+const PERSONAS = [
+  { name: "Busy parents",        rev: 5210, back: 3.8, ads: 21 },
+  { name: "Desk workers 30–45",  rev: 4120, back: 3.2, ads: 17 },
+  { name: "Athletes & gym-goers",rev: 3350, back: 2.6, ads: 15 },
+  { name: "45+ recovery",        rev: 2610, back: 2.1, ads: 12 },
+  { name: "Skeptical first-timers", rev: 1920, back: 1.7, ads: 8 },
+];
+const AWARENESS = [
+  { name: "Problem-aware",  rev: 7420, back: 4.1, ads: 30 },
+  { name: "Solution-aware", rev: 4180, back: 3.0, ads: 22 },
+  { name: "Product-aware",  rev: 3030, back: 2.5, ads: 13 },
+  { name: "Unaware",        rev: 1610, back: 1.3, ads: 10 },
+  { name: "Most-aware",     rev: 1180, back: 4.6, ads: 4 },
+];
+const FUNNEL = [
+  { name: "Cold (TOF)",      rev: 9120, back: 2.9, ads: 41 },
+  { name: "Warming (MOF)",   rev: 4210, back: 3.4, ads: 22 },
+  { name: "Ready to buy (BOF)", rev: 4090, back: 4.2, ads: 16 },
+];
+const UNTAGGED = { healthy: { rev: 1012, ads: 7, spendPct: 16 }, low: { rev: 3480, ads: 34, spendPct: 42 } };
+
+const DIMS = {
+  "Angle": ANGLES, "Persona": PERSONAS, "Awareness": AWARENESS, "Funnel stage": FUNNEL,
+};
+
+/* angle × funnel-stage matrix (revenue) */
+const MATRIX = {
+  cols: ["Cold", "Warming", "Ready to buy"],
+  rows: [
+    { name: "Problem–solution", cells: [4310, 1690, 940] },
+    { name: "Transformation",   cells: [2260, 890, 460] },
+    { name: "Social proof",     cells: [1140, 1010, 730] },
+    { name: "Offer / promo",    cells: [240, 380, 1520] },
+    { name: "Comparison",       cells: [310, 420, 250] },
+    { name: "Skepticism",       cells: [180, 340, 90] },
+    { name: "Education",        cells: [160, 70, 30] },
+  ],
+};
+
+const ADS = [
+  { name: "Morning stiffness UGC #4", angle: "Problem–solution", stage: "Cold", rev: 1840, spend: 402, back: 4.6, land: 71, atc: 11 },
+  { name: "“I tried everything” founder cut", angle: "Problem–solution", stage: "Cold", rev: 1215, spend: 318, back: 3.8, land: 66, atc: 9 },
+  { name: "Before/after 6-week static", angle: "Transformation", stage: "Warming", rev: 890, spend: 240, back: 3.7, land: 74, atc: 13 },
+  { name: "3,000 reviews carousel", angle: "Social proof", stage: "Warming", rev: 640, spend: 305, back: 2.1, land: 58, atc: 8 },
+  { name: "Cold plunge UGC #3", angle: "Problem–solution", stage: "Cold", rev: 310, spend: 412, back: 0.8, land: 44, atc: 4 },
+  { name: "Bundle promo — last week", angle: "Offer / promo", stage: "Ready to buy", rev: 1410, spend: 288, back: 4.9, land: 82, atc: 21 },
+];
+
+const FINDINGS = {
+  mismatch: {
+    sev: "warning",
+    head: "“Cold plunge UGC #3” talks to strangers, but lands them on your checkout-style page.",
+    age: "2h",
+    body: [
+      "The ad is tagged for people who just discovered the problem, but its link goes to /pages/bundle-offer — a page written for people ready to buy. $412 went out on it in the last 7 days and only $310 came back.",
+      "Our read of that page’s stage is a guess from its copy — nobody has confirmed it yet.",
+    ],
+    evidence: "See the ad and the page →",
+    note: "Page stage: our guess · unconfirmed",
+  },
+  untagged: {
+    sev: "warning",
+    head: "42% of your Meta spend ran on ads with no tags this week.",
+    age: "1d",
+    body: [
+      "$2,570 of $6,120 went out on 34 ads we can’t place by angle, persona or awareness — so every breakdown on this screen is reading a little more than half of your spend.",
+      "Tag the 9 biggest and you’re over the line: breakdowns unlock at 80% of active spend tagged.",
+    ],
+    evidence: "Open the tagging queue →",
+    note: null,
+  },
+  drift: {
+    sev: "critical",
+    head: "3 of today’s orders matched an ad by its name, not its id — a campaign may have lost its tracking template.",
+    age: "4h",
+    body: [
+      "Orders from “Reviv — Broad — Advantage+” are arriving with the ad’s name where its id should be. Name matches survive today, but break the moment an ad is renamed.",
+      "Check the campaign’s URL parameters in Ads Manager — the template should read utm_content={{ad.id}}.",
+    ],
+    evidence: "See those orders →",
+    note: null,
+  },
+};
+
+/* =================== shell =================== */
+const ICONS = {
+  dash: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>',
+  mer: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13 6 8l3 3 5-7"/></svg>',
+  attr: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 3h12M4 8h8M6 13h4"/></svg>',
+  intel: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="5.5"/><path d="M8 5.5v2.8l2 1.4"/></svg>',
+  gallery: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><circle cx="6" cy="6.5" r="1.2"/><path d="M3 12l3.5-3.5 2 2L11 8l2.5 2.5"/></svg>',
+  layers: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M8 2 14 5 8 8 2 5Z"/><path d="M2 8.5 8 11.5 14 8.5"/></svg>',
+  users: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="5.5" cy="5.5" r="2"/><circle cx="11" cy="6.5" r="1.6"/><path d="M2 13c0-2 1.6-3.4 3.5-3.4S9 11 9 13M9.6 12.9c.2-1.7 1.4-2.7 2.9-2.7 1 0 1.9.5 2.4 1.3"/></svg>',
+  studio: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M8 2.5 9.4 6l3.6.3-2.7 2.4.8 3.6L8 10.4l-3.1 1.9.8-3.6L3 6.3 6.6 6Z"/></svg>',
+};
+
+/* Round-1 verdict baked in: an Analyze group holds Attribution + Creative insights. */
+function renderSidebar() {
+  document.getElementById("sidebar").innerHTML = `
+    <div class="side-brand"><span class="logo">A</span> Adsolute</div>
+    <div class="side-nav">
+      <a class="side-item">${ICONS.dash}<span>Dashboard</span></a>
+      <a class="side-item">${ICONS.mer}<span>MER</span></a>
+    </div>
+    <div>
+      <div class="side-group-label">Analyze</div>
+      <div class="side-nav">
+        <a class="side-item">${ICONS.attr}<span>Attribution</span></a>
+        <a class="side-item active">${ICONS.intel}<span>Creative insights</span><span class="new-dot">NEW</span></a>
+      </div>
+    </div>
+    <div>
+      <div class="side-group-label">Manage</div>
+      <div class="side-nav">
+        <a class="side-item">${ICONS.gallery}<span>Creatives</span></a>
+        <a class="side-item">${ICONS.layers}<span>Campaigns</span></a>
+        <a class="side-item">${ICONS.users}<span>Teams</span></a>
+      </div>
+    </div>
+    <div>
+      <div class="side-group-label">Studio</div>
+      <div class="side-nav"><a class="side-item">${ICONS.studio}<span>Image Studio</span></a></div>
+    </div>`;
+  document.getElementById("topbar").innerHTML =
+    `<span>Reviv</span><span style="opacity:.4">/</span><b>Creative insights</b>`;
+}
+
+/* =================== shared fragments =================== */
+function pageHead(state) {
+  return `
+    <div class="page-head">
+      <h1 class="page-title">What your ads said, and what it earned</h1>
+      <span class="freshness">Shopify checked 7:00 AM · Meta checked 6:45 AM</span>
+    </div>
+    <div class="kicker-row">
+      <span class="kicker">Last 7 days · Jul 27 – Aug 2 · store time</span>
+      <div class="chips">
+        ${["Today","Yesterday","7 days","30 days","Custom"].map((c,i) => `<span class="chip ${i===2?"on":""}">${c}</span>`).join("")}
+      </div>
+    </div>`;
+}
+
+function railCard(state) {
+  return `
+    <div class="rail cols3">
+      <div class="rail-fig"><div class="rail-val tn" style="color:var(--attr-known)">$14,110</div><div class="rail-lab">Confirmed to Meta ads</div><div class="rail-sub tn">of $18,432 net sales</div></div>
+      <div class="rail-fig"><div class="rail-val tn">${state.coverage === "low" ? "58%" : "84%"}</div><div class="rail-lab">of spend on tagged ads</div><div class="rail-sub">${state.coverage === "low" ? "below the 80% line" : "above the 80% line"}</div></div>
+      <div class="rail-fig"><div class="rail-val tn" style="color:var(--attr-good)">$4.90</div><div class="rail-lab">Best angle, back per $1</div><div class="rail-sub">Problem–solution</div></div>
+    </div>`;
+}
+
+function tagLedger(dim, state, opts = {}) {
+  const rows = DIMS[dim];
+  const un = UNTAGGED[state.coverage];
+  const max = Math.max(...rows.map(r => r.rev), un.rev);
+  const gated = state.coverage === "low";
+  const limit = opts.limit ?? rows.length;
+  const shown = rows.slice(0, limit);
+  const row = (r, i, n) => {
+    const mix = 100 - (i / Math.max(1, n)) * 45;
+    const color = `color-mix(in oklab, var(--attr-known) ${mix}%, var(--card))`;
+    const sel = opts.selected === r.name;
+    return `<div class="lrow ${gated ? "veiled" : ""} ${sel ? "sel" : ""}" title="${r.name}: ${money(r.rev)} back · ${r.ads} ads">
+      <span class="lname"><span class="dot" style="background:${color}"></span><span class="txt">${r.name}</span></span>
+      <div class="barwrap"><div class="bar" style="width:${Math.max(2, r.rev / max * 100)}%; background:${color}"></div></div>
+      <span class="lmoney tn">${gated ? "—" : money(r.rev)}</span>
+      <span class="lsub tn">${gated ? "" : "$" + r.back.toFixed(2) + " / $1"}</span>
+    </div>`;
+  };
+  return `
+    <div class="ledger">
+      ${shown.map((r, i) => row(r, i, rows.length)).join("")}
+      ${limit < rows.length ? `<div style="padding: 2px 6px"><span style="font-size:11.5px; color:var(--primary); font-weight:500">All ${rows.length} →</span></div>` : ""}
+      <div class="lrow" title="Untagged: ${money(un.rev)} · ${un.ads} ads">
+        <span class="lname"><span class="dot" style="background:var(--attr-neutral)"></span><span class="txt">No tags yet</span></span>
+        <div class="barwrap"><div class="bar" style="width:${Math.max(2, un.rev / max * 100)}%; background:var(--attr-neutral)"></div></div>
+        <span class="lmoney tn">${money(un.rev)}</span>
+        <span class="lsub tn">${un.ads} ads</span>
+      </div>
+      ${gated && !opts.quietGate ? `<div class="gate-note"><b>These breakdowns are reading only 58% of your spend.</b> They unlock when 80% of active spend is tagged — tag the 9 biggest untagged ads to get there. The per-ad alerts still run.</div>` : ""}
+    </div>`;
+}
+
+function adRows(list) {
+  return list.map(a => `
+    <tr>
+      <td>${a.name}</td>
+      <td class="r tn">${money(a.spend)}</td>
+      <td class="r tn">${money(a.rev)}</td>
+      <td class="r tn" style="color:${a.back >= 2 ? "var(--attr-good)" : "var(--attr-warning)"}">$${a.back.toFixed(2)}</td>
+      <td class="r tn">${a.land}%</td>
+      <td class="r tn">${a.atc}%</td>
+    </tr>`).join("");
+}
+const AD_HEAD = `<thead><tr><th>Ad</th><th class="r">Spend</th><th class="r">Back</th><th class="r">Back / $1</th><th class="r">Land</th><th class="r">Add to cart</th></tr></thead>`;
+const RATIO_NOTE = `<p class="footnote" style="padding: 8px 12px 10px; margin:0">Land = of the people who clicked, how many reached the page. Add to cart = of those, how many put it in the cart. Meta’s modelled counts — compare ads against each other, not against Shopify.</p>`;
+
+function drillCard(title, sub, list) {
+  return `
+    <section class="card">
+      <div class="fold-head"><span>${title}</span><span class="count">${sub}</span></div>
+      <div class="tablewrap"><table class="adtable">${AD_HEAD}<tbody>${adRows(list)}</tbody></table></div>
+      ${RATIO_NOTE}
+    </section>`;
+}
+
+function findingRow(f, open = false) {
+  const sevColor = f.sev === "critical" ? "var(--attr-critical)" : "var(--attr-warning)";
+  return `
+    <div class="frow">
+      <button class="frow-btn frow-toggle" aria-expanded="${open}">
+        <span class="fdot" style="background:${sevColor}"></span>
+        <span class="fhead">${f.head}</span>
+        <span class="fage tn">${f.age}</span>
+      </button>
+      <div class="fbody" ${open ? "" : "hidden"}>
+        ${f.body.map(p => `<p>${p}</p>`).join("")}
+        <span class="evidence">${f.evidence}</span>
+        ${f.note ? `<span class="pill warn">${f.note}</span>` : ""}
+        <div class="factions">
+          <button class="btn">Mark resolved</button>
+          <button class="btn ghost">Snooze</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function findingsFold(state, title = "Needs your attention", openFirst = true) {
+  const items = [FINDINGS.mismatch];
+  if (state.coverage === "low") items.unshift(FINDINGS.untagged);
+  items.push(FINDINGS.drift);
+  return `
+    <div class="fold">
+      <div class="fold-head"><span>${title}</span><span class="count">${items.length} open</span></div>
+      ${items.map((f, i) => findingRow(f, openFirst && i === 0)).join("")}
+    </div>`;
+}
+
+const METHOD_NOTE = `<p class="footnote">Revenue here is confirmed orders only — each one traced to a specific ad through its link. Ads with no tags are always shown, never dropped.</p>`;
+
+/* =================== round 3: five insight-card anatomies =================== */
+/* Spine is locked (round 2): cards lead, ledger below, findings under that.
+   Only the cards area changes between variants. */
+
+const CARD_DATA = [
+  {
+    stat: "$4.90", statLab: "back per $1", tone: "good",
+    lede: "Ads that name the problem brought back $4.90 per $1 — double anything else.",
+    why: "Across 26 ads and $1,420 of spend. Social proof, your second-biggest angle by spend, brought back $2.20.",
+    see: "See all seven angles →",
+    bars: [["Problem–solution", 4.9], ["Transformation", 3.1], ["Offer / promo", 2.8], ["Social proof", 2.2]],
+  },
+  {
+    stat: "14%", statLab: "of budget", tone: "warn",
+    lede: "“Ready to buy” ads earn $4.20 per $1 — but get 14% of the budget.",
+    why: "Cold ads take 62% of spend at $2.90 back. Worth a look, not a verdict: retargeting always flatters itself.",
+    see: "See spend by stage →",
+    bars: [["Cold (TOF)", 2.9], ["Warming (MOF)", 3.4], ["Ready to buy (BOF)", 4.2]],
+  },
+];
+
+function gateCard(state) {
+  if (state.coverage !== "low") return "";
+  return `<div class="insight" style="border-color: color-mix(in oklab, var(--attr-warning) 40%, transparent); background: var(--attr-warning-soft)">
+      <p class="lede">Almost half your spend is invisible to us.</p>
+      <p class="why">42% of Meta spend ran on ads with no tags, so everything below reads just over half the picture. Tag the 9 biggest untagged ads and these notes cover the real total.</p>
+      <span class="see">Open the tagging queue →</span>
+    </div>`;
+}
+
+function pageAround(cardsHtml, state) {
+  return `
+    ${pageHead(state)}
+    ${cardsHtml}
+    <section class="card">
+      <div class="fold-head">
+        <span>The full picture</span>
+        <div class="slice-chips">${Object.keys(DIMS).map((d, i) => `<span class="slice-chip ${i === 0 ? "on" : ""}">${d}</span>`).join("")}</div>
+      </div>
+      ${tagLedger("Angle", state)}
+    </section>
+    ${findingsFold(state)}
+    ${METHOD_NOTE}`;
+}
+
+/* Round-3 verdict baked in: proof-inside cards lead the page. */
+function proofCards(state) {
+  const gated = state.coverage === "low";
+  return `
+    ${gateCard(state)}
+    <div class="mini-grid">
+      ${CARD_DATA.map(c => {
+        const mx = Math.max(...c.bars.map(b => b[1]));
+        return `<div class="insight">
+        <p class="lede">${c.lede}</p>
+        <div class="minibars">
+          ${c.bars.map(([n, v]) => `<div class="minibar"><span>${n}</span><div class="mb" style="width:${v / mx * 100}%; ${gated ? "opacity:.3" : ""}"></div><span class="mv tn">${gated ? "—" : "$" + v.toFixed(2)}</span></div>`).join("")}
+        </div>
+        <span class="see">${c.see}</span>
+      </div>`;
+      }).join("")}
+    </div>`;
+}
+
+/* The whole page, fixed; only the mismatch finding's drawer differs. */
+function pageWithDrawer(drawerHtml, state) {
+  const items = [];
+  if (state.coverage === "low") items.push(findingRow(FINDINGS.untagged, false));
+  const sevColor = "var(--attr-warning)";
+  const mismatchRow = `
+    <div class="frow">
+      <button class="frow-btn frow-toggle" aria-expanded="true">
+        <span class="fdot" style="background:${sevColor}"></span>
+        <span class="fhead">${FINDINGS.mismatch.head}</span>
+        <span class="fage tn">${FINDINGS.mismatch.age}</span>
+      </button>
+      <div class="fbody">${drawerHtml}</div>
+    </div>`;
+  return `
+    ${pageHead(state)}
+    ${proofCards(state)}
+    <section class="card">
+      <div class="fold-head">
+        <span>The full picture</span>
+        <div class="slice-chips">${Object.keys(DIMS).map((d, i) => `<span class="slice-chip ${i === 0 ? "on" : ""}">${d}</span>`).join("")}</div>
+      </div>
+      ${tagLedger("Angle", state, { quietGate: true })}
+    </section>
+    <div class="fold">
+      <div class="fold-head"><span>Needs your attention</span><span class="count">${(state.coverage === "low" ? 3 : 2)} open</span></div>
+      ${items.join("")}
+      ${mismatchRow}
+      ${findingRow(FINDINGS.drift, false)}
+    </div>
+    ${METHOD_NOTE}`;
+}
+
+const DRAWER_ACTIONS = `<div class="factions">
+  <button class="btn">Mark resolved</button>
+  <button class="btn ghost">Snooze</button>
+</div>`;
+
+/* Round-4 verdict baked in: side-by-side comparison + the settle-it question. */
+const LOCKED_DRAWER = `
+    <div class="mini-grid" style="gap:8px">
+      <div style="border:1px solid var(--border); border-radius:8px; padding:10px 12px">
+        <div class="kicker" style="letter-spacing:0.1em; margin-bottom:4px">The ad</div>
+        <p style="margin:0; font-size:12.5px; font-weight:500">Cold plunge UGC #3</p>
+        <p class="why" style="margin-top:4px">Tagged: <b>Cold</b> · problem-aware · problem–solution</p>
+        <p class="why" style="margin-top:2px">$412 spent · $310 back · 44% reach the page</p>
+      </div>
+      <div style="border:1px solid color-mix(in oklab, var(--attr-warning) 45%, var(--border)); border-radius:8px; padding:10px 12px; background:var(--attr-warning-soft)">
+        <div class="kicker" style="letter-spacing:0.1em; margin-bottom:4px">The page it links</div>
+        <p style="margin:0; font-size:12.5px; font-weight:500">/pages/bundle-offer</p>
+        <p class="why" style="margin-top:4px">Reads as: <b>Ready to buy</b> <span class="pill warn" style="margin-left:4px">our guess</span></p>
+        <p class="why" style="margin-top:2px">Written for people who already know the product.</p>
+      </div>
+    </div>
+    <div style="border:1px solid var(--border); border-radius:8px; padding:10px 12px; display:flex; flex-direction:column; gap:8px">
+      <p style="margin:0; font-size:12.5px; font-weight:500">Is /pages/bundle-offer written for people ready to buy?</p>
+      <div class="factions">
+        <button class="btn">Yes — keep the alert</button>
+        <button class="btn">No — it’s for colder traffic</button>
+        <button class="btn ghost">Show me the page first</button>
+      </div>
+      <p class="footnote" style="margin:0">Your answer sticks: the page’s stage stops being a guess, here and in every future alert.</p>
+    </div>
+    ${DRAWER_ACTIONS}`;
+
+/* =================== round 5: the per-ad funnel view =================== */
+/* Everything is locked; only the drill-in card (open on Problem–solution) differs. */
+
+const DRILL_ADS = ADS.filter(a => a.angle === "Problem–solution").concat(ADS.slice(2, 4)).slice(0, 5);
+
+function pageWithDrill(drillHtml, state) {
+  return `
+    ${pageHead(state)}
+    ${proofCards(state)}
+    <section class="card">
+      <div class="fold-head">
+        <span>The full picture</span>
+        <div class="slice-chips">${Object.keys(DIMS).map((d, i) => `<span class="slice-chip ${i === 0 ? "on" : ""}">${d}</span>`).join("")}</div>
+      </div>
+      ${tagLedger("Angle", state, { quietGate: true, selected: "Problem–solution" })}
+    </section>
+    ${drillHtml}
+    <div class="fold">
+      <div class="fold-head"><span>Needs your attention</span><span class="count">${(state.coverage === "low" ? 3 : 2)} open</span></div>
+      ${state.coverage === "low" ? findingRow(FINDINGS.untagged, false) : ""}
+      ${findingRow(FINDINGS.mismatch, false)}
+      ${findingRow(FINDINGS.drift, false)}
+    </div>
+    ${METHOD_NOTE}`;
+}
+
+function funnelTrio(a, gated) {
+  const seg = (w, o) => `<div style="height:6px; border-radius:3px; background:var(--attr-known); opacity:${gated ? 0.25 : o}; width:${w}%"></div>`;
+  return `<div style="display:flex; flex-direction:column; gap:2px; width:110px" title="${a.land}% land, ${a.atc}% of those add to cart">
+    ${seg(100, 0.35)}${seg(a.land, 0.65)}${seg(a.land * a.atc / 100, 1)}
+  </div>`;
+}
+
+/* 1 — Columns: Land % and Add-to-cart % as two more table columns */
+function v1(state) {
+  return pageWithDrill(drillCard("Inside problem–solution", "26 ads · top 5 by revenue", DRILL_ADS), state);
+}
+
+/* 2 — Ratio bars in the rows: each ad carries its little funnel */
+function v2(state) {
+  const gated = state.coverage === "low";
+  return pageWithDrill(`
+    <section class="card">
+      <div class="fold-head"><span>Inside problem–solution</span><span class="count">26 ads · top 5 by revenue</span></div>
+      <div class="tablewrap"><table class="adtable">
+        <thead><tr><th>Ad</th><th class="r">Spend</th><th class="r">Back / $1</th><th>Click → land → cart</th></tr></thead>
+        <tbody>
+          ${DRILL_ADS.map(a => `<tr>
+            <td>${a.name}</td>
+            <td class="r tn">${money(a.spend)}</td>
+            <td class="r tn" style="color:${a.back >= 2 ? "var(--attr-good)" : "var(--attr-warning)"}">$${a.back.toFixed(2)}</td>
+            <td>${funnelTrio(a, gated)}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table></div>
+      ${RATIO_NOTE}
+    </section>`, state);
+}
+
+/* 3 — The ad sheet: click an ad, its whole story opens beside the table */
+function v3(state) {
+  const a = DRILL_ADS[0];
+  return pageWithDrill(`
+    <div class="two-col">
+      <section class="card">
+        <div class="fold-head"><span>Inside problem–solution</span><span class="count">26 ads</span></div>
+        <div class="tablewrap"><table class="adtable">
+          <thead><tr><th>Ad</th><th class="r">Spend</th><th class="r">Back / $1</th></tr></thead>
+          <tbody>
+            ${DRILL_ADS.map((x, i) => `<tr style="${i === 0 ? "background:var(--muted)" : ""}">
+              <td>${x.name}</td><td class="r tn">${money(x.spend)}</td>
+              <td class="r tn" style="color:${x.back >= 2 ? "var(--attr-good)" : "var(--attr-warning)"}">$${x.back.toFixed(2)}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table></div>
+      </section>
+      <section class="card">
+        <div class="fold-head"><span style="font-size:12.5px">${a.name}</span></div>
+        <div style="padding: 0 14px 6px; display:flex; gap:16px; flex-wrap:wrap">
+          <div><div class="rail-val tn" style="font-size:16px">${money(a.spend)}</div><div class="rail-lab">spent</div></div>
+          <div><div class="rail-val tn" style="font-size:16px; color:var(--attr-good)">$${a.back.toFixed(2)}</div><div class="rail-lab">back per $1</div></div>
+        </div>
+        <div style="padding: 6px 14px 12px; display:flex; flex-direction:column; gap:5px">
+          ${[["Clicked the ad", 100, "1,846"], ["Reached the page", a.land, a.land + "%"], ["Added to cart", Math.round(a.land * a.atc / 100), a.atc + "% of those"], ["Bought", 4, "31 orders"]].map(([lab, w, val]) => `
+            <div style="display:grid; grid-template-columns: 110px 1fr 70px; gap:8px; align-items:center; font-size:11px; color:var(--muted-foreground)">
+              <span>${lab}</span>
+              <div style="height:8px; border-radius:4px; background:var(--attr-known); opacity:${0.3 + w / 140}; width:${Math.max(3, w)}%"></div>
+              <span class="tn" style="text-align:right; color:var(--foreground)">${val}</span>
+            </div>`).join("")}
+        </div>
+        <p class="footnote" style="padding:0 14px 12px; margin:0">Middle steps are Meta’s modelled counts; orders are ours. Tagged Cold · problem-aware · problem–solution.</p>
+      </section>
+    </div>`, state);
+}
+
+/* 4 — Revenue only, with a seam: no funnel promises until the store pixel lands */
+function v4(state) {
+  return pageWithDrill(`
+    <section class="card">
+      <div class="fold-head"><span>Inside problem–solution</span><span class="count">26 ads · top 5 by revenue</span></div>
+      <div class="tablewrap"><table class="adtable">
+        <thead><tr><th>Ad</th><th class="r">Spend</th><th class="r">Back</th><th class="r">Back / $1</th><th class="r">Orders</th></tr></thead>
+        <tbody>
+          ${DRILL_ADS.map(a => `<tr>
+            <td>${a.name}</td>
+            <td class="r tn">${money(a.spend)}</td>
+            <td class="r tn">${money(a.rev)}</td>
+            <td class="r tn" style="color:${a.back >= 2 ? "var(--attr-good)" : "var(--attr-warning)"}">$${a.back.toFixed(2)}</td>
+            <td class="r tn">${Math.max(2, Math.round(a.rev / 60))}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table></div>
+      <p class="footnote" style="padding: 8px 12px 10px; margin:0">What happens between the click and the order — page visits, add-to-carts — starts counting when your store’s pixel is installed. <span style="color:var(--primary); font-weight:500">Install it →</span></p>
+    </section>`, state);
+}
+
+/* 5 — Funnel cards: the drill-in is a grid of mini funnels, one per ad */
+function v5(state) {
+  const gated = state.coverage === "low";
+  return pageWithDrill(`
+    <section class="card">
+      <div class="fold-head"><span>Inside problem–solution</span><span class="count">26 ads · top 4 by revenue</span></div>
+      <div class="mini-grid" style="padding: 0 12px 12px">
+        ${DRILL_ADS.slice(0, 4).map(a => `
+          <div style="border:1px solid var(--border); border-radius:8px; padding:10px 12px">
+            <p style="margin:0 0 6px; font-size:12px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${a.name}</p>
+            <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:7px">
+              <span class="tn" style="font-size:15px; font-weight:600; color:${a.back >= 2 ? "var(--attr-good)" : "var(--attr-warning)"}">$${a.back.toFixed(2)}</span>
+              <span class="footnote">back per $1 · ${money(a.spend)} spent</span>
+            </div>
+            ${funnelTrio(a, gated)}
+            <p class="footnote" style="margin:5px 0 0">${a.land}% land · ${a.atc}% add to cart</p>
+          </div>`).join("")}
+      </div>
+      ${RATIO_NOTE}
+    </section>`, state);
+}
+
+/* =================== variant registry & picker =================== */
+const VARIANTS = [
+  { name: "Two columns", sub: "Land % and Add-to-cart % in the table", render: v1 },
+  { name: "Bars in rows", sub: "each ad carries its little funnel", render: v2 },
+  { name: "The ad sheet", sub: "click an ad, its story opens beside", render: v3 },
+  { name: "Revenue only", sub: "no funnel until the pixel lands", render: v4 },
+  { name: "Funnel cards", sub: "a grid of mini funnels, one per ad", render: v5 },
+];
+
+const state = { variant: 0, coverage: "healthy" };
+
+function readHash() {
+  const m = location.hash.match(/v=(\d)/); const s = location.hash.match(/c=(healthy|low)/);
+  if (m) state.variant = Math.min(4, Math.max(0, +m[1] - 1));
+  if (s) state.coverage = s[1];
+}
+function writeHash() { history.replaceState(null, "", `#v=${state.variant + 1}&c=${state.coverage}`); }
+
+function render() {
+  renderSidebar();
+  document.getElementById("main").innerHTML = VARIANTS[state.variant].render(state);
+  document.getElementById("vname").textContent = `${state.variant + 1} · ${VARIANTS[state.variant].name}`;
+  document.getElementById("vsub").textContent = VARIANTS[state.variant].sub;
+  document.getElementById("pdots").innerHTML = VARIANTS.map((_, i) => `<span class="pdot ${i === state.variant ? "on" : ""}"></span>`).join("");
+  document.querySelectorAll("#states .st").forEach(b => b.classList.toggle("on", b.dataset.state === state.coverage));
+  document.querySelectorAll(".frow-toggle").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const body = btn.nextElementSibling;
+      const open = body.hasAttribute("hidden");
+      body.toggleAttribute("hidden", !open);
+      btn.setAttribute("aria-expanded", String(open));
+    });
+  });
+  writeHash();
+}
+
+function step(d) { state.variant = (state.variant + d + VARIANTS.length) % VARIANTS.length; render(); }
+document.getElementById("prev").addEventListener("click", () => step(-1));
+document.getElementById("next").addEventListener("click", () => step(1));
+document.querySelectorAll("#states .st").forEach(b =>
+  b.addEventListener("click", () => { state.coverage = b.dataset.state; render(); }));
+document.addEventListener("keydown", e => {
+  if (/INPUT|TEXTAREA/.test(document.activeElement.tagName) || document.activeElement.isContentEditable) return;
+  if (e.key === "ArrowLeft") step(-1);
+  if (e.key === "ArrowRight") step(1);
+});
+
+/* draggable picker */
+(() => {
+  const el = document.getElementById("picker"), grip = document.getElementById("grip");
+  let sx, sy, ox, oy, dragging = false;
+  grip.addEventListener("pointerdown", e => {
+    dragging = true; grip.setPointerCapture(e.pointerId);
+    const r = el.getBoundingClientRect(); sx = e.clientX; sy = e.clientY; ox = r.left; oy = r.top;
+    el.style.right = "auto"; el.style.bottom = "auto"; el.style.left = r.left + "px"; el.style.top = r.top + "px";
+  });
+  grip.addEventListener("pointermove", e => {
+    if (!dragging) return;
+    el.style.left = Math.min(innerWidth - 60, Math.max(0, ox + e.clientX - sx)) + "px";
+    el.style.top = Math.min(innerHeight - 40, Math.max(0, oy + e.clientY - sy)) + "px";
+  });
+  grip.addEventListener("pointerup", () => { dragging = false; });
+})();
+
+readHash();
+render();
+</script>
