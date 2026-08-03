@@ -1548,6 +1548,8 @@ git commit -m "feat(shopify): add evidence persistence schema"
 **Files:**
 - Create: `src/lib/shopify-evidence-admin.ts`
 - Create: `src/lib/shopify-evidence-admin.test.ts`
+- Modify: `docs/superpowers/plans/2026-07-31-klaviyo-01-shopify-evidence-foundation.md`
+- Modify: `docs/superpowers/specs/2026-07-31-klaviyo-shopify-evidence-pilot-design.md`
 - Read only: `src/lib/shopify-admin.ts`
 
 - [ ] **Step 1: Write line-pagination failure tests**
@@ -1559,6 +1561,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ShopifyGraphql } from "@/lib/shopify-evidence-admin";
 import {
   IncompleteShopifyLineSetError,
+  RetryableShopifyEvidenceRequestError,
   fetchCompleteShopifyOrderLines,
   isRetryableShopifyLineFailure,
 } from "@/lib/shopify-evidence-admin";
@@ -1641,7 +1644,7 @@ describe("fetchCompleteShopifyOrderLines", () => {
     ).rejects.toBeInstanceOf(IncompleteShopifyLineSetError);
   });
 
-  it("returns no complete set when a later page fails", async () => {
+  it("returns no complete set or provider detail when a later page fails", async () => {
     const graphql = vi
       .fn<ShopifyGraphql>()
       .mockResolvedValueOnce({
@@ -1657,11 +1660,20 @@ describe("fetchCompleteShopifyOrderLines", () => {
       .mockRejectedValueOnce(new Error("remote page failed"));
     await expect(
       fetchCompleteShopifyOrderLines(graphql, "gid://shopify/Order/1"),
-    ).rejects.toThrow("remote page failed");
+    ).rejects.toEqual(
+      expect.objectContaining({
+        name: "RetryableShopifyEvidenceRequestError",
+        message: "Shopify evidence request failed",
+      }),
+    );
   });
 
   it("classifies transport failures for task retry but deterministic invalid sets as terminal", () => {
-    expect(isRetryableShopifyLineFailure(new Error("network reset"))).toBe(true);
+    expect(
+      isRetryableShopifyLineFailure(
+        new RetryableShopifyEvidenceRequestError(),
+      ),
+    ).toBe(true);
     expect(
       isRetryableShopifyLineFailure(
         new IncompleteShopifyLineSetError("Shopify line cursor did not advance"),
@@ -1822,6 +1834,13 @@ export class IncompleteShopifyLineSetError extends Error {
   }
 }
 
+export class RetryableShopifyEvidenceRequestError extends Error {
+  constructor() {
+    super("Shopify evidence request failed");
+    this.name = "RetryableShopifyEvidenceRequestError";
+  }
+}
+
 /**
  * A deterministic incomplete source set is safe to record as partial. Remote
  * transport/API failures must escape so Trigger.dev can replay from the last
@@ -1831,6 +1850,8 @@ export function isRetryableShopifyLineFailure(error: unknown): boolean {
   return !(error instanceof IncompleteShopifyLineSetError);
 }
 ```
+
+Every rejected line-page request and every transient capability-probe request is converted at the request boundary to this fixed retryable error. It has no raw provider message/body, attached cause, or other serializable provider field. An explicit capability access denial closes safely, while an optional identity-query rejection degrades to the fixed `protected_identity_unavailable` result. Deterministic resolved-response validation remains `IncompleteShopifyLineSetError` and never returns a partial line set.
 
 Add these query constants:
 
@@ -1879,11 +1900,13 @@ const ACCESS_SCOPES_QUERY = `
 `;
 ```
 
-Implement `probeShopifyEvidenceCapabilities` by reading the exact returned scope handles. `orderScope` is available only with `read_orders`, `historicalOrders` only with `read_all_orders`, and `identityScope` is declared only with `read_customers`. Return a closed safe state for absent grants instead of throwing a retryable access-denied error. This is a preflight hint, not proof of protected-field access; only the identity query proves that. Keep the raw scope array in the in-memory result for the start decision only; never persist or log it.
+Implement `probeShopifyEvidenceCapabilities` by reading the exact returned scope handles. `orderScope` is available only with `read_orders`, `historicalOrders` only with `read_all_orders`, and `identityScope` is declared only with `read_customers`. A resolved missing/malformed installation or scope array, exact absent grants, and an explicit access-denied/unauthorized/forbidden rejection return the closed safe state. Any transport, timeout, exhausted throttle/5xx, or otherwise transient/provider rejection escapes as `RetryableShopifyEvidenceRequestError`, so a Task 8 start cannot turn temporary failure into terminal capability denial. Detection is local and conservative over status/code/status text and Shopify GraphQL error shapes; raw errors and scope arrays are never logged or persisted. This is a preflight hint, not proof of protected-field access; only the identity query proves that. Keep the returned scope handles in memory for the start decision only.
 
 - [ ] **Step 5: Implement complete line pagination**
 
 Use this cursor loop. It returns only after every page is assembled and validated:
+
+The implementation wraps only each `graphql(...)` rejection in `RetryableShopifyEvidenceRequestError` before continuing with this resolved-response validation. It discards the raw error and attaches no cause. This applies to the first and every later line page.
 
 ```ts
 export async function fetchCompleteShopifyOrderLines(
@@ -1978,39 +2001,40 @@ export async function fetchShopifyIdentityEvidence(params: {
   keyring: IdentityHmacKeyring;
   suppressionKey: ErasureSuppressionKey;
 }): Promise<NormalizedShopifyIdentityEvidence> {
+  const input = snapshotIdentityEvidenceInput(params);
   const keyChecks = computeIdentityCryptoKeyChecks({
-    scope: params.scope,
-    keyring: params.keyring,
-    suppressionKey: params.suppressionKey,
+    scope: input.scope,
+    keyring: input.keyring,
+    suppressionKey: input.suppressionKey,
   });
   try {
-    const data = await params.graphql<{
+    const data = await input.graphql<{
       node: {
         id: string;
         email: string | null;
         customer: { id: string } | null;
       } | null;
-    }>(ORDER_IDENTITY_QUERY, { orderId: params.shopifyOrderId });
-    if (!data.node || data.node.id !== params.shopifyOrderId) {
+    }>(ORDER_IDENTITY_QUERY, { orderId: input.shopifyOrderId });
+    if (!data.node || data.node.id !== input.shopifyOrderId) {
       return { status: "unavailable", reason: "protected_identity_unavailable" };
     }
     const evaluatedKeyVersions = [
-      params.keyring.current.version,
-      ...(params.keyring.previous ? [params.keyring.previous.version] : []),
+      input.keyring.current.version,
+      ...(input.keyring.previous ? [input.keyring.previous.version] : []),
     ];
     return {
       status: "available",
       shopifyCustomerId: data.node.customer?.id ?? null,
       digests: data.node.email !== null
         ? computeIdentityDigests({
-            scope: params.scope,
+            scope: input.scope,
             email: data.node.email,
-            keyring: params.keyring,
+            keyring: input.keyring,
           })
         : [],
       suppressionCandidates: computeErasureSuppressionDigests({
-        scope: params.scope,
-        key: params.suppressionKey,
+        scope: input.scope,
+        key: input.suppressionKey,
         email: data.node.email,
         shopifyCustomerId: data.node.customer?.id,
       }),
@@ -2023,7 +2047,9 @@ export async function fetchShopifyIdentityEvidence(params: {
 }
 ```
 
-The raw email and customer ID exist only inside this function. Unit tests must prove the returned `suppressionCandidates` are HMAC-only, cover both available aliases, remain store-scoped, and contain neither source value nor either secret. `email: ""` is present and produces matching/suppression HMACs; only null/absent suppression aliases are omitted. Compute the combined non-secret key checks before entering the provider `try` or calling `params.graphql`, so all combined configuration/root-independence validation occurs before the protected remote request. Test suppression-root reuse against both current and previous matching roots: each error must escape with `graphql` uncalled. Do not convert either into the ordinary capability-unavailable branch.
+`snapshotIdentityEvidenceInput` performs direct runtime structural checks and, synchronously at function entry, copies the GraphQL reference and order ID, both scope strings, current/previous version strings, independent `Uint8Array` copies of every current/previous matching secret, and the suppression version plus an independent secret-byte copy. It then computes the combined non-secret key checks from that snapshot before entering the provider `try` or making the protected call. Only snapshot values may be used after the await. Invalid input and suppression-root reuse against current or previous matching roots escape before GraphQL and are not degraded to unavailable. A deferred-provider regression mutates every original field/secret during the await and must produce exactly the same result as an unmutated current-plus-previous control.
+
+The raw email and provider response exist only inside this function and are never returned. Shopify customer ID is the single approved opaque alias that may return, only through the explicit `shopifyCustomerId` field. Unit tests must prove the returned `suppressionCandidates` are HMAC-only, cover both available aliases, remain store-scoped, and contain neither raw email, customer ID, nor any secret. `email: ""` is present and produces matching/suppression HMACs; only null/absent suppression aliases are omitted. No raw email, provider error, secret, or HMAC is logged or directly persisted by this admin boundary.
 
 - [ ] **Step 7: Run evidence-client and monetary-boundary tests**
 
@@ -2034,7 +2060,7 @@ Expected: PASS. The evidence query paginates independently while the monetary qu
 - [ ] **Step 8: Commit the Shopify evidence client**
 
 ```bash
-git add src/lib/shopify-evidence-admin.ts src/lib/shopify-evidence-admin.test.ts
+git add src/lib/shopify-evidence-admin.ts src/lib/shopify-evidence-admin.test.ts docs/superpowers/plans/2026-07-31-klaviyo-01-shopify-evidence-foundation.md docs/superpowers/specs/2026-07-31-klaviyo-shopify-evidence-pilot-design.md
 git commit -m "feat(shopify): fetch complete isolated order evidence"
 ```
 

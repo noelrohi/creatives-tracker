@@ -223,6 +223,10 @@ The Shopify response email is normalized and HMACed in memory, then discarded be
 
 Shopify customer ID and email are protected customer data. Connection validation must confirm the installed credential can read the approved order/customer fields before enabling identity comparison. Identity fields remain nullable and diagnostic; unavailable protected fields do not block order/product matching. Refetching order lines for orders older than Shopify's default 60-day order window also requires `read_all_orders`. If that access is absent, the UI reports incomplete Shopify product coverage rather than implying a complete 90-day comparison.
 
+The Shopify capability probe treats a resolved missing/malformed installation or scope set, exact absent grants, and explicit access-denied/unauthorized/forbidden rejections as a closed unavailable/missing result. Transport, timeout, exhausted throttle/5xx, and generic provider rejections instead escape as one fixed retryable evidence-request error so temporary provider failure cannot become terminal readiness denial. That error contains no raw provider message/body, attached cause, or other serializable provider detail; raw scope handles remain in memory only for the immediate start decision and are never logged or persisted.
+
+Before a protected identity request, the boundary synchronously snapshots the GraphQL reference and order ID, scope strings, current/previous version labels, independent byte copies of every current/previous matching root, and an independent suppression version/root copy. Structural and root-independence checks run on that snapshot before the provider call, and only snapshot values are used after the await. Invalid inputs escape without a protected request. Mutation of caller-owned scope, labels, or secret arrays during the await therefore cannot change key checks, digests, evaluated versions, or suppression candidates. Raw email, secret bytes, and raw provider failures remain local and are never logged, returned, or persisted. Shopify customer ID is the one approved opaque alias that may return through its explicit field; every suppression candidate remains HMAC-only and contains neither raw email nor customer ID.
+
 #### `shopify_order_line`
 
 - `organization_id`, `store_id`, and `order_id`.
@@ -232,7 +236,7 @@ Shopify customer ID and email are protected customer data. Connection validation
 - Integer quantity and stable source position when available.
 - Parent-order snapshot timestamp plus created/updated timestamps; no line-specific update timestamp is invented.
 
-The store plus Shopify line-item ID is unique. Quantity is positive. Indexes support order, product, variant, and SKU lookup inside the store. Product, variant, title, and SKU fields are immutable purchase-time snapshots even if the catalog object is later edited or deleted. Reingesting an order replaces its line set transactionally so removed or edited lines cannot remain stale. Every line-item page must be fetched and assembled successfully before replacement begins; a truncated child connection leaves the previous complete line set intact. The table intentionally has no derived revenue, refund, discount, or attribution columns.
+The store plus Shopify line-item ID is unique. Quantity is positive. Indexes support order, product, variant, and SKU lookup inside the store. Product, variant, title, and SKU fields are immutable purchase-time snapshots even if the catalog object is later edited or deleted. Reingesting an order replaces its line set transactionally so removed or edited lines cannot remain stale. Every line-item page must be fetched and assembled successfully before replacement begins; a truncated child connection leaves the previous complete line set intact. First-page and later-page request rejection return no partial set and expose only the fixed retryable error with no cause or provider text. Deterministic resolved-response defects use a distinct terminal incomplete-set error. The table intentionally has no derived revenue, refund, discount, or attribution columns.
 
 The existing Shopify bulk JSONL assembler currently reconstructs refund children only. The enrichment path may reuse proven parsing primitives, but it uses its own order/line operation and completion gate rather than changing the load-bearing monetary query. It must reconstruct all line-item children under their parent order before persistence and keep refund assembly and Net sales computation unchanged.
 
@@ -464,7 +468,7 @@ This requires closing both deletion and tenant-scope gaps before pilot identity 
 ### 9.1 Pilot stages
 
 1. **Connection validation** — require the private key and HMAC secret, call Accounts, verify the discovered account ID against the explicit Reviv binding, and ensure that account is not active on another store connection.
-2. **Shopify evidence readiness** — run a separate 90-day enrichment backfill for existing Shopify orders, complete order lines first, and add limited identity only when the capability probe succeeds. Record complete, partial, and unavailable coverage without touching monetary fields.
+2. **Shopify evidence readiness** — run a separate 90-day enrichment backfill for existing Shopify orders, complete order lines first, and add limited identity only when the capability probe succeeds. Record complete, partial, and unavailable coverage without touching monetary fields. Resolved/explicit access denial is closed unavailable coverage; transient probe rejection remains retryable and creates no terminal false denial.
 3. **Metric discovery** — enumerate metrics and resolve the unique Shopify-native order metrics plus the allowed journey metrics.
 4. **Small live probe** — inspect 20–50 recent Shopify orders and corresponding Klaviyo events. Persist property shapes, identifier coverage, collisions, normalization rules, product coverage, unmatched examples, and approval decisions.
 5. **Order-core event backfill** — after the probe gate passes, ingest the approved 90-day `Placed Order` and `Ordered Product` window in bounded chunks with cursor pagination and attribution relationship IDs included.
@@ -667,6 +671,8 @@ Before pruning, older current **results** outside the rematch window whose expla
 | Discovered Klaviyo account differs from the explicit binding | Fail closed; write no source rows |
 | Probe cannot substantiate the Reviv store/account association | Keep the connection pending review; block the 90-day backfill |
 | Shopify evidence capability/page is incomplete | Preserve monetary sync and prior complete evidence; mark product/identity coverage partial |
+| Shopify evidence probe has explicit access denial | Return closed unavailable/missing capability state without provider detail |
+| Shopify evidence request/probe has transient provider failure | Throw the fixed retryable evidence-request error with no cause/raw text; create no terminal capability denial or partial line set |
 | Missing or ambiguous Shopify-native metric | Fail discovery closed; do not guess by name |
 | HTTP 429 | Honor `Retry-After`; retry within a bounded budget; checkpoint remains safe |
 | Retryable 5xx/network failure | Bounded exponential retry with jitter; preserve previous data |
@@ -676,7 +682,7 @@ Before pruning, older current **results** outside the rematch window whose expla
 | Matcher rule change | Append a new version and retain superseded explanations |
 | No defensible join | Render candidate, ambiguous, or unmatched; never force confirmed |
 
-Sync-run counts and timestamps must make it possible to reconcile fetched, accepted, ignored, warned, and failed records. The UI labels stale data instead of hiding it or presenting it as current.
+Sync-run counts and timestamps must make it possible to reconcile fetched, accepted, ignored, warned, and failed records. The UI labels stale data instead of hiding it or presenting it as current. Shopify evidence observability may record only the fixed safe retryable classification/message; it never records the underlying error, cause, response body, access-scope array, protected aliases, HMACs, or secret material.
 
 ## 14. Verification strategy
 
