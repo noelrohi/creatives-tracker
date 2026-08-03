@@ -120,6 +120,95 @@ describe("redactEventProperties", () => {
     );
   });
 
+  it("never reclassifies query or fragment slashes as an absolute URL path", () => {
+    const result = redactEventProperties(
+      {
+        QueryOnly: "https://reviv.example.com?next=/customers/query-secret",
+        FragmentOnly: "https://reviv.example.com#next=/customers/fragment-secret",
+        EncodedDelimiter:
+          "https://reviv.example.com/products/safe%3Fquery-secret",
+      },
+      new Set(["QueryOnly", "FragmentOnly", "EncodedDelimiter"]),
+      new Set(["reviv.example.com"]),
+    );
+
+    expect(result.values).toEqual({
+      EncodedDelimiter: "https://reviv.example.com/products/[redacted]",
+      FragmentOnly: "https://reviv.example.com/",
+      QueryOnly: "https://reviv.example.com/",
+    });
+    expect(JSON.stringify(Object.values(result.values))).not.toMatch(
+      /query-secret|fragment-secret|next=/,
+    );
+  });
+
+  it("classifies whitespace-prefixed absolute and relative paths before retaining generic fields", () => {
+    const result = redactEventProperties(
+      {
+        GenericEvilAbsolute:
+          "  https://evil.example/customers/absolute-secret?token=raw",
+        GenericAllowedAbsolute:
+          "  https://reviv.example.com/customers/allowed-secret?token=raw",
+        GenericRelative:
+          "  /customers/relative-secret?token=raw#fragment",
+        TabPrefixed:
+          "\thttps://reviv.example.com/customers/tab-secret?token=raw",
+        NewlinePrefixed:
+          "\n/customers/newline-secret?token=raw",
+      },
+      new Set([
+        "GenericEvilAbsolute",
+        "GenericAllowedAbsolute",
+        "GenericRelative",
+        "TabPrefixed",
+        "NewlinePrefixed",
+      ]),
+      new Set(["reviv.example.com"]),
+    );
+
+    expect(result.values).toEqual({
+      GenericAllowedAbsolute:
+        "https://reviv.example.com/customers/[redacted]",
+      GenericRelative: "/customers/[redacted]",
+    });
+    expect(JSON.stringify(result)).not.toMatch(
+      /evil\.example|absolute-secret|allowed-secret|relative-secret|tab-secret|newline-secret|token=raw/,
+    );
+  });
+
+  it("retains prototype-shaped approved keys as safe own data properties", () => {
+    const properties = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(properties, "__proto__", {
+      enumerable: true,
+      value: "safe-proto-value",
+    });
+    Object.defineProperty(properties, "constructor", {
+      enumerable: true,
+      value: "safe-constructor-value",
+    });
+    Object.defineProperty(properties, "prototype", {
+      enumerable: true,
+      value: "safe-prototype-value",
+    });
+
+    const result = redactEventProperties(
+      properties,
+      new Set(["__proto__", "constructor", "prototype"]),
+      new Set<string>(),
+    );
+
+    expect(Object.getPrototypeOf(result.values)).toBeNull();
+    expect(Object.hasOwn(result.values, "__proto__")).toBe(true);
+    expect(Object.hasOwn(result.values, "constructor")).toBe(true);
+    expect(Object.hasOwn(result.values, "prototype")).toBe(true);
+    expect(JSON.parse(JSON.stringify(result.values))).toEqual(
+      JSON.parse(
+        '{"__proto__":"safe-proto-value","constructor":"safe-constructor-value","prototype":"safe-prototype-value"}',
+      ),
+    );
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+  });
+
   it("handles empty, repeated, and encoded identity labels conservatively", () => {
     const result = redactEventProperties(
       {

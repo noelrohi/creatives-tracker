@@ -199,6 +199,76 @@ describe("normalizeEventPage", () => {
     ).toThrow();
   });
 
+  it("requires exact calendar-valid timestamps with an explicit timezone", () => {
+    const invalidTimestamps = [
+      "2026-02-29T10:00:00.000Z",
+      "2026-04-31T10:00:00.000Z",
+      "2026-13-01T10:00:00.000Z",
+      "2026-07-20T24:00:00.000Z",
+      "2026-07-20T10:60:00.000Z",
+      "2026-07-20T10:00:60.000Z",
+      "2026-07-20T10:00:00.000",
+      "2026-07-20 10:00:00Z",
+      "2026-07-20",
+    ];
+    for (const datetime of invalidTimestamps) {
+      expect(() =>
+        normalizeEventPage(
+          normalizerInput({
+            page: {
+              data: [
+                eventResource({
+                  attributes: { datetime, event_properties: {} },
+                }),
+              ],
+              included: [],
+              nextCursor: null,
+              apiRevision: "2026-07-15",
+            },
+          }),
+        ),
+      ).toThrow("event page is invalid");
+    }
+
+    const [leapDay] = normalizeEventPage(
+      normalizerInput({
+        page: {
+          data: [
+            eventResource({
+              attributes: {
+                datetime: "2028-02-29T10:00:00.123456Z",
+                event_properties: {},
+              },
+            }),
+          ],
+          included: [],
+          nextCursor: null,
+          apiRevision: "2026-07-15",
+        },
+      }),
+    );
+    const [offset] = normalizeEventPage(
+      normalizerInput({
+        page: {
+          data: [
+            eventResource({
+              attributes: {
+                datetime: "2026-07-20T18:00:00+08:00",
+                event_properties: {},
+              },
+            }),
+          ],
+          included: [],
+          nextCursor: null,
+          apiRevision: "2026-07-15",
+        },
+      }),
+    );
+
+    expect(leapDay.occurredAt.toISOString()).toBe("2028-02-29T10:00:00.123Z");
+    expect(offset.occurredAt.toISOString()).toBe("2026-07-20T10:00:00.000Z");
+  });
+
   it("maps only approved scalar aliases and never uses the provider metric as its FK", () => {
     const [event] = normalizeEventPage(
       normalizerInput({ metricRowId: "internal-metric-row" }),

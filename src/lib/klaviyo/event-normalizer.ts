@@ -25,6 +25,8 @@ const PHONE_REPLACE = /(?:\+?\d[\d\s().-]{7,}\d)/g;
 const EMAIL_REPLACE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const EXACT_HOSTNAME_PATTERN =
   /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
+const RFC3339_TIMESTAMP =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|([+-])(\d{2}):(\d{2}))$/;
 const PRODUCT_FIELDS = [
   "productId",
   "variantId",
@@ -47,6 +49,55 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function codePointLength(value: string): number {
   return Array.from(value).length;
+}
+
+function isLeapYear(year: number): boolean {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
+function parseOccurredAt(value: unknown): Date {
+  if (typeof value !== "string") invalidPage();
+  const match = RFC3339_TIMESTAMP.exec(value);
+  if (!match) invalidPage();
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const offsetHour = match[8] === "Z" ? 0 : Number(match[10]);
+  const offsetMinute = match[8] === "Z" ? 0 : Number(match[11]);
+  const monthDays = [
+    31,
+    isLeapYear(year) ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ];
+  if (
+    year === 0 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > monthDays[month - 1] ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHour > 23 ||
+    offsetMinute > 59
+  ) {
+    invalidPage();
+  }
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) invalidPage();
+  return new Date(timestamp);
 }
 
 function requiredIdentifier(value: unknown, error: () => never): string {
@@ -570,10 +621,7 @@ function normalizeResource(input: {
   } catch {
     invalidPage();
   }
-  if (typeof rawDatetime !== "string") invalidPage();
-  const timestamp = Date.parse(rawDatetime);
-  if (!Number.isFinite(timestamp)) invalidPage();
-  const occurredAt = new Date(timestamp);
+  const occurredAt = parseOccurredAt(rawDatetime);
   const properties = snapshotEventProperties(rawProperties);
   const approvedKeys = new Set(
     KLAVIYO_EVENT_ALIAS_FIELDS.map((field) => input.aliases[field]).filter(

@@ -173,8 +173,16 @@ function rawAbsolutePath(value: string): string | null {
   const schemeEnd = value.indexOf("://");
   if (schemeEnd < 0) return null;
   const authorityStart = schemeEnd + 3;
-  const pathStart = value.indexOf("/", authorityStart);
-  if (pathStart < 0) return "/";
+  const authorityEnd = Math.min(
+    ...[
+      value.indexOf("/", authorityStart),
+      value.indexOf("?", authorityStart),
+      value.indexOf("#", authorityStart),
+      value.length,
+    ].filter((index) => index >= 0),
+  );
+  if (value[authorityEnd] !== "/") return "/";
+  const pathStart = authorityEnd;
   const queryStart = value.indexOf("?", pathStart);
   const fragmentStart = value.indexOf("#", pathStart);
   const pathEnd = Math.min(
@@ -194,9 +202,10 @@ function safeUrl(
   ) {
     return null;
   }
+  const candidate = value.trim();
   let url: URL;
   try {
-    url = new URL(value);
+    url = new URL(candidate);
   } catch {
     return null;
   }
@@ -209,7 +218,7 @@ function safeUrl(
   ) {
     return null;
   }
-  const rawPath = rawAbsolutePath(value);
+  const rawPath = rawAbsolutePath(candidate);
   if (rawPath === null) return null;
   const path = safePathname(rawPath);
   return path === null ? null : `${url.origin}${path}`;
@@ -218,19 +227,21 @@ function safeUrl(
 function safeRelativePath(value: unknown): string | null {
   if (
     typeof value !== "string" ||
-    !value.startsWith("/") ||
-    value.startsWith("//") ||
     CONTROL_CHARACTER.test(value) ||
     value.includes("\\")
   ) {
     return null;
   }
-  const queryStart = value.indexOf("?");
-  const fragmentStart = value.indexOf("#");
+  const candidate = value.trim();
+  if (!candidate.startsWith("/") || candidate.startsWith("//")) return null;
+  const queryStart = candidate.indexOf("?");
+  const fragmentStart = candidate.indexOf("#");
   const pathEnd = Math.min(
-    ...[queryStart, fragmentStart, value.length].filter((index) => index >= 0),
+    ...[queryStart, fragmentStart, candidate.length].filter(
+      (index) => index >= 0,
+    ),
   );
-  return safePathname(value.slice(0, pathEnd));
+  return safePathname(candidate.slice(0, pathEnd));
 }
 
 function approvedValue(
@@ -238,22 +249,28 @@ function approvedValue(
   value: unknown,
   merchantHosts: ReadonlySet<string>,
 ): JsonValue | undefined {
+  const classifiedValue =
+    typeof value === "string" && !CONTROL_CHARACTER.test(value)
+      ? value.trim()
+      : value;
   if (/url|link|referrer/i.test(key)) {
-    return safeUrl(value, merchantHosts) ?? undefined;
+    return safeUrl(classifiedValue, merchantHosts) ?? undefined;
   }
   if (
     /path|page/i.test(key) ||
-    (typeof value === "string" && value.startsWith("/"))
+    (typeof classifiedValue === "string" && classifiedValue.startsWith("/"))
   ) {
     return (
-      safeRelativePath(value) ?? safeUrl(value, merchantHosts) ?? undefined
+      safeRelativePath(classifiedValue) ??
+      safeUrl(classifiedValue, merchantHosts) ??
+      undefined
     );
   }
   if (
-    typeof value === "string" &&
-    /^[a-z][a-z0-9+.-]*:\/\//i.test(value)
+    typeof classifiedValue === "string" &&
+    /^[a-z][a-z0-9+.-]*:\/\//i.test(classifiedValue)
   ) {
-    return safeUrl(value, merchantHosts) ?? undefined;
+    return safeUrl(classifiedValue, merchantHosts) ?? undefined;
   }
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "boolean" || value === null) return value;
@@ -275,7 +292,7 @@ export function redactEventProperties(
     invalidInput();
   }
 
-  const values: Record<string, JsonValue> = {};
+  const values = Object.create(null) as Record<string, JsonValue>;
   const fingerprint: RedactedEventEvidence["fingerprint"] = [];
   let truncated = keys.length > FINGERPRINT_MAX_KEYS;
 
@@ -301,7 +318,14 @@ export function redactEventProperties(
       continue;
     }
     const normalized = approvedValue(key, value, hostSnapshot);
-    if (normalized !== undefined) values[key] = normalized;
+    if (normalized !== undefined) {
+      Object.defineProperty(values, key, {
+        configurable: true,
+        enumerable: true,
+        value: normalized,
+        writable: true,
+      });
+    }
   }
 
   while (
