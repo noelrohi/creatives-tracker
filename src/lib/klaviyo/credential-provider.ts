@@ -77,26 +77,43 @@ function parseAllowedUrlHosts(value: string, shopDomain: string): string[] {
 export class EnvironmentKlaviyoCredentialProvider
   implements KlaviyoCredentialProvider
 {
-  constructor(private readonly environment: KlaviyoEnvironment = process.env) {}
+  readonly #environment: KlaviyoEnvironment;
+
+  constructor(environment: KlaviyoEnvironment = process.env) {
+    this.#environment = environment;
+  }
+
+  #readCredentialConfiguration(): {
+    binding: RevivKlaviyoBinding;
+    privateApiKey: string;
+  } {
+    const privateApiKey = required(
+      this.#environment,
+      "KLAVIYO_PRIVATE_API_KEY",
+    );
+    const shopDomain = normalizeShopDomain(
+      required(this.#environment, "KLAVIYO_REVIV_SHOP_DOMAIN"),
+    );
+    return {
+      privateApiKey,
+      binding: {
+        expectedAccountId: required(
+          this.#environment,
+          "KLAVIYO_REVIV_ACCOUNT_ID",
+        ),
+        shopDomain,
+        allowedUrlHosts: parseAllowedUrlHosts(
+          required(this.#environment, "KLAVIYO_REVIV_ALLOWED_URL_HOSTS"),
+          shopDomain,
+        ),
+      },
+    };
+  }
 
   async getPilotBinding(): Promise<RevivKlaviyoBinding> {
     // Validate the key before bootstrap can write, but keep it out of the
     // public binding and all validation errors.
-    required(this.environment, "KLAVIYO_PRIVATE_API_KEY");
-    const shopDomain = normalizeShopDomain(
-      required(this.environment, "KLAVIYO_REVIV_SHOP_DOMAIN"),
-    );
-    return {
-      expectedAccountId: required(
-        this.environment,
-        "KLAVIYO_REVIV_ACCOUNT_ID",
-      ),
-      shopDomain,
-      allowedUrlHosts: parseAllowedUrlHosts(
-        required(this.environment, "KLAVIYO_REVIV_ALLOWED_URL_HOSTS"),
-        shopDomain,
-      ),
-    };
+    return this.#readCredentialConfiguration().binding;
   }
 
   async resolve(
@@ -106,7 +123,7 @@ export class EnvironmentKlaviyoCredentialProvider
       throw new Error("Unsupported Klaviyo credential reference");
     }
 
-    const binding = await this.getPilotBinding();
+    const { binding, privateApiKey } = this.#readCredentialConfiguration();
     let requestShopDomain: string | null = null;
     try {
       requestShopDomain = normalizeShopDomain(request.shopDomain);
@@ -126,7 +143,7 @@ export class EnvironmentKlaviyoCredentialProvider
     }
 
     return {
-      privateApiKey: required(this.environment, "KLAVIYO_PRIVATE_API_KEY"),
+      privateApiKey,
       reference: KLAVIYO_CREDENTIAL_REFERENCE,
       expectedAccountId: binding.expectedAccountId,
       allowedUrlHosts: binding.allowedUrlHosts,

@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
   EnvironmentKlaviyoCredentialProvider,
@@ -91,6 +92,43 @@ describe("EnvironmentKlaviyoCredentialProvider", () => {
       ],
     });
     expect(JSON.stringify(binding)).not.toContain("pk_test_secret");
+  });
+
+  it("conceals the entire environment from provider serialization and inspection", () => {
+    const provider = new EnvironmentKlaviyoCredentialProvider({
+      ...environment(),
+      UNRELATED_ENV_SECRET: "database-password",
+    });
+
+    const objectKeys = Object.keys(provider);
+    const serialized = JSON.stringify(provider);
+    const inspected = inspect(provider, { showHidden: true });
+
+    expect(objectKeys).not.toContain("environment");
+    expect(serialized).not.toContain("pk_test_secret");
+    expect(serialized).not.toContain("database-password");
+    expect(inspected).not.toContain("pk_test_secret");
+    expect(inspected).not.toContain("database-password");
+  });
+
+  it("returns the same private-key snapshot it validated", async () => {
+    const mutableEnvironment = environment();
+    let keyReads = 0;
+    Object.defineProperty(mutableEnvironment, "KLAVIYO_PRIVATE_API_KEY", {
+      enumerable: true,
+      get() {
+        keyReads += 1;
+        return keyReads === 1 ? "pk_initial_secret" : "pk_mutated_secret";
+      },
+    });
+    const provider = new EnvironmentKlaviyoCredentialProvider(
+      mutableEnvironment,
+    );
+
+    await expect(provider.resolve(request)).resolves.toMatchObject({
+      privateApiKey: "pk_initial_secret",
+    });
+    expect(keyReads).toBe(1);
   });
 
   it.each([
