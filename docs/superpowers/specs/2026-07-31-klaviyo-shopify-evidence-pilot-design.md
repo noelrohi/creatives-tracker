@@ -616,7 +616,20 @@ During a planned rotation only, the server/worker may also receive previous-secr
 
 The optional rotation variables are added to `.env.example` beside the required pilot variables, with comments that prohibit client-side exposure.
 
-The matching HMAC master secret is independent from authentication secrets, API-key hashing secrets, Shopify credentials, worker secrets, and the erasure-suppression secret. Both HMAC secrets contain at least 32 random bytes. A matching tenant/store key is first derived as `HMAC-SHA256(master, "identity-tenant:<organization-id>:<shopify-store-id>")`; the email digest is then `HMAC-SHA256(tenant-key, "email:<key-version>:<normalized-email>")`. This prevents equal emails in different organizations/stores from producing a globally correlatable digest. The separate suppression key uses its own tenant/store derivation and domain-separated email/customer/profile inputs. It remains stable for the lifetime of retained tombstones because erased plaintext is unavailable for automatic re-keying; changing it requires an explicit compliance migration/upstream-deletion process.
+The matching HMAC master secret is independent from authentication secrets, API-key hashing secrets, Shopify credentials, worker secrets, and the erasure-suppression secret. Both HMAC secrets contain at least 32 random bytes. `encodeIdentityScope(scope)` is the internal (not stable public export) canonical scope primitive:
+
+```ts
+function encodeIdentityScope(scope: IdentityScope): string {
+  assertWellFormedIdentityScope(scope);
+  const organizationLength = Buffer.byteLength(scope.organizationId, "utf8");
+  const storeLength = Buffer.byteLength(scope.storeId, "utf8");
+  return `scope-v1:${organizationLength}:${scope.organizationId}:${storeLength}:${scope.storeId}`;
+}
+```
+
+The matching tenant key is `HMAC-SHA256(matching-secret, "identity-tenant:" + encodeIdentityScope(scope))`; the suppression tenant key is `HMAC-SHA256(suppression-secret, "identity-erasure-tenant:" + encodeIdentityScope(scope))`. Scope components are arbitrary well-formed Unicode / PostgreSQL-representable text: empty components, colons, controls other than U+0000, and multibyte text are accepted, while U+0000 or a JavaScript string containing an unpaired UTF-16 surrogate is rejected before `Buffer.byteLength` or derivation. No Unicode normalization occurs. The canonical `scope-v1` grammar uses UTF-8 byte lengths as unsigned ASCII decimal with no leading zero except `0`, delimiting both components unambiguously. Every HMAC context string is UTF-8. The email digest remains `HMAC-SHA256(matching-tenant-key, "email:<key-version>:<normalized-email>")`; suppression retains its distinct email/customer/profile subject domains and current-then-previous matching output ordering is unchanged. Equal emails in different organizations/stores therefore cannot produce a globally correlatable digest. Only null or absent suppression subject fields are omitted. A present blank/whitespace email is trim-and-lowercase normalized, then HMACed; matching `email: string` has no blank rejection. Shopify customer/profile aliases are exact opaque strings—including whitespace when present—and are neither normalized nor trimmed before their domain HMAC.
+
+Current and previous matching secrets must decode to different byte sequences even when their version labels differ. The suppression root secret must decode to a byte sequence different from every configured matching root (current and previous); both comparisons use the same equal-length `timingSafeEqual` helper (different lengths return false). Configuration and use fail closed before returning key checks or doing identity-bearing work when any root material is reused. Domain separation remains mandatory despite this root-material independence. The separate suppression key remains stable for the lifetime of retained tombstones because erased plaintext is unavailable for automatic re-keying; changing it requires an explicit compliance migration/upstream-deletion process.
 
 ### 12.2 HMAC rotation
 

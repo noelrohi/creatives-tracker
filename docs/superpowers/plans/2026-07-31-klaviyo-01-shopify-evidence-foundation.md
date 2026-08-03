@@ -456,7 +456,7 @@ describe("identity HMAC", () => {
     ]);
   });
 
-  it("rejects short, incomplete, and same-version rotation configuration", () => {
+  it("rejects short, incomplete, same-version, and reused-root rotation configuration", () => {
     expect(() =>
       parseIdentityHmacKeyring({
         IDENTITY_HMAC_SECRET: Buffer.alloc(16, 1).toString("base64url"),
@@ -478,6 +478,28 @@ describe("identity HMAC", () => {
         IDENTITY_HMAC_PREVIOUS_KEY_VERSION: "v2",
       }),
     ).toThrow("must differ");
+    expect(() =>
+      parseIdentityHmacKeyring({
+        IDENTITY_HMAC_SECRET: CURRENT_SECRET,
+        IDENTITY_HMAC_KEY_VERSION: "v2",
+        IDENTITY_HMAC_PREVIOUS_SECRET: CURRENT_SECRET,
+        IDENTITY_HMAC_PREVIOUS_KEY_VERSION: "v1",
+      }),
+    ).toThrow("different decoded byte sequences");
+  });
+
+  it("rejects directly constructed equal-root keyrings before producing a digest", () => {
+    const reusedRoot = Buffer.alloc(32, 7);
+    expect(() =>
+      computeIdentityDigests({
+        scope: { organizationId: "org_a", storeId: "store_a" },
+        email: "person@example.com",
+        keyring: {
+          current: { version: "v2", secret: reusedRoot },
+          previous: { version: "v1", secret: Buffer.from(reusedRoot) },
+        },
+      }),
+    ).toThrow("different decoded byte sequences");
   });
 
   it("never returns plaintext email or master secrets", () => {
@@ -498,13 +520,13 @@ describe("identity HMAC", () => {
 });
 ```
 
-Add suppression/key-binding cases: prove the same email/customer alias produces deterministic but domain-distinct suppression HMACs inside one scope and different values across stores; prove `parseErasureSuppressionKey` rejects a short/missing secret or invalid version; and prove `computeIdentityCryptoKeyChecks` is deterministic, store-scoped, distinct between matching/suppression domains, and changes when a secret changes without revealing either secret or subject data. Same version plus a different secret must produce a different check. No serialized result may contain the email, customer ID, matching secret, or suppression secret. The suppression key is deliberately separate from the rotatable matching keyring.
+Pin literal known-answer vectors for the matching email digest, email suppression digest, customer-ID suppression digest, matching key check, and suppression key check, including at least one vector with multibyte scope components. Prove organization and store isolation in every relevant domain (matching email, both suppression subject kinds, and both key checks). Test well-formed Unicode / PostgreSQL-representable scope text including empty components, colons, a representable control character, and multibyte components for deterministic output; reject U+0000 and an unpaired UTF-16 surrogate before any output; and prove `{ organizationId: "org", storeId: "store:x" }` and `{ organizationId: "org:store", storeId: "x" }` produce different outputs, not errors. Prove the same email/customer alias produces deterministic but domain-distinct suppression HMACs inside one scope; `parseErasureSuppressionKey` rejects a short/missing secret or invalid version; and configuration/use rejects a matching current/previous pair with identical decoded root bytes plus a suppression root reused from either current or previous matching root before returning key checks or doing identity-bearing work. Directly construct wrong-type (`as unknown as ...`), short-secret, and invalid-version matching keys and prove the matching operations throw before HMAC output; directly construct an equal-root/different-label `IdentityHmacKeyring` and prove `computeIdentityDigests` throws without producing a digest. Directly construct wrong-type (`as unknown as ...`), short-secret, and invalid-version `ErasureSuppressionKey` values and prove `computeErasureSuppressionDigests` throws before output. `computeIdentityCryptoKeyChecks` is deterministic, scoped, distinct between matching/suppression domains, and changes when a secret changes without revealing either secret or subject data. Same version plus a different secret must produce a different check. Only null or absent suppression fields are omitted. A present blank/whitespace email is trim-and-lowercase normalized then HMACed, while Shopify customer/profile aliases remain exact opaque strings (including whitespace) and are never normalized or trimmed before HMAC; matching `email: string` remains accepted without blank rejection. No serialized result may contain the email, customer ID, matching secret, or suppression secret. The suppression key is deliberately separate from the rotatable matching keyring.
 
 - [ ] **Step 2: Run the HMAC tests to verify they fail**
 
 Run: `bun run test -- src/lib/identity-hmac.test.ts`
 
-Expected: FAIL with `Failed to resolve import "@/lib/identity-hmac"`.
+Expected: on the original clean baseline, FAIL with `Failed to resolve import "@/lib/identity-hmac"`. When applying this approved amendment to an already-created module, the new scope/root/direct-key regression cases must fail until the implementation is updated.
 
 - [ ] **Step 3: Implement the HMAC module**
 
@@ -512,7 +534,7 @@ Create `src/lib/identity-hmac.ts`:
 
 ```ts
 import "server-only";
-import { createHmac } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 export type IdentityScope = {
   organizationId: string;
@@ -561,6 +583,53 @@ function parseSecret(value: string | undefined, name: string): Uint8Array {
   return decoded;
 }
 
+function equalSecretBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return (
+    left.byteLength === right.byteLength &&
+    timingSafeEqual(Buffer.from(left), Buffer.from(right))
+  );
+}
+
+function assertValidMatchingKey(key: IdentityHmacKey, name: string): void {
+  if (typeof key.version !== "string") {
+    throw new Error(`${name} version must be a string`);
+  }
+  if (!(key.secret instanceof Uint8Array)) {
+    throw new Error(`${name} secret must be a Uint8Array`);
+  }
+  if (!VERSION_PATTERN.test(key.version)) {
+    throw new Error(`${name} version must be 1-64 letters, digits, dot, underscore, or dash`);
+  }
+  if (key.secret.byteLength < 32) {
+    throw new Error(`${name} secret must be at least 32 bytes`);
+  }
+}
+
+function assertValidMatchingKeyring(keyring: IdentityHmacKeyring): void {
+  assertValidMatchingKey(keyring.current, "Current identity HMAC key");
+  if (!keyring.previous) return;
+  assertValidMatchingKey(keyring.previous, "Previous identity HMAC key");
+  if (keyring.previous.version === keyring.current.version) {
+    throw new Error("Current and previous identity HMAC versions must differ");
+  }
+  if (equalSecretBytes(keyring.previous.secret, keyring.current.secret)) {
+    throw new Error(
+      "Current and previous identity HMAC secrets must use different decoded byte sequences",
+    );
+  }
+}
+
+function assertWellFormedIdentityScope(scope: IdentityScope): void {
+  for (const [name, value] of [
+    ["organizationId", scope.organizationId],
+    ["storeId", scope.storeId],
+  ]) {
+    if (typeof value !== "string" || !value.isWellFormed() || value.includes("\0")) {
+      throw new Error(`${name} must be PostgreSQL-representable well-formed Unicode text`);
+    }
+  }
+}
+
 export function normalizeIdentityEmail(email: string): string {
   return email.trim().toLowerCase();
 }
@@ -579,7 +648,11 @@ export function parseIdentityHmacKeyring(
       "IDENTITY_HMAC_PREVIOUS_SECRET and IDENTITY_HMAC_PREVIOUS_KEY_VERSION must be configured together",
     );
   }
-  if (!hasPreviousSecret) return { current };
+  if (!hasPreviousSecret) {
+    const keyring = { current };
+    assertValidMatchingKeyring(keyring);
+    return keyring;
+  }
 
   const previous = {
     version: parseVersion(
@@ -591,18 +664,25 @@ export function parseIdentityHmacKeyring(
       "IDENTITY_HMAC_PREVIOUS_SECRET",
     ),
   };
-  if (previous.version === current.version) {
-    throw new Error("Current and previous identity HMAC versions must differ");
-  }
-  return { current, previous };
+  const keyring = { current, previous };
+  assertValidMatchingKeyring(keyring);
+  return keyring;
+}
+
+function encodeIdentityScope(scope: IdentityScope): string {
+  assertWellFormedIdentityScope(scope);
+  const organizationLength = Buffer.byteLength(scope.organizationId, "utf8");
+  const storeLength = Buffer.byteLength(scope.storeId, "utf8");
+  return `scope-v1:${organizationLength}:${scope.organizationId}:${storeLength}:${scope.storeId}`;
 }
 
 export function deriveTenantIdentityKey(
   key: IdentityHmacKey,
   scope: IdentityScope,
 ): Uint8Array {
+  assertValidMatchingKey(key, "Identity HMAC key");
   return createHmac("sha256", key.secret)
-    .update(`identity-tenant:${scope.organizationId}:${scope.storeId}`)
+    .update(`identity-tenant:${encodeIdentityScope(scope)}`, "utf8")
     .digest();
 }
 
@@ -611,10 +691,11 @@ export function digestIdentityEmail(params: {
   email: string;
   key: IdentityHmacKey;
 }): string {
+  assertValidMatchingKey(params.key, "Identity HMAC key");
   const tenantKey = deriveTenantIdentityKey(params.key, params.scope);
   const normalized = normalizeIdentityEmail(params.email);
   return createHmac("sha256", tenantKey)
-    .update(`email:${params.key.version}:${normalized}`)
+    .update(`email:${params.key.version}:${normalized}`, "utf8")
     .digest("base64url");
 }
 
@@ -623,6 +704,7 @@ export function computeIdentityDigests(params: {
   email: string;
   keyring: IdentityHmacKeyring;
 }): VersionedIdentityDigest[] {
+  assertValidMatchingKeyring(params.keyring);
   const rows: VersionedIdentityDigest[] = [
     {
       keyVersion: params.keyring.current.version,
@@ -649,7 +731,9 @@ export function computeIdentityDigests(params: {
 }
 ```
 
-In the same server-only module, add `parseErasureSuppressionKey`, `computeErasureSuppressionDigests`, and `computeIdentityCryptoKeyChecks` matching the stable contracts above. Derive a tenant/store key as `HMAC-SHA256(suppression-secret, "identity-erasure-tenant:<organization>:<store>")`, then HMAC normalized inputs with distinct domains: `email:<normalized>` and `shopify-customer-id:<opaque-id>`. The returned subject rows contain only kind, suppression-key version, and base64url digest. Key checks are non-subject sentinels: HMAC the fixed contexts `identity-key-binding:<version>` and `erasure-key-binding:<version>` under their respective tenant/store-derived keys. They prove that a later process holds the same high-entropy secret for a stored label; they are never matcher inputs, subject lookup values, or aggregate checksums. This suppression key is a compliance key, not a matcher key: matching, rotation, reports, checksums, and UI must never read its subject rows. Because erased plaintext is unavailable for migration, the pilot keeps this key/version stable for the lifetime of its suppression rows; changing it requires an explicit compliance migration/upstream-deletion procedure and is outside automatic matching-key rotation.
+In the same server-only module, add `parseErasureSuppressionKey`, `computeErasureSuppressionDigests`, and `computeIdentityCryptoKeyChecks` matching the stable contracts above. `encodeIdentityScope` is an internal primitive, not a new stable public export. Derive the suppression tenant key as `HMAC-SHA256(suppression-secret, "identity-erasure-tenant:" + encodeIdentityScope(scope))`; matching uses `HMAC-SHA256(matching-secret, "identity-tenant:" + encodeIdentityScope(scope))`. The canonical `scope-v1` encoding accepts only well-formed Unicode / PostgreSQL-representable scope text, including empty components, colons, controls other than U+0000, and multibyte text; it rejects U+0000 and unpaired UTF-16 surrogates before byte-length calculation or derivation. UTF-8 byte lengths are unsigned ASCII decimal with no leading zero except `0`, no Unicode normalization occurs, and every HMAC context string is UTF-8. Then HMAC the unchanged distinct subject domains: email is trim-and-lowercase normalized before `email:<normalized>`, while `shopify-customer-id:<opaque-id>` and profile aliases use exact opaque strings byte-for-byte, including whitespace, with no trimming or normalization. Only null/absent suppression inputs are omitted. The returned subject rows contain only kind, suppression-key version, and base64url digest. Key checks are non-subject sentinels: HMAC the fixed UTF-8 contexts `identity-key-binding:<version>` and `erasure-key-binding:<version>` under their respective tenant/store-derived keys. They prove that a later process holds the same high-entropy secret for a stored label; they are never matcher inputs, subject lookup values, or aggregate checksums. Centralize direct-constructed-key validation in private primitives: parsing and every matching-key operation (`deriveTenantIdentityKey`, `digestIdentityEmail`, `computeIdentityDigests`, and `computeIdentityCryptoKeyChecks`) validate secret length and version syntax; keyring operations additionally validate distinct current/previous labels and decoded roots. Add a private suppression-key validator (version syntax plus `Uint8Array` secret type/length) used by parsing, `computeErasureSuppressionDigests`, and `computeIdentityCryptoKeyChecks`, so direct structural keys cannot bypass validation. Combined operations validate suppression-root independence from both matching roots before output or protected work, using the same equal-length `timingSafeEqual` helper as matching-root comparison (different lengths return false). This does not replace the required domains. This suppression key is a compliance key, not a matcher key: matching, rotation, reports, checksums, and UI must never read its subject rows. Because erased plaintext is unavailable for migration, the pilot keeps this key/version stable for the lifetime of its suppression rows; changing it requires an explicit compliance migration/upstream-deletion procedure and is outside automatic matching-key rotation.
+
+Both private key validators first require `typeof key.version === "string"` and `key.secret instanceof Uint8Array` (so `Buffer` is accepted), before version-pattern or length checks. The suppression validator is called by parsing, suppression-only derivation, and combined key checks; invalid direct objects throw before any HMAC output.
 
 - [ ] **Step 4: Document server-only environment variables**
 
@@ -1869,6 +1953,11 @@ export async function fetchShopifyIdentityEvidence(params: {
   keyring: IdentityHmacKeyring;
   suppressionKey: ErasureSuppressionKey;
 }): Promise<NormalizedShopifyIdentityEvidence> {
+  const keyChecks = computeIdentityCryptoKeyChecks({
+    scope: params.scope,
+    keyring: params.keyring,
+    suppressionKey: params.suppressionKey,
+  });
   try {
     const data = await params.graphql<{
       node: {
@@ -1887,7 +1976,7 @@ export async function fetchShopifyIdentityEvidence(params: {
     return {
       status: "available",
       shopifyCustomerId: data.node.customer?.id ?? null,
-      digests: data.node.email
+      digests: data.node.email !== null
         ? computeIdentityDigests({
             scope: params.scope,
             email: data.node.email,
@@ -1900,11 +1989,7 @@ export async function fetchShopifyIdentityEvidence(params: {
         email: data.node.email,
         shopifyCustomerId: data.node.customer?.id,
       }),
-      keyChecks: computeIdentityCryptoKeyChecks({
-        scope: params.scope,
-        keyring: params.keyring,
-        suppressionKey: params.suppressionKey,
-      }),
+      keyChecks,
       evaluatedKeyVersions,
     };
   } catch {
@@ -1913,7 +1998,7 @@ export async function fetchShopifyIdentityEvidence(params: {
 }
 ```
 
-The raw email and customer ID exist only inside this function. Unit tests must prove the returned `suppressionCandidates` are HMAC-only, cover both available aliases, remain store-scoped, and contain neither source value nor either secret. A missing suppression key fails before the protected-identity request; do not convert that configuration error into the ordinary capability-unavailable branch.
+The raw email and customer ID exist only inside this function. Unit tests must prove the returned `suppressionCandidates` are HMAC-only, cover both available aliases, remain store-scoped, and contain neither source value nor either secret. `email: ""` is present and produces matching/suppression HMACs; only null/absent suppression aliases are omitted. Compute the combined non-secret key checks before entering the provider `try` or calling `params.graphql`, so all combined configuration/root-independence validation occurs before the protected remote request. Test suppression-root reuse against both current and previous matching roots: each error must escape with `graphql` uncalled. Do not convert either into the ordinary capability-unavailable branch.
 
 - [ ] **Step 7: Run evidence-client and monetary-boundary tests**
 
@@ -3015,7 +3100,7 @@ export type ShopifyEvidenceRunnerDependencies = {
 
 Implement `runShopifyEvidenceBatch` in this order:
 
-1. Load the matching keyring and stable erasure-suppression key; either configuration failure aborts before a database write or remote call.
+1. Load the matching keyring and stable erasure-suppression key; either configuration failure aborts before a database write or remote call. Test suppression-root reuse against both current and previous matching roots: each preflight must make zero provider calls and zero writes.
 2. Read the scoped store.
 3. Compare lowercased configured/stored domains and throw the fixed mismatch error before `graphql` or evidence/policy writes.
 4. Derive non-secret key checks and call `ensureCryptoPolicy` before a protected-identity or line remote call. Same-label/different-secret fails here.
@@ -3428,7 +3513,7 @@ describeIfDb("Shopify pilot privacy", () => {
 });
 ```
 
-Add cases proving an erasure with no currently matching order still inserts the email tombstone; replay is idempotent; a different store survives; a missing/mismatched stable suppression key fails before writes; and uninstall preserves tombstones. Explicitly use the same suppression version with a different secret and prove the stored `identity_crypto_policy` check rejects it before lookup/deletion. After erasure, replay the same historical order through `commitShopifyEvidenceOrder` using both its email and customer-alias suppression candidates. It must retain commerce/lines, clear identity, store `identityDisposition: "suppressed"`, omit the identity observation, and never recreate matching HMAC rows. Race erasure against that commit and prove either lock ordering produces the same final private state.
+Add cases proving an erasure with no currently matching order still inserts the email tombstone; replay is idempotent; a different store survives; a missing/mismatched stable suppression key fails before writes; and uninstall preserves tombstones. Explicitly use the same suppression version with a different secret and prove the stored `identity_crypto_policy` check rejects it before lookup/deletion. Test suppression-root reuse against both current and previous matching roots: `eraseShopifySubjectByEmail` must make zero writes. After erasure, replay the same historical order through `commitShopifyEvidenceOrder` using both its email and customer-alias suppression candidates. It must retain commerce/lines, clear identity, store `identityDisposition: "suppressed"`, omit the identity observation, and never recreate matching HMAC rows. Race erasure against that commit and prove either lock ordering produces the same final private state.
 
 `readCommerceSnapshot` must include order count, `sum(net_sales)`, refund count/amount, line count, bucket/rule version, and Meta-verification fields. It must exclude customer ID and matching-HMAC rows because those are the intended deletion targets. Snapshot suppression rows separately: they must be inserted by subject erasure, survive identity-only uninstall, and cascade only with store/organization deletion.
 
@@ -3455,10 +3540,10 @@ export async function eraseShopifySubjectByEmail(params: {
 }>;
 ```
 
-Compute all configured matching digests and the stable email suppression HMAC before entering the transaction, then implement one transaction in this exact order:
+Before entering the transaction, first compute the combined non-secret key checks (thereby validating root independence), then compute all configured matching subject digests and the stable email suppression subject digest. Then implement one transaction in this exact order:
 
 1. Lock the exact scoped `shopify_store` row `FOR UPDATE`; a missing/mismatched store fails before writes. This is the same lock acquired first by `commitShopifyEvidenceOrder`.
-2. Compute the supplied non-secret key checks and validate them against the locked `identity_crypto_policy` before subject lookup. Same-version/different-secret suppression input fails. Then read all matching-digest key versions retained in that store and fail before writes if any required matching secret is unavailable; mixed or mismatched policy/keyring state is not accepted automatically.
+2. Validate the precomputed non-secret key checks against the locked `identity_crypto_policy` before subject lookup or write. Same-version/different-secret suppression input fails. Then read all matching-digest key versions retained in that store and fail before writes if any required matching secret is unavailable; mixed or mismatched policy/keyring state is not accepted automatically.
 3. Resolve every Shopify order whose scoped matching digest equals one computed subject digest and load its nullable customer ID under the lock. Compute `shopify_customer_id` suppression HMACs in memory from those IDs; never retain the raw aliases beyond the transaction input.
 4. Upsert the email suppression row and every discovered customer-alias suppression row with `ON CONFLICT DO NOTHING` **before** clearing identity. The email row is inserted even when no current order matches, so a later historical/new order cannot recreate the subject. Count only newly inserted rows.
 5. With targeted SQL, set `shopify_customer_id = NULL` for the matched order IDs without invoking the production `updated_at` hook. Delete only those orders' `source_identity_hmac` rows; dependent run identity observations cascade while identity-free content observations remain.
