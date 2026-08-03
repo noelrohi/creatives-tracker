@@ -379,6 +379,13 @@
       "when": 1785726656416,
       "tag": "0053_klaviyo_shopify_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1785747364840,
+      "tag": "0054_klaviyo_source_core",
+      "breakpoints": true
     }
   ]
 }
