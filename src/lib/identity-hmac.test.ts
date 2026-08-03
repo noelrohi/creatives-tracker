@@ -3,9 +3,14 @@ import {
   computeErasureSuppressionDigests,
   computeIdentityCryptoKeyChecks,
   computeIdentityDigests,
+  deriveTenantIdentityKey,
+  digestIdentityEmail,
   normalizeIdentityEmail,
   parseErasureSuppressionKey,
   parseIdentityHmacKeyring,
+  type ErasureSuppressionKey,
+  type IdentityHmacKey,
+  type IdentityHmacKeyring,
 } from "@/lib/identity-hmac";
 
 const CURRENT_SECRET = Buffer.alloc(32, 7).toString("base64url");
@@ -54,7 +59,63 @@ describe("identity HMAC", () => {
     expect(digest("org_a", "store_a")).not.toBe(digest("org_a", "store_b"));
   });
 
-  it("rejects ambiguous and invalid identity scopes before either derivation", () => {
+  it("canonically frames ambiguous, empty, control, and multibyte scopes", () => {
+    const keyring = parseIdentityHmacKeyring({
+      IDENTITY_HMAC_SECRET: CURRENT_SECRET,
+      IDENTITY_HMAC_KEY_VERSION: "v2",
+    });
+    const suppressionKey = parseErasureSuppressionKey(
+      suppressionEnv({
+        IDENTITY_ERASURE_HMAC_SECRET: SUPPRESSION_SECRET,
+        IDENTITY_ERASURE_HMAC_KEY_VERSION: "e1",
+      }),
+    );
+    const matchingDigest = (scope: {
+      organizationId: string;
+      storeId: string;
+    }) =>
+      computeIdentityDigests({
+        scope,
+        email: "person@example.com",
+        keyring,
+      })[0].digest;
+    const suppressionDigest = (scope: {
+      organizationId: string;
+      storeId: string;
+    }) =>
+      computeErasureSuppressionDigests({
+        scope,
+        key: suppressionKey,
+        email: "person@example.com",
+      })[0].digest;
+    const formerlyColliding = [
+      { organizationId: "org", storeId: "store:x" },
+      { organizationId: "org:store", storeId: "x" },
+    ] as const;
+
+    expect(matchingDigest(formerlyColliding[0])).not.toBe(
+      matchingDigest(formerlyColliding[1]),
+    );
+    expect(suppressionDigest(formerlyColliding[0])).not.toBe(
+      suppressionDigest(formerlyColliding[1]),
+    );
+    const composed = { organizationId: "é", storeId: "store_a" };
+    const decomposed = { organizationId: "e\u0301", storeId: "store_a" };
+    expect(matchingDigest(composed)).not.toBe(matchingDigest(decomposed));
+    expect(suppressionDigest(composed)).not.toBe(suppressionDigest(decomposed));
+
+    const validScopes = [
+      { organizationId: "", storeId: "" },
+      { organizationId: "组织:α", storeId: "店舗\n🛒" },
+      { organizationId: "org\t", storeId: "store\u007f" },
+    ];
+    for (const scope of validScopes) {
+      expect(() => matchingDigest(scope)).not.toThrow();
+      expect(() => suppressionDigest(scope)).not.toThrow();
+    }
+  });
+
+  it("rejects NUL, unpaired surrogates, and non-string scope components", () => {
     const keyring = parseIdentityHmacKeyring({
       IDENTITY_HMAC_SECRET: CURRENT_SECRET,
       IDENTITY_HMAC_KEY_VERSION: "v2",
@@ -66,11 +127,14 @@ describe("identity HMAC", () => {
       }),
     );
     const invalidScopes = [
-      { organizationId: "org", storeId: "store:x" },
-      { organizationId: "org:store", storeId: "x" },
-      { organizationId: "", storeId: "store_a" },
-      { organizationId: "org_a", storeId: "store\n" },
-    ];
+      { organizationId: "org\0unsafe", storeId: "store_a" },
+      { organizationId: "org_a", storeId: "store\0unsafe" },
+      { organizationId: "high\ud800", storeId: "store_a" },
+      { organizationId: "org_a", storeId: "low\udc00" },
+      { organizationId: 42, storeId: "store_a" },
+      { organizationId: "org_a", storeId: 42 },
+      null,
+    ] as unknown as Array<{ organizationId: string; storeId: string }>;
 
     for (const scope of invalidScopes) {
       expect(() =>
@@ -90,18 +154,105 @@ describe("identity HMAC", () => {
     }
   });
 
-  it("rejects blank matching email", () => {
+  it("hashes blank matching email after trim-and-lower normalization", () => {
     const keyring = parseIdentityHmacKeyring({
       IDENTITY_HMAC_SECRET: CURRENT_SECRET,
       IDENTITY_HMAC_KEY_VERSION: "v2",
     });
     const scope = { organizationId: "org_a", storeId: "store_a" };
+    const digest = (email: string) =>
+      computeIdentityDigests({ scope, email, keyring })[0].digest;
 
-    for (const email of ["", "   ", "\t\n"]) {
-      expect(() => computeIdentityDigests({ scope, email, keyring })).toThrowError(
-        /^Invalid identity email$/,
+    expect(digest("")).toBe(digest(" \t\n "));
+    expect(digest("")).toHaveLength(43);
+  });
+
+  it("rejects direct structurally invalid matching and suppression keys", () => {
+    const scope = { organizationId: "org_a", storeId: "store_a" };
+    const validKeyring = parseIdentityHmacKeyring({
+      IDENTITY_HMAC_SECRET: CURRENT_SECRET,
+      IDENTITY_HMAC_KEY_VERSION: "v2",
+    });
+    const validSuppressionKey = parseErasureSuppressionKey(
+      suppressionEnv({
+        IDENTITY_ERASURE_HMAC_SECRET: SUPPRESSION_SECRET,
+        IDENTITY_ERASURE_HMAC_KEY_VERSION: "e1",
+      }),
+    );
+    const invalidMatchingKeys = [
+      null,
+      { version: 2, secret: new Uint8Array(32) },
+      { version: "invalid version", secret: new Uint8Array(32) },
+      { version: "v1", secret: new Uint8Array(31) },
+      { version: "v1", secret: CURRENT_SECRET },
+    ] as unknown as IdentityHmacKey[];
+
+    for (const key of invalidMatchingKeys) {
+      expect(() => deriveTenantIdentityKey(key, scope)).toThrowError(
+        /^Invalid identity HMAC key$/,
       );
+      expect(() =>
+        digestIdentityEmail({ scope, email: "person@example.com", key }),
+      ).toThrowError(/^Invalid identity HMAC key$/);
+      const keyring = { current: key } as IdentityHmacKeyring;
+      expect(() =>
+        computeIdentityDigests({
+          scope,
+          email: "person@example.com",
+          keyring,
+        }),
+      ).toThrowError(/^Invalid identity HMAC key$/);
+      expect(() =>
+        computeIdentityCryptoKeyChecks({
+          scope,
+          keyring,
+          suppressionKey: validSuppressionKey,
+        }),
+      ).toThrowError(/^Invalid identity HMAC key$/);
     }
+
+    const invalidSuppressionKeys = [
+      null,
+      { version: 2, secret: new Uint8Array(32) },
+      { version: "invalid version", secret: new Uint8Array(32) },
+      { version: "e1", secret: new Uint8Array(31) },
+      { version: "e1", secret: SUPPRESSION_SECRET },
+    ] as unknown as ErasureSuppressionKey[];
+
+    for (const key of invalidSuppressionKeys) {
+      expect(() =>
+        computeErasureSuppressionDigests({
+          scope,
+          key,
+          email: "person@example.com",
+        }),
+      ).toThrowError(/^Invalid erasure suppression HMAC key$/);
+      expect(() =>
+        computeIdentityCryptoKeyChecks({
+          scope,
+          keyring: validKeyring,
+          suppressionKey: key,
+        }),
+      ).toThrowError(/^Invalid erasure suppression HMAC key$/);
+    }
+  });
+
+  it("rejects a direct matching keyring with repeated root material", () => {
+    const repeatedSecret = new Uint8Array(32).fill(7);
+    const keyring = {
+      current: { version: "v2", secret: repeatedSecret },
+      previous: { version: "v1", secret: repeatedSecret.slice() },
+    };
+
+    expect(() =>
+      computeIdentityDigests({
+        scope: { organizationId: "org_a", storeId: "store_a" },
+        email: "person@example.com",
+        keyring,
+      }),
+    ).toThrowError(
+      /^Current and previous identity HMAC key material must differ$/,
+    );
   });
 
   it("emits current and previous rows during rotation", () => {
@@ -219,7 +370,7 @@ describe("identity HMAC", () => {
     expect(first[1].digest).not.toBe(otherOrganization[1].digest);
   });
 
-  it("omits absent and null suppression subjects without hashing null", () => {
+  it("omits nullish suppression subjects but hashes present blank values", () => {
     const key = parseErasureSuppressionKey(
       suppressionEnv({
         IDENTITY_ERASURE_HMAC_SECRET: SUPPRESSION_SECRET,
@@ -254,27 +405,25 @@ describe("identity HMAC", () => {
         shopifyCustomerId: "customer-123",
       }).map(({ kind }) => kind),
     ).toEqual(["email", "shopify_customer_id"]);
-    expect(compute({ email: "  ", shopifyCustomerId: "\t\n" })).toEqual([]);
     expect(
-      compute({ email: "  ", shopifyCustomerId: "customer-123" }).map(
+      compute({ email: "  ", shopifyCustomerId: "\t\n" }).map(
         ({ kind }) => kind,
       ),
-    ).toEqual(["shopify_customer_id"]);
-    expect(
-      compute({ email: "person@example.com", shopifyCustomerId: "  " }).map(
-        ({ kind }) => kind,
-      ),
-    ).toEqual(["email"]);
+    ).toEqual(["email", "shopify_customer_id"]);
+
+    const emailDigest = (email: string) => compute({ email })[0].digest;
+    expect(emailDigest("  ")).toBe(emailDigest("\t\n"));
 
     const customerDigest = (shopifyCustomerId: string) =>
       compute({ shopifyCustomerId })[0].digest;
+    expect(customerDigest("  ")).not.toBe(customerDigest("\t\n"));
     expect(customerDigest(" customer-123 ")).not.toBe(
       customerDigest("customer-123"),
     );
   });
 
   it("matches literal known-answer vectors for persisted crypto domains", () => {
-    const scope = { organizationId: "org_a", storeId: "store_a" };
+    const scope = { organizationId: "组织:α", storeId: "店舗\n🛒" };
     const keyring = parseIdentityHmacKeyring({
       IDENTITY_HMAC_SECRET: CURRENT_SECRET,
       IDENTITY_HMAC_KEY_VERSION: "v2",
@@ -292,7 +441,7 @@ describe("identity HMAC", () => {
         email: "person@example.com",
         keyring,
       })[0].digest,
-    ).toBe("HrHIvgvoLcn556wQZHhre-VY_ttYKdeSjDnqQSIexCk");
+    ).toBe("IGMjHENM9EquSx60gw0r6JyeC1VrBlpl4JpVyuOp0_0");
     expect(
       computeErasureSuppressionDigests({
         scope,
@@ -301,20 +450,20 @@ describe("identity HMAC", () => {
         shopifyCustomerId: "gid://shopify/Customer/123456",
       }).map(({ digest }) => digest),
     ).toEqual([
-      "-NsOP3cYKXo_K1JLfDiWbvqx2uA5DNelvy4A1Z3gn8g",
-      "UIMbqh76ULD2eohS85KwwSyxfu2mrWS2TqU5YklT218",
+      "1l3HHbMrPVJVZ3BhNulnk7z4ilnwuz7rXtN19RZiUKA",
+      "3VncFEJcIl3k--fLFdncZo1lK8Yy7bHfCNVXmCQbO0M",
     ]);
     expect(computeIdentityCryptoKeyChecks({ scope, keyring, suppressionKey })).toEqual(
       {
         matching: [
           {
             keyVersion: "v2",
-            keyCheck: "SsOzD9BUFiXTiafCDz_v7De8YMyvEaD8cLxaeXNFv5U",
+            keyCheck: "8SAcj5-m6P8s3B1uByqbIfbLFXIoEM82IPpJKCLxY48",
           },
         ],
         suppression: {
           keyVersion: "e1",
-          keyCheck: "KsPcl5a4SiBVOmQ4wrnl36Tu78tvLAibx3ygKOR8Jzg",
+          keyCheck: "H2IU_FYvbA28XqiaqwrvQxl2EeRrr_-jQxKPaLX1-ec",
         },
       },
     );
@@ -379,6 +528,7 @@ describe("identity HMAC", () => {
     ]);
     expect(first.matching[0].keyCheck).not.toBe(first.suppression.keyCheck);
     expect(first.matching[0].keyCheck).not.toBe(otherStore.matching[0].keyCheck);
+    expect(first.matching[1].keyCheck).not.toBe(otherStore.matching[1].keyCheck);
     expect(first.suppression.keyCheck).not.toBe(otherStore.suppression.keyCheck);
     expect(first.matching[0].keyCheck).not.toBe(
       otherOrganization.matching[0].keyCheck,
