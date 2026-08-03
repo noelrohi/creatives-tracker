@@ -215,6 +215,10 @@ Names below describe the intended Drizzle/PostgreSQL model. New primary keys are
 
 - `shopify_customer_id` — nullable Shopify customer identifier.
 
+Before these additions become available, migration 0053 performs fail-closed legacy-scope preflights at its absolute start. It rejects any orphaned Shopify store, order whose organization differs from its store, refund whose organization/store differs from its order, monetary sync run whose organization differs from its store, or nonnull-store finding whose organization differs from its store. No preflight repairs, reassigns, or deletes data, and no 0053 catalog mutation occurs before all checks pass.
+
+After a clean preflight, existing parent paths become tenant-scoped: orders reference stores by `(organization_id, store_id)`; refunds reference orders by `(organization_id, store_id, order_id)`; monetary sync runs reference stores by `(organization_id, store_id)`; and nullable-store findings reference stores by `(organization_id, store_id)` with PostgreSQL `MATCH SIMPLE`, preserving organization-only findings. Every replacement cascades from its scoped parent, so store deletion still reaches refunds transitively through orders.
+
 The Shopify response email is normalized and HMACed in memory, then discarded before persistence or logging.
 
 Shopify customer ID and email are protected customer data. Connection validation must confirm the installed credential can read the approved order/customer fields before enabling identity comparison. Identity fields remain nullable and diagnostic; unavailable protected fields do not block order/product matching. Refetching order lines for orders older than Shopify's default 60-day order window also requires `read_all_orders`. If that access is absent, the UI reports incomplete Shopify product coverage rather than implying a complete 90-day comparison.
@@ -451,9 +455,9 @@ Report facts are aggregate claims and cannot participate in order matching.
 
 Previous source data remains available when a later run fails.
 
-All source-child, claim, evidence-link, candidate, and result foreign keys have explicit cascade behavior from organization/store/connection and their immediate source parent. Checks enforce exactly-one polymorphic source reference, positive quantities, valid status combinations, and confidence bounds. Query indexes cover store/customer ID, versioned HMAC digest, event metric/time/profile, order/product/variant/SKU, marketing-object external ID, current result lookup, and report request freshness.
+All source-child, claim, evidence-link, candidate, and result foreign keys have explicit cascade behavior from organization/store/connection and their immediate source parent. Existing Shopify orders, refunds, monetary sync runs, and nullable-store findings also use their full organization/store parent scope rather than an independently mutable store ID. Checks enforce exactly-one polymorphic source reference, positive quantities, valid status combinations, and confidence bounds. Query indexes cover store/customer ID, versioned HMAC digest, event metric/time/profile, order/product/variant/SKU, marketing-object external ID, current result lookup, and report request freshness.
 
-This requires closing an existing deletion gap before pilot identity collection: validate current ownership, add `shopify_store.organization_id -> organization.id` with `ON DELETE CASCADE` (orders/refunds already cascade from store), and cover workspace deletion with an integration test. Pilot customer/profile identity ingestion remains disabled until that migration is applied.
+This requires closing both deletion and tenant-scope gaps before pilot identity collection: run the fail-closed preflights before any migration mutation, add `shopify_store.organization_id -> organization.id` with `ON DELETE CASCADE`, replace the four legacy unscoped foreign-key paths, and cover organization/store/order/run deletion with integration tests against the actual migration artifact. Pilot customer/profile identity ingestion remains disabled until that migration is applied.
 
 ## 9. Synchronization design
 

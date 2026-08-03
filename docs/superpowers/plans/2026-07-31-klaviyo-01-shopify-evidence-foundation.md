@@ -29,6 +29,7 @@
 | --- | --- | --- |
 | `.env.example` | Modify | Document Shopify evidence and current/previous HMAC server-only configuration. |
 | `src/schema/shopify.ts` | Modify | Add store ownership FK/composite keys and nullable `shopifyCustomerId`; leave monetary columns intact. |
+| `src/schema/finding.ts` | Modify | Scope nullable store-backed findings by organization/store while retaining organization-only findings. |
 | `src/schema/shopify-evidence.ts` | Create | Own order lines, Shopify-only source HMAC rows, per-store non-secret crypto-key bindings, durable HMAC-only erasure suppressions, independent evidence sync runs, identity-free per-run order observations, and digest-backed identity observation links. |
 | `drizzle/0053_klaviyo_shopify_evidence.sql` | Generate/inspect | Apply Plan 1 schema without rewriting existing monetary data. |
 | `drizzle/meta/0053_snapshot.json` | Generate/inspect | Drizzle snapshot for the Plan 1 schema. |
@@ -36,6 +37,7 @@
 | `src/lib/shopify-ingest.ts` | Modify | Make store-domain ownership conflict fail closed; do not add evidence fields to monetary mapping/upserts. |
 | `src/lib/shopify-ingest.test.ts` | Modify | Characterize the immutable monetary query and mapping boundary. |
 | `src/lib/shopify-store.integration.test.ts` | Create | Verify race-safe store ownership behavior against PostgreSQL. |
+| `src/lib/shopify-evidence-schema.test.ts` | Create | Normalize the Drizzle relation graph, including direct evidence-run identity observations. |
 | `src/lib/identity-hmac.ts` | Create | Normalize email, parse matching/suppression key configuration, derive tenant/store keys, and emit versioned/domain-separated digests. |
 | `src/lib/identity-hmac.test.ts` | Create | Verify deterministic HMAC behavior, isolation, rotation, suppression domains, and invalid configuration. |
 | `src/lib/evidence-window.ts` | Create | Own the cross-plan half-open UTC window type and inclusive store-day conversion. |
@@ -778,15 +780,23 @@ git commit -m "feat(privacy): add tenant-scoped identity digests"
 
 **Files:**
 - Modify: `src/schema/shopify.ts:1-112,187-220`
+- Modify: `src/schema/finding.ts`
 - Create: `src/schema/shopify-evidence.ts`
+- Create: `src/lib/shopify-evidence-schema.test.ts`
 - Generate: `drizzle/0053_klaviyo_shopify_evidence.sql`
 - Generate: `drizzle/meta/0053_snapshot.json`
 - Modify: `drizzle/meta/_journal.json`
 - Modify: `src/lib/shopify-store.integration.test.ts`
+- Modify: `docs/superpowers/specs/2026-07-31-klaviyo-shopify-evidence-pilot-design.md`
+- Modify: `docs/superpowers/plans/2026-07-31-klaviyo-01-shopify-evidence-foundation.md`
 
 - [ ] **Step 1: Add failing database-constraint cases**
 
 Extend `src/lib/shopify-store.integration.test.ts` with a `Shopify evidence constraints` describe block. Seed one order for `org_a/store_a`, then execute these assertions:
+
+The suite creates only the minimal relevant pre-0053 tables with their exact legacy foreign-key names, then reads and executes `drizzle/0053_klaviyo_shopify_evidence.sql` statement-by-statement using the checked-in `--> statement-breakpoint` delimiters. Do not duplicate post-0053 evidence DDL in the fixture. Add isolated legacy mismatch fixtures proving each migration preflight aborts before any enum, table, column, unique, or foreign-key mutation. Add catalog and behavior coverage for the scoped order/refund/sync-run/finding constraints, nullable-store findings, organization/order/run cascades, run window/mode/start/running uniqueness, dispositions, identity-observation uniqueness, and both invalid previous-key null-pair directions.
+
+Add `src/lib/shopify-evidence-schema.test.ts` and invoke Drizzle relation extraction plus normalization for the direct evidence-run-to-identity-observations edge. It must normalize the full `(organization_id, store_id, id) -> (organization_id, store_id, evidence_run_id)` shape without inference errors.
 
 ```ts
 describe("Shopify evidence constraints", () => {
@@ -865,7 +875,7 @@ Run: `bun run test -- src/lib/shopify-store.integration.test.ts`
 
 Expected: FAIL because the evidence tables and `shopify_customer_id` column do not exist.
 
-- [ ] **Step 3: Add parent ownership and customer-ID schema changes**
+- [ ] **Step 3: Add fail-closed parent ownership, scoped foreign keys, and customer-ID schema changes**
 
 In `src/schema/shopify.ts`:
 
@@ -875,6 +885,11 @@ In `src/schema/shopify.ts`:
 4. Add nullable `shopifyCustomerId: text("shopify_customer_id")` immediately after `shopifyOrderId`.
 5. Add `unique("shopify_order_org_store_id_uniq").on(table.organizationId, table.storeId, table.id)`.
 6. Add `index("shopify_order_store_customer_idx").on(table.storeId, table.shopifyCustomerId)` for store-scoped protected-identity cleanup and diagnostics.
+7. Replace `shopify_order`'s single-column store foreign key with named composite `shopify_order_org_store_fk` on `(organizationId, storeId) -> shopify_store(organizationId, id)`, cascading on store deletion.
+8. Replace `shopify_refund`'s independent store/order foreign keys with named composite `shopify_refund_org_store_order_fk` on `(organizationId, storeId, orderId) -> shopify_order(organizationId, storeId, id)`, cascading on order deletion and transitively on store deletion.
+9. Replace `shopify_sync_run`'s single-column store foreign key with named composite `shopify_sync_run_org_store_fk` on `(organizationId, storeId) -> shopify_store(organizationId, id)`, cascading on store deletion.
+10. In `src/schema/finding.ts`, replace the nullable single-column store foreign key with named composite `finding_org_store_fk` on `(organizationId, storeId) -> shopify_store(organizationId, id)`, cascading on store deletion. Keep `storeId` nullable; PostgreSQL `MATCH SIMPLE` permits organization-only findings.
+11. Update the Drizzle relations for these four paths to use the same full scoped fields. Do not repair, reassign, or delete legacy rows.
 
 The resulting ownership fields and unique keys must be:
 
@@ -1460,7 +1475,7 @@ When fresh current-version email identity exists, `shopify_evidence_run_identity
 
 `identity_erasure_suppression` is a compliance control, not source evidence. It contains only tenant/store-scoped, domain-separated HMACs under the stable suppression key. It has no relation to match runs and is excluded from fingerprints, reports, inspector output, ordinary logs, and the 90-day source window. Subject erasure validates `identity_crypto_policy`, upserts suppressions before deleting identity, and evidence commits check candidate HMACs while holding the same scoped store lock. A hit actively clears current pilot identity and records `identityDisposition: "suppressed"` while retaining identity-free order/line evidence. Suppression rows survive pilot uninstall and matching-key rotation, and cascade only with their store/organization unless an explicit compliance release removes an exact tombstone.
 
-- [ ] **Step 5: Preflight existing store ownership before adding the FK**
+- [ ] **Step 5: Put all legacy ownership preflights before every 0053 mutation**
 
 Run this read-only query against the target database:
 
@@ -1472,6 +1487,16 @@ WHERE o.id IS NULL;
 ```
 
 Expected: 0 rows. If rows exist, stop; do not delete or reassign them as part of this plan.
+
+At the absolute start of 0053, before creating an enum/table, adding `shopify_customer_id`, adding a unique, or dropping a legacy foreign key, fail closed when any of these exist:
+
+- a `shopify_store.organization_id` with no organization;
+- a `shopify_order` whose organization differs from its referenced store;
+- a `shopify_refund` whose organization/store differs from its referenced order;
+- a `shopify_sync_run` whose organization differs from its referenced store;
+- a nonnull-store `finding` whose organization differs from its referenced store.
+
+Each failure raises a fixed safe migration error and leaves all five exact legacy constraints plus the entire pre-0053 catalog unchanged. After all preflights pass, add the parent composite uniques before dependent foreign keys, drop the exact 0052 constraint names, and install the four named scoped replacements. No automatic data repair is allowed.
 
 - [ ] **Step 6: Generate migration 0053**
 
@@ -1489,6 +1514,8 @@ Confirm all of these are present exactly once:
 - unique `shopify_evidence_sync_run.start_trigger_run_id`, nullable first-batch Trigger handle, running heartbeat, and one-running-run-per-store partial unique index
 - `shopify_store.organization_id → organization.id ON DELETE CASCADE`
 - parent composite unique constraints
+- top-of-file fail-closed ownership preflights before every mutation
+- exact removal of the five legacy single-column/independent foreign keys and installation of `shopify_order_org_store_fk`, `shopify_refund_org_store_order_fk`, `shopify_sync_run_org_store_fk`, and `finding_org_store_fk`
 - all eight new tables, including `identity_matching_key_binding`, `identity_crypto_policy`, `identity_erasure_suppression`, `shopify_evidence_run_observation`, and `shopify_evidence_run_identity_observation`
 - the positive quantity, valid-window, and closed evidence-mode checks
 - the Shopify-only source check
@@ -1499,22 +1526,20 @@ Run: `git diff -- drizzle/0053_klaviyo_shopify_evidence.sql drizzle/meta/0053_sn
 
 Expected: only the Plan 1 additions listed above.
 
-- [ ] **Step 8: Apply the migration to the disposable test database**
+- [ ] **Step 8: Apply 0053 to the disposable minimal pre-0053 database**
 
-Run: `DATABASE_URL=postgres://postgres:postgres@localhost:5432/adsolute_shopify_evidence_test bun run db:migrate`
-
-Expected: exit code 0 and migration 0053 recorded by Drizzle.
+The repository's clean historical replay is already blocked before this task by the known 0010/0011 `ad_account` duplication. Do not modify historical migrations or claim a full replay. Apply the actual 0053 statements to the minimal pre-0053 integration fixture and a disposable equivalent database; expect all preflights to pass, all eight evidence tables to exist, and the scoped replacement constraints to appear in the PostgreSQL catalog.
 
 - [ ] **Step 9: Run schema and monetary tests**
 
-Run: `bun run test -- src/lib/shopify-store.integration.test.ts src/lib/shopify-ingest.test.ts`
+Run: `bun run test -- src/lib/shopify-store.integration.test.ts src/lib/shopify-evidence-schema.test.ts src/lib/shopify-ingest.test.ts`
 
 Expected: PASS; the evidence constraints reject invalid rows and monetary characterization remains green.
 
 - [ ] **Step 10: Commit schema and migration**
 
 ```bash
-git add src/schema/shopify.ts src/schema/shopify-evidence.ts src/lib/shopify-store.integration.test.ts drizzle/0053_klaviyo_shopify_evidence.sql drizzle/meta/0053_snapshot.json drizzle/meta/_journal.json
+git add src/schema/shopify.ts src/schema/finding.ts src/schema/shopify-evidence.ts src/lib/shopify-store.integration.test.ts src/lib/shopify-evidence-schema.test.ts drizzle/0053_klaviyo_shopify_evidence.sql drizzle/meta/0053_snapshot.json drizzle/meta/_journal.json docs/superpowers/specs/2026-07-31-klaviyo-shopify-evidence-pilot-design.md docs/superpowers/plans/2026-07-31-klaviyo-01-shopify-evidence-foundation.md
 git commit -m "feat(shopify): add evidence persistence schema"
 ```
 
