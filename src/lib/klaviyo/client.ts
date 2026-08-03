@@ -1,9 +1,9 @@
 import "server-only";
-import type { HalfOpenWindow } from "@/lib/klaviyo/types";
 
 const KLAVIYO_ORIGIN = "https://a.klaviyo.com";
 const MAX_ATTEMPTS = 4;
 const MAX_RETRY_DELAY_MS = 60_000;
+const MAX_CURSOR_LENGTH = 4_096;
 
 export const KLAVIYO_API_REVISIONS = {
   accounts: "2026-07-15",
@@ -30,6 +30,11 @@ export class KlaviyoApiError extends Error {
     message: string,
     readonly status: number | null,
     readonly retryable: boolean,
+    /**
+     * Sanitized provider-directed delay. Durable callers must persist or
+     * reschedule this wait before issuing another request after a terminal 429.
+     */
+    readonly retryAfterMs: number | null = null,
   ) {
     super(message);
     this.name = "KlaviyoApiError";
@@ -69,11 +74,21 @@ function parseRetryAfter(value: string | null): number | null {
   if (!trimmed) return null;
   if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
     const seconds = Number(trimmed);
-    return Number.isFinite(seconds) ? seconds * 1_000 : null;
+    const milliseconds = seconds * 1_000;
+    return Number.isFinite(milliseconds) ? milliseconds : null;
   }
   const timestamp = Date.parse(trimmed);
   if (Number.isNaN(timestamp)) return null;
   return Math.max(0, timestamp - Date.now());
+}
+
+function discardResponseBody(response: Response): void {
+  try {
+    const cancellation = response.body?.cancel();
+    void cancellation?.catch(() => undefined);
+  } catch {
+    // Body disposal is best-effort and must never surface provider content.
+  }
 }
 
 function invalidPaginationLink(): never {
@@ -82,6 +97,27 @@ function invalidPaginationLink(): never {
     null,
     false,
   );
+}
+
+function rawPathHasDotSegment(value: string): boolean {
+  const schemeEnd = value.indexOf("://");
+  if (schemeEnd < 0) return true;
+  const pathStart = value.indexOf("/", schemeEnd + 3);
+  if (pathStart < 0) return false;
+  const queryStart = value.indexOf("?", pathStart);
+  const fragmentStart = value.indexOf("#", pathStart);
+  const pathEnd = Math.min(
+    ...[queryStart, fragmentStart, value.length].filter((index) => index >= 0),
+  );
+  const rawPath = value.slice(pathStart, pathEnd);
+  return rawPath.split("/").some((segment) => {
+    try {
+      const decoded = decodeURIComponent(segment);
+      return decoded === "." || decoded === "..";
+    } catch {
+      return true;
+    }
+  });
 }
 
 function nextCursor(next: unknown, expectedPath: string): string | null {
@@ -103,25 +139,129 @@ function nextCursor(next: unknown, expectedPath: string): string | null {
     url.origin !== KLAVIYO_ORIGIN ||
     url.username !== "" ||
     url.password !== "" ||
+    next.includes("#") ||
+    rawPathHasDotSegment(next) ||
     (url.pathname !== canonicalPath && url.pathname !== `${canonicalPath}/`)
   ) {
     invalidPaginationLink();
   }
 
   const cursorValues = url.searchParams.getAll("page[cursor]");
-  if (cursorValues.length !== 1 || cursorValues[0].trim() === "") {
+  if (
+    cursorValues.length !== 1 ||
+    cursorValues[0].trim() === "" ||
+    cursorValues[0].length > MAX_CURSOR_LENGTH
+  ) {
     invalidPaginationLink();
   }
   return cursorValues[0];
 }
 
-function eventFilter(metricId: string, window: HalfOpenWindow): string {
+function eventFilter(metricId: string, from: string, to: string): string {
   const metric = JSON.stringify(metricId);
   return (
     `and(equals(metric_id,${metric}),` +
-    `greater-or-equal(datetime,${window.from.toISOString()}),` +
-    `less-than(datetime,${window.to.toISOString()}))`
+    `greater-or-equal(datetime,${from}),` +
+    `less-than(datetime,${to}))`
   );
+}
+
+function invalidEventWindow(): never {
+  throw new KlaviyoApiError(
+    "Klaviyo event request has an invalid half-open window",
+    null,
+    false,
+  );
+}
+
+function invalidRequestCursor(): never {
+  throw new KlaviyoApiError(
+    "Klaviyo request cursor is invalid",
+    null,
+    false,
+  );
+}
+
+function assertRequestCursor(
+  cursor: unknown,
+): asserts cursor is string | null {
+  if (
+    cursor !== null &&
+    (typeof cursor !== "string" ||
+      cursor.trim() === "" ||
+      cursor.length > MAX_CURSOR_LENGTH)
+  ) {
+    invalidRequestCursor();
+  }
+}
+
+type ListEventsInput = {
+  metricId: string;
+  from: Date;
+  to: Date;
+  cursor: string | null;
+  includeAttributions: boolean;
+  includeProfileEmail: boolean;
+};
+
+type EventRequestSnapshot = Omit<ListEventsInput, "from" | "to"> & {
+  from: string;
+  to: string;
+};
+
+function snapshotEventRequest(input: ListEventsInput): EventRequestSnapshot {
+  let metricId: string;
+  let fromMilliseconds: number;
+  let toMilliseconds: number;
+  let cursor: string | null;
+  let includeAttributions: boolean;
+  let includeProfileEmail: boolean;
+  try {
+    metricId = input.metricId;
+    const from = input.from;
+    fromMilliseconds = Date.prototype.getTime.call(from);
+    const to = input.to;
+    toMilliseconds = Date.prototype.getTime.call(to);
+    cursor = input.cursor;
+    includeAttributions = input.includeAttributions;
+    includeProfileEmail = input.includeProfileEmail;
+  } catch {
+    invalidEventWindow();
+  }
+  if (
+    !Number.isFinite(fromMilliseconds) ||
+    !Number.isFinite(toMilliseconds) ||
+    fromMilliseconds >= toMilliseconds
+  ) {
+    invalidEventWindow();
+  }
+  if (typeof metricId !== "string" || metricId.trim() === "") {
+    throw new KlaviyoApiError(
+      "Klaviyo event request has an invalid metric",
+      null,
+      false,
+    );
+  }
+  if (
+    typeof includeAttributions !== "boolean" ||
+    typeof includeProfileEmail !== "boolean"
+  ) {
+    throw new KlaviyoApiError(
+      "Klaviyo event request has invalid include flags",
+      null,
+      false,
+    );
+  }
+  assertRequestCursor(cursor);
+
+  return {
+    metricId,
+    from: new Date(fromMilliseconds).toISOString(),
+    to: new Date(toMilliseconds).toISOString(),
+    cursor,
+    includeAttributions,
+    includeProfileEmail,
+  };
 }
 
 function invalidResponse(status: number): never {
@@ -220,13 +360,16 @@ export class KlaviyoApiClient {
         ? parseRetryAfter(response.headers.get("retry-after"))
         : null;
       if (retryAfter !== null && retryAfter > MAX_RETRY_DELAY_MS) {
+        discardResponseBody(response);
         throw new KlaviyoApiError(
           "Klaviyo API retry delay exceeds client limit",
           response.status,
           true,
+          response.status === 429 ? retryAfter : null,
         );
       }
       if (retryable && attempt < MAX_ATTEMPTS - 1) {
+        discardResponseBody(response);
         await this.#sleep(
           retryAfter ??
             500 * 2 ** attempt + Math.floor(this.#random() * 250),
@@ -234,10 +377,12 @@ export class KlaviyoApiClient {
         continue;
       }
       if (!response.ok) {
+        discardResponseBody(response);
         throw new KlaviyoApiError(
           `Klaviyo API request failed (${response.status})`,
           response.status,
           retryable,
+          response.status === 429 ? retryAfter : null,
         );
       }
 
@@ -269,7 +414,8 @@ export class KlaviyoApiClient {
     });
   }
 
-  listMetrics(cursor: string | null): Promise<KlaviyoCompoundPage> {
+  async listMetrics(cursor: string | null): Promise<KlaviyoCompoundPage> {
+    assertRequestCursor(cursor);
     const params = new URLSearchParams();
     if (cursor !== null) params.set("page[cursor]", cursor);
     return this.#request({
@@ -279,21 +425,15 @@ export class KlaviyoApiClient {
     });
   }
 
-  listEvents(input: {
-    metricId: string;
-    from: Date;
-    to: Date;
-    cursor: string | null;
-    includeAttributions: boolean;
-    includeProfileEmail: boolean;
-  }): Promise<KlaviyoCompoundPage> {
+  async listEvents(input: ListEventsInput): Promise<KlaviyoCompoundPage> {
+    const snapshot = snapshotEventRequest(input);
     const include = [
-      ...(input.includeProfileEmail ? ["profile"] : []),
+      ...(snapshot.includeProfileEmail ? ["profile"] : []),
       "metric",
-      ...(input.includeAttributions ? ["attributions"] : []),
+      ...(snapshot.includeAttributions ? ["attributions"] : []),
     ].join(",");
     const params = new URLSearchParams({
-      filter: eventFilter(input.metricId, { from: input.from, to: input.to }),
+      filter: eventFilter(snapshot.metricId, snapshot.from, snapshot.to),
       include,
       "fields[event]": "id,datetime,event_properties,timestamp,uuid",
       "fields[metric]": "id,name,integration",
@@ -301,8 +441,10 @@ export class KlaviyoApiClient {
       "page[size]": "200",
       sort: "datetime",
     });
-    if (input.includeProfileEmail) params.set("fields[profile]", "email");
-    if (input.cursor !== null) params.set("page[cursor]", input.cursor);
+    if (snapshot.includeProfileEmail) params.set("fields[profile]", "email");
+    if (snapshot.cursor !== null) {
+      params.set("page[cursor]", snapshot.cursor);
+    }
     return this.#request({
       path: "/api/events",
       revision: KLAVIYO_API_REVISIONS.events,

@@ -130,6 +130,129 @@ describe("KlaviyoApiClient", () => {
     );
   });
 
+  it("snapshots every event input value exactly once before query construction", async () => {
+    const reads = {
+      metricId: 0,
+      from: 0,
+      to: 0,
+      cursor: 0,
+      includeAttributions: 0,
+      includeProfileEmail: 0,
+    };
+    const input = {
+      get metricId() {
+        reads.metricId += 1;
+        return reads.metricId === 1 ? "metric-stable" : "metric-mutated";
+      },
+      get from() {
+        reads.from += 1;
+        return reads.from === 1
+          ? new Date("2026-05-01T00:00:00.000Z")
+          : new Date("invalid");
+      },
+      get to() {
+        reads.to += 1;
+        return reads.to === 1
+          ? new Date("2026-07-30T00:00:00.000Z")
+          : new Date("invalid");
+      },
+      get cursor() {
+        reads.cursor += 1;
+        return reads.cursor === 1 ? "cursor-stable" : null;
+      },
+      get includeAttributions() {
+        reads.includeAttributions += 1;
+        return true;
+      },
+      get includeProfileEmail() {
+        reads.includeProfileEmail += 1;
+        return reads.includeProfileEmail === 1;
+      },
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(successfulPage());
+    const client = clientWith(fetchMock);
+
+    await client.listEvents(input);
+
+    expect(reads).toEqual({
+      metricId: 1,
+      from: 1,
+      to: 1,
+      cursor: 1,
+      includeAttributions: 1,
+      includeProfileEmail: 1,
+    });
+    const url = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(url.searchParams.get("include")).toBe(
+      "profile,metric,attributions",
+    );
+    expect(url.searchParams.get("fields[profile]")).toBe("email");
+    expect(url.searchParams.get("page[cursor]")).toBe("cursor-stable");
+    expect(url.searchParams.get("filter")).toContain(
+      'equals(metric_id,"metric-stable")',
+    );
+  });
+
+  it("copies each event date before a later getter can mutate it", async () => {
+    const mutableFrom = new Date("2026-05-01T00:00:00.000Z");
+    const input = {
+      metricId: "metric-stable",
+      get from() {
+        return mutableFrom;
+      },
+      get to() {
+        mutableFrom.setUTCFullYear(2030);
+        return new Date("2026-07-30T00:00:00.000Z");
+      },
+      cursor: null,
+      includeAttributions: true,
+      includeProfileEmail: false,
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(successfulPage());
+    const client = clientWith(fetchMock);
+
+    await client.listEvents(input);
+
+    const url = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(url.searchParams.get("filter")).toContain(
+      "greater-or-equal(datetime,2026-05-01T00:00:00.000Z)",
+    );
+  });
+
+  it.each([
+    [new Date("invalid"), new Date("2026-07-30T00:00:00.000Z")],
+    [new Date("2026-05-01T00:00:00.000Z"), new Date("invalid")],
+    [
+      new Date("2026-07-30T00:00:00.000Z"),
+      new Date("2026-07-30T00:00:00.000Z"),
+    ],
+    [
+      new Date("2026-07-31T00:00:00.000Z"),
+      new Date("2026-07-30T00:00:00.000Z"),
+    ],
+  ])("rejects an invalid or empty half-open event window before fetch", async (from, to) => {
+    const fetchMock = vi.fn<typeof fetch>();
+    const client = clientWith(fetchMock);
+
+    const error = await client
+      .listEvents({
+        metricId: "metric-1",
+        from,
+        to,
+        cursor: null,
+        includeAttributions: true,
+        includeProfileEmail: false,
+      })
+      .catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(KlaviyoApiError);
+    expect(error).toMatchObject({ status: null, retryable: false });
+    expect(String(error)).toBe(
+      "KlaviyoApiError: Klaviyo event request has an invalid half-open window",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("omits unsupported page size from Metrics and sends only an opaque cursor", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(successfulPage());
     const client = clientWith(fetchMock);
@@ -180,7 +303,11 @@ describe("KlaviyoApiClient", () => {
     const error = await client.listMetrics(null).catch((value: unknown) => value);
 
     expect(error).toBeInstanceOf(KlaviyoApiError);
-    expect(error).toMatchObject({ status: 429, retryable: true });
+    expect(error).toMatchObject({
+      status: 429,
+      retryable: true,
+      retryAfterMs: 61_000,
+    });
     expect(String(error)).toBe(
       "KlaviyoApiError: Klaviyo API retry delay exceeds client limit",
     );
@@ -188,6 +315,44 @@ describe("KlaviyoApiClient", () => {
     expect(String(error)).not.toContain("user@example.com");
     expect(sleep).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("exposes a final 429 delay for durable runner rescheduling", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response("retry-1", {
+        status: 429,
+        headers: { "retry-after": "0" },
+      }))
+      .mockResolvedValueOnce(new Response("retry-2", {
+        status: 429,
+        headers: { "retry-after": "0" },
+      }))
+      .mockResolvedValueOnce(new Response("retry-3", {
+        status: 429,
+        headers: { "retry-after": "0" },
+      }))
+      .mockResolvedValueOnce(new Response("body_secret=pk_secret", {
+        status: 429,
+        headers: { "retry-after": "7" },
+      }));
+    const client = clientWith(fetchMock, { sleep });
+
+    const error = await client.listMetrics(null).catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(KlaviyoApiError);
+    expect(error).toMatchObject({
+      status: 429,
+      retryable: true,
+      retryAfterMs: 7_000,
+    });
+    expect(String(error)).toBe(
+      "KlaviyoApiError: Klaviyo API request failed (429)",
+    );
+    expect(String(error)).not.toContain(PRIVATE_API_KEY);
+    expect(sleep.mock.calls).toEqual([[0], [0], [0]]);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("rejects a pagination link on another host", async () => {
@@ -236,9 +401,25 @@ describe("KlaviyoApiClient", () => {
       "duplicate cursor",
       "https://a.klaviyo.com/api/metrics?page%5Bcursor%5D=one&page%5Bcursor%5D=two",
     ],
+    [
+      "fragment",
+      "https://a.klaviyo.com/api/metrics?page%5Bcursor%5D=cursor#fragment",
+    ],
+    [
+      "empty fragment",
+      "https://a.klaviyo.com/api/metrics?page%5Bcursor%5D=cursor#",
+    ],
+    [
+      "dot-segment path",
+      "https://a.klaviyo.com/api/ignored/../metrics?page%5Bcursor%5D=cursor",
+    ],
+    [
+      "encoded dot-segment path",
+      "https://a.klaviyo.com/api/%2e/metrics?page%5Bcursor%5D=cursor",
+    ],
   ])("rejects a %s pagination link with one fixed safe error", async (_, next) => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      successfulPage(`${next}&body_secret=pk_secret`),
+      successfulPage(next.includes("#") ? next : `${next}&body_secret=pk_secret`),
     );
     const client = clientWith(fetchMock);
 
@@ -249,6 +430,39 @@ describe("KlaviyoApiClient", () => {
       "KlaviyoApiError: Klaviyo returned an invalid pagination link",
     );
     expect(String(error)).not.toContain(PRIVATE_API_KEY);
+  });
+
+  it("rejects an oversized pagination cursor with the fixed safe error", async () => {
+    const oversizedCursor = "x".repeat(4_097);
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      successfulPage(
+        `https://a.klaviyo.com/api/metrics?page%5Bcursor%5D=${oversizedCursor}`,
+      ),
+    );
+    const client = clientWith(fetchMock);
+
+    const error = await client.listMetrics(null).catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(KlaviyoApiError);
+    expect(String(error)).toBe(
+      "KlaviyoApiError: Klaviyo returned an invalid pagination link",
+    );
+    expect(String(error)).not.toContain(oversizedCursor);
+  });
+
+  it("rejects an oversized persisted cursor before fetch", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    const client = clientWith(fetchMock);
+
+    const error = await client
+      .listMetrics("x".repeat(4_097))
+      .catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(KlaviyoApiError);
+    expect(String(error)).toBe(
+      "KlaviyoApiError: Klaviyo request cursor is invalid",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("accepts the expected pagination path with a trailing slash", async () => {
@@ -298,7 +512,11 @@ describe("KlaviyoApiClient", () => {
     expect(String(error)).toBe(
       "KlaviyoApiError: Klaviyo API request failed (403)",
     );
-    expect(error).toMatchObject({ status: 403, retryable: false });
+    expect(error).toMatchObject({
+      status: 403,
+      retryable: false,
+      retryAfterMs: null,
+    });
     expect(String(error)).not.toContain("user@example.com");
     expect(String(error)).not.toContain(PRIVATE_API_KEY);
   });
@@ -365,6 +583,22 @@ describe("KlaviyoApiClient", () => {
     await expect(client.listAccounts()).resolves.toMatchObject({ data: [] });
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(sleep.mock.calls).toEqual([[500], [1_000]]);
+  });
+
+  it("discards a retry response body before requesting again", async () => {
+    const retryResponse = new Response("provider-private-body", {
+      status: 503,
+    });
+    const cancel = vi.spyOn(retryResponse.body!, "cancel");
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(retryResponse)
+      .mockResolvedValueOnce(successfulPage());
+    const client = clientWith(fetchMock);
+
+    await client.listAccounts();
+
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("sanitizes exhausted network failures", async () => {
