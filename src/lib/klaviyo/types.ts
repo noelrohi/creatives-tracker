@@ -61,11 +61,20 @@ export function orderCoreSourceContract(): OrderCoreSourceContract {
 export function assertOrderCoreSourceContract(
   value: unknown,
 ): asserts value is OrderCoreSourceContract {
-  const candidate = value as Partial<OrderCoreSourceContract> | null;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Klaviyo event run has an invalid source contract");
+  }
+  const candidate = value as {
+    sourceMode?: unknown;
+    metricKinds?: unknown;
+  };
+  const metricKinds = candidate.metricKinds;
   if (
-    candidate?.sourceMode !== "order_core" ||
-    JSON.stringify(candidate.metricKinds) !==
-      JSON.stringify(KLAVIYO_ORDER_CORE_KINDS)
+    candidate.sourceMode !== "order_core" ||
+    !Array.isArray(metricKinds) ||
+    metricKinds.length !== 2 ||
+    metricKinds[0] !== "placed_order" ||
+    metricKinds[1] !== "ordered_product"
   ) {
     throw new Error("Klaviyo event run has an invalid source contract");
   }

@@ -55,4 +55,27 @@ describe("Klaviyo source types", () => {
       }),
     ).toThrow("not immutable order core");
   });
+
+  it("rejects deceptive or non-canonical metric kind collections", () => {
+    expect(() =>
+      assertOrderCoreSourceContract({
+        sourceMode: "order_core",
+        metricKinds: {
+          toJSON: () => ["placed_order", "ordered_product"],
+        },
+      }),
+    ).toThrow("invalid source contract");
+    expect(() =>
+      assertOrderCoreSourceContract({
+        sourceMode: "order_core",
+        metricKinds: ["ordered_product", "placed_order"],
+      }),
+    ).toThrow("invalid source contract");
+    expect(() =>
+      assertOrderCoreSourceContract({
+        sourceMode: "order_core",
+        metricKinds: ["placed_order", "ordered_product", "placed_order"],
+      }),
+    ).toThrow("invalid source contract");
+  });
 });
