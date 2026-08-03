@@ -453,6 +453,25 @@ export async function renewKlaviyoSyncRunHeartbeat(
   const now = new Date(input.now.getTime());
   if (Number.isNaN(now.getTime())) throw new Error("Invalid heartbeat time");
   return runInTransaction(executor, async (tx) => {
+    const [run] = await tx
+      .select({
+        id: klaviyoSyncRuns.id,
+        status: klaviyoSyncRuns.status,
+      })
+      .from(klaviyoSyncRuns)
+      .where(
+        and(
+          eq(klaviyoSyncRuns.id, input.syncRunId),
+          eq(klaviyoSyncRuns.organizationId, input.scope.organizationId),
+          eq(klaviyoSyncRuns.storeId, input.scope.storeId),
+          eq(klaviyoSyncRuns.connectionId, input.scope.connectionId),
+          eq(klaviyoSyncRuns.operation, input.operation),
+        ),
+      )
+      .for("update");
+    if (!run || run.status !== "running") {
+      throw new Error("Klaviyo sync run is not active for this scoped operation");
+    }
     const changed = await tx
       .update(klaviyoSyncRuns)
       .set({ heartbeatAt: now })
@@ -464,11 +483,12 @@ export async function renewKlaviyoSyncRunHeartbeat(
           eq(klaviyoSyncRuns.connectionId, input.scope.connectionId),
           eq(klaviyoSyncRuns.operation, input.operation),
           eq(klaviyoSyncRuns.status, "running"),
+          lte(klaviyoSyncRuns.heartbeatAt, now),
         ),
       )
       .returning({ id: klaviyoSyncRuns.id });
     if (changed.length !== 1) {
-      throw new Error("Klaviyo sync run is not active for this scoped operation");
+      throw new Error("Klaviyo sync run heartbeat cannot move backwards");
     }
     return { changed: true };
   });
@@ -549,6 +569,12 @@ export async function commitKlaviyoDiscovery(input: {
     apiRevision: string;
   }>;
 }): Promise<void> {
+  if (
+    new Set(input.metrics.map((metric) => metric.externalMetricId)).size !==
+    input.metrics.length
+  ) {
+    throw new Error("Klaviyo discovery contains a duplicate external metric ID");
+  }
   const enabledOrderMetrics = input.metrics.filter(
     (metric) =>
       metric.ingestionEnabled &&
@@ -690,8 +716,13 @@ export async function commitKlaviyoDiscovery(input: {
           organizationId: input.scope.organizationId,
           storeId: input.scope.storeId,
           connectionId: input.scope.connectionId,
-          ...metric,
+          externalMetricId: metric.externalMetricId,
+          name: metric.name,
+          integrationName: metric.integrationName,
+          integrationCategory: metric.integrationCategory,
+          canonicalKind: metric.canonicalKind,
           ingestionEnabled: metric.ingestionEnabled ? 1 : 0,
+          apiRevision: metric.apiRevision,
         })
         .onConflictDoUpdate({
           target: [klaviyoMetrics.connectionId, klaviyoMetrics.externalMetricId],
@@ -822,6 +853,58 @@ export async function commitKlaviyoEventPage(input: {
       return { committed: false as const, inserted: 0, updated: 0 };
     }
 
+    const enabledOrderMetrics = await tx
+      .select({
+        metricRowId: klaviyoMetrics.id,
+        metricKind: klaviyoMetrics.canonicalKind,
+      })
+      .from(klaviyoMetrics)
+      .where(
+        and(
+          eq(klaviyoMetrics.organizationId, input.scope.organizationId),
+          eq(klaviyoMetrics.storeId, input.scope.storeId),
+          eq(klaviyoMetrics.connectionId, input.scope.connectionId),
+          eq(klaviyoMetrics.ingestionEnabled, 1),
+          inArray(klaviyoMetrics.canonicalKind, [...KLAVIYO_ORDER_CORE_KINDS]),
+        ),
+      );
+    const metricsByKind = new Map<
+      (typeof KLAVIYO_ORDER_CORE_KINDS)[number],
+      string
+    >();
+    for (const metric of enabledOrderMetrics) {
+      if (
+        metric.metricKind === null ||
+        !KLAVIYO_ORDER_CORE_KINDS.includes(metric.metricKind as never) ||
+        metricsByKind.has(
+          metric.metricKind as (typeof KLAVIYO_ORDER_CORE_KINDS)[number],
+        )
+      ) {
+        throw new Error("Klaviyo enabled order-core metric binding is ambiguous");
+      }
+      metricsByKind.set(
+        metric.metricKind as (typeof KLAVIYO_ORDER_CORE_KINDS)[number],
+        metric.metricRowId,
+      );
+    }
+    if (metricsByKind.size !== KLAVIYO_ORDER_CORE_KINDS.length) {
+      throw new Error("Klaviyo enabled order-core metric binding is incomplete");
+    }
+    const expectedMetricKind =
+      KLAVIYO_ORDER_CORE_KINDS[input.expectedCheckpoint.metricIndex];
+    const expectedMetricRowId = metricsByKind.get(expectedMetricKind);
+    if (!expectedMetricRowId) {
+      throw new Error("Klaviyo event checkpoint metric binding is unavailable");
+    }
+    for (const event of input.events) {
+      if (
+        event.metricKind !== expectedMetricKind ||
+        event.metricId !== expectedMetricRowId
+      ) {
+        throw new Error("Klaviyo event does not match the active scoped metric binding");
+      }
+    }
+
     let inserted = 0;
     let updated = 0;
     const pageCommittedAt = new Date();
@@ -904,7 +987,13 @@ export async function commitKlaviyoEventPage(input: {
               storeId: input.scope.storeId,
               connectionId: input.scope.connectionId,
               eventId: stored.id,
-              ...product,
+              sourceOrdinal: product.sourceOrdinal,
+              productId: product.productId,
+              variantId: product.variantId,
+              sku: product.sku,
+              productName: product.productName,
+              variantName: product.variantName,
+              quantity: product.quantity,
             })),
           );
         }
@@ -954,7 +1043,10 @@ export async function commitKlaviyoEventPage(input: {
       .update(klaviyoSyncRuns)
       .set({
         checkpoint: input.nextCheckpoint,
-        heartbeatAt: pageCommittedAt,
+        heartbeatAt: sql`greatest(
+          ${klaviyoSyncRuns.heartbeatAt},
+          ${sql.param(pageCommittedAt, klaviyoSyncRuns.heartbeatAt)}
+        )`,
         rowsRead: sql`${klaviyoSyncRuns.rowsRead} + ${input.rowsRead}`,
         rowsInserted: sql`${klaviyoSyncRuns.rowsInserted} + ${inserted}`,
         rowsUpdated: sql`${klaviyoSyncRuns.rowsUpdated} + ${updated}`,

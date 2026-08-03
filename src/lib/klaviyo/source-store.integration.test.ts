@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { drizzle } from "drizzle-orm/node-postgres";
+import { eq } from "drizzle-orm";
 import { Pool, type PoolClient } from "pg";
 import {
   afterAll,
@@ -12,6 +13,7 @@ import {
   vi,
 } from "vitest";
 import { orderCoreSourceContract, type NormalizedKlaviyoEvent } from "@/lib/klaviyo/types";
+import { klaviyoSyncRuns } from "@/schema/klaviyo";
 
 function resolveConnectionString(): string | null {
   if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
@@ -224,7 +226,9 @@ async function seedBase(): Promise<void> {
        ('metric-row-product', 'org-a', 'store-a', 'connection-a',
         'metric-external-product', 'Ordered Product', 'ordered_product', 1, '2026-07-15'),
        ('metric-row-other', 'org-b', 'store-b', 'connection-b',
-        'metric-external-other', 'Placed Order', 'placed_order', 1, '2026-07-15')`,
+        'metric-external-other', 'Placed Order', 'placed_order', 1, '2026-07-15'),
+       ('metric-row-other-product', 'org-b', 'store-b', 'connection-b',
+        'metric-external-other-product', 'Ordered Product', 'ordered_product', 1, '2026-07-15')`,
   );
 }
 
@@ -262,6 +266,35 @@ async function seedRun(input: {
       input.heartbeatAt ?? new Date(),
     ],
   );
+}
+
+async function setHeartbeatForTest(id: string, heartbeatAt: Date): Promise<void> {
+  await testDb!
+    .update(klaviyoSyncRuns)
+    .set({ heartbeatAt })
+    .where(eq(klaviyoSyncRuns.id, id));
+}
+
+async function expectNoPageMutation(runId: string): Promise<void> {
+  for (const table of [
+    "klaviyo_event",
+    "klaviyo_event_product",
+    "klaviyo_event_run_observation",
+  ]) {
+    const count = await testPool!.query(`SELECT count(*)::int AS count FROM ${table}`);
+    expect(count.rows[0].count).toBe(0);
+  }
+  const run = await testPool!.query(
+    `SELECT checkpoint, rows_read, rows_inserted, rows_updated
+       FROM klaviyo_sync_run WHERE id = $1`,
+    [runId],
+  );
+  expect(run.rows[0]).toEqual({
+    checkpoint: checkpoint0,
+    rows_read: 0,
+    rows_inserted: 0,
+    rows_updated: 0,
+  });
 }
 
 async function seedProbeParents(targetScope = scope): Promise<void> {
@@ -648,12 +681,7 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
     );
 
     const oldHeartbeat = new Date("2026-07-01T00:00:00.000Z");
-    await store.renewKlaviyoSyncRunHeartbeat({
-      scope,
-      syncRunId: started.id,
-      operation: "events",
-      now: oldHeartbeat,
-    });
+    await setHeartbeatForTest(started.id, oldHeartbeat);
     await store.commitKlaviyoEventPage({
       scope,
       syncRunId: started.id,
@@ -672,6 +700,42 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
       oldHeartbeat.getTime(),
     );
     expect(committed.rows[0]).toMatchObject({ checkpoint: null, rows_read: 1 });
+
+    await store.finishKlaviyoSyncRun({
+      scope,
+      syncRunId: started.id,
+      operation: "events",
+      status: "success",
+    });
+    const futureRun = await store.startKlaviyoSyncRun({
+      scope,
+      operation: "events",
+      triggerType: "manual",
+      checkpoint: checkpoint0,
+      requestParameters: contract,
+    });
+    const futureHeartbeat = new Date(Date.now() + 60 * 60 * 1000);
+    await setHeartbeatForTest(futureRun.id, futureHeartbeat);
+    const futureBeforeCommit = await testDb!
+      .select({ heartbeatAt: klaviyoSyncRuns.heartbeatAt })
+      .from(klaviyoSyncRuns)
+      .where(eq(klaviyoSyncRuns.id, futureRun.id));
+    await store.commitKlaviyoEventPage({
+      scope,
+      syncRunId: futureRun.id,
+      sourceContract: contract,
+      expectedCheckpoint: checkpoint0,
+      nextCheckpoint: null,
+      events: [eventFixture({ externalEventId: "event-future-heartbeat" })],
+      rowsRead: 1,
+    });
+    const futureCommitted = await testDb!
+      .select({ heartbeatAt: klaviyoSyncRuns.heartbeatAt })
+      .from(klaviyoSyncRuns)
+      .where(eq(klaviyoSyncRuns.id, futureRun.id));
+    expect(futureCommitted[0].heartbeatAt.getTime()).toBe(
+      futureBeforeCommit[0].heartbeatAt.getTime(),
+    );
   });
 
   it("rolls back event, product, observation, counts and checkpoint together", async () => {
@@ -768,6 +832,128 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
       (await testPool!.query(`SELECT count(*)::int AS count FROM klaviyo_event`)).rows[0]
         .count,
     ).toBe(0);
+  });
+
+  it("rejects wrong-kind, wrong-row, disabled, and cross-scope event metrics atomically", async () => {
+    const cases: Array<{
+      id: string;
+      event: NormalizedKlaviyoEvent;
+      prepare?: () => Promise<void>;
+      restore?: () => Promise<void>;
+    }> = [
+      {
+        id: "wrong-kind",
+        event: eventFixture({ metricKind: "ordered_product" }),
+      },
+      {
+        id: "wrong-row",
+        event: eventFixture({ metricId: "metric-row-product" }),
+      },
+      {
+        id: "disabled-row",
+        event: eventFixture(),
+        prepare: async () => {
+          await testPool!.query(
+            `UPDATE klaviyo_metric SET ingestion_enabled = 0 WHERE id = 'metric-row-placed'`,
+          );
+        },
+        restore: async () => {
+          await testPool!.query(
+            `UPDATE klaviyo_metric SET ingestion_enabled = 1 WHERE id = 'metric-row-placed'`,
+          );
+        },
+      },
+      {
+        id: "cross-scope-row",
+        event: eventFixture({ metricId: "metric-row-other" }),
+      },
+    ];
+
+    for (const testCase of cases) {
+      await testCase.prepare?.();
+      const runId = `run-${testCase.id}`;
+      await seedRun({ id: runId });
+      await expect(
+        store.commitKlaviyoEventPage({
+          scope,
+          syncRunId: runId,
+          sourceContract: contract,
+          expectedCheckpoint: checkpoint0,
+          nextCheckpoint: null,
+          events: [
+            eventFixture({
+              ...testCase.event,
+              externalEventId: `event-${testCase.id}`,
+            }),
+          ],
+          rowsRead: 1,
+        }),
+      ).rejects.toThrow(/metric/i);
+      await expectNoPageMutation(runId);
+      await testPool!.query(
+        `UPDATE klaviyo_sync_run SET status = 'failed' WHERE id = $1`,
+        [runId],
+      );
+      await testCase.restore?.();
+    }
+  });
+
+  it("ignores hostile product scope and database-column overrides", async () => {
+    await testPool!.query(
+      `INSERT INTO klaviyo_event
+         (id, organization_id, shopify_store_id, connection_id, metric_id,
+          external_event_id, occurred_at, attribution_relationship_ids,
+          redacted_properties, key_type_fingerprint, warnings,
+          product_evidence_completeness, source_checksum, api_revision)
+       VALUES ('event-b', 'org-b', 'store-b', 'connection-b', 'metric-row-other',
+        'event-external-b', now(), '[]', '{}', '[]', '[]', 'complete',
+        'checksum-b', '2026-07-15')`,
+    );
+    await seedRun({ id: "run-hostile-product" });
+    const hostileProduct = Object.assign(
+      {
+        sourceOrdinal: 0,
+        productId: "product-safe",
+        variantId: "variant-safe",
+        sku: "SKU-SAFE",
+        productName: "Safe product",
+        variantName: "Safe variant",
+        quantity: 1,
+      },
+      {
+        id: "hostile-product-id",
+        organizationId: "org-b",
+        storeId: "store-b",
+        connectionId: "connection-b",
+        eventId: "event-b",
+        createdAt: new Date("2000-01-01T00:00:00.000Z"),
+      },
+    );
+    await store.commitKlaviyoEventPage({
+      scope,
+      syncRunId: "run-hostile-product",
+      sourceContract: contract,
+      expectedCheckpoint: checkpoint0,
+      nextCheckpoint: null,
+      events: [eventFixture({ products: [hostileProduct] })],
+      rowsRead: 1,
+    });
+    const products = await testPool!.query(
+      `SELECT p.id, p.organization_id, p.shopify_store_id, p.connection_id,
+              p.event_id, p.product_id, p.created_at, e.external_event_id
+         FROM klaviyo_event_product p JOIN klaviyo_event e ON e.id = p.event_id`,
+    );
+    expect(products.rows).toHaveLength(1);
+    expect(products.rows[0]).toMatchObject({
+      organization_id: "org-a",
+      shopify_store_id: "store-a",
+      connection_id: "connection-a",
+      product_id: "product-safe",
+      external_event_id: "event-external-a",
+    });
+    expect(products.rows[0].id).not.toBe("hostile-product-id");
+    expect(products.rows[0].event_id).not.toBe("event-b");
+    expect(products.rows[0].created_at.getUTCFullYear()).not.toBe(2000);
   });
 
   it("keeps exact-run observations immutable across later-run updates", async () => {
@@ -1071,27 +1257,17 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
     await seedRun({
       id: "run-lease",
     });
-    await store.renewKlaviyoSyncRunHeartbeat({
-      scope,
-      syncRunId: "run-lease",
-      operation: "events",
-      now: new Date(now.getTime() - store.KLAVIYO_RUN_STALE_AFTER_MS + 1),
-    });
+    await setHeartbeatForTest(
+      "run-lease",
+      new Date(now.getTime() - store.KLAVIYO_RUN_STALE_AFTER_MS + 1),
+    );
     await expect(
       store.failExpiredKlaviyoSyncRun({ scope, syncRunId: "run-lease", operation: "events", now }),
     ).resolves.toEqual({ changed: false });
-    await store.renewKlaviyoSyncRunHeartbeat({
-      scope,
-      syncRunId: "run-lease",
-      operation: "events",
-      now,
-    });
-    await store.renewKlaviyoSyncRunHeartbeat({
-      scope,
-      syncRunId: "run-lease",
-      operation: "events",
-      now: new Date(now.getTime() - store.KLAVIYO_RUN_STALE_AFTER_MS),
-    });
+    await setHeartbeatForTest(
+      "run-lease",
+      new Date(now.getTime() - store.KLAVIYO_RUN_STALE_AFTER_MS),
+    );
     await expect(
       store.failExpiredKlaviyoSyncRun({ scope, syncRunId: "run-lease", operation: "events", now }),
     ).resolves.toEqual({ changed: true });
@@ -1110,17 +1286,41 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
     });
   });
 
+  it("refuses to move a running heartbeat backwards", async () => {
+    await seedRun({ id: "run-monotonic-heartbeat" });
+    const baseline = new Date("2026-07-30T12:00:00.000Z");
+    await setHeartbeatForTest("run-monotonic-heartbeat", baseline);
+    const forward = new Date(baseline.getTime() + 60_000);
+    await store.renewKlaviyoSyncRunHeartbeat({
+      scope,
+      syncRunId: "run-monotonic-heartbeat",
+      operation: "events",
+      now: forward,
+    });
+    await expect(
+      store.renewKlaviyoSyncRunHeartbeat({
+        scope,
+        syncRunId: "run-monotonic-heartbeat",
+        operation: "events",
+        now: new Date(forward.getTime() - 1),
+      }),
+    ).rejects.toThrow(/backwards/i);
+    const [run] = await testDb!
+      .select({ heartbeatAt: klaviyoSyncRuns.heartbeatAt })
+      .from(klaviyoSyncRuns)
+      .where(eq(klaviyoSyncRuns.id, "run-monotonic-heartbeat"));
+    expect(run.heartbeatAt.getTime()).toBe(forward.getTime());
+  });
+
   it("reaps and replaces atomically under one connection lock", async () => {
     const now = new Date("2026-07-30T12:00:00.000Z");
     await seedRun({
       id: "run-stale",
     });
-    await store.renewKlaviyoSyncRunHeartbeat({
-      scope,
-      syncRunId: "run-stale",
-      operation: "events",
-      now: new Date(now.getTime() - store.KLAVIYO_RUN_STALE_AFTER_MS),
-    });
+    await setHeartbeatForTest(
+      "run-stale",
+      new Date(now.getTime() - store.KLAVIYO_RUN_STALE_AFTER_MS),
+    );
     await store.withKlaviyoConnectionLock(scope, async (tx) => {
       await store.failExpiredKlaviyoSyncRun(
         { scope, syncRunId: "run-stale", operation: "events", now },
@@ -1303,6 +1503,98 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
     ]);
   });
 
+  it("ignores hostile discovery scope and database-column overrides", async () => {
+    await seedRun({
+      id: "discovery-hostile-scope",
+      operation: "discovery",
+      checkpoint: null,
+      requestParameters: {},
+    });
+    const [placed, product] = discoveryMetrics({
+      placedId: "metric-external-other",
+    });
+    const hostilePlaced = Object.assign(
+      { ...placed, name: "Scoped A replacement" },
+      {
+        id: "metric-row-other",
+        organizationId: "org-b",
+        storeId: "store-b",
+        connectionId: "connection-b",
+        discoveredAt: new Date("2000-01-01T00:00:00.000Z"),
+        updatedAt: new Date("2000-01-01T00:00:00.000Z"),
+      },
+    );
+    await store.commitKlaviyoDiscovery({
+      scope,
+      syncRunId: "discovery-hostile-scope",
+      expectedAccountId: "account-a",
+      account: { id: "account-a", name: null, timezone: null, currency: null },
+      metrics: [hostilePlaced, product],
+    });
+    const otherMetric = await testPool!.query(
+      `SELECT name, organization_id, shopify_store_id, connection_id
+         FROM klaviyo_metric WHERE id = 'metric-row-other'`,
+    );
+    expect(otherMetric.rows[0]).toEqual({
+      name: "Placed Order",
+      organization_id: "org-b",
+      shopify_store_id: "store-b",
+      connection_id: "connection-b",
+    });
+    const scopedMetric = await testPool!.query(
+      `SELECT id, organization_id, shopify_store_id, connection_id, discovered_at
+         FROM klaviyo_metric
+        WHERE connection_id = 'connection-a'
+          AND external_metric_id = 'metric-external-other'`,
+    );
+    expect(scopedMetric.rows).toHaveLength(1);
+    expect(scopedMetric.rows[0]).toMatchObject({
+      organization_id: "org-a",
+      shopify_store_id: "store-a",
+      connection_id: "connection-a",
+    });
+    expect(scopedMetric.rows[0].id).not.toBe("metric-row-other");
+    expect(scopedMetric.rows[0].discovered_at.getUTCFullYear()).not.toBe(2000);
+  });
+
+  it("rejects duplicate external IDs anywhere in a discovery payload", async () => {
+    await seedRun({
+      id: "discovery-duplicate-external",
+      operation: "discovery",
+      checkpoint: null,
+      requestParameters: {},
+    });
+    const metrics = discoveryMetrics();
+    metrics.push({
+      ...metrics[0],
+      name: "Duplicate disabled copy",
+      canonicalKind: null as never,
+      ingestionEnabled: false,
+    });
+    await expect(
+      store.commitKlaviyoDiscovery({
+        scope,
+        syncRunId: "discovery-duplicate-external",
+        expectedAccountId: "account-a",
+        account: { id: "account-a", name: null, timezone: null, currency: null },
+        metrics,
+      }),
+    ).rejects.toThrow(/duplicate external metric/i);
+    const run = await testPool!.query(
+      `SELECT status FROM klaviyo_sync_run WHERE id = 'discovery-duplicate-external'`,
+    );
+    expect(run.rows[0].status).toBe("running");
+    const enabled = await testPool!.query(
+      `SELECT external_metric_id FROM klaviyo_metric
+        WHERE connection_id = 'connection-a' AND ingestion_enabled = 1
+        ORDER BY external_metric_id`,
+    );
+    expect(enabled.rows).toEqual([
+      { external_metric_id: "metric-external-placed" },
+      { external_metric_id: "metric-external-product" },
+    ]);
+  });
+
   it("never returns opaque provider cursors, request JSON, or raw errors", async () => {
     const hostile = "user@example.com-secret-provider-cursor-key-fragment";
     await seedRun({ id: "run-hostile" });
@@ -1453,6 +1745,10 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
     const publisher: PoolClient = await testPool!.connect();
     try {
       await publisher.query("BEGIN");
+      const blocker = await publisher.query<{ pid: number }>(
+        `SELECT pg_backend_pid() AS pid`,
+      );
+      const blockerPid = blocker.rows[0].pid;
       await publisher.query(
         `SELECT id FROM klaviyo_connection
           WHERE organization_id = $1 AND shopify_store_id = $2 AND id = $3
@@ -1481,7 +1777,22 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
           pageSettled = true;
           return result;
         });
-      await new Promise((resolve) => setTimeout(resolve, 75));
+      let waiterPid: number | null = null;
+      for (let attempt = 0; attempt < 100 && waiterPid === null; attempt += 1) {
+        const waiters = await testPool!.query<{ pid: number }>(
+          `SELECT pid
+             FROM pg_stat_activity
+            WHERE $1 = ANY(pg_blocking_pids(pid))
+            ORDER BY pid
+            LIMIT 1`,
+          [blockerPid],
+        );
+        waiterPid = waiters.rows[0]?.pid ?? null;
+        if (waiterPid === null) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+      }
+      expect(waiterPid).not.toBeNull();
       expect(pageSettled).toBe(false);
       const beforePublication = await publisher.query(
         `SELECT count(*)::int AS count FROM klaviyo_event WHERE connection_id = $1`,
