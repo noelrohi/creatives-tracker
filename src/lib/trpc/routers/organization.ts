@@ -11,6 +11,7 @@ import { apiKeys } from "@/schema/api-key";
 import { organization, session } from "@/schema/auth";
 import { campaigns } from "@/schema/campaign";
 import { performanceLogs } from "@/schema/performance-log";
+import { shopifyStores } from "@/schema/shopify";
 import { entityTags, tags } from "@/schema/tag";
 import { orgOwnerProcedure, router } from "../init";
 
@@ -60,6 +61,9 @@ export const organizationRouter = router({
         await tx
           .delete(apiKeys)
           .where(eq(apiKeys.organizationId, input.organizationId));
+        await tx
+          .delete(shopifyStores)
+          .where(eq(shopifyStores.organizationId, input.organizationId));
         await tx
           .update(session)
           .set({ activeOrganizationId: null })
