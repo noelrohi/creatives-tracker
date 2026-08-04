@@ -15,6 +15,7 @@ import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 import { computeCreativeHealthByCreativeId, type CreativeRollup } from "@/lib/creative-health-rollup";
 import { fetchAgentExportRows } from "@/lib/ad-export";
 import { effectiveAdActiveSql, effectiveAdStatusSql } from "@/lib/effective-ad-status";
+import { ANGLE_TYPES, MODES, VISUAL_STYLES } from "@/lib/creative-taxonomy";
 
 type CreativeAttributes = (typeof adCreatives.$inferSelect)["attributes"];
 type CreativeAttributesMeta = (typeof adCreatives.$inferSelect)["attributesMeta"];
@@ -60,6 +61,11 @@ const awarenessLevelSchema = z.enum([
   "most_aware",
 ]);
 const ownershipSchema = z.enum(["ours", "theirs"]);
+/**
+ * The OUTPUT shape, deliberately permissive: legacy blobs predate the closed
+ * vocabularies and must still read back. The write path validates instead —
+ * see `creativeAttributesPatchSchema`.
+ */
 const creativeAttributesSchema = z.object({
   visualElements: z.array(z.string()).optional(),
   visualStyle: z.string().optional(),
@@ -70,6 +76,34 @@ const creativeAttributesSchema = z.object({
   promos: z.string().optional(),
   disclaimer: z.string().optional(),
 });
+
+/**
+ * The human write path (spec §3: the vocabulary is "validated at the app layer
+ * on write"). All eight captured attributes, so a person can write everything
+ * the AI path writes, with the two closed fields held to the same vocabularies
+ * the enrichment run enforces. `null` clears a field; omitted leaves it alone.
+ */
+const creativeAttributesPatchSchema = z.object({
+  visualElements: z.array(z.string()).nullable().optional(),
+  visualStyle: z.enum(VISUAL_STYLES).nullable().optional(),
+  mode: z.enum(MODES).nullable().optional(),
+  hook: z.string().nullable().optional(),
+  supportingTexts: z.array(z.string()).nullable().optional(),
+  cta: z.string().nullable().optional(),
+  promos: z.string().nullable().optional(),
+  disclaimer: z.string().nullable().optional(),
+});
+
+const CREATIVE_ATTRIBUTE_FIELDS = [
+  "visualElements",
+  "visualStyle",
+  "mode",
+  "hook",
+  "supportingTexts",
+  "cta",
+  "promos",
+  "disclaimer",
+] as const satisfies readonly (keyof CreativeAttributes)[];
 const creativeAttributesMetaSchema = z.record(
   z.string(),
   z.object({
@@ -1931,15 +1965,39 @@ export const adCreativeRouter = router({
       return preview;
     }),
 
+  /**
+   * §6.1's hard gate, server side: "Studio and manual creatives require the
+   * four enforced tags at save." The fourth — funnel stage — lives on the ad,
+   * and a manual creative has no ad yet, so the trio a creative can actually
+   * carry at birth is persona + angle + awareness. Nothing may create an
+   * untagged creative; legacy rows that predate the gate are only ever edited.
+   */
   create: orgWriteProcedure
     .meta(openApiMutationMeta("adCreative", "create"))
     .output(adCreativeRowSchema)
-    .input(z.object({ name: z.string().optional() }).optional())
+    .input(
+      z.object({
+        name: z.string().optional(),
+        persona: z.string().trim().min(1),
+        angle: z.enum(ANGLE_TYPES),
+        awarenessLevel: awarenessLevelSchema,
+      }),
+    )
     .mutation(async ({ input, ctx }) => {
       const [creative] = await db
         .insert(adCreatives)
         .values({
-          name: input?.name ?? "Untitled Creative",
+          name: input.name ?? "Untitled Creative",
+          persona: input.persona.trim(),
+          angle: input.angle,
+          awarenessLevel: input.awarenessLevel,
+          // Human-supplied from the first save, so AI re-enrichment leaves the
+          // trio alone from here on.
+          attributesMeta: {
+            persona: { source: "human" },
+            angle: { source: "human" },
+            awarenessLevel: { source: "human" },
+          },
           organizationId: ctx.organizationId,
         })
         .returning();
@@ -1955,18 +2013,13 @@ export const adCreativeRouter = router({
         name: z.string().min(1).optional(),
         assetUrl: z.string().nullable().optional(),
         format: z.enum(["static", "video", "ugc", "carousel"]).nullable().optional(),
-        angle: z.string().nullable().optional(),
-        persona: z.string().nullable().optional(),
-        awarenessLevel: z
-          .enum(["unaware", "problem_aware", "solution_aware", "product_aware", "most_aware"])
-          .nullable()
-          .optional(),
-        attributes: z
-          .object({
-            hook: z.string().nullable().optional(),
-            cta: z.string().nullable().optional(),
-          })
-          .optional(),
+        // The enforced trio stays optional — a legacy untagged creative can be
+        // edited without being retagged in the same breath — but it can never
+        // be cleared: an explicit null is rejected, not stored (§6.1).
+        angle: z.enum(ANGLE_TYPES).optional(),
+        persona: z.string().trim().min(1).optional(),
+        awarenessLevel: awarenessLevelSchema.optional(),
+        attributes: creativeAttributesPatchSchema.optional(),
         tone: z.array(z.string()).nullable().optional(),
         ownership: z.enum(["ours", "theirs"]).nullable().optional(),
         teamId: z.string().nullable().optional(),
@@ -1976,7 +2029,10 @@ export const adCreativeRouter = router({
     .mutation(async ({ input, ctx }) => {
       const { id, attributes: attributesPatch, ...data } = input;
       const [existing] = await db
-        .select({ attributes: adCreatives.attributes })
+        .select({
+          attributes: adCreatives.attributes,
+          attributesMeta: adCreatives.attributesMeta,
+        })
         .from(adCreatives)
         .where(
           and(
@@ -1988,18 +2044,28 @@ export const adCreativeRouter = router({
       if (!existing) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Ad creative not found" });
       }
-      const attributes = { ...existing.attributes };
-      if (attributesPatch?.hook !== undefined) {
-        if (attributesPatch.hook === null) delete attributes.hook;
-        else attributes.hook = attributesPatch.hook;
+      const attributes: CreativeAttributes = { ...existing.attributes };
+      // Anything a person writes here is theirs from now on: `human`
+      // provenance is what makes a value stick against AI re-enrichment.
+      const attributesMeta: CreativeAttributesMeta = { ...existing.attributesMeta };
+      for (const field of CREATIVE_ATTRIBUTE_FIELDS) {
+        const value = attributesPatch?.[field];
+        if (value === undefined) continue;
+        if (value === null) {
+          delete attributes[field];
+          delete attributesMeta[field];
+          continue;
+        }
+        // Each field's own type; the patch schema already validated it.
+        (attributes[field] as unknown) = value;
+        attributesMeta[field] = { source: "human" };
       }
-      if (attributesPatch?.cta !== undefined) {
-        if (attributesPatch.cta === null) delete attributes.cta;
-        else attributes.cta = attributesPatch.cta;
+      for (const field of ["persona", "angle", "awarenessLevel"] as const) {
+        if (data[field] !== undefined) attributesMeta[field] = { source: "human" };
       }
       const [creative] = await db
         .update(adCreatives)
-        .set({ ...data, attributes })
+        .set({ ...data, attributes, attributesMeta })
         .where(and(eq(adCreatives.id, id), eq(adCreatives.organizationId, ctx.organizationId)))
         .returning();
       if (!creative) throw new TRPCError({ code: "NOT_FOUND", message: "Ad creative not found" });

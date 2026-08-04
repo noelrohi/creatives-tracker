@@ -16,6 +16,7 @@ import {
   desc,
   eq,
   gt,
+  inArray,
   isNotNull,
   isNull,
   or,
@@ -26,6 +27,7 @@ import {
   PAID_LOOKING_MEDIUM_HINTS,
   PAID_LOOKING_MEDIUM_REGEX_SOURCE,
 } from "@/lib/attribution-bucket";
+import { isUntagged } from "@/lib/creative-insights-shared";
 import { type FunnelStage } from "@/lib/creative-taxonomy";
 import { addDays } from "@/lib/day";
 import {
@@ -37,6 +39,7 @@ import {
   getSyncHealth,
   type SyncHealth,
 } from "@/lib/attribution-queries";
+import { basePerformanceRowsOnly } from "@/lib/performance-rows";
 import { deriveDayInTimezone } from "@/lib/shopify-ingest";
 import { ads } from "@/schema/ad";
 import { adCreatives } from "@/schema/ad-creative";
@@ -45,6 +48,7 @@ import { landingPages } from "@/schema/landing-page";
 import { performanceLogs } from "@/schema/performance-log";
 import {
   shopifyOrders,
+  shopifyRefunds,
   shopifyStores,
   shopifySyncRuns,
 } from "@/schema/shopify";
@@ -440,6 +444,10 @@ export type AdLpMismatchCandidate = {
   pageClassificationStatus: "suggested" | "confirmed" | "stale" | null;
   pageClassificationSource: string | null;
   trailing7dSpend: number;
+  /** Net Meta-bucket revenue attributed to the ad over the same window, in dollars. */
+  trailing7dRevenue: number;
+  /** Meta-reported landing page views over the same window. */
+  trailing7dLandingPageViews: number;
 };
 
 const FUNNEL_STAGE_RANK: Record<FunnelStage, number> = {
@@ -739,64 +747,130 @@ async function getBrokenUtmOrders(params: {
   return { orderCount: countRow?.orderCount ?? 0, samples };
 }
 
-/** Base Meta rows only; breakdown rows repeat the same spend. */
-function basePerformanceRowsOnly() {
-  return and(
-    isNull(performanceLogs.country),
-    isNull(performanceLogs.platform),
-    isNull(performanceLogs.placement),
-    isNull(performanceLogs.device),
-    isNull(performanceLogs.age),
-    isNull(performanceLogs.gender),
+/**
+ * What the ad brought back over the same trailing week, per ad: Meta-bucket
+ * orders whose ad we resolved (`id` or `name` — an `unmatched` row names no ad),
+ * netted of refunds exactly the way `getMetaVerified` nets verified revenue.
+ * Amounts stay in dollars, the unit `trailing7dSpend` is already in.
+ */
+async function getAdRevenueByAdId(params: {
+  organizationId: string;
+  storeId: string;
+  day: string;
+}): Promise<Map<string, number>> {
+  const from = addDays(params.day, -6);
+  const adJoin = and(
+    eq(ads.organizationId, params.organizationId),
+    inArray(shopifyOrders.metaAdMatchMethod, ["id", "name"]),
+    sql`lower(${ads.metaId}) = ${shopifyOrders.metaAdId}`,
   );
+  const metaOrders = and(
+    eq(shopifyOrders.organizationId, params.organizationId),
+    eq(shopifyOrders.storeId, params.storeId),
+    eq(shopifyOrders.bucket, "meta"),
+  );
+
+  const [orderRows, refundRows] = await Promise.all([
+    db
+      .select({
+        adId: ads.id,
+        gross: sql<string>`coalesce(sum(${shopifyOrders.netSales}), 0)`,
+      })
+      .from(shopifyOrders)
+      .innerJoin(ads, adJoin)
+      .where(and(metaOrders, between(shopifyOrders.orderDay, from, params.day)))
+      .groupBy(ads.id),
+
+    // Refunds land on the day the money went back, so they carry their own
+    // range — the same rule the attribution ledger uses.
+    db
+      .select({
+        adId: ads.id,
+        refunded: sql<string>`coalesce(sum(${shopifyRefunds.amount}), 0)`,
+      })
+      .from(shopifyRefunds)
+      .innerJoin(shopifyOrders, eq(shopifyOrders.id, shopifyRefunds.orderId))
+      .innerJoin(ads, adJoin)
+      .where(
+        and(
+          metaOrders,
+          eq(shopifyRefunds.organizationId, params.organizationId),
+          eq(shopifyRefunds.storeId, params.storeId),
+          between(shopifyRefunds.refundDay, from, params.day),
+        ),
+      )
+      .groupBy(ads.id),
+  ]);
+
+  const revenue = new Map<string, number>();
+  for (const row of orderRows) {
+    revenue.set(row.adId, Number(row.gross));
+  }
+  for (const row of refundRows) {
+    revenue.set(row.adId, (revenue.get(row.adId) ?? 0) - Number(row.refunded));
+  }
+  return revenue;
 }
 
 async function getAdLpMismatchCandidates(params: {
   organizationId: string;
+  storeId: string;
   day: string;
 }): Promise<AdLpMismatchCandidate[]> {
-  const rows = await db
-    .select({
-      adId: ads.id,
-      adName: ads.name,
-      adFunnelStage: sql<FunnelStage>`${ads.funnelStage}`,
-      adFunnelStageSource: ads.funnelStageSource,
-      landingPageId: landingPages.id,
-      normalizedUrl: landingPages.normalizedUrl,
-      pageFunnelStage: sql<FunnelStage>`${landingPages.funnelStage}`,
-      pageClassificationStatus: landingPages.classificationStatus,
-      pageClassificationSource: landingPages.classificationSource,
-      trailing7dSpend: sql<string>`coalesce(sum(${performanceLogs.spend}), 0)`,
-    })
-    .from(ads)
-    .innerJoin(landingPages, eq(ads.landingPageId, landingPages.id))
-    .innerJoin(performanceLogs, eq(performanceLogs.adId, ads.id))
-    .where(
-      and(
-        eq(ads.organizationId, params.organizationId),
-        eq(landingPages.organizationId, params.organizationId),
-        eq(performanceLogs.organizationId, params.organizationId),
-        isNotNull(ads.funnelStage),
-        isNotNull(landingPages.funnelStage),
-        between(performanceLogs.dateStart, addDays(params.day, -6), params.day),
-        basePerformanceRowsOnly(),
+  const [rows, revenueByAd] = await Promise.all([
+    db
+      .select({
+        adId: ads.id,
+        adName: ads.name,
+        adFunnelStage: sql<FunnelStage>`${ads.funnelStage}`,
+        adFunnelStageSource: ads.funnelStageSource,
+        landingPageId: landingPages.id,
+        normalizedUrl: landingPages.normalizedUrl,
+        pageFunnelStage: sql<FunnelStage>`${landingPages.funnelStage}`,
+        pageClassificationStatus: landingPages.classificationStatus,
+        pageClassificationSource: landingPages.classificationSource,
+        trailing7dSpend: sql<string>`coalesce(sum(${performanceLogs.spend}), 0)`,
+        // The land side of "spend/back/land": the same base rows the spend sum
+        // is taken over, so the two can never disagree about the window.
+        trailing7dLandingPageViews: sql<number>`coalesce(sum(${performanceLogs.landingPageViews}), 0)::int`,
+      })
+      .from(ads)
+      .innerJoin(landingPages, eq(ads.landingPageId, landingPages.id))
+      .innerJoin(performanceLogs, eq(performanceLogs.adId, ads.id))
+      .where(
+        and(
+          eq(ads.organizationId, params.organizationId),
+          eq(landingPages.organizationId, params.organizationId),
+          eq(performanceLogs.organizationId, params.organizationId),
+          isNotNull(ads.funnelStage),
+          isNotNull(landingPages.funnelStage),
+          between(
+            performanceLogs.dateStart,
+            addDays(params.day, -6),
+            params.day,
+          ),
+          basePerformanceRowsOnly(),
+        ),
+      )
+      .groupBy(
+        ads.id,
+        ads.name,
+        ads.funnelStage,
+        ads.funnelStageSource,
+        landingPages.id,
+        landingPages.normalizedUrl,
+        landingPages.funnelStage,
+        landingPages.classificationStatus,
+        landingPages.classificationSource,
       ),
-    )
-    .groupBy(
-      ads.id,
-      ads.name,
-      ads.funnelStage,
-      ads.funnelStageSource,
-      landingPages.id,
-      landingPages.normalizedUrl,
-      landingPages.funnelStage,
-      landingPages.classificationStatus,
-      landingPages.classificationSource,
-    );
+
+    getAdRevenueByAdId(params),
+  ]);
 
   return rows.map((row) => ({
     ...row,
     trailing7dSpend: Number(row.trailing7dSpend),
+    trailing7dRevenue: revenueByAd.get(row.adId) ?? 0,
   }));
 }
 
@@ -843,14 +917,9 @@ async function getUntaggedSpendRollup(params: {
   return rows.reduce<UntaggedSpendRollup>(
     (rollup, row) => {
       const spend = Number(row.spend);
-      const untagged =
-        row.funnelStage === null ||
-        row.creativeId === null ||
-        row.persona === null ||
-        row.angle === null ||
-        row.awarenessLevel === null;
       rollup.totalActiveSpend += spend;
-      if (untagged) {
+      // One definition of "tagged" for the whole app (§6.4).
+      if (isUntagged(row)) {
         rollup.untaggedAdCount += 1;
         rollup.untaggedSpend += spend;
       }
@@ -1017,7 +1086,11 @@ export async function evaluateFindingsForStore(params: {
       dateTo: day,
     }),
     getBrokenUtmOrders({ ...params, day }),
-    getAdLpMismatchCandidates({ organizationId: params.organizationId, day }),
+    getAdLpMismatchCandidates({
+      organizationId: params.organizationId,
+      storeId: params.storeId,
+      day,
+    }),
     getUntaggedSpendRollup({ organizationId: params.organizationId, day }),
     getUtmDriftOrders({ ...params, day }),
     getSyncHealth({ ...params, now }),

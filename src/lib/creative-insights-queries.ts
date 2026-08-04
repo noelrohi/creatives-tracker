@@ -12,20 +12,20 @@
  * Every Meta-bucket order in the range lands in exactly one row.
  */
 
-import { and, between, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, between, desc, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { addDays } from "@/lib/day";
 import {
   COVERAGE_WINDOW_DAYS,
   EXPLICIT_SLICE_KEYS,
   INSIGHT_MIN_SPEND,
+  missingEnforcedTags,
   NO_TAGS_KEY,
   TAGGED_SPEND_MIN_SHARE,
   UNMATCHED_KEY,
   type CoverageAdRow,
   type CoverageSummary,
   type DrillInAdRow,
-  type EnforcedTag,
   type InsightCard,
   type InsightsScope,
   type SliceDimension,
@@ -33,6 +33,7 @@ import {
   type TaggingQueueRow,
 } from "@/lib/creative-insights-shared";
 import { toCents } from "@/lib/money";
+import { basePerformanceRowsOnly } from "@/lib/performance-rows";
 import { adCreatives } from "@/schema/ad-creative";
 import { adSets } from "@/schema/ad-set";
 import { ads } from "@/schema/ad";
@@ -122,25 +123,6 @@ export function mergeSliceRows(params: {
   return [...tagged, build(NO_TAGS_KEY), build(UNMATCHED_KEY)];
 }
 
-/** Which of the four enforced tags this ad is still missing. */
-export function missingTags(row: {
-  creativeId: string | null;
-  funnelStage: string | null;
-  persona: string | null;
-  angle: string | null;
-  awarenessLevel: string | null;
-}): EnforcedTag[] {
-  const missing: EnforcedTag[] = [];
-  if (row.funnelStage === null) missing.push("funnelStage");
-  // No creative behind the ad means none of its three tags can exist.
-  if (row.creativeId === null || row.persona === null) missing.push("persona");
-  if (row.creativeId === null || row.angle === null) missing.push("angle");
-  if (row.creativeId === null || row.awarenessLevel === null) {
-    missing.push("awareness");
-  }
-  return missing;
-}
-
 /**
  * Trailing-window coverage: how much active Meta spend is fully tagged, and
  * which ads would move the number most. The top list is what the veil note and
@@ -157,7 +139,7 @@ export function summarizeCoverage(
 
   for (const row of rows) {
     totalActiveSpendCents += row.spendCents;
-    const missing = missingTags(row);
+    const missing = missingEnforcedTags(row);
     if (missing.length === 0) {
       taggedSpendCents += row.spendCents;
       continue;
@@ -242,18 +224,6 @@ export function pickInsightCards(params: {
 /* SQL fragments                                                       */
 /* ------------------------------------------------------------------ */
 
-/** Base Meta rows only; breakdown rows repeat the same spend. */
-function basePerformanceRowsOnly() {
-  return and(
-    isNull(performanceLogs.country),
-    isNull(performanceLogs.platform),
-    isNull(performanceLogs.placement),
-    isNull(performanceLogs.device),
-    isNull(performanceLogs.age),
-    isNull(performanceLogs.gender),
-  );
-}
-
 /**
  * The ad behind an order. `meta_ad_id` holds a real Meta ad id for both the
  * `id` and the `name` match methods; an `unmatched` row holds whatever the link
@@ -265,6 +235,28 @@ function orderAdJoin(organizationId: string) {
     sql`${shopifyOrders.metaAdMatchMethod} is distinct from 'unmatched'`,
     sql`lower(${ads.metaId}) = ${shopifyOrders.metaAdId}`,
   );
+}
+
+/**
+ * The SQL twin of `missingEnforcedTags` (creative-insights-shared.ts): true for
+ * exactly the ads that function calls untagged. The two cannot literally share
+ * code — one is evaluated by Postgres, one by TypeScript — so they are bound by
+ * this comment and by the truth-table test in creative-insights-queries.test.ts
+ * that runs both over every combination of present/absent tags. Change one and
+ * the other must change with it.
+ *
+ * Written as a flat `or` of null checks: a missing creative makes all three of
+ * its columns null through the left join, which is the same reading the TS side
+ * spells out explicitly.
+ */
+export function untaggedAdSql() {
+  return or(
+    isNull(ads.funnelStage),
+    isNull(adCreatives.id),
+    isNull(adCreatives.persona),
+    isNull(adCreatives.angle),
+    isNull(adCreatives.awarenessLevel),
+  )!;
 }
 
 /** The dimension's own column, on the ad or on its creative. */
@@ -515,13 +507,7 @@ export async function getTaggingQueue(params: {
         eq(ads.organizationId, params.organizationId),
         eq(ads.status, "active"),
         isNotNull(ads.metaId),
-        sql`(
-          ${ads.funnelStage} is null
-          or ${adCreatives.id} is null
-          or ${adCreatives.persona} is null
-          or ${adCreatives.angle} is null
-          or ${adCreatives.awarenessLevel} is null
-        )`,
+        untaggedAdSql(),
       ),
     )
     .groupBy(
@@ -545,7 +531,7 @@ export async function getTaggingQueue(params: {
     adSetName: row.adSetName,
     campaignName: row.campaignName,
     spendCents: toCents(row.spend),
-    missing: missingTags(row),
+    missing: missingEnforcedTags(row),
   }));
 }
 

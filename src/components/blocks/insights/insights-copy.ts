@@ -14,7 +14,18 @@ import {
   type EnforcedTag,
   type SliceDimension,
 } from "@/lib/creative-insights-shared";
-import { formatCount, formatPercent } from "../attribution/format";
+import { formatCount, formatPercent } from "@/components/blocks/attribution/format";
+import {
+  funnelStageHelp,
+  funnelStageLabels,
+  isFunnelStage,
+} from "@/components/blocks/funnel-stage-copy";
+
+export {
+  funnelStageHelp,
+  funnelStageLabels,
+  funnelStageWords,
+} from "@/components/blocks/funnel-stage-copy";
 
 export const page = {
   navLabel: "Creative insights",
@@ -36,7 +47,12 @@ export const dimensionLabels: Record<SliceDimension, string> = {
   funnelStage: "Funnel stage",
 };
 
-const angleLabels: Record<string, string> = {
+/**
+ * The seven angles from `ANGLE_TYPES`, in the words a person writes them in.
+ * Exported because the manual-creative form offers the same seven, and the two
+ * must not name them differently.
+ */
+export const angleLabels: Record<string, string> = {
   problem_solution: "Problem–solution",
   social_proof: "Social proof",
   comparison: "Comparison",
@@ -52,25 +68,6 @@ const awarenessLabels: Record<string, string> = {
   solution_aware: "Solution-aware",
   product_aware: "Product-aware",
   most_aware: "Most-aware",
-};
-
-const funnelStageLabels: Record<string, string> = {
-  tof: "TOF",
-  mof: "MOF",
-  bof: "BOF",
-};
-
-/** The long form, for tooltips and for sentences that need real words. */
-export const funnelStageHelp: Record<string, string> = {
-  tof: "Top of funnel — people meeting you for the first time.",
-  mof: "Middle of funnel — people who know you and are weighing it up.",
-  bof: "Bottom of funnel — people ready to buy.",
-};
-
-export const funnelStageWords: Record<string, string> = {
-  tof: "people meeting you for the first time",
-  mof: "people weighing it up",
-  bof: "people ready to buy",
 };
 
 export const explicitRowLabels: Record<string, string> = {
@@ -99,7 +96,7 @@ export function sliceValueLabel(
     case "awareness":
       return awarenessLabels[key] ?? key;
     case "funnelStage":
-      return funnelStageLabels[key] ?? key;
+      return isFunnelStage(key) ? funnelStageLabels[key] : key;
     case "persona":
       // Personas are free text written by whoever tagged the creative.
       return key;
@@ -113,7 +110,9 @@ export function sliceValueHelp(
 ): string | null {
   const explicit = explicitRowHelp[key];
   if (explicit) return explicit;
-  if (dimension === "funnelStage") return funnelStageHelp[key] ?? null;
+  if (dimension === "funnelStage") {
+    return isFunnelStage(key) ? funnelStageHelp[key] : null;
+  }
   return null;
 }
 

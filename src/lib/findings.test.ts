@@ -538,6 +538,8 @@ describe("evaluateAdLpFunnelMismatch", () => {
       pageClassificationStatus: "suggested",
       pageClassificationSource: "ai",
       trailing7dSpend: 100,
+      trailing7dRevenue: 250,
+      trailing7dLandingPageViews: 400,
       ...overrides,
     };
   }
@@ -553,6 +555,24 @@ describe("evaluateAdLpFunnelMismatch", () => {
     expect(finding?.payload.totalCount).toBe(1);
     expect(finding?.payload.offendingAds).toEqual([candidate()]);
     expect(finding?.payload.headline).toContain("$100.00");
+  });
+
+  // The drawer prints "spend/back/land" off the frozen payload, so both extra
+  // figures have to survive the trip untouched.
+  it("carries back and land through to the payload untouched", () => {
+    const finding = evaluateAdLpFunnelMismatch({
+      day: DAY,
+      candidates: [
+        candidate({ trailing7dRevenue: 1234.56, trailing7dLandingPageViews: 89 }),
+      ],
+    });
+    const offenders = finding?.payload.offendingAds as AdLpMismatchCandidate[];
+    const topAd = finding?.payload.topAd as AdLpMismatchCandidate;
+
+    expect(offenders[0].trailing7dRevenue).toBe(1234.56);
+    expect(offenders[0].trailing7dLandingPageViews).toBe(89);
+    expect(topAd.trailing7dRevenue).toBe(1234.56);
+    expect(topAd.trailing7dLandingPageViews).toBe(89);
   });
 
   it("does not fire below $100", () => {

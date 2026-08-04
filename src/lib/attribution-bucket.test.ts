@@ -634,6 +634,50 @@ describe("resolveMetaAdIdentity (§4.2)", () => {
     });
   });
 
+  // `{{ad.name}}` arrives percent-encoded, in both the `%20` and `+` spellings.
+  it("matches an encoded ad name in either spelling", () => {
+    expect(identity({ term: AD_SET, content: "UGC%2DTestimonial%2Dv3" })).toEqual(
+      { adSetId: AD_SET, adId: "120210000000456", matchMethod: "name" },
+    );
+    expect(identity({ term: OTHER_AD_SET, content: "shared%20name" })).toEqual({
+      adSetId: OTHER_AD_SET,
+      adId: "120210000000789",
+      matchMethod: "name",
+    });
+    expect(identity({ term: OTHER_AD_SET, content: "shared+name" })).toEqual({
+      adSetId: OTHER_AD_SET,
+      adId: "120210000000789",
+      matchMethod: "name",
+    });
+  });
+
+  // A malformed sequence is a name, not an error: it falls back to the raw form.
+  it("falls back to the raw value when decoding throws", () => {
+    expect(identity({ term: AD_SET, content: "100%-natural%zz" })).toEqual({
+      adSetId: AD_SET,
+      adId: "100%-natural%zz",
+      matchMethod: "unmatched",
+    });
+  });
+
+  // Decoding never rescues a name two ads in the ad set share.
+  it("leaves a decoded-ambiguous name unmatched", () => {
+    expect(identity({ term: AD_SET, content: "shared%20name" })).toEqual({
+      adSetId: AD_SET,
+      adId: "shared%20name",
+      matchMethod: "unmatched",
+    });
+  });
+
+  // An encoded digit string is still an id: decoding runs before the id test.
+  it("ids an encoded numeric utm_content", () => {
+    expect(identity({ term: AD_SET, content: "%3120210000000456" })).toEqual({
+      adSetId: AD_SET,
+      adId: "120210000000456",
+      matchMethod: "id",
+    });
+  });
+
   it("leaves a name with no ad set to scope it unmatched", () => {
     expect(identity({ content: "ugc-testimonial-v3" })).toEqual({
       adSetId: null,

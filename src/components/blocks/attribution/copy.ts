@@ -13,6 +13,12 @@
  * except the value.
  */
 
+import {
+  funnelStageName,
+  funnelStageWords,
+  funnelStageWordsFor,
+  isFunnelStage,
+} from "@/components/blocks/funnel-stage-copy";
 import type { AttributionBucket } from "@/lib/attribution-bucket";
 import type { CheckStatus, FindingType } from "@/lib/findings";
 import {
@@ -23,6 +29,7 @@ import {
   formatMoneyExact,
   formatPercent,
 } from "./format";
+import { bucketOrdersUrl } from "./shopify-links";
 
 export type VoiceContext = { currency: string; timeZone: string };
 
@@ -549,6 +556,30 @@ function sumCells(
   return values.reduce((total, value) => total + value, 0);
 }
 
+/**
+ * Who the drifting link tags belong to. The rule fires on two different kinds
+ * of offender and the sentence has to be true for whichever it caught: an ad we
+ * could match by name is genuinely new, but an unmatched one may be deleted or
+ * never synced — we cannot know when it was made, so we don't claim it is new.
+ */
+function driftOffenderPhrase(payload: Record<string, unknown> | null): string {
+  const methods = new Set(
+    rows(payload, "offenders")
+      .map((offender) => offender.matchMethod)
+      .filter((method): method is string => typeof method === "string"),
+  );
+  const named = methods.has("name");
+  const unnamed = methods.has("unmatched");
+
+  if (named && unnamed) {
+    return "a new ad and an ad we can't identify, both using non-standard link tags";
+  }
+  if (named) return "a new ad using non-standard link tags";
+  if (unnamed) return "an ad we can't identify, using non-standard link tags";
+  // Fired before the offenders carried a match method: say only what holds.
+  return "an ad using non-standard link tags";
+}
+
 export function findingHeadline(item: FindingItem, ctx: VoiceContext): string {
   const payload = item.payload;
 
@@ -753,7 +784,7 @@ export function findingBody(item: FindingItem, ctx: VoiceContext): string[] {
     case "utm_template_drift": {
       const orderCount = num(payload, "orderCount");
       return [
-        `${orderCount === null ? "Several orders" : `${formatCount(orderCount)} ${orderCount === 1 ? "order" : "orders"}`} yesterday came through a new ad using non-standard link tags.`,
+        `${orderCount === null ? "Several orders" : `${formatCount(orderCount)} ${orderCount === 1 ? "order" : "orders"}`} yesterday came through ${driftOffenderPhrase(payload)}.`,
         "New ads should send their numeric ad ID in utm_content so orders resolve without a name fallback.",
       ];
     }
@@ -764,24 +795,9 @@ export function findingBody(item: FindingItem, ctx: VoiceContext): string[] {
 /* Drawers — the three creative-insights findings                      */
 /* ------------------------------------------------------------------ */
 
-/** Long form of a funnel stage, for sentences that need real words. */
-const stageWords: Record<string, string> = {
-  tof: "people meeting you for the first time",
-  mof: "people weighing it up",
-  bof: "people ready to buy",
-};
-
-const stageNames: Record<string, string> = {
-  tof: "Cold",
-  mof: "Warming",
-  bof: "Ready to buy",
-};
-
 export const drawers = {
-  stageName: (stage: string | null) =>
-    (stage && stageNames[stage]) ?? "not classified",
-  stageWords: (stage: string | null) =>
-    (stage && stageWords[stage]) ?? "someone we can't place",
+  stageName: (stage: string | null) => funnelStageName(stage),
+  stageWords: (stage: string | null) => funnelStageWordsFor(stage),
 
   mismatch: {
     adTitle: "The ad",
@@ -790,14 +806,23 @@ export const drawers = {
     /** An ai-stamped funnel stage says so; a human-set one is simply the truth. */
     adGuessPill: "our guess",
     adSpend: (spend: string) => `${spend} spent in the last 7 days`,
+    /** What the week's spend brought back, and how far it got people. */
+    adBack: (money: string) => `${money} came back`,
+    adLand: (views: number) =>
+      `${formatCount(views)} ${views === 1 ? "person" : "people"} reached the page`,
+    seeAd: "See the ad →",
     guessPill: "our guess",
     unconfirmedPill: "AI-classified, unconfirmed",
     confirmedPill: "confirmed by your team",
     pageReads: (stage: string) => `Reads as ${stage}`,
     pageFor: (stage: string | null) =>
-      `Written for ${(stage && stageWords[stage]) ?? "an audience we can't place"}.`,
+      `Written for ${
+        isFunnelStage(stage) ? funnelStageWords[stage] : "an audience we can't place"
+      }.`,
     question: (path: string, stage: string | null) =>
-      `Is ${path} written for ${(stage && stageWords[stage]) ?? "the audience we guessed"}?`,
+      `Is ${path} written for ${
+        isFunnelStage(stage) ? funnelStageWords[stage] : "the audience we guessed"
+      }?`,
     yes: "Yes — keep the alert",
     no: "No — it's colder",
     visit: "Show me the page",
@@ -894,12 +919,25 @@ export function findingEvidence(
         href: "/insights/tagging-queue",
       };
 
-    case "utm_template_drift":
+    /**
+     * §8 wants the orders themselves, not a summary: the drifting tags are
+     * only legible order by order. The payload's day drives the range, so the
+     * link lands on exactly the orders the rule counted.
+     */
+    case "utm_template_drift": {
+      const orderCount = num(item.payload, "orderCount");
+      const day = str(item.payload, "day");
       return {
         kind: "link",
-        label: "Review attribution →",
-        href: links.metaVsShopify,
+        label:
+          orderCount === null
+            ? "See those orders →"
+            : `See the ${formatCount(orderCount)} orders →`,
+        href: day
+          ? bucketOrdersUrl({ bucket: "meta", dateFrom: day })
+          : links.metaVsShopify,
       };
+    }
   }
 }
 

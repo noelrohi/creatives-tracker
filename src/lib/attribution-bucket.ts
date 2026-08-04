@@ -5,6 +5,9 @@
 
 import { normalizeLower } from "@/lib/text";
 
+// Stays at 5 even though the §4.2 name match now decodes `utm_content`: v5 has
+// never stamped a production row (its migration is unapplied), so there is no
+// stamped history for the widened match to invalidate.
 export const BUCKET_RULE_VERSION = 5;
 
 export const META_SOURCES = [
@@ -197,6 +200,26 @@ export function normalizeMetaAdSetTerm(value: string | null | undefined) {
 const META_AD_ID_PATTERN = /^[0-9]{10,20}$/;
 
 /**
+ * `{{ad.name}}` reaches Shopify percent-encoded — "My Ad" arrives as `my%20ad`
+ * or `my+ad` — and a raw encoded value never matches a stored ad name. The
+ * decoded form is tried *alongside* the raw one, never instead of it: a name
+ * that genuinely contains a percent sign is still matched raw-first, and a
+ * malformed sequence (`%zz`, a lone `%`) falls back to the raw string rather
+ * than throwing.
+ */
+function decodeUtmValue(value: string): string | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(value.replace(/\+/g, " "));
+  } catch {
+    return null;
+  }
+  const normalized = decoded.trim().toLowerCase();
+  if (normalized.length === 0 || normalized === value) return null;
+  return normalized;
+}
+
+/**
  * Two ads in the same ad set carrying the same name — a name can no longer pick
  * one of them, so the order resolves as unmatched rather than to a coin flip.
  */
@@ -243,20 +266,31 @@ export function resolveMetaAdIdentity(
   // Nothing identifies the ad — ad grain simply doesn't apply to this order.
   if (!content) return { adSetId, adId: null, matchMethod: null };
 
-  if (META_AD_ID_PATTERN.test(content)) {
+  // Decoded before the numeric test, so an encoded digit string still ids.
+  const decoded = decodeUtmValue(content);
+
+  const idForm = META_AD_ID_PATTERN.test(content)
+    ? content
+    : decoded && META_AD_ID_PATTERN.test(decoded)
+      ? decoded
+      : null;
+  if (idForm) {
     return {
       adSetId,
-      adId: content,
-      matchMethod: index.adMetaIds.has(content) ? "id" : "unmatched",
+      adId: idForm,
+      matchMethod: index.adMetaIds.has(idForm) ? "id" : "unmatched",
     };
   }
 
   const namesInAdSet = adSetId
     ? index.adMetaIdsByAdSetAndName.get(adSetId)
     : undefined;
-  const named = namesInAdSet?.get(content);
-  if (typeof named === "string") {
-    return { adSetId, adId: named, matchMethod: "name" };
+  // Raw first for exact fidelity, then the decoded form.
+  for (const candidate of decoded ? [content, decoded] : [content]) {
+    const named = namesInAdSet?.get(candidate);
+    if (typeof named === "string") {
+      return { adSetId, adId: named, matchMethod: "name" };
+    }
   }
 
   return { adSetId, adId: content, matchMethod: "unmatched" };

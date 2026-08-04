@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { PgDialect } from "drizzle-orm/pg-core";
 import {
   backPerDollar,
+  isUntagged,
   mergeSliceRows,
-  missingTags,
+  missingEnforcedTags,
   NO_TAGS_KEY,
   pickInsightCards,
   summarizeCoverage,
   UNMATCHED_KEY,
+  untaggedAdSql,
   type CoverageAdRow,
+  type EnforcedTagRow,
   type SliceRow,
 } from "./creative-insights-queries";
 
@@ -96,7 +100,7 @@ describe("mergeSliceRows", () => {
   });
 });
 
-describe("missingTags", () => {
+describe("missingEnforcedTags", () => {
   const tagged = {
     creativeId: "creative_1",
     funnelStage: "tof",
@@ -106,11 +110,11 @@ describe("missingTags", () => {
   };
 
   it("returns nothing when all four enforced tags are present", () => {
-    expect(missingTags(tagged)).toEqual([]);
+    expect(missingEnforcedTags(tagged)).toEqual([]);
   });
 
   it("names each missing tag", () => {
-    expect(missingTags({ ...tagged, funnelStage: null, angle: null })).toEqual([
+    expect(missingEnforcedTags({ ...tagged, funnelStage: null, angle: null })).toEqual([
       "funnelStage",
       "angle",
     ]);
@@ -118,7 +122,7 @@ describe("missingTags", () => {
 
   it("counts all three creative tags missing when there is no creative", () => {
     expect(
-      missingTags({
+      missingEnforcedTags({
         creativeId: null,
         funnelStage: "bof",
         persona: null,
@@ -126,6 +130,62 @@ describe("missingTags", () => {
         awarenessLevel: null,
       }),
     ).toEqual(["persona", "angle", "awareness"]);
+  });
+});
+
+/**
+ * `untaggedAdSql` is the Postgres twin of `missingEnforcedTags` and the two
+ * cannot share code, so this pins them to the same verdicts: the rendered SQL is
+ * read back term by term and evaluated in TypeScript over every combination of
+ * present/absent tags. Any change to one side that the other does not follow —
+ * a dropped term, a different column, a form this reader cannot parse — fails
+ * here.
+ */
+describe("untaggedAdSql (SQL twin of missingEnforcedTags)", () => {
+  const COLUMN_TO_FIELD: Record<string, keyof EnforcedTagRow> = {
+    "ad.funnel_stage": "funnelStage",
+    "ad_creative.id": "creativeId",
+    "ad_creative.persona": "persona",
+    "ad_creative.angle": "angle",
+    "ad_creative.awareness_level": "awarenessLevel",
+  };
+
+  /** Evaluates the rendered `(… is null or … is null)` against one row. */
+  function evaluateSql(row: EnforcedTagRow): boolean {
+    const rendered = new PgDialect().sqlToQuery(untaggedAdSql()).sql;
+    const body = rendered.trim().replace(/^\(/, "").replace(/\)$/, "");
+    return body.split(" or ").some((term) => {
+      const match = term
+        .trim()
+        .match(/^"(\w+)"\."(\w+)" is null$/);
+      if (!match) throw new Error(`unreadable SQL term: ${term}`);
+      const field = COLUMN_TO_FIELD[`${match[1]}.${match[2]}`];
+      if (!field) throw new Error(`unknown column in SQL: ${match[0]}`);
+      return row[field] === null;
+    });
+  }
+
+  it("agrees with missingEnforcedTags on every combination of tags", () => {
+    const present: EnforcedTagRow = {
+      creativeId: "creative_1",
+      funnelStage: "tof",
+      persona: "busy parents",
+      angle: "problem_solution",
+      awarenessLevel: "problem_aware",
+    };
+    const fields = Object.keys(present) as Array<keyof EnforcedTagRow>;
+
+    for (let mask = 0; mask < 1 << fields.length; mask += 1) {
+      const row = { ...present };
+      fields.forEach((field, index) => {
+        if (mask & (1 << index)) row[field] = null;
+      });
+
+      expect({ row, untagged: evaluateSql(row) }).toEqual({
+        row,
+        untagged: isUntagged(row),
+      });
+    }
   });
 });
 

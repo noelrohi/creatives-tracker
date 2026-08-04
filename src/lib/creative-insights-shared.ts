@@ -43,6 +43,41 @@ export const ENFORCED_TAGS = [
 ] as const;
 export type EnforcedTag = (typeof ENFORCED_TAGS)[number];
 
+/**
+ * The row shape "is this ad tagged?" is decided on: the funnel stage lives on
+ * the ad, the other three on the creative behind it.
+ */
+export type EnforcedTagRow = {
+  creativeId: string | null;
+  funnelStage: string | null;
+  persona: string | null;
+  angle: string | null;
+  awarenessLevel: string | null;
+};
+
+/**
+ * Which of the four enforced tags this ad is still missing — the single
+ * definition of "tagged" for the whole app. The tagging queue's SQL cascade
+ * (`untaggedAdSql` in creative-insights-queries.ts) is its twin in Postgres and
+ * is pinned to it by a truth-table test.
+ */
+export function missingEnforcedTags(row: EnforcedTagRow): EnforcedTag[] {
+  const missing: EnforcedTag[] = [];
+  if (row.funnelStage === null) missing.push("funnelStage");
+  // No creative behind the ad means none of its three tags can exist.
+  if (row.creativeId === null || row.persona === null) missing.push("persona");
+  if (row.creativeId === null || row.angle === null) missing.push("angle");
+  if (row.creativeId === null || row.awarenessLevel === null) {
+    missing.push("awareness");
+  }
+  return missing;
+}
+
+/** An ad is untagged when it is missing any enforced tag. */
+export function isUntagged(row: EnforcedTagRow): boolean {
+  return missingEnforcedTags(row).length > 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Types                                                              */
 /* ------------------------------------------------------------------ */

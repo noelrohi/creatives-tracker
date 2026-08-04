@@ -13,21 +13,19 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
+import Link from "next/link";
+import {
+  colderFunnelStages,
+  isFunnelStage,
+  type FunnelStage,
+} from "@/components/blocks/funnel-stage-copy";
 import { ExternalLink } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { useTRPC } from "@/lib/trpc/client";
 import { cn } from "@/lib/utils";
 import { drawers as copy, page, type FindingItem, type VoiceContext } from "./copy";
 import { formatMoneyExact, formatPercent } from "./format";
-
-const STAGE_ORDER = ["tof", "mof", "bof"] as const;
-type Stage = (typeof STAGE_ORDER)[number];
-
-function isStage(value: unknown): value is Stage {
-  return (
-    typeof value === "string" && STAGE_ORDER.includes(value as Stage)
-  );
-}
+import { managerAdUrl } from "./shopify-links";
 
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -52,11 +50,6 @@ function list(source: Record<string, unknown> | null, key: string) {
     (entry): entry is Record<string, unknown> =>
       typeof entry === "object" && entry !== null,
   );
-}
-
-/** Everything colder than the stage on record — the only honest "No" options. */
-function colderStages(stage: Stage): Stage[] {
-  return STAGE_ORDER.slice(0, STAGE_ORDER.indexOf(stage));
 }
 
 function pageUrl(normalizedUrl: string): string {
@@ -108,7 +101,7 @@ function MismatchDetail({
 }) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
-  const [confirmed, setConfirmed] = useState<Stage | null>(null);
+  const [confirmed, setConfirmed] = useState<FunnelStage | null>(null);
   const [picking, setPicking] = useState(false);
 
   const confirm = useMutation(
@@ -129,19 +122,25 @@ function MismatchDetail({
   const others = list(item.payload, "offendingAds").slice(1);
   if (!topAd) return null;
 
-  const adStage = isStage(topAd.adFunnelStage) ? topAd.adFunnelStage : null;
-  const storedPageStage = isStage(topAd.pageFunnelStage)
+  const adStage = isFunnelStage(topAd.adFunnelStage) ? topAd.adFunnelStage : null;
+  const storedPageStage = isFunnelStage(topAd.pageFunnelStage)
     ? topAd.pageFunnelStage
     : null;
   const pageStage = confirmed ?? storedPageStage;
   const landingPageId = text(topAd, "landingPageId");
   const normalizedUrl = text(topAd, "normalizedUrl");
+  const adName = text(topAd, "adName");
   const spend = formatMoneyExact(amount(topAd, "trailing7dSpend"), ctx.currency);
+  const back = formatMoneyExact(
+    amount(topAd, "trailing7dRevenue"),
+    ctx.currency,
+  );
+  const land = amount(topAd, "trailing7dLandingPageViews");
   const adSource = text(topAd, "adFunnelStageSource");
   const pageStatus = text(topAd, "pageClassificationStatus");
   const settled = confirmed !== null || pageStatus === "confirmed";
 
-  const submit = (stage: Stage) => {
+  const submit = (stage: FunnelStage) => {
     if (!landingPageId) return;
     setConfirmed(stage);
     setPicking(false);
@@ -156,16 +155,38 @@ function MismatchDetail({
             {copy.mismatch.adTitle}
           </span>
           <span className="text-[12.5px] font-medium">
-            {text(topAd, "adName") ?? page.noDataYet}
+            {adName ?? page.noDataYet}
           </span>
           <span className="flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
             {copy.mismatch.adTags(copy.stageName(adStage))}
             {adSource === "ai" ? <Pill>{copy.mismatch.adGuessPill}</Pill> : null}
           </span>
+          {/* Spend, what came back, and how far people got — the three figures
+              §9 asks for. Any one of them can be missing on a finding fired
+              before it was recorded, and a missing figure is left out rather
+              than printed as zero. */}
           {spend ? (
             <span className="text-[12px] text-muted-foreground">
               {copy.mismatch.adSpend(spend)}
             </span>
+          ) : null}
+          {back ? (
+            <span className="text-[12px] text-muted-foreground">
+              {copy.mismatch.adBack(back)}
+            </span>
+          ) : null}
+          {land !== null ? (
+            <span className="text-[12px] text-muted-foreground">
+              {copy.mismatch.adLand(land)}
+            </span>
+          ) : null}
+          {adName ? (
+            <Link
+              href={managerAdUrl({ adName })}
+              className="text-[12px] font-medium text-primary hover:underline"
+            >
+              {copy.mismatch.seeAd}
+            </Link>
           ) : null}
         </div>
 
@@ -212,7 +233,7 @@ function MismatchDetail({
               <span className="text-[12px] text-muted-foreground">
                 {copy.mismatch.pick}
               </span>
-              {colderStages(storedPageStage).map((stage) => (
+              {colderFunnelStages(storedPageStage).map((stage) => (
                 <Button
                   key={stage}
                   size="sm"
@@ -251,7 +272,7 @@ function MismatchDetail({
                 disabled={
                   !canAct ||
                   confirm.isPending ||
-                  colderStages(storedPageStage).length === 0
+                  colderFunnelStages(storedPageStage).length === 0
                 }
                 onClick={() => setPicking(true)}
               >
