@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { idempotencyKeys, tasks } from "@trigger.dev/sdk";
 import { router, orgAdminProcedure } from "../init";
+import { uninstallKlaviyoConnection } from "@/lib/klaviyo/connection-lifecycle";
 import { prepareKlaviyoDiscoveryRun } from "@/lib/klaviyo/discovery";
 import { reviewJoinRule, reviewProbeReport } from "@/lib/klaviyo/join-rules";
 import { prepareKlaviyoProbeRun } from "@/lib/klaviyo/probe";
@@ -226,4 +227,9 @@ export const klaviyoRouter = router({
         resumed: run.resumed,
       };
     }),
+
+  uninstall: orgAdminProcedure.mutation(async ({ ctx }) => {
+    const connection = await requirePilotConnection(ctx.organizationId);
+    return uninstallKlaviyoConnection(connection);
+  }),
 });

@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => {
     reviewProbeReport: vi.fn(),
     reviewJoinRule: vi.fn(),
     startOrResumeOrderCoreSync: vi.fn(),
+    uninstallKlaviyoConnection: vi.fn(),
     idempotencyCreate: vi.fn(),
     taskTrigger: vi.fn(),
   };
@@ -58,6 +59,9 @@ vi.mock("@/lib/klaviyo/join-rules", () => ({
 }));
 vi.mock("@/lib/klaviyo/source-runner", () => ({
   startOrResumeOrderCoreSync: mocks.startOrResumeOrderCoreSync,
+}));
+vi.mock("@/lib/klaviyo/connection-lifecycle", () => ({
+  uninstallKlaviyoConnection: mocks.uninstallKlaviyoConnection,
 }));
 
 const { createCallerFactory } = await import("../init");
@@ -146,6 +150,9 @@ beforeEach(() => {
   mocks.failKlaviyoSyncRunAfterRetryExhaustion.mockResolvedValue({
     changed: true,
   });
+  mocks.uninstallKlaviyoConnection.mockResolvedValue({
+    shopifyIdentity: { ordersCleared: 2, digestsDeleted: 2 },
+  });
   mocks.idempotencyCreate.mockImplementation(async (key: string) => ({ key }));
   mocks.taskTrigger.mockResolvedValue({ id: "trigger-run-1" });
 });
@@ -180,6 +187,7 @@ const PROCEDURE_CALLS: Array<[string, (caller: ReturnType<typeof sessionCaller>)
         dateTo: "2026-07-30",
       }),
   ],
+  ["uninstall", (caller) => caller.uninstall()],
 ];
 
 describe("klaviyo router RBAC", () => {
@@ -412,6 +420,16 @@ describe("klaviyo router behavior", () => {
       mocks.failKlaviyoSyncRunAfterRetryExhaustion.mock.calls,
     );
     expect(finalizeArgs).not.toContain("secret token");
+  });
+
+  it("uninstalls through the lifecycle service with server-derived scope only", async () => {
+    const result = await sessionCaller("owner").uninstall();
+    expect(result).toEqual({
+      shopifyIdentity: { ordersCleared: 2, digestsDeleted: 2 },
+    });
+    expect(mocks.uninstallKlaviyoConnection).toHaveBeenCalledWith(
+      mocks.connection,
+    );
   });
 
   it("reuses a live identical handoff key when preparation resumes", async () => {

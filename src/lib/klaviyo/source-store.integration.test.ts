@@ -121,6 +121,7 @@ vi.mock("@/db", () => ({
 
 const store = await import("@/lib/klaviyo/source-store");
 const joinRules = await import("@/lib/klaviyo/join-rules");
+const lifecycle = await import("@/lib/klaviyo/connection-lifecycle");
 const describeIfDb = baseConnectionString ? describe : describe.skip;
 
 const scope = {
@@ -2007,6 +2008,108 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
         [reportId],
       ),
     ).rejects.toThrow(/klaviyo_join_rule_approved_source_uidx/);
+  });
+
+  it("uninstalls the connection while preserving Shopify commerce, policy, and tombstones", async () => {
+    await seedProbeParents(scope);
+    await testPool!.query(
+      `INSERT INTO klaviyo_join_rule
+         (id, organization_id, shopify_store_id, connection_id, probe_report_id,
+          event_kind, source_property, target_namespace, canonicalizer, state,
+          observed_populated, observed_collisions)
+       VALUES ('uninstall-rule', 'org-a', 'store-a', 'connection-a',
+        'probe-connection-a', 'placed_order', 'OrderId', 'shopify_order_gid',
+        'shopify_order_gid', 'candidate', 20, 0)`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_event_alias
+         (id, organization_id, shopify_store_id, connection_id, metric_id,
+          probe_report_id, canonical_field, source_property, state, observed_populated)
+       VALUES ('uninstall-alias', 'org-a', 'store-a', 'connection-a',
+        'metric-row-placed', 'probe-connection-a', 'orderId', 'OrderId',
+        'candidate', 20)`,
+    );
+    await seedRun({ id: "uninstall-event-run" });
+    await store.commitKlaviyoEventPage({
+      scope,
+      syncRunId: "uninstall-event-run",
+      sourceContract: contract,
+      expectedCheckpoint: checkpoint0,
+      nextCheckpoint: null,
+      events: [eventFixture({ externalEventId: "uninstall-event" })],
+      rowsRead: 1,
+    });
+    await testPool!.query(
+      `INSERT INTO shopify_order
+         (id, organization_id, store_id, shopify_order_id, order_created_at,
+          order_day, net_sales, bucket, bucket_rule_version, meta_verified)
+       VALUES ('order-a', 'org-a', 'store-a', 'shopify-order-a', now(),
+         current_date, 42.50, 'meta', 3, true)`,
+    );
+    await testPool!.query(
+      `INSERT INTO shopify_order_line
+         (id, organization_id, store_id, order_id, shopify_line_item_id,
+          product_title, quantity, parent_order_updated_at)
+       VALUES ('line-a', 'org-a', 'store-a', 'order-a', 'external-line-a',
+         'Product', 1, now())`,
+    );
+    await testPool!.query(
+      `INSERT INTO source_identity_hmac
+         (id, organization_id, store_id, source_kind, shopify_order_id,
+          key_version, digest, rotation_state)
+       VALUES ('hmac-a', 'org-a', 'store-a', 'shopify_order', 'order-a',
+         'v1', 'digest-a', 'active')`,
+    );
+    await testPool!.query(
+      `INSERT INTO identity_matching_key_binding
+         (organization_id, store_id, key_version, key_check)
+       VALUES ('org-a', 'store-a', 'v1', 'check-v1')`,
+    );
+    await testPool!.query(
+      `INSERT INTO identity_crypto_policy
+         (id, organization_id, store_id, matching_current_version,
+          matching_current_key_check, suppression_version, suppression_key_check)
+       VALUES ('policy-a', 'org-a', 'store-a', 'v1', 'check-v1', 's1', 'check-s1')`,
+    );
+    await testPool!.query(
+      `INSERT INTO identity_erasure_suppression
+         (id, organization_id, store_id, kind, key_version, digest)
+       VALUES ('suppression-a', 'org-a', 'store-a', 'email', 's1', 'tombstone-a')`,
+    );
+
+    await lifecycle.uninstallKlaviyoConnection(scope);
+
+    const count = async (table: string, column: string, value: string) => {
+      const result = await testPool!.query(
+        `SELECT count(*)::int AS count FROM ${table} WHERE ${column} = $1`,
+        [value],
+      );
+      return result.rows[0].count as number;
+    };
+    expect(await count("klaviyo_connection", "id", "connection-a")).toBe(0);
+    expect(await count("klaviyo_metric", "connection_id", "connection-a")).toBe(0);
+    expect(await count("klaviyo_event_alias", "connection_id", "connection-a")).toBe(0);
+    expect(await count("klaviyo_event", "connection_id", "connection-a")).toBe(0);
+    expect(await count("klaviyo_event_product", "connection_id", "connection-a")).toBe(0);
+    expect(await count("klaviyo_probe_report", "connection_id", "connection-a")).toBe(0);
+    expect(await count("klaviyo_join_rule", "connection_id", "connection-a")).toBe(0);
+    expect(await count("klaviyo_sync_run", "connection_id", "connection-a")).toBe(0);
+    expect(await count("source_identity_hmac", "shopify_order_id", "order-a")).toBe(0);
+    expect(await count("identity_erasure_suppression", "store_id", "store-a")).toBe(1);
+    expect(await count("identity_crypto_policy", "store_id", "store-a")).toBe(1);
+    expect(await count("shopify_order", "id", "order-a")).toBe(1);
+    expect(await count("shopify_order_line", "order_id", "order-a")).toBe(1);
+
+    const money = await testPool!.query(
+      `SELECT net_sales, bucket, bucket_rule_version, meta_verified
+         FROM shopify_order WHERE id = 'order-a'`,
+    );
+    expect(money.rows[0]).toEqual({
+      net_sales: "42.50",
+      bucket: "meta",
+      bucket_rule_version: 3,
+      meta_verified: true,
+    });
   });
 
   it("keeps committed account and metric data across lease recovery", async () => {
