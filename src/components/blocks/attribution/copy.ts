@@ -760,6 +760,80 @@ export function findingBody(item: FindingItem, ctx: VoiceContext): string[] {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Drawers — the three creative-insights findings                      */
+/* ------------------------------------------------------------------ */
+
+/** Long form of a funnel stage, for sentences that need real words. */
+const stageWords: Record<string, string> = {
+  tof: "people meeting you for the first time",
+  mof: "people weighing it up",
+  bof: "people ready to buy",
+};
+
+const stageNames: Record<string, string> = {
+  tof: "Cold",
+  mof: "Warming",
+  bof: "Ready to buy",
+};
+
+export const drawers = {
+  stageName: (stage: string | null) =>
+    (stage && stageNames[stage]) ?? "not classified",
+  stageWords: (stage: string | null) =>
+    (stage && stageWords[stage]) ?? "someone we can't place",
+
+  mismatch: {
+    adTitle: "The ad",
+    pageTitle: "The page it links",
+    adTags: (stage: string) => `Tagged ${stage}`,
+    /** An ai-stamped funnel stage says so; a human-set one is simply the truth. */
+    adGuessPill: "our guess",
+    adSpend: (spend: string) => `${spend} spent in the last 7 days`,
+    guessPill: "our guess",
+    unconfirmedPill: "AI-classified, unconfirmed",
+    confirmedPill: "confirmed by your team",
+    pageReads: (stage: string) => `Reads as ${stage}`,
+    pageFor: (stage: string | null) =>
+      `Written for ${(stage && stageWords[stage]) ?? "an audience we can't place"}.`,
+    question: (path: string, stage: string | null) =>
+      `Is ${path} written for ${(stage && stageWords[stage]) ?? "the audience we guessed"}?`,
+    yes: "Yes — keep the alert",
+    no: "No — it's colder",
+    visit: "Show me the page",
+    pick: "Which is it written for?",
+    cancel: "Cancel",
+    sticks:
+      "Your answer sticks: the page's stage stops being a guess, here and in every future alert.",
+    saved: (stage: string) =>
+      `Saved — the page is now confirmed as ${stage.toLowerCase()}.`,
+    others: (count: number) =>
+      `${formatCount(count)} more ${count === 1 ? "ad does" : "ads do"} the same thing:`,
+    othersSpend: (spend: string) => `${spend} this week`,
+  },
+
+  untagged: {
+    figures: (taggedShare: string, minShare: string) =>
+      `${taggedShare} of active Meta spend is fully tagged · the line is ${minShare}.`,
+    spend: (untagged: string, total: string) =>
+      `${untagged} of ${total} ran on ads we can't place.`,
+  },
+
+  drift: {
+    offenders: "Where it is coming from:",
+    offenderName: (name: string | null, raw: string | null) =>
+      name ?? (raw ? `link tag "${raw}"` : "an ad we can't name"),
+    offenderOrders: (orderCount: number) =>
+      `${formatCount(orderCount)} ${orderCount === 1 ? "order" : "orders"}`,
+    methodName: "matched by name",
+    methodUnmatched: "matched nothing",
+    samples: "The tags we received:",
+    sample: (value: string, count: number) =>
+      `${value} · ${formatCount(count)}×`,
+    fix: "The template should read utm_content={{ad.id}} — check the campaign's URL parameters in Ads Manager.",
+  },
+};
+
 export type Evidence =
   | { kind: "link"; label: string; href: string }
   | { kind: "orders"; label: string; bucket: AttributionBucket };
@@ -803,12 +877,21 @@ export function findingEvidence(
         href: links.connections,
       };
 
+    // Both land on the screens built for them: the funnel-stage slice, where
+    // the mismatch is visible against every other stage, and the queue that
+    // ranks the untagged ads by the money riding on them.
     case "ad_lp_funnel_mismatch":
+      return {
+        kind: "link",
+        label: "See it against every stage →",
+        href: "/insights?slice=funnelStage",
+      };
+
     case "untagged_spend":
       return {
         kind: "link",
-        label: "See the affected ads →",
-        href: "/campaigns",
+        label: "Open the tagging queue →",
+        href: "/insights/tagging-queue",
       };
 
     case "utm_template_drift":

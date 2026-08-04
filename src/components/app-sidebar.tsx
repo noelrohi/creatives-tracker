@@ -53,11 +53,26 @@ const dashboardSubItems: Array<{
 }> = [
   { label: "Dashboard", href: "/", icon: "solar:widget-5-linear" },
   { label: "MER", href: "/mer", icon: "solar:graph-up-linear" },
+];
+
+/** Where the money is read rather than managed: attribution and the slices. */
+const analyzeItems: Array<{
+  label: string;
+  href: string;
+  icon: string;
+  badge?: string;
+}> = [
   {
     label: "Attribution",
     href: "/attribution",
     icon: "solar:pie-chart-2-linear",
     badge: "Beta",
+  },
+  {
+    label: "Creative insights",
+    href: "/insights",
+    icon: "solar:chart-square-linear",
+    badge: "New",
   },
 ];
 
@@ -302,6 +317,36 @@ export function AppSidebar() {
                     </SidebarMenuItem>
                   );
                 })}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+          <SidebarGroup>
+            <SidebarGroupLabel>Analyze</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {analyzeItems.map((item) => (
+                  <SidebarMenuItem key={item.href}>
+                    <SidebarMenuButton
+                      asChild
+                      tooltip={item.label}
+                      isActive={
+                        pathname === item.href ||
+                        pathname.startsWith(`${item.href}/`)
+                      }
+                      className={item.badge ? "pr-14" : undefined}
+                    >
+                      <Link href={item.href}>
+                        <Icon icon={item.icon} className="size-4" />
+                        <span>{item.label}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                    {item.badge ? (
+                      <SidebarMenuBadge className="rounded-full border border-sidebar-border bg-sidebar-accent/80 px-2 text-[10px] font-semibold uppercase tracking-wide text-sidebar-accent-foreground">
+                        {item.badge}
+                      </SidebarMenuBadge>
+                    ) : null}
+                  </SidebarMenuItem>
+                ))}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
