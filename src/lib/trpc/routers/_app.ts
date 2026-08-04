@@ -17,6 +17,7 @@ import { triggerRouter } from "./trigger";
 import { studioRouter } from "./studio";
 import { attributionRouter } from "./attribution";
 import { findingsRouter } from "./findings";
+import { landingPageRouter } from "./landing-page";
 
 export const appRouter = router({
   adCreative: adCreativeRouter,
@@ -37,6 +38,7 @@ export const appRouter = router({
   studio: studioRouter,
   attribution: attributionRouter,
   findings: findingsRouter,
+  landingPage: landingPageRouter,
 });
 
 export type AppRouter = typeof appRouter;

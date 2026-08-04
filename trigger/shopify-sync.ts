@@ -29,6 +29,7 @@ import {
   type ShopifyStoreRecord,
 } from "@/lib/shopify-ingest";
 import { BUCKET_RULE_VERSION } from "@/lib/attribution-bucket";
+import { harvestLandingPages } from "@/lib/landing-page";
 import { ATTRIBUTION_TASK_RETRY } from "./retry";
 
 const SHOPIFY_SYNC_QUEUE = { name: "shopify-sync", concurrencyLimit: 1 };
@@ -139,6 +140,25 @@ async function stampAndLog(params: {
     syncedMetaAdSets,
     syncedMetaAds,
   });
+
+  // The journey side of the landing-page harvest (§5.1): orders only carry a
+  // landing page once their journey is ready, which is exactly what the pass
+  // above just settled.
+  try {
+    const harvested = await harvestLandingPages({
+      organizationId: params.organizationId,
+      storeId: params.storeId,
+    });
+    logger.info("Harvested landing pages", {
+      storeId: params.storeId,
+      ...harvested,
+    });
+  } catch (error) {
+    logger.error("Landing page harvest failed", {
+      storeId: params.storeId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   logger.info("Stamped attribution buckets", {
     storeId: params.storeId,
