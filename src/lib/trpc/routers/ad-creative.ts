@@ -27,6 +27,8 @@ function enumerateDateRange(from: string, to: string): string[] {
   return dates;
 }
 
+const creativeFormatSchema = z.enum(["static", "video", "ugc", "carousel"]);
+
 const dashboardAnalyticsFilterSchema = z.object({
   days: z.number().int().min(1).max(90).default(7),
   from: z.string().optional(),
@@ -37,6 +39,7 @@ const dashboardAnalyticsFilterSchema = z.object({
   statuses: z.array(z.enum(["active", "paused", "archived"])).optional(),
   ownership: z.enum(["ours", "theirs"]).optional(),
   teamId: z.string().optional(),
+  format: creativeFormatSchema.optional(),
 });
 
 const dashboardAnalyticsInputSchema = dashboardAnalyticsFilterSchema.optional();
@@ -46,7 +49,6 @@ const dashboardStatsInputSchema = dashboardAnalyticsFilterSchema
   })
   .optional();
 
-const creativeFormatSchema = z.enum(["static", "video", "ugc", "carousel"]);
 const awarenessLevelSchema = z.enum([
   "unaware",
   "problem_aware",
@@ -491,6 +493,9 @@ function buildDashboardAnalyticsFilters(input: DashboardAnalyticsInput, organiza
   const teamFilter = input?.teamId
     ? sql`AND ac.team_id = ${input.teamId}`
     : sql``;
+  const formatFilter = input?.format
+    ? sql`AND ac.format = ${input.format}`
+    : sql``;
   const basePl = basePerformanceLogFilter("pl");
   const campaignFilter = input?.campaignIds?.length
     ? sql`AND ad.ad_set_id IN (SELECT ast.id FROM ad_set ast WHERE ast.campaign_id IN (${sql.join(input.campaignIds.map((id) => sql`${id}`), sql`, `)}))`
@@ -510,6 +515,7 @@ function buildDashboardAnalyticsFilters(input: DashboardAnalyticsInput, organiza
     accountFilter,
     ownershipFilter,
     teamFilter,
+    formatFilter,
     basePl,
     campaignFilter,
     adSetFilter,
@@ -541,6 +547,7 @@ async function fetchPortfolioRow(filters: ReturnType<typeof buildDashboardAnalyt
       ${filters.statusFilter}
       ${filters.ownershipFilter}
       ${filters.teamFilter}
+      ${filters.formatFilter}
   `);
   return (portfolioResult.rows as PortfolioRow[])[0];
 }
@@ -1087,6 +1094,7 @@ export const adCreativeRouter = router({
         accountFilter,
         ownershipFilter,
         teamFilter,
+        formatFilter,
         basePl,
         campaignFilter,
         adSetFilter,
@@ -1153,7 +1161,7 @@ export const adCreativeRouter = router({
         JOIN ad ON ad.ad_creative_id = ac.id
         LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
         JOIN performance_log pl ON pl.ad_id = ad.id
-        WHERE ${dateFilter} AND ${basePl} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter} ${teamFilter}
+        WHERE ${dateFilter} AND ${basePl} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter} ${teamFilter} ${formatFilter}
         GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
         HAVING sum(pl.spend) >= 50
           AND coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) >= 1
@@ -1191,7 +1199,7 @@ export const adCreativeRouter = router({
         JOIN performance_log pl ON pl.ad_id = ad.id
         WHERE ad.organization_id = ${ctx.organizationId}
           AND ${basePl}
-          ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter}
+          ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter} ${formatFilter}
           ${survivingExclude}
         GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
         HAVING sum(pl.spend) >= 50
@@ -1223,7 +1231,7 @@ export const adCreativeRouter = router({
         tier: "pause_now" | "watch";
       };
       const scopedAdFilters = sql`
-        ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter}
+        ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter} ${formatFilter}
       `;
       const bottomResult = await db.execute(sql`
         WITH scoped_ads AS NOT MATERIALIZED (
@@ -1431,6 +1439,7 @@ export const adCreativeRouter = router({
         accountId: z.string().optional(),
         ownership: z.enum(["ours", "theirs"]).optional(),
         teamId: z.string().optional(),
+        format: creativeFormatSchema.optional(),
       }),
     )
     .query(async ({ input, ctx }) => {
@@ -1444,6 +1453,9 @@ export const adCreativeRouter = router({
         : sql``;
       const teamFilter = input.teamId
         ? sql`AND ac.team_id = ${input.teamId}`
+        : sql``;
+      const formatFilter = input.format
+        ? sql`AND ac.format = ${input.format}`
         : sql``;
 
       const rows = await db.execute(sql`
@@ -1501,7 +1513,7 @@ export const adCreativeRouter = router({
         WHERE pl.date_start <= ${input.to}::date
           AND pl.date_end >= ${input.from}::date
           AND pl.organization_id = ${ctx.organizationId}
-          ${accountFilter} ${ownershipFilter} ${teamFilter}
+          ${accountFilter} ${ownershipFilter} ${teamFilter} ${formatFilter}
         ORDER BY pl.date_start DESC, ad.name
       `);
 
@@ -1518,6 +1530,7 @@ export const adCreativeRouter = router({
         accountId: z.string().optional(),
         ownership: z.enum(["ours", "theirs"]).optional(),
         teamId: z.string().optional(),
+        format: creativeFormatSchema.optional(),
       }).optional(),
     )
     .query(async ({ input, ctx }) => {
@@ -1531,6 +1544,9 @@ export const adCreativeRouter = router({
         : sql``;
       const teamFilter = input?.teamId
         ? sql`AND ac.team_id = ${input.teamId}`
+        : sql``;
+      const formatFilter = input?.format
+        ? sql`AND ac.format = ${input.format}`
         : sql``;
       const basePl = basePerformanceLogFilter("pl");
 
@@ -1576,7 +1592,7 @@ export const adCreativeRouter = router({
           AND pl.date_start <= ${toStr}::date
           AND ad.organization_id = ${ctx.organizationId}
           AND ${basePl}
-          ${accountFilter} ${ownershipFilter} ${teamFilter}
+          ${accountFilter} ${ownershipFilter} ${teamFilter} ${formatFilter}
         GROUP BY pl.date_start
         ORDER BY pl.date_start
       `);

@@ -70,6 +70,7 @@ export function ManagerLedgerRow({
   onToggle,
   ancestorOff = null,
   actions = null,
+  onNavigate,
 }: {
   row: ManagerRowData;
   level: ManagerLevel;
@@ -78,6 +79,7 @@ export function ManagerLedgerRow({
   onToggle?: () => void;
   ancestorOff?: ManagerAncestorOff;
   actions?: ManagerRowActions | null;
+  onNavigate?: () => void;
 }) {
   const chip = LEVEL_CHIPS[level];
   const expandable = row.hasChildren && onToggle != null;
@@ -86,7 +88,24 @@ export function ManagerLedgerRow({
     // `group` drives the §8 hover affordances. The dim is on the row so an
     // "ON" ad under a switched-off parent never reads as delivering (§8) —
     // the status tag itself still reports the row's own state.
-    <TableRow className={cn(ROW_HEIGHT, "group", ancestorOff && "opacity-50")}>
+    <TableRow
+      className={cn(
+        ROW_HEIGHT,
+        "group",
+        ancestorOff && "opacity-50",
+        onNavigate && "cursor-pointer focus-visible:bg-muted/50 focus-visible:outline-none",
+      )}
+      tabIndex={onNavigate ? 0 : undefined}
+      aria-label={onNavigate ? `Open creative for ${row.name}` : undefined}
+      onClick={onNavigate}
+      onKeyDown={(event) => {
+        if (!onNavigate || event.target !== event.currentTarget) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onNavigate();
+        }
+      }}
+    >
       <TableCell className={cn(CELL, "w-7")}>
         {expandable && (
           <button
@@ -141,7 +160,10 @@ export function ManagerLedgerRow({
       <TableCell className={NUMERIC_CELL}>
         {formatConversions(row.conversions)}
       </TableCell>
-      <TableCell className={cn(CELL, ACTION_COLUMN)}>
+      <TableCell
+        className={cn(CELL, ACTION_COLUMN)}
+        onClick={(event) => event.stopPropagation()}
+      >
         {actions && <ManagerRowActionButtons row={row} actions={actions} />}
       </TableCell>
     </TableRow>

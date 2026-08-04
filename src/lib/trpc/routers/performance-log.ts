@@ -299,6 +299,7 @@ export const performanceLogRouter = router({
         to: z.string(),
         accountId: z.string().optional(),
         teamId: z.string().optional(),
+        format: z.enum(["static", "video", "ugc", "carousel"]).optional(),
       }),
     )
     .output(z.array(demographicBreakdownSchema))
@@ -310,7 +311,10 @@ export const performanceLogRouter = router({
       const teamFilter = input.teamId
         ? sql`AND ac.team_id = ${input.teamId}`
         : sql``;
-      const joinCreative = input.teamId
+      const formatFilter = input.format
+        ? sql`AND ac.format = ${input.format}`
+        : sql``;
+      const joinCreative = input.teamId || input.format
         ? sql`JOIN ad_creative ac ON ac.id = ad.ad_creative_id`
         : sql``;
 
@@ -339,6 +343,7 @@ export const performanceLogRouter = router({
           AND ${dim} != ''
           ${accountFilter}
           ${teamFilter}
+          ${formatFilter}
         GROUP BY ${dim}
         ORDER BY sum(pl.spend) DESC NULLS LAST
         LIMIT 15

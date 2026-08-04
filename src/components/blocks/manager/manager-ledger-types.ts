@@ -6,10 +6,9 @@ export type ManagerCampaignRow = RouterOutputs["manager"]["campaigns"][number];
 export type ManagerAdSetRow = RouterOutputs["manager"]["adSets"][number];
 export type ManagerAdRow = RouterOutputs["manager"]["ads"][number];
 
-// Every level returns the same row shape (campaigns add accountName, campaigns
-// and ad sets add hasMatches), so one presentational row component covers the
-// whole tree. The ad row is the common denominator.
-export type ManagerRowData = ManagerAdRow;
+// One presentational row covers the shared fields at every level. Campaigns
+// and ad sets add expansion metadata; ads add the linked creative id.
+export type ManagerRowData = ManagerCampaignRow | ManagerAdSetRow | ManagerAdRow;
 
 // The from/to/status/search inputs shared by all three procedures — the child
 // queries reuse the page's current values so rollups stay consistent (§4).

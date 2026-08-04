@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useTRPC } from "@/lib/trpc/client";
 import type { ManagerAdActions } from "./manager-ad-actions";
@@ -144,6 +145,7 @@ function ManagerAdRows({
   adActions: ManagerAdActions;
 }) {
   const trpc = useTRPC();
+  const router = useRouter();
   const ads = useQuery(
     trpc.manager.ads.queryOptions(
       { adSetId, ...filters },
@@ -177,6 +179,10 @@ function ManagerAdRows({
           row={ad}
           level="ad"
           ancestorOff={ancestorOff}
+          onNavigate={ad.creativeId ? () => {
+            const params = new URLSearchParams({ from: filters.from, to: filters.to });
+            router.push(`/creatives/${ad.creativeId}?${params.toString()}`);
+          } : undefined}
           // Ads are the only actionable level (§8); the branch ids come along so
           // a mutation can invalidate exactly this ad set and campaign.
           actions={adActions.forAd({ ad, adSetId, campaignId })}
