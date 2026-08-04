@@ -1745,8 +1745,11 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
       operation: "discovery",
       checkpoint: null,
       requestParameters: {},
-      heartbeatAt: new Date(now.getTime() - 25 * 60 * 1000),
     });
+    await setHeartbeatForTest(
+      "discovery-expired",
+      new Date(now.getTime() - 25 * 60 * 1000),
+    );
     const replacement = await store.prepareKlaviyoOperationRun({
       scope,
       operation: "discovery",
@@ -1833,13 +1836,33 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
     );
     expect(approved.rows[0].count).toBe(1);
 
+    // A direct second approved insert must fail at the approved-only partial
+    // index, so it references a fresh report to dodge the per-report uniques.
+    await seedRun({
+      id: "probe-run-direct",
+      operation: "probe",
+      status: "success",
+      checkpoint: null,
+      requestParameters: { sampleSize: 20 },
+    });
+    await testPool!.query(
+      `INSERT INTO klaviyo_probe_report
+         (id, organization_id, shopify_store_id, connection_id, sync_run_id,
+          sampled_from, sampled_to, sampled_shopify_orders, sampled_klaviyo_events,
+          binding_overlap_count, key_type_shapes, identifier_coverage,
+          collision_summary, unmatched_summary, unmatched_examples,
+          product_coverage, attribution_coverage, redaction_verified, status, checksum)
+       VALUES ('report-direct', 'org-a', 'store-a', 'connection-a', 'probe-run-direct',
+         now() - interval '1 day', now(), 20, 20, 3, '[]', '{}', '{}', '{}',
+         '[]', '{}', '{}', 1, 'pending', 'checksum-direct')`,
+    );
     await expect(
       testPool!.query(
         `INSERT INTO klaviyo_event_alias
            (id, organization_id, shopify_store_id, connection_id, metric_id,
             probe_report_id, canonical_field, source_property, state, observed_populated)
          VALUES ('direct-approved', 'org-a', 'store-a', 'connection-a',
-           'metric-row-placed', 'report-two', 'orderId', 'OrderIdCopy',
+           'metric-row-placed', 'report-direct', 'orderId', 'OrderIdCopy',
            'approved', 20)`,
       ),
     ).rejects.toThrow(/klaviyo_event_alias_approved_metric_field_uniq/);
@@ -1996,16 +2019,35 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
     ]);
     expect(runtime[0].approvedAliases.orderId).toBe("OrderId");
 
+    // The direct second approved rule references a fresh report so only the
+    // approved-only partial index can reject it.
+    await seedRun({
+      id: "probe-run-direct-rule",
+      operation: "probe",
+      status: "success",
+      checkpoint: null,
+      requestParameters: { sampleSize: 20 },
+    });
+    await testPool!.query(
+      `INSERT INTO klaviyo_probe_report
+         (id, organization_id, shopify_store_id, connection_id, sync_run_id,
+          sampled_from, sampled_to, sampled_shopify_orders, sampled_klaviyo_events,
+          binding_overlap_count, key_type_shapes, identifier_coverage,
+          collision_summary, unmatched_summary, unmatched_examples,
+          product_coverage, attribution_coverage, redaction_verified, status, checksum)
+       VALUES ('report-direct-rule', 'org-a', 'store-a', 'connection-a',
+         'probe-run-direct-rule', now() - interval '1 day', now(), 20, 20, 3,
+         '[]', '{}', '{}', '{}', '[]', '{}', '{}', 1, 'passed', 'checksum-direct-rule')`,
+    );
     await expect(
       testPool!.query(
         `INSERT INTO klaviyo_join_rule
            (id, organization_id, shopify_store_id, connection_id, probe_report_id,
             event_kind, source_property, target_namespace, canonicalizer, state,
             observed_populated, observed_collisions)
-         VALUES ('second-approved-rule', 'org-a', 'store-a', 'connection-a', $1,
-          'placed_order', 'OrderId', 'shopify_order_gid', 'shopify_order_gid',
-          'approved', 20, 0)`,
-        [reportId],
+         VALUES ('second-approved-rule', 'org-a', 'store-a', 'connection-a',
+          'report-direct-rule', 'placed_order', 'OrderId', 'shopify_order_gid',
+          'shopify_order_gid', 'approved', 20, 0)`,
       ),
     ).rejects.toThrow(/klaviyo_join_rule_approved_source_uidx/);
   });
@@ -2138,8 +2180,11 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
       operation: "discovery",
       checkpoint: null,
       requestParameters: {},
-      heartbeatAt: new Date(now.getTime() - 25 * 60 * 1000),
     });
+    await setHeartbeatForTest(
+      "discovery-crashed",
+      new Date(now.getTime() - 25 * 60 * 1000),
+    );
     await store.prepareKlaviyoOperationRun({
       scope,
       operation: "discovery",
