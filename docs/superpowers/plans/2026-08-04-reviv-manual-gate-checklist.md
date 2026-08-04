@@ -47,6 +47,14 @@ const trpcGet = async (proc, input) => {
 };
 ```
 
+> **Sandbox note (dev-store dry-runs only):** Shopify blocks PII (customer
+> emails/names/phones) via API on development stores and Basic plans, so
+> `source_identity_hmac` stays empty and the evidence run reports
+> `identity_capability: unavailable`. This is expected degradation, not a
+> failure: the probe's deterministic OrderId overlap still works and drives
+> `bindingOverlapCount`. Email-diagnostic overlap can only be exercised on
+> the real store (Shopify plan or higher).
+
 ## B. Discovery
 
 - [ ] `await trpc("klaviyo.startDiscovery")` returns `{ runId, syncRunId }`
