@@ -372,6 +372,13 @@
       "when": 1785491259984,
       "tag": "0052_unknown_wasp",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1785828521128,
+      "tag": "0053_damp_titanium_man",
+      "breakpoints": true
     }
   ]
 }

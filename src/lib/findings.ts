@@ -67,7 +67,7 @@ export const ROAS_CONSECUTIVE_DAYS = 7;
 /** Mute is a fixed week — custom durations were explicitly rejected. */
 export const MUTE_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 
-export type FindingType = (typeof findingTypeEnum.enumValues)[number];
+type FindingTypeEnumValue = (typeof findingTypeEnum.enumValues)[number];
 
 export const FINDING_TYPES = [
   "meta_overclaim",
@@ -75,7 +75,10 @@ export const FINDING_TYPES = [
   "broken_utm_template",
   "sync_failure",
   "roas_below_target",
-] as const satisfies readonly FindingType[];
+] as const satisfies readonly FindingTypeEnumValue[];
+
+/** Finding rules implemented by this task's existing chassis. */
+export type FindingType = (typeof FINDING_TYPES)[number];
 
 export type FindingDraft = {
   type: FindingType;
@@ -541,7 +544,7 @@ async function getActiveMutedTypes(params: {
       ),
     );
 
-  return new Set(rows.map((row) => row.type));
+  return new Set(rows.map((row) => row.type as FindingType));
 }
 
 /* ------------------------------------------------------------------ */

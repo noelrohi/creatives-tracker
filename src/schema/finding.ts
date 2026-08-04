@@ -17,6 +17,9 @@ export const findingTypeEnum = pgEnum("finding_type", [
   "broken_utm_template",
   "sync_failure",
   "roas_below_target",
+  "ad_lp_funnel_mismatch",
+  "untagged_spend",
+  "utm_template_drift",
 ]);
 
 /** How a finding closed: someone dealt with it, or its rule stopped holding. */

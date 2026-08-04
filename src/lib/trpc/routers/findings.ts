@@ -39,7 +39,7 @@ function toItem(
 ): FindingListItem {
   return {
     id: row.id,
-    type: row.type,
+    type: row.type as FindingType,
     firedAt: row.firedAt,
     periodStart: row.periodStart,
     periodEnd: row.periodEnd,
@@ -93,7 +93,7 @@ export const findingsRouter = router({
               ? toItem(row, mute.mutedUntil)
               : {
                   id: null,
-                  type: mute.type,
+                  type: mute.type as FindingType,
                   firedAt: null,
                   periodStart: null,
                   periodEnd: null,

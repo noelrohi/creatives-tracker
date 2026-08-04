@@ -1,6 +1,17 @@
-import { pgTable, text, timestamp, index } from "drizzle-orm/pg-core";
+import { index, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { formatEnum, awarenessLevelEnum, ownershipEnum } from "./enums";
 import { teams } from "./team";
+
+export type CreativeAttributes = {
+  visualElements?: string[];
+  visualStyle?: string;
+  mode?: string;
+  hook?: string;
+  supportingTexts?: string[];
+  cta?: string;
+  promos?: string;
+  disclaimer?: string;
+};
 
 export const adCreatives = pgTable(
   "ad_creative",
@@ -15,9 +26,17 @@ export const adCreatives = pgTable(
     angle: text("angle"),
     persona: text("persona"),
     awarenessLevel: awarenessLevelEnum("awareness_level"),
-    hook: text("hook"),
+    attributes: jsonb("attributes")
+      .$type<CreativeAttributes>()
+      .notNull()
+      .default({}),
+    attributesMeta: jsonb("attributes_meta")
+      .$type<
+        Record<string, { source: "ai" | "human"; confidence?: number }>
+      >()
+      .notNull()
+      .default({}),
     tone: text("tone").array(),
-    cta: text("cta"),
     ownership: ownershipEnum("ownership"),
     teamId: text("team_id").references(() => teams.id, { onDelete: "set null" }),
     notes: text("notes"),

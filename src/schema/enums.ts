@@ -29,10 +29,18 @@ export const pageTypeEnum = pgEnum("page_type", [
   "other",
 ]);
 
-export const funnelPositionEnum = pgEnum("funnel_position", [
-  "cold_traffic_entry",
-  "retarget",
-  "upsell",
+export const funnelStageEnum = pgEnum("funnel_stage", ["tof", "mof", "bof"]);
+
+export const metaAdMatchMethodEnum = pgEnum("meta_ad_match_method", [
+  "id",
+  "name",
+  "unmatched",
+]);
+
+export const lpClassificationStatusEnum = pgEnum("lp_classification_status", [
+  "suggested",
+  "confirmed",
+  "stale",
 ]);
 
 export const ownershipEnum = pgEnum("ownership", [

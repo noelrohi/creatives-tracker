@@ -66,9 +66,11 @@ type CreativeFormSource = {
   awarenessLevel: string | null;
   ownership: string | null;
   teamId?: string | null;
-  hook: string | null;
+  attributes: {
+    hook?: string;
+    cta?: string;
+  };
   tone: string[] | null;
-  cta: string | null;
 
   notes: string | null;
 };
@@ -108,9 +110,9 @@ export function getCreativeFormValues(
     angle: creative?.angle ?? "",
     persona: creative?.persona ?? "",
     awarenessLevel: normalizeAwareness(creative?.awarenessLevel),
-    hook: creative?.hook ?? "",
+    hook: creative?.attributes.hook ?? "",
     tone: creative?.tone ?? [],
-    cta: creative?.cta ?? "",
+    cta: creative?.attributes.cta ?? "",
 
     ownership: normalizeOwnership(creative?.ownership),
     teamId: creative?.teamId ?? null,
@@ -131,9 +133,11 @@ export function toCreativeMutationInput(values: CreativeFormValues) {
     angle: emptyToNull(values.angle),
     persona: emptyToNull(values.persona),
     awarenessLevel: values.awarenessLevel,
-    hook: emptyToNull(values.hook),
+    attributes: {
+      hook: emptyToNull(values.hook),
+      cta: emptyToNull(values.cta),
+    },
     tone: values.tone.length > 0 ? values.tone : null,
-    cta: emptyToNull(values.cta),
 
     ownership: values.ownership,
     teamId: values.teamId,
@@ -150,9 +154,9 @@ export function hasCreativeExtraValues(
       values.angle ||
       values.persona ||
       values.awarenessLevel ||
-      values.hook ||
+      values.attributes.hook ||
       (values.tone && values.tone.length > 0) ||
-      values.cta ||
+      values.attributes.cta ||
 
       values.notes,
   );

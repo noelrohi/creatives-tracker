@@ -53,9 +53,11 @@ export interface CreativeFormDialogProps {
     persona: string | null;
     awarenessLevel: string | null;
     ownership: string | null;
-    hook: string | null;
+    attributes: {
+      hook?: string;
+      cta?: string;
+    };
     tone: string[] | null;
-    cta: string | null;
     notes: string | null;
   };
   onSuccess?: (id: string) => void;

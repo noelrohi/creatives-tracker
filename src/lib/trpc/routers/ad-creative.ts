@@ -16,6 +16,9 @@ import { computeCreativeHealthByCreativeId, type CreativeRollup } from "@/lib/cr
 import { fetchAgentExportRows } from "@/lib/ad-export";
 import { effectiveAdActiveSql, effectiveAdStatusSql } from "@/lib/effective-ad-status";
 
+type CreativeAttributes = (typeof adCreatives.$inferSelect)["attributes"];
+type CreativeAttributesMeta = (typeof adCreatives.$inferSelect)["attributesMeta"];
+
 function enumerateDateRange(from: string, to: string): string[] {
   const dates: string[] = [];
   const current = new Date(`${from}T00:00:00.000Z`);
@@ -57,6 +60,23 @@ const awarenessLevelSchema = z.enum([
   "most_aware",
 ]);
 const ownershipSchema = z.enum(["ours", "theirs"]);
+const creativeAttributesSchema = z.object({
+  visualElements: z.array(z.string()).optional(),
+  visualStyle: z.string().optional(),
+  mode: z.string().optional(),
+  hook: z.string().optional(),
+  supportingTexts: z.array(z.string()).optional(),
+  cta: z.string().optional(),
+  promos: z.string().optional(),
+  disclaimer: z.string().optional(),
+});
+const creativeAttributesMetaSchema = z.record(
+  z.string(),
+  z.object({
+    source: z.enum(["ai", "human"]),
+    confidence: z.number().optional(),
+  }),
+);
 const creativeHealthSchema = z.enum(["healthy", "warning", "critical"]);
 const adStatusSchema = z.enum(["active", "paused", "archived"]);
 
@@ -69,9 +89,9 @@ const adCreativeRowSchema = z.object({
   angle: z.string().nullable(),
   persona: z.string().nullable(),
   awarenessLevel: awarenessLevelSchema.nullable(),
-  hook: z.string().nullable(),
+  attributes: creativeAttributesSchema,
+  attributesMeta: creativeAttributesMetaSchema,
   tone: z.array(z.string()).nullable(),
-  cta: z.string().nullable(),
   ownership: ownershipSchema.nullable(),
   teamId: z.string().nullable(),
   notes: z.string().nullable(),
@@ -91,9 +111,9 @@ const adCreativeListItemSchema = z.object({
   angle: z.string().nullable(),
   persona: z.string().nullable(),
   awarenessLevel: awarenessLevelSchema.nullable(),
-  hook: z.string().nullable(),
+  attributes: creativeAttributesSchema,
+  attributesMeta: creativeAttributesMetaSchema,
   tone: z.array(z.string()).nullable(),
-  cta: z.string().nullable(),
   ownership: ownershipSchema.nullable(),
   teamId: z.string().nullable(),
   notes: z.string().nullable(),
@@ -406,9 +426,9 @@ const adCreativeDetailSchema = z.object({
   angle: z.string().nullable(),
   persona: z.string().nullable(),
   awarenessLevel: awarenessLevelSchema.nullable(),
-  hook: z.string().nullable(),
+  attributes: creativeAttributesSchema,
+  attributesMeta: creativeAttributesMetaSchema,
   tone: z.array(z.string()).nullable(),
-  cta: z.string().nullable(),
   ownership: ownershipSchema.nullable(),
   teamId: z.string().nullable(),
   notes: z.string().nullable(),
@@ -676,9 +696,9 @@ export const adCreativeRouter = router({
         angle: string | null;
         persona: string | null;
         awareness_level: z.infer<typeof awarenessLevelSchema> | null;
-        hook: string | null;
+        attributes: CreativeAttributes;
+        attributes_meta: CreativeAttributesMeta;
         tone: string[] | null;
-        cta: string | null;
         ownership: z.infer<typeof ownershipSchema> | null;
         team_id: string | null;
         notes: string | null;
@@ -722,9 +742,9 @@ export const adCreativeRouter = router({
             ac.angle,
             ac.persona,
             ac.awareness_level,
-            ac.hook,
+            ac.attributes,
+            ac.attributes_meta,
             ac.tone,
-            ac.cta,
             ac.ownership,
             ac.team_id,
             ac.notes,
@@ -841,9 +861,9 @@ export const adCreativeRouter = router({
           fc.angle,
           fc.persona,
           fc.awareness_level,
-          fc.hook,
+          fc.attributes,
+          fc.attributes_meta,
           fc.tone,
-          fc.cta,
           fc.ownership,
           fc.team_id,
           fc.notes,
@@ -905,9 +925,9 @@ export const adCreativeRouter = router({
           angle: r.angle,
           persona: r.persona,
           awarenessLevel: r.awareness_level,
-          hook: r.hook,
+          attributes: r.attributes,
+          attributesMeta: r.attributes_meta,
           tone: r.tone,
-          cta: r.cta,
           ownership: r.ownership,
           teamId: r.team_id,
           notes: r.notes,
@@ -1818,9 +1838,9 @@ export const adCreativeRouter = router({
           angle: adCreatives.angle,
           persona: adCreatives.persona,
           awarenessLevel: adCreatives.awarenessLevel,
-          hook: adCreatives.hook,
+          attributes: adCreatives.attributes,
+          attributesMeta: adCreatives.attributesMeta,
           tone: adCreatives.tone,
-          cta: adCreatives.cta,
           ownership: adCreatives.ownership,
           teamId: adCreatives.teamId,
           notes: adCreatives.notes,
@@ -1941,19 +1961,45 @@ export const adCreativeRouter = router({
           .enum(["unaware", "problem_aware", "solution_aware", "product_aware", "most_aware"])
           .nullable()
           .optional(),
-        hook: z.string().nullable().optional(),
+        attributes: z
+          .object({
+            hook: z.string().nullable().optional(),
+            cta: z.string().nullable().optional(),
+          })
+          .optional(),
         tone: z.array(z.string()).nullable().optional(),
-        cta: z.string().nullable().optional(),
         ownership: z.enum(["ours", "theirs"]).nullable().optional(),
         teamId: z.string().nullable().optional(),
         notes: z.string().nullable().optional(),
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      const { id, ...data } = input;
+      const { id, attributes: attributesPatch, ...data } = input;
+      const [existing] = await db
+        .select({ attributes: adCreatives.attributes })
+        .from(adCreatives)
+        .where(
+          and(
+            eq(adCreatives.id, id),
+            eq(adCreatives.organizationId, ctx.organizationId),
+          ),
+        )
+        .limit(1);
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Ad creative not found" });
+      }
+      const attributes = { ...existing.attributes };
+      if (attributesPatch?.hook !== undefined) {
+        if (attributesPatch.hook === null) delete attributes.hook;
+        else attributes.hook = attributesPatch.hook;
+      }
+      if (attributesPatch?.cta !== undefined) {
+        if (attributesPatch.cta === null) delete attributes.cta;
+        else attributes.cta = attributesPatch.cta;
+      }
       const [creative] = await db
         .update(adCreatives)
-        .set(data)
+        .set({ ...data, attributes })
         .where(and(eq(adCreatives.id, id), eq(adCreatives.organizationId, ctx.organizationId)))
         .returning();
       if (!creative) throw new TRPCError({ code: "NOT_FOUND", message: "Ad creative not found" });
@@ -1980,9 +2026,9 @@ export const adCreativeRouter = router({
           angle: source.angle,
           persona: source.persona,
           awarenessLevel: source.awarenessLevel,
-          hook: source.hook,
+          attributes: source.attributes,
+          attributesMeta: source.attributesMeta,
           tone: source.tone,
-          cta: source.cta,
           ownership: source.ownership,
           teamId: source.teamId,
           notes: source.notes,

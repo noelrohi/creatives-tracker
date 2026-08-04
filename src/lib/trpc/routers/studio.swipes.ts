@@ -86,7 +86,7 @@ export const studioSwipeProcedures = {
         "studio",
         "swipes",
         "List saved swipes",
-        "List saved swipe references with their angle, visual-style, and hook-type taxonomy records. Filter by tags or search text; archived swipes are omitted unless requested.",
+        "List saved swipe references with their message, concept, and hook-type taxonomy records. Filter by tags or search text; archived swipes are omitted unless requested.",
       ),
     )
     .input(
@@ -224,11 +224,11 @@ export const studioSwipeProcedures = {
     )
     .mutation(async ({ input, ctx }) => {
       await Promise.all([
-        requireTaxonomyValue(ctx.organizationId, input.angleId, "angle"),
+        requireTaxonomyValue(ctx.organizationId, input.angleId, "message"),
         requireTaxonomyValue(
           ctx.organizationId,
           input.visualStyleId,
-          "visual_style",
+          "concept",
         ),
       ]);
       const [duplicateImage] = input.imageHash
@@ -327,7 +327,7 @@ export const studioSwipeProcedures = {
         "studio",
         "updateSwipe",
         "Update a swipe",
-        "Update swipe metadata and optional angle, visual-style, or hook-type tags. Source URLs remain unique within the organization.",
+        "Update swipe metadata and optional message, concept, or hook-type tags. Source URLs remain unique within the organization.",
       ),
     )
     .input(
@@ -345,11 +345,11 @@ export const studioSwipeProcedures = {
     .mutation(async ({ input, ctx }) => {
       const { id, sourceUrl, ...values } = input;
       await Promise.all([
-        requireTaxonomyValue(ctx.organizationId, values.angleId, "angle"),
+        requireTaxonomyValue(ctx.organizationId, values.angleId, "message"),
         requireTaxonomyValue(
           ctx.organizationId,
           values.visualStyleId,
-          "visual_style",
+          "concept",
         ),
         requireTaxonomyValue(ctx.organizationId, values.hookTypeId, "hook_type"),
       ]);

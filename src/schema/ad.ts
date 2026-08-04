@@ -1,9 +1,10 @@
 import { relations } from "drizzle-orm";
-import { pgTable, text, timestamp, index } from "drizzle-orm/pg-core";
-import { statusEnum } from "./enums";
+import { index, numeric, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { funnelStageEnum, statusEnum } from "./enums";
 import { adSets } from "./ad-set";
 import { adCreatives } from "./ad-creative";
 import { adAccounts } from "./account";
+import { landingPages } from "./landing-page";
 
 export const ads = pgTable(
   "ad",
@@ -24,6 +25,12 @@ export const ads = pgTable(
     }),
     caption: text("caption"),
     destinationUrl: text("destination_url"),
+    funnelStage: funnelStageEnum("funnel_stage"),
+    funnelStageSource: text("funnel_stage_source"),
+    funnelStageConfidence: numeric("funnel_stage_confidence"),
+    landingPageId: text("landing_page_id").references(() => landingPages.id, {
+      onDelete: "set null",
+    }),
     metaId: text("meta_id").unique(),
     metaImageHash: text("meta_image_hash"),
     metaVideoId: text("meta_video_id"),
@@ -44,6 +51,8 @@ export const ads = pgTable(
     index("ad_ad_set_id_idx").on(table.adSetId),
     index("ad_creative_id_idx").on(table.adCreativeId),
     index("ad_organization_id_idx").on(table.organizationId),
+    index("ad_funnel_stage_idx").on(table.funnelStage),
+    index("ad_landing_page_id_idx").on(table.landingPageId),
   ],
 );
 

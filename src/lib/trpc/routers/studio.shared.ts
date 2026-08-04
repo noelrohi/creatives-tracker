@@ -31,9 +31,9 @@ import {
 } from "@/lib/studio-prompt";
 import { buildElementsBrief } from "@/lib/studio-suggestions";
 import {
-  STUDIO_ANGLE_SEEDS,
+  STUDIO_CONCEPT_SEEDS,
   STUDIO_HOOK_TYPE_SEEDS,
-  STUDIO_STYLE_SEEDS,
+  STUDIO_MESSAGE_SEEDS,
   studioSlug,
 } from "@/lib/studio-taxonomy";
 import type { generateStaticAdsTask } from "../../../../trigger/generate-static-ads";
@@ -53,8 +53,8 @@ export const persistedSwipeImageUrlSchema = remoteImageUrlSchema.refine((value) 
     hostname.endsWith(".blob.vercel-storage.com");
 }, "Swipe screenshots must be uploaded before saving");
 export const taxonomyKindSchema = z.enum([
-  "angle",
-  "visual_style",
+  "message",
+  "concept",
   "hook_type",
 ]);
 export const markSchema = z.enum(["good", "bad"]);
@@ -109,7 +109,7 @@ export function normalizeOptionalUrl(value?: string | null) {
 export async function requireTaxonomyValue(
   organizationId: string,
   id: string | null | undefined,
-  kind: "angle" | "visual_style" | "hook_type",
+  kind: "message" | "concept" | "hook_type",
 ) {
   if (!id) return;
   const [value] = await db
@@ -128,10 +128,10 @@ export async function requireTaxonomyValue(
     throw new TRPCError({
       code: "BAD_REQUEST",
       message:
-        kind === "angle"
-          ? "Invalid angle tag"
-          : kind === "visual_style"
-            ? "Invalid visual-style tag"
+        kind === "message"
+          ? "Invalid message tag"
+          : kind === "concept"
+            ? "Invalid concept tag"
             : "Invalid hook-type tag",
     });
   }
@@ -587,8 +587,8 @@ export async function queueClaimedSuggestion(
 
 export async function seedTaxonomy(organizationId: string) {
   const rows = [
-    ...STUDIO_ANGLE_SEEDS.map((name) => ({ kind: "angle", name })),
-    ...STUDIO_STYLE_SEEDS.map((name) => ({ kind: "visual_style", name })),
+    ...STUDIO_MESSAGE_SEEDS.map((name) => ({ kind: "message", name })),
+    ...STUDIO_CONCEPT_SEEDS.map((name) => ({ kind: "concept", name })),
     ...STUDIO_HOOK_TYPE_SEEDS.map((name) => ({ kind: "hook_type", name })),
   ].map((value) => ({
     organizationId,

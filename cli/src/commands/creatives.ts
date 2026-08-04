@@ -90,9 +90,11 @@ export function registerCreativeCommands(program: Command) {
             angle: options.angle,
             persona: options.persona,
             awarenessLevel: options.awarenessLevel,
-            hook: options.hook,
+            attributes:
+              options.hook !== undefined || options.cta !== undefined
+                ? compactObject({ hook: options.hook, cta: options.cta })
+                : undefined,
             tone: parseList(options.tone),
-            cta: options.cta,
             notes: options.notes,
           }),
         }),

@@ -12,6 +12,8 @@ import {
   unique,
   jsonb,
 } from "drizzle-orm/pg-core";
+import { metaAdMatchMethodEnum } from "./enums";
+import { landingPages } from "./landing-page";
 
 export const attributionBucketEnum = pgEnum("attribution_bucket", [
   "meta",
@@ -79,6 +81,12 @@ export const shopifyOrders = pgTable(
     bucketRuleVersion: integer("bucket_rule_version"),
     metaVerified: boolean("meta_verified").default(false).notNull(),
     metaCampaignId: text("meta_campaign_id"),
+    metaAdSetId: text("meta_ad_set_id"),
+    metaAdId: text("meta_ad_id"),
+    metaAdMatchMethod: metaAdMatchMethodEnum("meta_ad_match_method"),
+    landingPageId: text("landing_page_id").references(() => landingPages.id, {
+      onDelete: "set null",
+    }),
     verificationPending: boolean("verification_pending")
       .default(false)
       .notNull(),
@@ -107,6 +115,11 @@ export const shopifyOrders = pgTable(
       table.organizationId,
       table.storeId,
       table.bucket,
+    ),
+    index("shopify_order_org_store_meta_ad_id_idx").on(
+      table.organizationId,
+      table.storeId,
+      table.metaAdId,
     ),
   ],
 );
