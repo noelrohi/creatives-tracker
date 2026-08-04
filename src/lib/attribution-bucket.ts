@@ -5,7 +5,7 @@
 
 import { normalizeLower } from "@/lib/text";
 
-export const BUCKET_RULE_VERSION = 4;
+export const BUCKET_RULE_VERSION = 5;
 
 export const META_SOURCES = [
   "facebook",
@@ -106,6 +106,8 @@ export type BucketLastVisit = {
   utmCampaign?: string | null;
   /** The ad set id Meta writes into the link. */
   utmTerm?: string | null;
+  /** The ad — its Meta id on newer links, its name on older ones. */
+  utmContent?: string | null;
   referrerUrl?: string | null;
   source?: string | null;
 } | null;
@@ -189,6 +191,75 @@ export function normalizeMetaAdSetTerm(value: string | null | undefined) {
   const [beforeQuery] = normalized.split("?");
   const term = beforeQuery.trim();
   return term.length > 0 ? term : null;
+}
+
+/** Meta ids as they appear in a link: digits only, 10–20 of them (spec §4.2). */
+const META_AD_ID_PATTERN = /^[0-9]{10,20}$/;
+
+/**
+ * Two ads in the same ad set carrying the same name — a name can no longer pick
+ * one of them, so the order resolves as unmatched rather than to a coin flip.
+ */
+export const AMBIGUOUS_AD_NAME = Symbol("ambiguous-ad-name");
+
+export type MetaAdMatchMethod = "id" | "name" | "unmatched";
+
+export type MetaAdIndex = {
+  /** Every synced ad's Meta id. */
+  adMetaIds: ReadonlySet<string>;
+  /**
+   * Ad set Meta id → lowercased ad name → that ad's Meta id. Names are only
+   * near-unique inside one ad set (3,925 ads share 2,107 names across the
+   * account), so the scope is what makes a name match trustworthy.
+   */
+  adMetaIdsByAdSetAndName: ReadonlyMap<
+    string,
+    ReadonlyMap<string, string | typeof AMBIGUOUS_AD_NAME>
+  >;
+};
+
+export type MetaAdIdentity = {
+  adSetId: string | null;
+  adId: string | null;
+  matchMethod: MetaAdMatchMethod | null;
+};
+
+/**
+ * The ad set and ad behind a visit (spec §4.2–§4.3). A dimension stamped
+ * alongside the bucket — it never changes the bucket or the verification.
+ *
+ * `utm_term` is stamped as-is whether or not it names a synced ad set, and an
+ * extracted `utm_content` is always stamped too: an ad we have not synced yet
+ * records as `unmatched` with its raw value, and the next re-stamp after that
+ * ad arrives upgrades it.
+ */
+export function resolveMetaAdIdentity(
+  input: { utmTerm?: string | null; utmContent?: string | null },
+  index: MetaAdIndex,
+): MetaAdIdentity {
+  const adSetId = normalizeMetaAdSetTerm(input.utmTerm);
+  const content = normalizeMetaAdSetTerm(input.utmContent);
+
+  // Nothing identifies the ad — ad grain simply doesn't apply to this order.
+  if (!content) return { adSetId, adId: null, matchMethod: null };
+
+  if (META_AD_ID_PATTERN.test(content)) {
+    return {
+      adSetId,
+      adId: content,
+      matchMethod: index.adMetaIds.has(content) ? "id" : "unmatched",
+    };
+  }
+
+  const namesInAdSet = adSetId
+    ? index.adMetaIdsByAdSetAndName.get(adSetId)
+    : undefined;
+  const named = namesInAdSet?.get(content);
+  if (typeof named === "string") {
+    return { adSetId, adId: named, matchMethod: "name" };
+  }
+
+  return { adSetId, adId: content, matchMethod: "unmatched" };
 }
 
 /** POS, draft and subscription-renewal orders (spec §4.1). */

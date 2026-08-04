@@ -257,7 +257,7 @@ export const metaCheck = {
       orderCount === 1 ? "order is" : "orders are"
     } still too new to place, so this can still move.`,
   footnote:
-    "Meta counts a sale when someone buys within 7 days of clicking or 1 day of seeing one of its ads, so \"Meta says\" always reads higher than what we can match to a real order. A steady gap is normal — the daily checks watch for it widening.",
+    'Meta counts a sale when someone buys within 7 days of clicking or 1 day of seeing one of its ads, so "Meta says" always reads higher than what we can match to a real order. A steady gap is normal — the daily checks watch for it widening.',
 };
 
 /* ------------------------------------------------------------------ */
@@ -310,7 +310,7 @@ export const campaigns = {
       orderCount === 1 ? "it" : "them"
     } behind one. ${orderCount === 1 ? "It is" : "They are"} still counted in your Meta total.`,
   footnote:
-    "\"We confirm\" is the real Shopify orders behind each campaign, so it always reads lower than \"Meta says\" — the two count different things, and a steady gap is normal. Every row plus the last one adds up to your Meta ads total above.",
+    '"We confirm" is the real Shopify orders behind each campaign, so it always reads lower than "Meta says" — the two count different things, and a steady gap is normal. Every row plus the last one adds up to your Meta ads total above.',
 };
 
 /* ------------------------------------------------------------------ */
@@ -324,10 +324,11 @@ export const campaigns = {
  */
 const glossary = {
   netSales:
-    "Sales after discounts and refunds, before shipping and tax — the same as the Net sales row in Shopify's Finances summary. Two things move that row: Shopify's own \"Total sales\" line adds shipping and tax on top, so it reads higher, and the report remembers the last sales channel you looked at. We count every channel, so set it to \"All channels\" to compare.",
+    'Sales after discounts and refunds, before shipping and tax — the same as the Net sales row in Shopify\'s Finances summary. Two things move that row: Shopify\'s own "Total sales" line adds shipping and tax on top, so it reads higher, and the report remembers the last sales channel you looked at. We count every channel, so set it to "All channels" to compare.',
   unattributed:
     "The order had tracking info, but it didn't match any ad or email we know.",
-  untracked: "The order arrived with nothing we could read — no link tags at all.",
+  untracked:
+    "The order arrived with nothing we could read — no link tags at all.",
   organicDirect:
     "Nothing paid in the shopper's last visit. They came to you by themselves.",
   meta: "An order files under Meta ads when the shopper's last visit before checkout came from a Meta ad. We then look for that exact ad on the order to call it confirmed.",
@@ -398,7 +399,11 @@ export const folds = {
   attentionFrozen: "paused while numbers are frozen",
   attentionFirstLoad: "checks start after the first load",
   meta: metaCheck.title,
-  metaSummary: (metaSays: string | null, confirm: string, back: string | null) =>
+  metaSummary: (
+    metaSays: string | null,
+    confirm: string,
+    back: string | null,
+  ) =>
     [
       metaSays ? `Meta says ${metaSays}` : null,
       `we confirm ${confirm}`,
@@ -461,6 +466,9 @@ export const checks = {
     unattributed_spike: "Share of unknown sources",
     roas_below_target: "Ad payback vs your goal",
     sync_failure: "Data connections",
+    ad_lp_funnel_mismatch: "Ad and landing-page fit",
+    untagged_spend: "Creative tagging coverage",
+    utm_template_drift: "New-ad link tags",
   } satisfies Record<FindingType, string>,
   status: {
     ok: "OK",
@@ -487,15 +495,24 @@ export const severityByType: Record<FindingType, Severity> = {
   unattributed_spike: "warning",
   broken_utm_template: "warning",
   roas_below_target: "warning",
+  ad_lp_funnel_mismatch: "warning",
+  untagged_spend: "warning",
+  utm_template_drift: "warning",
 };
 
 /** Payloads are frozen at fire time and read defensively — never re-derived. */
-function num(payload: Record<string, unknown> | null, key: string): number | null {
+function num(
+  payload: Record<string, unknown> | null,
+  key: string,
+): number | null {
   const value = payload?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function str(payload: Record<string, unknown> | null, key: string): string | null {
+function str(
+  payload: Record<string, unknown> | null,
+  key: string,
+): string | null {
   const value = payload?.[key];
   return typeof value === "string" && value.length > 0 ? value : null;
 }
@@ -585,6 +602,22 @@ export function findingHeadline(item: FindingItem, ctx: VoiceContext): string {
         ? "Your Meta ads paid back less than your goal all week"
         : `Your Meta ads paid back less than your goal ${formatCount(days)} days running`;
     }
+
+    case "ad_lp_funnel_mismatch":
+      return (
+        str(payload, "headline") ??
+        "An ad is sending colder traffic to a hotter landing page"
+      );
+
+    case "untagged_spend":
+      return (
+        str(payload, "headline") ?? "Active ad spend is missing creative tags"
+      );
+
+    case "utm_template_drift":
+      return (
+        str(payload, "headline") ?? "A new ad is sending non-standard UTMs"
+      );
   }
 }
 
@@ -645,7 +678,9 @@ export function findingBody(item: FindingItem, ctx: VoiceContext): string[] {
       const exampleTag =
         example && typeof example.utmSource === "string"
           ? `${example.utmSource}${
-              typeof example.utmMedium === "string" ? ` / ${example.utmMedium}` : ""
+              typeof example.utmMedium === "string"
+                ? ` / ${example.utmMedium}`
+                : ""
             }`
           : null;
 
@@ -697,6 +732,31 @@ export function findingBody(item: FindingItem, ctx: VoiceContext): string[] {
         "It has been under your goal every day this week, so it isn't a one-day dip.",
       ];
     }
+
+    case "ad_lp_funnel_mismatch": {
+      const count = num(payload, "totalCount");
+      return [
+        `${count === null ? "At least one ad" : `${formatCount(count)} ${count === 1 ? "ad" : "ads"}`} sent colder traffic to a landing page written for people closer to buying.`,
+        "Warmer ads pointing to colder pages are legitimate retargeting and are not included.",
+      ];
+    }
+
+    case "untagged_spend": {
+      const share = formatPercent(num(payload, "share")) ?? page.noDataYet;
+      const count = num(payload, "untaggedAdCount");
+      return [
+        `${count === null ? "Some active ads" : `${formatCount(count)} active ads`} are missing funnel stage, persona, angle, or awareness tags and carry ${share} of active Meta spend.`,
+        "Slice-level alerts stay paused until at least 80% of active spend is fully tagged.",
+      ];
+    }
+
+    case "utm_template_drift": {
+      const orderCount = num(payload, "orderCount");
+      return [
+        `${orderCount === null ? "Several orders" : `${formatCount(orderCount)} ${orderCount === 1 ? "order" : "orders"}`} yesterday came through a new ad using non-standard link tags.`,
+        "New ads should send their numeric ad ID in utm_content so orders resolve without a name fallback.",
+      ];
+    }
   }
 }
 
@@ -741,6 +801,21 @@ export function findingEvidence(
         kind: "link",
         label: "Connection details →",
         href: links.connections,
+      };
+
+    case "ad_lp_funnel_mismatch":
+    case "untagged_spend":
+      return {
+        kind: "link",
+        label: "See the affected ads →",
+        href: "/campaigns",
+      };
+
+    case "utm_template_drift":
+      return {
+        kind: "link",
+        label: "Review attribution →",
+        href: links.metaVsShopify,
       };
   }
 }

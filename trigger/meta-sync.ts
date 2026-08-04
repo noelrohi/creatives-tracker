@@ -8,6 +8,7 @@ import {
   wait,
 } from "@trigger.dev/sdk";
 import { createApiClient, getEnvConfig } from "./client";
+import { enrichCreativeTagsTask } from "./enrich-creative-tags";
 
 const BREAKDOWNS = [
   null,
@@ -562,6 +563,33 @@ export const metaSyncTask = task({
         skippedBreakdowns: accountResult.skippedBreakdowns,
         failures: accountResult.failures,
         totalRows,
+      });
+    }
+
+    // AI tagging runs once per organization, after every account has had its
+    // previews enriched — the copy and imagery it reads are what that step
+    // fetches, and creatives are org-scoped, not account-scoped.
+    metadata.set("currentBreakdown", "tagging");
+    metadata.set("step", "Enriching creative tags with AI");
+    try {
+      const tagResult = await enrichCreativeTagsTask.triggerAndWait({
+        organizationId: payload.organizationId,
+      });
+      if (tagResult.ok) {
+        logger.info("Completed AI tag enrichment", {
+          organizationId: payload.organizationId,
+          ...tagResult.output,
+        });
+      } else {
+        logger.error("AI tag enrichment run failed", {
+          organizationId: payload.organizationId,
+          error: tagResult.error,
+        });
+      }
+    } catch (error) {
+      logger.error("AI tag enrichment could not be triggered", {
+        organizationId: payload.organizationId,
+        error: error instanceof Error ? error.message : String(error),
       });
     }
 

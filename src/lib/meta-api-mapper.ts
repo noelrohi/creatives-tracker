@@ -55,6 +55,25 @@ function findAction(actions: MetaAction[] | undefined, type: string): string | u
   return findActionEntry(actions, type)?.value;
 }
 
+/**
+ * Cost-per-action, preferring Meta's own number and falling back to
+ * spend / count when the payload omits it. Formatted to two decimals like the
+ * other derived numeric strings in this mapper (see `roas` below).
+ */
+function costPerAction(
+  reported: string | undefined,
+  spend: string | undefined,
+  count: string | undefined,
+): string | undefined {
+  if (reported) return reported;
+  if (!spend || !count) return undefined;
+  const countValue = Number(count);
+  const spendValue = Number(spend);
+  if (!Number.isFinite(countValue) || countValue <= 0) return undefined;
+  if (!Number.isFinite(spendValue)) return undefined;
+  return (spendValue / countValue).toFixed(2);
+}
+
 export function mapMetaInsightsToRows(
   data: MetaInsightRow[],
   level: "campaign" | "ad_set" | "ad",
@@ -79,6 +98,17 @@ export function mapMetaInsightsToRows(
       findAction(row.actions, "initiate_checkout");
     const cpa = findAction(row.cost_per_action_type, "omni_purchase") ??
       findAction(row.cost_per_action_type, "purchase");
+    const costPerLpv = costPerAction(
+      findAction(row.cost_per_action_type, "landing_page_view"),
+      spend,
+      landingPageViews,
+    );
+    const costPerAddToCart = costPerAction(
+      findAction(row.cost_per_action_type, "omni_add_to_cart") ??
+        findAction(row.cost_per_action_type, "add_to_cart"),
+      spend,
+      addToCart,
+    );
 
     // Compute ROAS if we have both values
     let roas: string | undefined;
@@ -116,6 +146,8 @@ export function mapMetaInsightsToRows(
       landingPageViews: landingPageViews
         ? Number(landingPageViews)
         : undefined,
+      costPerLpv,
+      costPerAddToCart,
       purchaseValue,
       purchaseValue7dClick,
       purchaseValue1dView,
