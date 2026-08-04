@@ -1595,6 +1595,221 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
     ]);
   });
 
+  it("preserves readiness, approved parsing, and a running event when bindings are unchanged", async () => {
+    await seedProbeParents(scope);
+    await testPool!.query(
+      `UPDATE klaviyo_connection SET status = 'ready' WHERE id = 'connection-a'`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_event_alias
+         (id, organization_id, shopify_store_id, connection_id, metric_id,
+          probe_report_id, canonical_field, source_property, state, observed_populated)
+       VALUES ('approved-unchanged', 'org-a', 'store-a', 'connection-a',
+        'metric-row-placed', 'probe-connection-a', 'orderId', 'OrderId',
+        'approved', 20)`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_join_rule
+         (id, organization_id, shopify_store_id, connection_id, probe_report_id,
+          event_kind, source_property, target_namespace, canonicalizer, state,
+          observed_populated, observed_collisions)
+       VALUES ('rule-unchanged', 'org-a', 'store-a', 'connection-a',
+        'probe-connection-a', 'placed_order', 'OrderId', 'shopify_order_gid',
+        'shopify_order_gid', 'approved', 20, 0)`,
+    );
+    await seedRun({ id: "event-unchanged" });
+    await seedRun({
+      id: "discovery-unchanged",
+      operation: "discovery",
+      checkpoint: null,
+      requestParameters: {},
+    });
+
+    await store.commitKlaviyoDiscovery({
+      scope,
+      syncRunId: "discovery-unchanged",
+      expectedAccountId: "account-a",
+      account: {
+        id: "account-a",
+        name: "Reviv",
+        timezone: "America/New_York",
+        currency: "USD",
+      },
+      metrics: discoveryMetrics(),
+    });
+
+    const state = await testPool!.query(
+      `SELECT
+         (SELECT status FROM klaviyo_connection WHERE id = 'connection-a') AS connection_status,
+         (SELECT state FROM klaviyo_event_alias WHERE id = 'approved-unchanged') AS alias_state,
+         (SELECT state FROM klaviyo_join_rule WHERE id = 'rule-unchanged') AS rule_state,
+         (SELECT status FROM klaviyo_sync_run WHERE id = 'event-unchanged') AS event_status`,
+    );
+    expect(state.rows[0]).toEqual({
+      connection_status: "ready",
+      alias_state: "approved",
+      rule_state: "approved",
+      event_status: "running",
+    });
+    const enabled = await testPool!.query(
+      `SELECT external_metric_id FROM klaviyo_metric
+        WHERE connection_id = 'connection-a' AND ingestion_enabled = 1
+        ORDER BY external_metric_id`,
+    );
+    expect(enabled.rows).toEqual([
+      { external_metric_id: "metric-external-placed" },
+      { external_metric_id: "metric-external-product" },
+    ]);
+  });
+
+  it("disables an allowlisted metric omitted from the latest discovery", async () => {
+    await testPool!.query(
+      `INSERT INTO klaviyo_metric
+         (id, organization_id, shopify_store_id, connection_id,
+          external_metric_id, name, canonical_kind, ingestion_enabled, api_revision)
+       VALUES ('metric-row-clicked', 'org-a', 'store-a', 'connection-a',
+        'metric-external-clicked', 'Clicked Email', 'clicked_email', 1, '2026-07-15')`,
+    );
+    await seedRun({
+      id: "discovery-omitted",
+      operation: "discovery",
+      checkpoint: null,
+      requestParameters: {},
+    });
+
+    await store.commitKlaviyoDiscovery({
+      scope,
+      syncRunId: "discovery-omitted",
+      expectedAccountId: "account-a",
+      account: { id: "account-a", name: null, timezone: null, currency: null },
+      metrics: discoveryMetrics(),
+    });
+
+    const clicked = await testPool!.query(
+      `SELECT ingestion_enabled FROM klaviyo_metric WHERE id = 'metric-row-clicked'`,
+    );
+    expect(clicked.rows[0].ingestion_enabled).toBe(0);
+    const connection = await testPool!.query(
+      `SELECT status FROM klaviyo_connection WHERE id = 'connection-a'`,
+    );
+    expect(connection.rows[0].status).toBe("pending");
+  });
+
+  it("reuses a live prepared run and refuses a different scoped request", async () => {
+    const now = new Date();
+    const first = await store.prepareKlaviyoOperationRun({
+      scope,
+      operation: "discovery",
+      triggerType: "manual",
+      requestParameters: {},
+      now,
+    });
+    expect(first.reused).toBe(false);
+    const second = await store.prepareKlaviyoOperationRun({
+      scope,
+      operation: "discovery",
+      triggerType: "manual",
+      requestParameters: {},
+      now: new Date(now.getTime() + 1000),
+    });
+    expect(second).toEqual({ syncRunId: first.syncRunId, reused: true });
+
+    await seedRun({
+      id: "probe-live",
+      operation: "probe",
+      checkpoint: null,
+      requestParameters: { sampleSize: 20 },
+    });
+    await expect(
+      store.prepareKlaviyoOperationRun({
+        scope,
+        operation: "probe",
+        triggerType: "manual",
+        requestParameters: { sampleSize: 30 },
+        now: new Date(),
+      }),
+    ).rejects.toThrow(/already running/i);
+    const probeRuns = await testPool!.query(
+      `SELECT count(*)::int AS count FROM klaviyo_sync_run
+        WHERE connection_id = 'connection-a' AND operation = 'probe'`,
+    );
+    expect(probeRuns.rows[0].count).toBe(1);
+  });
+
+  it("finalizes an expired prepared run with the fixed lease code before replacement", async () => {
+    const now = new Date();
+    await seedRun({
+      id: "discovery-expired",
+      operation: "discovery",
+      checkpoint: null,
+      requestParameters: {},
+      heartbeatAt: new Date(now.getTime() - 25 * 60 * 1000),
+    });
+    const replacement = await store.prepareKlaviyoOperationRun({
+      scope,
+      operation: "discovery",
+      triggerType: "manual",
+      requestParameters: {},
+      now,
+    });
+    expect(replacement.reused).toBe(false);
+    expect(replacement.syncRunId).not.toBe("discovery-expired");
+    const reaped = await testPool!.query(
+      `SELECT status, error_code, error_message FROM klaviyo_sync_run
+        WHERE id = 'discovery-expired'`,
+    );
+    expect(reaped.rows[0]).toEqual({
+      status: "failed",
+      error_code: "KLAVIYO_LEASE_EXPIRED",
+      error_message: "Klaviyo task lease expired before completion",
+    });
+  });
+
+  it("keeps committed account and metric data across lease recovery", async () => {
+    await seedRun({
+      id: "discovery-committed",
+      operation: "discovery",
+      checkpoint: null,
+      requestParameters: {},
+    });
+    await store.commitKlaviyoDiscovery({
+      scope,
+      syncRunId: "discovery-committed",
+      expectedAccountId: "account-a",
+      account: {
+        id: "account-a",
+        name: "Reviv",
+        timezone: "America/New_York",
+        currency: "USD",
+      },
+      metrics: discoveryMetrics(),
+    });
+
+    const now = new Date();
+    await seedRun({
+      id: "discovery-crashed",
+      operation: "discovery",
+      checkpoint: null,
+      requestParameters: {},
+      heartbeatAt: new Date(now.getTime() - 25 * 60 * 1000),
+    });
+    await store.prepareKlaviyoOperationRun({
+      scope,
+      operation: "discovery",
+      triggerType: "manual",
+      requestParameters: {},
+      now,
+    });
+
+    const preserved = await testPool!.query(
+      `SELECT
+         (SELECT account_name FROM klaviyo_connection WHERE id = 'connection-a') AS account_name,
+         (SELECT count(*)::int FROM klaviyo_metric
+           WHERE connection_id = 'connection-a' AND ingestion_enabled = 1) AS enabled_count`,
+    );
+    expect(preserved.rows[0]).toEqual({ account_name: "Reviv", enabled_count: 2 });
+  });
+
   it("never returns opaque provider cursors, request JSON, or raw errors", async () => {
     const hostile = "user@example.com-secret-provider-cursor-key-fragment";
     await seedRun({ id: "run-hostile" });

@@ -549,6 +549,96 @@ export async function failExpiredKlaviyoSyncRun(
   });
 }
 
+/**
+ * Prepare exactly one running run for a preparation-owned operation:
+ * fixed-code finalize an expired lease, reuse a live identical request, or
+ * insert a fresh running row. The operation's partial unique index is the
+ * race backstop when application locking regresses.
+ */
+export async function prepareKlaviyoOperationRun(
+  input: {
+    scope: KlaviyoConnectionScope;
+    operation: "discovery" | "probe";
+    triggerType: string;
+    requestParameters?: Record<string, JsonValue>;
+    now: Date;
+  },
+  executor: TransactionExecutor = db,
+): Promise<{ syncRunId: string; reused: boolean }> {
+  const now = new Date(input.now.getTime());
+  if (Number.isNaN(now.getTime())) throw new Error("Invalid preparation time");
+  const requestParameters = input.requestParameters ?? {};
+  const staleAt = new Date(now.getTime() - KLAVIYO_RUN_STALE_AFTER_MS);
+  return runInTransaction(executor, async (tx) => {
+    await lockConnection(tx, input.scope);
+    const [running] = await tx
+      .select({
+        id: klaviyoSyncRuns.id,
+        heartbeatAt: klaviyoSyncRuns.heartbeatAt,
+        requestParameters: klaviyoSyncRuns.requestParameters,
+      })
+      .from(klaviyoSyncRuns)
+      .where(
+        and(
+          eq(klaviyoSyncRuns.organizationId, input.scope.organizationId),
+          eq(klaviyoSyncRuns.storeId, input.scope.storeId),
+          eq(klaviyoSyncRuns.connectionId, input.scope.connectionId),
+          eq(klaviyoSyncRuns.operation, input.operation),
+          eq(klaviyoSyncRuns.status, "running"),
+        ),
+      )
+      .for("update");
+    if (running) {
+      if (running.heartbeatAt.getTime() > staleAt.getTime()) {
+        if (
+          JSON.stringify(running.requestParameters) !==
+          JSON.stringify(requestParameters)
+        ) {
+          throw new Error(
+            "A different Klaviyo run is already running for this scoped operation",
+          );
+        }
+        return { syncRunId: running.id, reused: true };
+      }
+      const reaped = await tx
+        .update(klaviyoSyncRuns)
+        .set({
+          status: "failed",
+          errorCode: SAFE_LEASE_ERROR.code,
+          errorMessage: SAFE_LEASE_ERROR.message,
+          failureCount: sql`${klaviyoSyncRuns.failureCount} + 1`,
+          finishedAt: now,
+        })
+        .where(
+          and(
+            eq(klaviyoSyncRuns.id, running.id),
+            eq(klaviyoSyncRuns.status, "running"),
+            lte(klaviyoSyncRuns.heartbeatAt, staleAt),
+          ),
+        )
+        .returning({ id: klaviyoSyncRuns.id });
+      if (reaped.length !== 1) {
+        throw new Error("Klaviyo expired run reap raced; retry preparation");
+      }
+    }
+    const [run] = await tx
+      .insert(klaviyoSyncRuns)
+      .values({
+        organizationId: input.scope.organizationId,
+        storeId: input.scope.storeId,
+        connectionId: input.scope.connectionId,
+        operation: input.operation,
+        triggerType: input.triggerType,
+        requestParameters,
+        status: "running",
+        heartbeatAt: now,
+        startedAt: now,
+      })
+      .returning({ id: klaviyoSyncRuns.id });
+    return { syncRunId: run.id, reused: false };
+  });
+}
+
 export async function commitKlaviyoDiscovery(input: {
   scope: KlaviyoConnectionScope;
   syncRunId: string;
