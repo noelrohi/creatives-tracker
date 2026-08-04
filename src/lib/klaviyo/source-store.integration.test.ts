@@ -120,6 +120,7 @@ vi.mock("@/db", () => ({
 }));
 
 const store = await import("@/lib/klaviyo/source-store");
+const joinRules = await import("@/lib/klaviyo/join-rules");
 const describeIfDb = baseConnectionString ? describe : describe.skip;
 
 const scope = {
@@ -1763,6 +1764,249 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
       error_code: "KLAVIYO_LEASE_EXPIRED",
       error_message: "Klaviyo task lease expired before completion",
     });
+  });
+
+  it("lets exactly one of two concurrent probe passes win on a pending connection", async () => {
+    for (const suffix of ["one", "two"]) {
+      await seedRun({
+        id: `probe-run-${suffix}`,
+        operation: "probe",
+        status: "success",
+        checkpoint: null,
+        requestParameters: { sampleSize: 20 },
+      });
+      await testPool!.query(
+        `INSERT INTO klaviyo_probe_report
+           (id, organization_id, shopify_store_id, connection_id, sync_run_id,
+            sampled_from, sampled_to, sampled_shopify_orders, sampled_klaviyo_events,
+            binding_overlap_count, key_type_shapes, identifier_coverage,
+            collision_summary, unmatched_summary, unmatched_examples,
+            product_coverage, attribution_coverage, redaction_verified, status, checksum)
+         VALUES ($1, 'org-a', 'store-a', 'connection-a', $2,
+           now() - interval '1 day', now(), 20, 20, 3, '[]', '{}', '{}', '{}',
+           '[]', '{}', '{}', 1, 'pending', $3)`,
+        [`report-${suffix}`, `probe-run-${suffix}`, `checksum-${suffix}`],
+      );
+      await testPool!.query(
+        `INSERT INTO klaviyo_event_alias
+           (id, organization_id, shopify_store_id, connection_id, metric_id,
+            probe_report_id, canonical_field, source_property, state, observed_populated)
+         VALUES ($1, 'org-a', 'store-a', 'connection-a', 'metric-row-placed',
+           $2, 'orderId', 'OrderId', 'candidate', 20)`,
+        [`candidate-${suffix}`, `report-${suffix}`],
+      );
+    }
+
+    const outcomes = await Promise.allSettled([
+      joinRules.reviewProbeReport({
+        scope,
+        reportId: "report-one",
+        reviewerId: "reviewer-1",
+        decision: "passed",
+        reviewNote: "first pass",
+      }),
+      joinRules.reviewProbeReport({
+        scope,
+        reportId: "report-two",
+        reviewerId: "reviewer-2",
+        decision: "passed",
+        reviewNote: "second pass",
+      }),
+    ]);
+    const fulfilled = outcomes.filter((entry) => entry.status === "fulfilled");
+    const rejected = outcomes.filter(
+      (entry): entry is PromiseRejectedResult => entry.status === "rejected",
+    );
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(String(rejected[0].reason)).toContain("no longer pending");
+
+    const connection = await testPool!.query(
+      `SELECT status FROM klaviyo_connection WHERE id = 'connection-a'`,
+    );
+    expect(connection.rows[0].status).toBe("ready");
+    const approved = await testPool!.query(
+      `SELECT count(*)::int AS count FROM klaviyo_event_alias
+        WHERE connection_id = 'connection-a' AND metric_id = 'metric-row-placed'
+          AND canonical_field = 'orderId' AND state = 'approved'`,
+    );
+    expect(approved.rows[0].count).toBe(1);
+
+    await expect(
+      testPool!.query(
+        `INSERT INTO klaviyo_event_alias
+           (id, organization_id, shopify_store_id, connection_id, metric_id,
+            probe_report_id, canonical_field, source_property, state, observed_populated)
+         VALUES ('direct-approved', 'org-a', 'store-a', 'connection-a',
+           'metric-row-placed', 'report-two', 'orderId', 'OrderIdCopy',
+           'approved', 20)`,
+      ),
+    ).rejects.toThrow(/klaviyo_event_alias_approved_metric_field_uniq/);
+  });
+
+  it("recovers a rebound connection through a fresh probe and rule approval", async () => {
+    await seedProbeParents(scope);
+    await testPool!.query(
+      `UPDATE klaviyo_connection SET status = 'ready' WHERE id = 'connection-a'`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_event_alias
+         (id, organization_id, shopify_store_id, connection_id, metric_id,
+          probe_report_id, canonical_field, source_property, state, observed_populated)
+       VALUES ('old-approved-alias', 'org-a', 'store-a', 'connection-a',
+        'metric-row-placed', 'probe-connection-a', 'orderId', 'OrderId',
+        'approved', 20)`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_join_rule
+         (id, organization_id, shopify_store_id, connection_id, probe_report_id,
+          event_kind, source_property, target_namespace, canonicalizer, state,
+          observed_populated, observed_collisions)
+       VALUES ('old-approved-rule', 'org-a', 'store-a', 'connection-a',
+        'probe-connection-a', 'placed_order', 'OrderId', 'shopify_order_gid',
+        'shopify_order_gid', 'approved', 20, 0)`,
+    );
+    await seedRun({
+      id: "discovery-recover",
+      operation: "discovery",
+      checkpoint: null,
+      requestParameters: {},
+    });
+    await store.commitKlaviyoDiscovery({
+      scope,
+      syncRunId: "discovery-recover",
+      expectedAccountId: "account-a",
+      account: {
+        id: "account-a",
+        name: "Reviv",
+        timezone: "America/New_York",
+        currency: "USD",
+      },
+      metrics: discoveryMetrics({
+        placedId: "metric-external-placed-v2",
+        productId: "metric-external-product-v2",
+      }),
+    });
+    const [newPlaced] = (
+      await testPool!.query(
+        `SELECT id FROM klaviyo_metric
+          WHERE connection_id = 'connection-a'
+            AND external_metric_id = 'metric-external-placed-v2'`,
+      )
+    ).rows;
+
+    await testPool!.query(
+      `UPDATE klaviyo_sync_run SET status = 'success', finished_at = now()
+        WHERE id = 'probe-run-connection-a'`,
+    );
+    await seedRun({
+      id: "probe-fresh",
+      operation: "probe",
+      checkpoint: null,
+      requestParameters: { sampleSize: 20 },
+    });
+    const { reportId } = await store.commitKlaviyoProbeReport({
+      scope,
+      syncRunId: "probe-fresh",
+      sampledFrom: new Date("2026-07-01T00:00:00.000Z"),
+      sampledTo: new Date("2026-07-30T00:00:00.000Z"),
+      sampledShopifyOrders: 20,
+      sampledKlaviyoEvents: 24,
+      persistence: {
+        bindingOverlapCount: 18,
+        keyTypeShapes: [],
+        identifierCoverage: { OrderId: 20 },
+        collisionSummary: {},
+        unmatchedSummary: {},
+        unmatchedExamples: [],
+        productCoverage: { comparable: 12 },
+        attributionCoverage: { campaign: 6 },
+        redactionVerified: true,
+      },
+      checksum: "fresh-checksum",
+      candidateAliases: [
+        {
+          metricRowId: newPlaced.id,
+          canonicalField: "orderId",
+          sourceProperty: "OrderId",
+          observedPopulated: 20,
+          observedMalformed: 0,
+        },
+      ],
+      candidateRules: [
+        {
+          eventKind: "placed_order",
+          sourceProperty: "OrderId",
+          targetNamespace: "shopify_order_gid",
+          canonicalizer: "shopify_order_gid",
+          observedPopulated: 20,
+          observedCollisions: 0,
+        },
+      ],
+      rowsRead: 24,
+    });
+
+    await joinRules.reviewProbeReport({
+      scope,
+      reportId,
+      reviewerId: "reviewer-1",
+      decision: "passed",
+      reviewNote: "fresh probe after rebinding",
+    });
+    const [freshRule] = (
+      await testPool!.query(
+        `SELECT id FROM klaviyo_join_rule WHERE probe_report_id = $1`,
+        [reportId],
+      )
+    ).rows;
+    await joinRules.reviewJoinRule({
+      scope,
+      ruleId: freshRule.id,
+      reviewerId: "reviewer-1",
+      decision: "approved",
+      reviewNote: "zero collisions in fresh probe",
+    });
+
+    const oldStates = await testPool!.query(
+      `SELECT
+         (SELECT state FROM klaviyo_event_alias WHERE id = 'old-approved-alias') AS alias_state,
+         (SELECT state FROM klaviyo_join_rule WHERE id = 'old-approved-rule') AS rule_state,
+         (SELECT status FROM klaviyo_connection WHERE id = 'connection-a') AS connection_status`,
+    );
+    expect(oldStates.rows[0]).toEqual({
+      alias_state: "disabled",
+      rule_state: "disabled",
+      connection_status: "ready",
+    });
+    const approvedRules = await testPool!.query(
+      `SELECT probe_report_id, matcher_version FROM klaviyo_join_rule
+        WHERE connection_id = 'connection-a' AND event_kind = 'placed_order'
+          AND source_property = 'OrderId'
+          AND target_namespace = 'shopify_order_gid' AND state = 'approved'`,
+    );
+    expect(approvedRules.rows).toEqual([
+      { probe_report_id: reportId, matcher_version: "klaviyo-v1" },
+    ]);
+
+    const runtime = await store.loadEnabledOrderCoreMetrics(scope);
+    expect(runtime.map((metric) => metric.externalMetricId)).toEqual([
+      "metric-external-placed-v2",
+      "metric-external-product-v2",
+    ]);
+    expect(runtime[0].approvedAliases.orderId).toBe("OrderId");
+
+    await expect(
+      testPool!.query(
+        `INSERT INTO klaviyo_join_rule
+           (id, organization_id, shopify_store_id, connection_id, probe_report_id,
+            event_kind, source_property, target_namespace, canonicalizer, state,
+            observed_populated, observed_collisions)
+         VALUES ('second-approved-rule', 'org-a', 'store-a', 'connection-a', $1,
+          'placed_order', 'OrderId', 'shopify_order_gid', 'shopify_order_gid',
+          'approved', 20, 0)`,
+        [reportId],
+      ),
+    ).rejects.toThrow(/klaviyo_join_rule_approved_source_uidx/);
   });
 
   it("keeps committed account and metric data across lease recovery", async () => {

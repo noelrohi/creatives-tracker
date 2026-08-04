@@ -5,6 +5,7 @@ import {
   asc,
   desc,
   eq,
+  exists,
   inArray,
   lt,
   lte,
@@ -36,7 +37,11 @@ import {
   klaviyoProbeReports,
   klaviyoSyncRuns,
 } from "@/schema/klaviyo";
-import { shopifyStores } from "@/schema/shopify";
+import { shopifyOrders, shopifyStores } from "@/schema/shopify";
+import {
+  shopifyOrderLines,
+  sourceIdentityHmacs,
+} from "@/schema/shopify-evidence";
 import type {
   EnabledOrderCoreMetric,
   HalfOpenWindow,
@@ -1251,6 +1256,269 @@ export async function failKlaviyoSyncRunAfterRetryExhaustion(input: {
       throw new Error("Klaviyo retry-exhaustion finalization raced");
     }
     return { changed: true };
+  });
+}
+
+export type SampledEvidenceOrder = {
+  orderId: string;
+  shopifyOrderId: string;
+  orderCreatedAt: Date;
+  identityDigests: string[];
+};
+
+/**
+ * Newest orders whose Plan 1 evidence run committed a complete line set.
+ * Line rows only exist after a complete replacement, so their presence is
+ * the completeness signal.
+ */
+export async function listNewestEvidenceCompleteOrders(
+  scope: KlaviyoConnectionScope,
+  limit: number,
+): Promise<SampledEvidenceOrder[]> {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+    throw new Error("Probe sample size must be between 20 and 50");
+  }
+  const orders = await db
+    .select({
+      orderId: shopifyOrders.id,
+      shopifyOrderId: shopifyOrders.shopifyOrderId,
+      orderCreatedAt: shopifyOrders.orderCreatedAt,
+    })
+    .from(shopifyOrders)
+    .where(
+      and(
+        eq(shopifyOrders.organizationId, scope.organizationId),
+        eq(shopifyOrders.storeId, scope.storeId),
+        exists(
+          db
+            .select({ one: sql`1` })
+            .from(shopifyOrderLines)
+            .where(
+              and(
+                eq(shopifyOrderLines.organizationId, scope.organizationId),
+                eq(shopifyOrderLines.storeId, scope.storeId),
+                eq(shopifyOrderLines.orderId, shopifyOrders.id),
+              ),
+            ),
+        ),
+      ),
+    )
+    .orderBy(desc(shopifyOrders.orderCreatedAt), desc(shopifyOrders.id))
+    .limit(limit);
+  if (orders.length === 0) return [];
+
+  const digests = await db
+    .select({
+      orderId: sourceIdentityHmacs.shopifyOrderId,
+      digest: sourceIdentityHmacs.digest,
+    })
+    .from(sourceIdentityHmacs)
+    .where(
+      and(
+        eq(sourceIdentityHmacs.organizationId, scope.organizationId),
+        eq(sourceIdentityHmacs.storeId, scope.storeId),
+        inArray(
+          sourceIdentityHmacs.shopifyOrderId,
+          orders.map((order) => order.orderId),
+        ),
+      ),
+    );
+  const digestsByOrder = new Map<string, string[]>();
+  for (const row of digests) {
+    const bucket = digestsByOrder.get(row.orderId) ?? [];
+    bucket.push(row.digest);
+    digestsByOrder.set(row.orderId, bucket);
+  }
+  return orders.map((order) => ({
+    ...order,
+    identityDigests: digestsByOrder.get(order.orderId) ?? [],
+  }));
+}
+
+export async function loadRunningProbeSampleSize(
+  scope: KlaviyoConnectionScope,
+  syncRunId: string,
+): Promise<{ sampleSize: number }> {
+  const [run] = await db
+    .select({ requestParameters: klaviyoSyncRuns.requestParameters })
+    .from(klaviyoSyncRuns)
+    .where(
+      and(
+        eq(klaviyoSyncRuns.id, syncRunId),
+        eq(klaviyoSyncRuns.organizationId, scope.organizationId),
+        eq(klaviyoSyncRuns.storeId, scope.storeId),
+        eq(klaviyoSyncRuns.connectionId, scope.connectionId),
+        eq(klaviyoSyncRuns.operation, "probe"),
+        eq(klaviyoSyncRuns.status, "running"),
+      ),
+    )
+    .limit(1);
+  if (!run) throw new Error("Klaviyo probe run is not active in this scope");
+  const parameters = run.requestParameters as Record<string, unknown>;
+  const sampleSize = parameters.sampleSize;
+  if (
+    Object.keys(parameters).length !== 1 ||
+    typeof sampleSize !== "number" ||
+    !Number.isInteger(sampleSize) ||
+    sampleSize < 20 ||
+    sampleSize > 50
+  ) {
+    throw new Error("Klaviyo probe request parameters are invalid");
+  }
+  return { sampleSize };
+}
+
+export type CandidateAliasInput = {
+  metricRowId: string;
+  canonicalField: KlaviyoEventAliasField;
+  sourceProperty: string;
+  observedPopulated: number;
+  observedMalformed: number;
+};
+
+export type CandidateRuleInput = {
+  eventKind: (typeof KLAVIYO_ORDER_CORE_KINDS)[number];
+  sourceProperty: string;
+  targetNamespace: string;
+  canonicalizer: "shopify_order_gid" | "trimmed_exact";
+  observedPopulated: number;
+  observedCollisions: number;
+};
+
+/**
+ * Persist one immutable pending probe report with its report-scoped
+ * candidate aliases/rules and finish the probe run in the same transaction.
+ * A failed probe never reaches this commit, so prior reports survive.
+ */
+export async function commitKlaviyoProbeReport(input: {
+  scope: KlaviyoConnectionScope;
+  syncRunId: string;
+  sampledFrom: Date;
+  sampledTo: Date;
+  sampledShopifyOrders: number;
+  sampledKlaviyoEvents: number;
+  persistence: ProbePersistence;
+  checksum: string;
+  candidateAliases: CandidateAliasInput[];
+  candidateRules: CandidateRuleInput[];
+  rowsRead: number;
+}): Promise<{ reportId: string }> {
+  if (
+    !Number.isInteger(input.sampledShopifyOrders) ||
+    input.sampledShopifyOrders < 20 ||
+    input.sampledShopifyOrders > 50
+  ) {
+    throw new Error("Probe sample size must be between 20 and 50");
+  }
+  if (
+    input.candidateAliases.some(
+      (alias) =>
+        alias.observedPopulated <= 0 || alias.observedMalformed < 0,
+    )
+  ) {
+    throw new Error("Probe candidate aliases must carry populated counts");
+  }
+
+  return withKlaviyoConnectionLock(input.scope, async (tx) => {
+    const [run] = await tx
+      .select({ id: klaviyoSyncRuns.id })
+      .from(klaviyoSyncRuns)
+      .where(
+        and(
+          eq(klaviyoSyncRuns.id, input.syncRunId),
+          eq(klaviyoSyncRuns.organizationId, input.scope.organizationId),
+          eq(klaviyoSyncRuns.storeId, input.scope.storeId),
+          eq(klaviyoSyncRuns.connectionId, input.scope.connectionId),
+          eq(klaviyoSyncRuns.operation, "probe"),
+          eq(klaviyoSyncRuns.status, "running"),
+        ),
+      )
+      .for("update");
+    if (!run) throw new Error("Klaviyo probe run is not active in this scope");
+
+    const committedAt = new Date();
+    const [report] = await tx
+      .insert(klaviyoProbeReports)
+      .values({
+        organizationId: input.scope.organizationId,
+        storeId: input.scope.storeId,
+        connectionId: input.scope.connectionId,
+        syncRunId: input.syncRunId,
+        sampledFrom: input.sampledFrom,
+        sampledTo: input.sampledTo,
+        sampledShopifyOrders: input.sampledShopifyOrders,
+        sampledKlaviyoEvents: input.sampledKlaviyoEvents,
+        bindingOverlapCount: input.persistence.bindingOverlapCount,
+        keyTypeShapes: input.persistence.keyTypeShapes,
+        identifierCoverage: input.persistence.identifierCoverage,
+        collisionSummary: input.persistence.collisionSummary,
+        unmatchedSummary: input.persistence.unmatchedSummary,
+        unmatchedExamples: input.persistence.unmatchedExamples,
+        productCoverage: input.persistence.productCoverage,
+        attributionCoverage: input.persistence.attributionCoverage,
+        redactionVerified: input.persistence.redactionVerified ? 1 : 0,
+        status: "pending",
+        checksum: input.checksum,
+      })
+      .returning({ id: klaviyoProbeReports.id });
+
+    if (input.candidateAliases.length > 0) {
+      await tx.insert(klaviyoEventAliases).values(
+        input.candidateAliases.map((alias) => ({
+          organizationId: input.scope.organizationId,
+          storeId: input.scope.storeId,
+          connectionId: input.scope.connectionId,
+          metricId: alias.metricRowId,
+          probeReportId: report.id,
+          canonicalField: alias.canonicalField,
+          sourceProperty: alias.sourceProperty,
+          state: "candidate",
+          observedPopulated: alias.observedPopulated,
+          observedMalformed: alias.observedMalformed,
+        })),
+      );
+    }
+    if (input.candidateRules.length > 0) {
+      await tx.insert(klaviyoJoinRules).values(
+        input.candidateRules.map((rule) => ({
+          organizationId: input.scope.organizationId,
+          storeId: input.scope.storeId,
+          connectionId: input.scope.connectionId,
+          probeReportId: report.id,
+          eventKind: rule.eventKind,
+          sourceProperty: rule.sourceProperty,
+          targetNamespace: rule.targetNamespace,
+          canonicalizer: rule.canonicalizer,
+          state: "candidate",
+          observedPopulated: rule.observedPopulated,
+          observedCollisions: rule.observedCollisions,
+        })),
+      );
+    }
+
+    const finished = await tx
+      .update(klaviyoSyncRuns)
+      .set({
+        status: "success",
+        rowsRead: sql`${klaviyoSyncRuns.rowsRead} + ${input.rowsRead}`,
+        heartbeatAt: sql`greatest(
+          ${klaviyoSyncRuns.heartbeatAt},
+          ${sql.param(committedAt, klaviyoSyncRuns.heartbeatAt)}
+        )`,
+        finishedAt: committedAt,
+      })
+      .where(
+        and(
+          eq(klaviyoSyncRuns.id, input.syncRunId),
+          eq(klaviyoSyncRuns.operation, "probe"),
+          eq(klaviyoSyncRuns.status, "running"),
+        ),
+      )
+      .returning({ id: klaviyoSyncRuns.id });
+    if (finished.length !== 1) {
+      throw new Error("Klaviyo probe run is not active in this scope");
+    }
+    return { reportId: report.id };
   });
 }
 
