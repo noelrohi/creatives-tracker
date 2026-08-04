@@ -55,6 +55,17 @@ if (!confirmed) {
   process.exit(1);
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const THROTTLE_PATTERN = /too many attempts|throttled|exceeded.*rate limit/i;
+
+class ThrottledError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ThrottledError";
+  }
+}
+
 async function graphql(query, variables) {
   const response = await fetch(
     `https://${shopDomain}/admin/api/${API_VERSION}/graphql.json`,
@@ -67,17 +78,55 @@ async function graphql(query, variables) {
       body: JSON.stringify({ query, variables }),
     },
   );
+  if (response.status === 429) {
+    throw new ThrottledError("HTTP 429");
+  }
   if (!response.ok) {
     throw new Error(`Shopify GraphQL HTTP ${response.status}`);
   }
   const body = await response.json();
   if (body.errors?.length) {
-    throw new Error(`Shopify GraphQL errors: ${JSON.stringify(body.errors)}`);
+    const message = JSON.stringify(body.errors);
+    if (
+      THROTTLE_PATTERN.test(message) ||
+      body.errors.some((error) => error.extensions?.code === "THROTTLED")
+    ) {
+      throw new ThrottledError(message);
+    }
+    throw new Error(`Shopify GraphQL errors: ${message}`);
   }
   return body.data;
 }
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+function assertNoUserErrors(label, userErrors) {
+  if (!userErrors.length) return;
+  const message = JSON.stringify(userErrors);
+  if (THROTTLE_PATTERN.test(message)) throw new ThrottledError(message);
+  throw new Error(`${label}: ${message}`);
+}
+
+// Sequential + exponential backoff with jitter; only throttle errors retry.
+async function withBackoff(label, work) {
+  const maxAttempts = 8;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await work();
+    } catch (error) {
+      if (!(error instanceof ThrottledError) || attempt === maxAttempts - 1) {
+        throw error;
+      }
+      const delay = Math.min(
+        2000 * 2 ** attempt + Math.floor(Math.random() * 1000),
+        60_000,
+      );
+      console.log(
+        `  throttled on ${label}; waiting ${Math.round(delay / 1000)}s ` +
+          `(attempt ${attempt + 1}/${maxAttempts})`,
+      );
+      await sleep(delay);
+    }
+  }
+}
 
 async function createProduct(title, price, sku) {
   const created = await graphql(
@@ -92,8 +141,7 @@ async function createProduct(title, price, sku) {
      }`,
     { product: { title } },
   );
-  const errors = created.productCreate.userErrors;
-  if (errors.length) throw new Error(`productCreate: ${JSON.stringify(errors)}`);
+  assertNoUserErrors("productCreate", created.productCreate.userErrors);
   const product = created.productCreate.product;
   const variantId = product.variants.nodes[0].id;
 
@@ -108,10 +156,7 @@ async function createProduct(title, price, sku) {
       variants: [{ id: variantId, price, inventoryItem: { sku } }],
     },
   );
-  const priceErrors = priced.productVariantsBulkUpdate.userErrors;
-  if (priceErrors.length) {
-    throw new Error(`variant price: ${JSON.stringify(priceErrors)}`);
-  }
+  assertNoUserErrors("variant price", priced.productVariantsBulkUpdate.userErrors);
   return { title, variantId };
 }
 
@@ -139,13 +184,23 @@ async function createOrder(index, variants) {
         financialStatus: "PAID",
         processedAt,
         test: true,
+        tags: ["seed-script"],
         lineItems,
       },
     },
   );
-  const errors = result.orderCreate.userErrors;
-  if (errors.length) throw new Error(`orderCreate: ${JSON.stringify(errors)}`);
+  assertNoUserErrors("orderCreate", result.orderCreate.userErrors);
   return result.orderCreate.order.name;
+}
+
+async function countExistingSeedOrders() {
+  const data = await graphql(
+    `query SeedCount($query: String!) {
+       ordersCount(query: $query) { count }
+     }`,
+    { query: "tag:seed-script" },
+  );
+  return data.ordersCount?.count ?? 0;
 }
 
 const productSpecs = [
@@ -157,18 +212,30 @@ const productSpecs = [
 console.log(`Seeding ${shopDomain}: 3 products + ${orderCount} paid orders`);
 const variants = [];
 for (const [title, price, sku] of productSpecs) {
-  variants.push(await createProduct(title, price, sku));
+  variants.push(
+    await withBackoff(`product ${title}`, () => createProduct(title, price, sku)),
+  );
   console.log(`  product: ${title}`);
-  await sleep(300);
+  await sleep(1000);
 }
 
-let created = 0;
-for (let index = 0; index < orderCount; index += 1) {
-  const name = await createOrder(index, variants);
+// Resume from previous runs: seed orders carry the seed-script tag.
+const existing = await withBackoff("order count", countExistingSeedOrders);
+if (existing >= orderCount) {
+  console.log(`Already have ${existing} seed orders; nothing to do.`);
+  process.exit(0);
+}
+if (existing > 0) console.log(`  resuming: ${existing} seed orders already exist`);
+
+let created = existing;
+for (let index = existing; index < orderCount; index += 1) {
+  const name = await withBackoff(`order ${index + 1}`, () =>
+    createOrder(index, variants),
+  );
   created += 1;
-  if (created % 10 === 0 || created === orderCount) {
+  if (created % 5 === 0 || created === orderCount) {
     console.log(`  orders: ${created}/${orderCount} (latest ${name})`);
   }
-  await sleep(600);
+  await sleep(2000);
 }
 console.log("Done. Next: run shopify-backfill, then shopify-evidence-start.");
