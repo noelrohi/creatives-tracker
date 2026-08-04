@@ -183,7 +183,8 @@ async function createOrder(index, variants) {
         email: `seed-buyer-${index + 1}@example.com`,
         financialStatus: "PAID",
         processedAt,
-        test: true,
+        // Not test:true — the ingest pipeline deliberately skips test orders
+        // (isTestOrder in shopify-ingest.ts), so seeds must be real orders.
         tags: ["seed-script"],
         lineItems,
       },
@@ -198,7 +199,9 @@ async function countExistingSeedOrders() {
     `query SeedCount($query: String!) {
        ordersCount(query: $query) { count }
      }`,
-    { query: "tag:seed-script" },
+    // Earlier script versions created test:true seeds the pipeline ignores;
+    // count only real seed orders so re-runs top up correctly.
+    { query: "tag:seed-script AND -test:true" },
   );
   return data.ordersCount?.count ?? 0;
 }
