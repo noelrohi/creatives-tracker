@@ -9,3 +9,10 @@ export const ATTRIBUTION_TASK_RETRY = {
   minTimeoutInMs: 5000,
   maxTimeoutInMs: 60000,
 };
+
+export const KLAVIYO_TASK_RETRY = {
+  maxAttempts: 3,
+  factor: 2,
+  minTimeoutInMs: 5000,
+  maxTimeoutInMs: 60000,
+};

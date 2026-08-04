@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { KlaviyoCompoundPage } from "@/lib/klaviyo/client";
 import type { ConnectionRecord } from "@/lib/klaviyo/source-store";
@@ -651,5 +653,63 @@ describe("startOrResumeOrderCoreSync", () => {
       ),
     ).rejects.toThrow("IDENTITY_HMAC_SECRET is required");
     expect(withConnectionLock).not.toHaveBeenCalled();
+  });
+});
+
+describe("klaviyo source task boundary", () => {
+  const source = readFileSync(
+    path.resolve(process.cwd(), "trigger", "klaviyo-source-sync.ts"),
+    "utf8",
+  );
+
+  it("exports discovery, probe, and order-core batch tasks with bounded duration", () => {
+    for (const exported of [
+      "export const klaviyoDiscoveryTask",
+      "export const klaviyoProbeTask",
+      "export const klaviyoOrderCoreBatchTask",
+    ]) {
+      expect(source).toContain(exported);
+    }
+    expect(source.match(/maxDuration: 600/g)).toHaveLength(3);
+    expect(source.match(/retry: KLAVIYO_TASK_RETRY/g)).toHaveLength(3);
+    expect(source.match(/onFailure: async \(\{ payload \}\)/g)).toHaveLength(3);
+  });
+
+  it("routes every terminal hook through the fixed retry-exhaustion finalizer", () => {
+    expect(source).toContain(
+      'await finalizeExhaustedSourceRun(payload, "discovery");',
+    );
+    expect(source).toContain(
+      'await finalizeExhaustedSourceRun(payload, "probe");',
+    );
+    expect(source).toContain(
+      'await finalizeExhaustedSourceRun(payload, "events");',
+    );
+    expect(source).toContain("failKlaviyoSyncRunAfterRetryExhaustion({");
+    // The fixed finalizer code is the only stored failure detail; the
+    // Trigger/provider error object never reaches persistence.
+    expect(source).not.toMatch(/failKlaviyoSyncRunAfterRetryExhaustion\([\s\S]{0,200}error/);
+    expect(source).not.toMatch(/onFailure:[^}]*error\.message/);
+  });
+
+  it("accepts exactly one internal sync run ID per payload", () => {
+    expect(source).toContain("type SourceBatchPayload = { syncRunId: string }");
+    expect(source).toContain("Object.keys(input).length !== 1");
+    expect(source.match(/assertExactSourceBatchPayload\(payload\);/g)).toHaveLength(3);
+    // Payloads never carry authoritative scope; it is re-resolved from rows.
+    expect(source).not.toContain("payload.organizationId");
+    expect(source).not.toContain("payload.storeId");
+    expect(source.match(/resolveTaskSyncRun\(payload\.syncRunId\)/g)?.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("hashes the persisted checkpoint into a global seven-day continuation key", () => {
+    expect(source).toContain(
+      "`klaviyo-order-core:${payload.syncRunId}:${checkpointFingerprint(result.checkpoint)}`",
+    );
+    expect(source).toContain('{ scope: "global" }');
+    expect(source).toContain('idempotencyKeyTTL: "7d"');
+    expect(source).toContain('createHash("sha256")');
+    // Provider cursors never enter task keys directly.
+    expect(source).not.toMatch(/idempotencyKeys\.create\([^)]*cursor/);
   });
 });
