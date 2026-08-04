@@ -9,15 +9,28 @@ export const REDACTED_PROPERTY_MAX_KEYS = 64;
 export const REDACTED_PROPERTY_MAX_DEPTH = 3;
 export const REDACTED_PROPERTY_MAX_BYTES = 16 * 1024;
 export const FINGERPRINT_MAX_KEYS = 128;
+export const REDACTED_PROPERTY_MAX_RAW_KEYS = 256;
+export const KLAVIYO_RAW_STRING_MAX_UTF16_UNITS = 20_000;
+export const KLAVIYO_RAW_STRING_MAX_UTF8_BYTES = 16_000;
+export const KLAVIYO_RAW_STRING_MAX_CODE_POINTS = 10_000;
+export const KLAVIYO_ALIAS_KEY_MAX_UTF8_BYTES = 512;
 
-const MAX_PROPERTY_KEY_BYTES = 512;
+const MAX_PROPERTY_KEY_BYTES = KLAVIYO_ALIAS_KEY_MAX_UTF8_BYTES;
 const MAX_TEXT_CODE_POINTS = 512;
-const EMAIL_REPLACE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
-const EMAIL_DETECT = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
-const PHONE_REPLACE = /(?:\+?\d[\d\s().-]{7,}\d)/g;
-const PHONE_DETECT = /(?:\+?\d[\d\s().-]{7,}\d)/;
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/;
 const OPAQUE_SEGMENT = /^[A-Za-z0-9_-]{32,}$/;
+const INTERNATIONAL_EMAIL =
+  /[\p{L}\p{N}._%+-]+@(?:[\p{L}\p{N}-]+\.)+[\p{L}\p{N}-]{2,}/giu;
+const PHONE_CANDIDATE = /(?:\+|00)?\d[\d\s().-]{6,}\d/gu;
+const BARE_PHONE_STRING = /^\s*\d{10,15}\s*$/u;
+const JWT_CREDENTIAL =
+  /[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/;
+const BEARER_CREDENTIAL = /\bbearer\s+[A-Za-z0-9._~+/=-]{8,}/i;
+const BASIC_CREDENTIAL = /\bbasic\s+([A-Za-z0-9+/]{8,}={0,2})(?=\s|$)/gi;
+const NAMED_CREDENTIAL =
+  /\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|client[_-]?secret)\s*[:=]\s*\S+/i;
+const PREFIXED_CREDENTIAL =
+  /\b(?:(?:sk|pk|rk)_(?:(?:live|test|prod)_)?[A-Za-z0-9_-]{12,}|shp(?:at|ca|pa|ss|ua)_[A-Za-z0-9_-]{12,}|AKIA[A-Z0-9]{16}|gh[pousr]_[A-Za-z0-9]{12,})\b/i;
 const EXACT_HOSTNAME_PATTERN =
   /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
 const IDENTITY_PATH_LABELS = new Set([
@@ -55,6 +68,143 @@ function hashKey(key: string): string {
   return createHash("sha256").update(key, "utf8").digest("hex").slice(0, 24);
 }
 
+export function isKlaviyoRawStringWithinBounds(value: string): boolean {
+  if (value.length > KLAVIYO_RAW_STRING_MAX_UTF16_UNITS) return false;
+  if (Buffer.byteLength(value, "utf8") > KLAVIYO_RAW_STRING_MAX_UTF8_BYTES) {
+    return false;
+  }
+  let codePoints = 0;
+  for (const character of value) {
+    if (character.length > 0) codePoints += 1;
+    if (codePoints > KLAVIYO_RAW_STRING_MAX_CODE_POINTS) return false;
+  }
+  return true;
+}
+
+function normalizedDecodedString(value: string): string | null {
+  if (!isKlaviyoRawStringWithinBounds(value)) return null;
+  let normalized = value.normalize("NFKC");
+  if (!isKlaviyoRawStringWithinBounds(normalized)) return null;
+  for (let depth = 0; depth <= REDACTED_PROPERTY_MAX_DEPTH; depth += 1) {
+    if (!/%[0-9a-f]{2}/i.test(normalized)) break;
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(normalized);
+    } catch {
+      return null;
+    }
+    normalized = decoded.normalize("NFKC");
+    if (!isKlaviyoRawStringWithinBounds(normalized)) return null;
+  }
+  return /%[0-9a-f]{2}/i.test(normalized) ? null : normalized;
+}
+
+function phoneRanges(value: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  for (const match of value.matchAll(PHONE_CANDIDATE)) {
+    const candidate = match[0];
+    const start = match.index;
+    const previous = start > 0 ? value[start - 1] : "";
+    const next = value[start + candidate.length] ?? "";
+    const digits = candidate.replace(/\D/g, "");
+    const separators = candidate.match(/[\s().-]/g)?.length ?? 0;
+    const digitGroups = candidate.match(/\d+/g) ?? [];
+    const firstGroup = digitGroups.at(0);
+    const lastGroup = digitGroups.at(-1);
+    const plausibleSeparatedPhone =
+      separators >= 2 &&
+      digitGroups.length >= 3 &&
+      firstGroup !== undefined &&
+      lastGroup !== undefined &&
+      firstGroup.length <= 3 &&
+      lastGroup.length <= 4 &&
+      digitGroups.slice(1, -1).every((group) => group.length <= 4);
+    const hasTelephoneShape =
+      candidate.startsWith("+") ||
+      candidate.startsWith("00") ||
+      /[()]/.test(candidate) ||
+      plausibleSeparatedPhone;
+    if (
+      digits.length >= 8 &&
+      digits.length <= 15 &&
+      hasTelephoneShape &&
+      !/[A-Za-z0-9_-]/.test(previous) &&
+      !/[A-Za-z0-9_-]/.test(next)
+    ) {
+      ranges.push([start, start + candidate.length]);
+    }
+  }
+  return ranges;
+}
+
+function hasCredentialShape(value: string): boolean {
+  return (
+    JWT_CREDENTIAL.test(value) ||
+    BEARER_CREDENTIAL.test(value) ||
+    hasBasicCredential(value) ||
+    NAMED_CREDENTIAL.test(value) ||
+    PREFIXED_CREDENTIAL.test(value)
+  );
+}
+
+function hasBasicCredential(value: string): boolean {
+  for (const match of value.matchAll(BASIC_CREDENTIAL)) {
+    const token = match[1];
+    let decoded: string;
+    try {
+      const bytes = Buffer.from(token, "base64");
+      const canonical = bytes.toString("base64").replace(/=+$/, "");
+      if (canonical !== token.replace(/=+$/, "")) continue;
+      decoded = bytes.toString("utf8");
+    } catch {
+      continue;
+    }
+    if (decoded.includes(":")) return true;
+  }
+  return false;
+}
+
+function replaceSensitiveText(value: string): string {
+  const emailRedacted = value.replace(INTERNATIONAL_EMAIL, "[redacted]");
+  const ranges = phoneRanges(emailRedacted);
+  if (ranges.length === 0) return emailRedacted;
+  let result = "";
+  let cursor = 0;
+  for (const [start, end] of ranges) {
+    result += `${emailRedacted.slice(cursor, start)}[redacted]`;
+    cursor = end;
+  }
+  return result + emailRedacted.slice(cursor);
+}
+
+export function sanitizeKlaviyoSensitiveString(
+  value: string,
+  mode: "identifier" | "text",
+): string | null {
+  const normalized = normalizedDecodedString(value);
+  if (
+    normalized === null ||
+    CONTROL_CHARACTER.test(normalized) ||
+    hasCredentialShape(normalized) ||
+    (mode === "text" && BARE_PHONE_STRING.test(normalized))
+  ) {
+    return null;
+  }
+  const redacted = replaceSensitiveText(normalized);
+  if (mode === "identifier" && redacted !== normalized) return null;
+  if (mode === "identifier" || redacted === normalized) return value;
+  return redacted;
+}
+
+export function isKlaviyoProviderOpaqueId(value: string): boolean {
+  const safe = sanitizeKlaviyoSensitiveString(value, "identifier");
+  return (
+    safe === value &&
+    value.length <= 256 &&
+    /^(?=.*[A-Za-z])[A-Za-z0-9][A-Za-z0-9_-]*$/.test(value)
+  );
+}
+
 function snapshotStringSet(
   value: ReadonlySet<string>,
   kind: "approved" | "host",
@@ -71,6 +221,7 @@ function snapshotStringSet(
     const normalized = kind === "host" ? entry.trim().toLowerCase() : entry;
     if (
       normalized.length === 0 ||
+      normalized.length > KLAVIYO_ALIAS_KEY_MAX_UTF8_BYTES ||
       CONTROL_CHARACTER.test(normalized) ||
       Buffer.byteLength(normalized, "utf8") > MAX_PROPERTY_KEY_BYTES ||
       (kind === "host" && !EXACT_HOSTNAME_PATTERN.test(normalized))
@@ -83,11 +234,10 @@ function snapshotStringSet(
 }
 
 function boundedText(value: unknown): string | null {
-  if (typeof value !== "string" || CONTROL_CHARACTER.test(value)) return null;
-  const cleaned = value
-    .trim()
-    .replace(EMAIL_REPLACE, "[redacted]")
-    .replace(PHONE_REPLACE, "[redacted]");
+  if (typeof value !== "string") return null;
+  const sanitized = sanitizeKlaviyoSensitiveString(value, "text");
+  if (sanitized === null) return null;
+  const cleaned = sanitized.trim();
   return Array.from(cleaned).slice(0, MAX_TEXT_CODE_POINTS).join("");
 }
 
@@ -135,7 +285,7 @@ function safePathname(rawPathname: string): string | null {
     if (decoded.kind === "dot") return null;
     if (decoded.kind === "redacted") {
       output.push("[redacted]");
-      if (redactNextIdentitySegment) redactNextIdentitySegment = false;
+      redactNextIdentitySegment = true;
       continue;
     }
     const segment = decoded.value;
@@ -156,12 +306,14 @@ function safePathname(rawPathname: string): string | null {
       redactNextIdentitySegment = true;
       continue;
     }
+    const sanitizedSegment = sanitizeKlaviyoSensitiveString(segment, "text");
     if (
-      EMAIL_DETECT.test(segment) ||
-      PHONE_DETECT.test(segment) ||
+      sanitizedSegment === null ||
+      sanitizedSegment !== segment ||
       OPAQUE_SEGMENT.test(segment)
     ) {
       output.push("[redacted]");
+      redactNextIdentitySegment = true;
       continue;
     }
     output.push(printablePathSegment(Array.from(segment).slice(0, 96).join("")));
@@ -287,10 +439,21 @@ export function redactEventProperties(
   const hostSnapshot = snapshotStringSet(merchantHosts, "host");
   let keys: string[];
   try {
-    keys = Object.keys(properties).sort();
+    keys = Object.keys(properties);
   } catch {
     invalidInput();
   }
+  if (keys.length > REDACTED_PROPERTY_MAX_RAW_KEYS) invalidInput();
+  for (const key of keys) {
+    if (
+      key.length > KLAVIYO_ALIAS_KEY_MAX_UTF8_BYTES ||
+      Buffer.byteLength(key, "utf8") > KLAVIYO_ALIAS_KEY_MAX_UTF8_BYTES ||
+      CONTROL_CHARACTER.test(key)
+    ) {
+      invalidInput();
+    }
+  }
+  keys.sort();
 
   const values = Object.create(null) as Record<string, JsonValue>;
   const fingerprint: RedactedEventEvidence["fingerprint"] = [];
@@ -313,6 +476,9 @@ export function redactEventProperties(
       type: jsonType(value),
     });
     if (!approved) continue;
+    if (typeof value === "string" && !isKlaviyoRawStringWithinBounds(value)) {
+      invalidInput();
+    }
     if (Object.keys(values).length >= REDACTED_PROPERTY_MAX_KEYS) {
       truncated = true;
       continue;

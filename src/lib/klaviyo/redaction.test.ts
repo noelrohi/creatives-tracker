@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   FINGERPRINT_MAX_KEYS,
+  KLAVIYO_ALIAS_KEY_MAX_UTF8_BYTES,
+  KLAVIYO_RAW_STRING_MAX_CODE_POINTS,
+  KLAVIYO_RAW_STRING_MAX_UTF16_UNITS,
+  KLAVIYO_RAW_STRING_MAX_UTF8_BYTES,
   REDACTED_PROPERTY_MAX_BYTES,
   REDACTED_PROPERTY_MAX_KEYS,
+  REDACTED_PROPERTY_MAX_RAW_KEYS,
+  isKlaviyoProviderOpaqueId,
   redactEventProperties,
+  sanitizeKlaviyoSensitiveString,
 } from "@/lib/klaviyo/redaction";
 
 describe("redactEventProperties", () => {
@@ -240,6 +247,141 @@ describe("redactEventProperties", () => {
     expect(JSON.stringify(result)).not.toMatch(/415|example\.com/);
   });
 
+  it("normalizes and removes international, encoded, and credential-shaped secrets", () => {
+    const secrets = {
+      FullWidthEmail: "Contact ｕｓｅｒ＠ｅｘａｍｐｌｅ．ｃｏｍ",
+      InternationalEmail: "联系 用户@例子.公司",
+      EncodedEmail: "user%2540example.com",
+      FullWidthPhone: "Call ＋６３ ９１７ １２３ ４５６７",
+      Jwt: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJwZXJzb24ifQ.signature123",
+      Bearer: "Bearer abcdefghijklmnopqrstuvwxyz012345",
+      ApiKey: "sk_live_abcdefghijklmnopqrstuvwxyz",
+      Credential: "password=customer-secret",
+    };
+    const result = redactEventProperties(
+      secrets,
+      new Set(Object.keys(secrets)),
+      new Set<string>(),
+    );
+
+    const serialized = JSON.stringify(Object.values(result.values));
+    expect(serialized).not.toMatch(
+      /example|例子|９１７|917|eyJhbGci|Bearer|sk_live|customer-secret/i,
+    );
+    expect(result.values).toMatchObject({
+      FullWidthEmail: "Contact [redacted]",
+      InternationalEmail: "联系 [redacted]",
+      EncodedEmail: "[redacted]",
+      FullWidthPhone: "Call [redacted]",
+    });
+    expect(result.values).not.toHaveProperty("Jwt");
+    expect(result.values).not.toHaveProperty("Bearer");
+    expect(result.values).not.toHaveProperty("ApiKey");
+    expect(result.values).not.toHaveProperty("Credential");
+  });
+
+  it("taints the next identity segment after invalid or residual percent encoding", () => {
+    const result = redactEventProperties(
+      {
+        Invalid: "/customers/%ZZ/customer-secret/products/safe",
+        Repeated: "/profiles/user%2525252540example.com/profile-secret",
+      },
+      new Set(["Invalid", "Repeated"]),
+      new Set<string>(),
+    );
+
+    expect(result.values).toEqual({
+      Invalid: "/customers/[redacted]/[redacted]/products/safe",
+      Repeated: "/profiles/[redacted]/[redacted]",
+    });
+    expect(JSON.stringify(result)).not.toMatch(/customer-secret|profile-secret|example/);
+  });
+
+  it("taints the segment after malformed encoding outside identity-labeled paths", () => {
+    const result = redactEventProperties(
+      {
+        Invalid: "/products/%ZZ/customer-id-must-not-survive",
+        Residual:
+          "/collections/%252525252F/customer-id-must-not-survive-either",
+        Sensitive: "/collections/user@example.com/customer-id-after-email",
+        Opaque:
+          "/collections/abcdefghijklmnopqrstuvwxyz0123456789/customer-id-after-opaque",
+      },
+      new Set(["Invalid", "Residual", "Sensitive", "Opaque"]),
+      new Set<string>(),
+    );
+
+    expect(result.values).toEqual({
+      Invalid: "/products/[redacted]/[redacted]",
+      Opaque: "/collections/[redacted]/[redacted]",
+      Residual: "/collections/[redacted]/[redacted]",
+      Sensitive: "/collections/[redacted]/[redacted]",
+    });
+    expect(JSON.stringify(result)).not.toContain("customer-id");
+  });
+
+  it("detects credentials without rewriting safe commerce strings", () => {
+    const jwt =
+      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJwZXJzb24ifQ.signature123";
+    const result = redactEventProperties(
+      {
+        BasicProductName: "Basic Black Dress",
+        BasicCredential: "Basic dXNlcjpwYXNz",
+        ShopifySecret: "shpat_abcdefghijklmnopqrstuvwxyz",
+        AssignedJwt: `token=${jwt}`,
+        AuthorizationJwt: `authorization=${jwt}`,
+        DateSku: "2026-12-123456",
+        EncodedSku: "SKU%20BLUE",
+      },
+      new Set([
+        "BasicProductName",
+        "BasicCredential",
+        "ShopifySecret",
+        "AssignedJwt",
+        "AuthorizationJwt",
+        "DateSku",
+        "EncodedSku",
+      ]),
+      new Set<string>(),
+    );
+
+    expect(result.values).toEqual({
+      BasicProductName: "Basic Black Dress",
+      DateSku: "2026-12-123456",
+      EncodedSku: "SKU%20BLUE",
+    });
+    expect(JSON.stringify(Object.values(result.values))).not.toMatch(
+      /shpat_|eyJhbGci|dXNlcjpwYXNz/,
+    );
+  });
+
+  it("separates bare-phone text detection from exact commerce identifiers", () => {
+    const barePhone = "14155552671";
+    const encodedEmail = "user%40example.com";
+    const encodedCredential = "Bearer%20abcdefghijklmnopqrstuvwxyz";
+
+    expect(sanitizeKlaviyoSensitiveString(barePhone, "text")).toBeNull();
+    expect(sanitizeKlaviyoSensitiveString(barePhone, "identifier")).toBe(
+      barePhone,
+    );
+    expect(sanitizeKlaviyoSensitiveString("50%OFF", "identifier")).toBe(
+      "50%OFF",
+    );
+    expect(sanitizeKlaviyoSensitiveString(encodedEmail, "identifier")).toBeNull();
+    expect(
+      sanitizeKlaviyoSensitiveString(encodedCredential, "identifier"),
+    ).toBeNull();
+    expect(isKlaviyoProviderOpaqueId("event%2D1")).toBe(false);
+
+    const result = redactEventProperties(
+      { CustomerPhone: barePhone },
+      new Set(["CustomerPhone"]),
+      new Set<string>(),
+    );
+    expect(result.values).not.toHaveProperty("CustomerPhone");
+    expect(JSON.stringify(result.values)).not.toContain(barePhone);
+  });
+
   it("enforces value, fingerprint, and byte bounds deterministically", () => {
     const properties = Object.fromEntries(
       Array.from({ length: FINGERPRINT_MAX_KEYS + 8 }, (_, index) => [
@@ -287,6 +429,48 @@ describe("redactEventProperties", () => {
     )) {
       expect(entry.key).toMatch(/^[a-f0-9]{24}$/);
     }
+  });
+
+  it("rejects raw property maps before sorting or reading values beyond the cap", () => {
+    let reads = 0;
+    const properties: Record<string, unknown> = {};
+    for (let index = 0; index <= REDACTED_PROPERTY_MAX_RAW_KEYS; index += 1) {
+      Object.defineProperty(properties, `key-${String(index).padStart(4, "0")}`, {
+        enumerable: true,
+        get() {
+          reads += 1;
+          return "raw-secret";
+        },
+      });
+    }
+
+    expect(() =>
+      redactEventProperties(properties, new Set<string>(), new Set<string>()),
+    ).toThrow("redaction input is invalid");
+    expect(reads).toBe(0);
+  });
+
+  it("rejects raw strings at UTF-16, UTF-8, and code-point work caps", () => {
+    const oversized = [
+      "x".repeat(KLAVIYO_RAW_STRING_MAX_CODE_POINTS + 1),
+      "界".repeat(Math.floor(KLAVIYO_RAW_STRING_MAX_UTF8_BYTES / 3) + 1),
+      "😀".repeat(Math.floor(KLAVIYO_RAW_STRING_MAX_UTF16_UNITS / 2) + 1),
+    ];
+    for (const value of oversized) {
+      expect(() =>
+        redactEventProperties(
+          { Approved: value },
+          new Set(["Approved"]),
+          new Set<string>(),
+        ),
+      ).toThrow("redaction input is invalid");
+    }
+  });
+
+  it("exports an alias byte cap below the general raw-string work cap", () => {
+    expect(KLAVIYO_ALIAS_KEY_MAX_UTF8_BYTES).toBeLessThan(
+      KLAVIYO_RAW_STRING_MAX_UTF8_BYTES,
+    );
   });
 
   it("omits nested approved values and reads each top-level property once", () => {
