@@ -190,6 +190,22 @@ describe("adCreative analytics procedures", () => {
       );
     });
 
+    it("applies the selected format to portfolio and every leaderboard query", async () => {
+      queueExecuteRows([], [], [], []);
+
+      const caller = createMockCaller({ role: "admin", organizationId: "org_1" });
+      await caller.adCreative.dashboardStats({
+        from: "2026-06-01",
+        to: "2026-06-07",
+        format: "video",
+      });
+
+      expect(mockState.executedSql).toHaveLength(4);
+      for (const query of mockState.executedSql) {
+        expect(compileSql(query).toLowerCase()).toContain("ac.format =");
+      }
+    });
+
     it("scopes lifetime aggregation to the dashboard-scoped ads", async () => {
       queueExecuteRows([], [], [], []);
 
@@ -306,6 +322,7 @@ describe("adCreative analytics procedures", () => {
       const result = await caller.adCreative.getDailyPortfolioPerformance({
         from: "2026-06-01",
         to: "2026-06-04",
+        format: "video",
       });
 
       expect(result.map((row) => row.dateStart)).toEqual([
@@ -320,6 +337,22 @@ describe("adCreative analytics procedures", () => {
           conversions: 0,
         }),
       );
+      expect(compileSql(mockState.executedSql[0]).toLowerCase()).toContain("ac.format =");
+    });
+  });
+
+  describe("dashboardExport", () => {
+    it("applies the selected creative format", async () => {
+      queueExecuteRows([]);
+
+      const caller = createMockCaller({ role: "admin", organizationId: "org_1" });
+      await caller.adCreative.dashboardExport({
+        from: "2026-06-01",
+        to: "2026-06-07",
+        format: "static",
+      });
+
+      expect(compileSql(mockState.executedSql[0]).toLowerCase()).toContain("ac.format =");
     });
   });
 
@@ -387,8 +420,8 @@ describe("adCreative analytics procedures", () => {
           ownership: "ours",
           team_id: "team_1",
           notes: "note",
-          created_at: new Date("2026-06-01T00:00:00.000Z"),
-          updated_at: new Date("2026-06-02T00:00:00.000Z"),
+          created_at: "2026-06-01T00:00:00.000Z",
+          updated_at: "2026-06-02T00:00:00.000Z",
           first_seen: "2026-06-01",
           total_spend: "123.45",
           avg_roas: "2.25",
@@ -482,8 +515,8 @@ describe("adCreative analytics procedures", () => {
           ownership: null,
           team_id: null,
           notes: null,
-          created_at: new Date("2026-06-01T00:00:00.000Z"),
-          updated_at: new Date("2026-06-02T00:00:00.000Z"),
+          created_at: "2026-06-01T00:00:00.000Z",
+          updated_at: "2026-06-02T00:00:00.000Z",
           first_seen: null,
           total_spend: null,
           avg_roas: null,
