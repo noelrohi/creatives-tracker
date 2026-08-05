@@ -18,8 +18,8 @@ import { shopifyStores } from "./shopify";
 import type {
   JsonValue,
   KlaviyoEventAliasField,
-  KlaviyoEventCheckpoint,
   KlaviyoMetricKind,
+  KlaviyoSyncRunCheckpoint,
   PropertyFingerprintEntry,
   RedactedProbeExample,
 } from "@/lib/klaviyo/types";
@@ -224,7 +224,7 @@ export const klaviyoSyncRuns = pgTable(
       .default({}),
     requestedFrom: timestamp("requested_from"),
     requestedTo: timestamp("requested_to"),
-    checkpoint: jsonb("checkpoint").$type<KlaviyoEventCheckpoint | null>(),
+    checkpoint: jsonb("checkpoint").$type<KlaviyoSyncRunCheckpoint | null>(),
     apiRevision: text("api_revision"),
     status: text("status").notNull().default("running"),
     rowsRead: integer("rows_read").notNull().default(0),

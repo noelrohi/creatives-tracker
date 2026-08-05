@@ -783,7 +783,7 @@ export async function failExpiredKlaviyoSyncRun(
 export async function prepareKlaviyoOperationRun(
   input: {
     scope: KlaviyoConnectionScope;
-    operation: "discovery" | "probe";
+    operation: "discovery" | "probe" | "dimensions" | "reports";
     triggerType: string;
     requestParameters?: Record<string, JsonValue>;
     now: Date;
@@ -1610,16 +1610,20 @@ export async function commitKlaviyoEventPage(input: {
   });
 }
 
-export async function finishKlaviyoSyncRun(input: {
-  scope: KlaviyoConnectionScope;
-  syncRunId: string;
-  operation: "discovery" | "probe" | "events";
-  status: "success" | "partial" | "failed";
-  error?: unknown;
-}): Promise<void> {
+export async function finishKlaviyoSyncRun(
+  input: {
+    scope: KlaviyoConnectionScope;
+    syncRunId: string;
+    operation: "discovery" | "probe" | "dimensions" | "events" | "reports";
+    status: "success" | "partial" | "failed";
+    error?: unknown;
+  },
+  executor: TransactionExecutor = db,
+): Promise<void> {
   const safeError = input.error === undefined ? null : safeSyncError(input.error);
   const finishedAt = new Date();
-  await withKlaviyoConnectionLock(input.scope, async (tx) => {
+  await runInTransaction(executor, async (tx) => {
+    await lockConnection(tx, input.scope);
     const finished = await tx
       .update(klaviyoSyncRuns)
       .set({

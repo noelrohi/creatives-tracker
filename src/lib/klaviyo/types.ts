@@ -129,6 +129,56 @@ export type KlaviyoEventCheckpoint = OrderCoreSourceContract & {
   page: number;
 };
 
+export const KLAVIYO_DIMENSION_STAGES = [
+  "campaigns_email",
+  "campaigns_sms",
+  "campaign_messages",
+  "flows",
+  "flow_messages",
+  "tracking_account",
+] as const;
+
+export type KlaviyoDimensionStage = (typeof KLAVIYO_DIMENSION_STAGES)[number];
+
+/**
+ * Durable dimension traversal position. `parentExternalId` is the provider
+ * campaign/flow currently being expanded; resume re-expands that one
+ * parent idempotently rather than persisting nested provider cursors.
+ */
+export type KlaviyoDimensionCheckpoint = {
+  operation: "dimensions";
+  stage: KlaviyoDimensionStage;
+  parentExternalId: string | null;
+  cursor: string | null;
+  page: number;
+};
+
+export function assertExactDimensionCheckpoint(
+  value: unknown,
+): asserts value is KlaviyoDimensionCheckpoint {
+  const checkpoint = value as Record<string, unknown> | null;
+  if (
+    !checkpoint ||
+    checkpoint.operation !== "dimensions" ||
+    !KLAVIYO_DIMENSION_STAGES.includes(
+      checkpoint.stage as KlaviyoDimensionStage,
+    ) ||
+    (checkpoint.parentExternalId !== null &&
+      typeof checkpoint.parentExternalId !== "string") ||
+    (checkpoint.cursor !== null && typeof checkpoint.cursor !== "string") ||
+    typeof checkpoint.page !== "number" ||
+    !Number.isInteger(checkpoint.page) ||
+    checkpoint.page < 0 ||
+    Object.keys(checkpoint).length !== 5
+  ) {
+    throw new Error("Klaviyo dimension checkpoint is malformed");
+  }
+}
+
+export type KlaviyoSyncRunCheckpoint =
+  | KlaviyoEventCheckpoint
+  | KlaviyoDimensionCheckpoint;
+
 export type ProductEvidenceCompleteness =
   | "complete"
   | "incomplete"

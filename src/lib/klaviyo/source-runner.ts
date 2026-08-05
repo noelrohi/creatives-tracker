@@ -263,7 +263,9 @@ async function defaultLoadEventRun(
     )
     .limit(1);
   if (!run) throw new Error("Klaviyo event sync run is outside this scope");
-  return run;
+  // An `events` operation row only ever stores an event checkpoint; the
+  // exact shape is still asserted before any resume or page commit.
+  return { ...run, checkpoint: run.checkpoint as KlaviyoEventCheckpoint | null };
 }
 
 function storeDayMinusDays(day: string, amount: number): string {

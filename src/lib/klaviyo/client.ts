@@ -9,6 +9,10 @@ export const KLAVIYO_API_REVISIONS = {
   accounts: "2026-07-15",
   metrics: "2026-07-15",
   events: "2026-07-15",
+  campaigns: "2026-07-15",
+  flows: "2026-07-15",
+  trackingSettings: "2026-07-15",
+  reports: "2026-07-15",
 } as const;
 
 export type KlaviyoResource = {
@@ -194,6 +198,21 @@ function assertRequestCursor(
       cursor.length > MAX_CURSOR_LENGTH)
   ) {
     invalidRequestCursor();
+  }
+}
+
+function assertProviderPathId(value: string, label: string): void {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 512 ||
+    /[\/?#\s]/.test(value)
+  ) {
+    throw new KlaviyoApiError(
+      `Klaviyo ${label} request has an invalid identifier`,
+      null,
+      false,
+    );
   }
 }
 
@@ -457,6 +476,155 @@ export class KlaviyoApiClient {
       path: "/api/events",
       revision: KLAVIYO_API_REVISIONS.events,
       params,
+    });
+  }
+
+  async listCampaigns(input: {
+    channel: "email" | "sms";
+    cursor: string | null;
+  }): Promise<KlaviyoCompoundPage> {
+    if (input.channel !== "email" && input.channel !== "sms") {
+      throw new KlaviyoApiError(
+        "Klaviyo campaign request has an invalid channel",
+        null,
+        false,
+      );
+    }
+    assertRequestCursor(input.cursor);
+    const params = new URLSearchParams({
+      filter: `equals(messages.channel,'${input.channel}')`,
+      "fields[campaign]": "name,status,archived,created_at,updated_at",
+      sort: "id",
+    });
+    if (input.cursor !== null) params.set("page[cursor]", input.cursor);
+    return this.#request({
+      path: "/api/campaigns",
+      revision: KLAVIYO_API_REVISIONS.campaigns,
+      params,
+    });
+  }
+
+  async listCampaignMessages(input: {
+    campaignId: string;
+    cursor: string | null;
+  }): Promise<KlaviyoCompoundPage> {
+    assertProviderPathId(input.campaignId, "campaign");
+    assertRequestCursor(input.cursor);
+    const params = new URLSearchParams({
+      "fields[campaign-message]": "label,channel,created_at,updated_at",
+    });
+    if (input.cursor !== null) params.set("page[cursor]", input.cursor);
+    return this.#request({
+      path: `/api/campaigns/${encodeURIComponent(input.campaignId)}/campaign-messages`,
+      revision: KLAVIYO_API_REVISIONS.campaigns,
+      params,
+    });
+  }
+
+  async listFlows(input: {
+    cursor: string | null;
+  }): Promise<KlaviyoCompoundPage> {
+    assertRequestCursor(input.cursor);
+    const params = new URLSearchParams({
+      "fields[flow]": "name,status,archived,created,updated",
+      sort: "id",
+    });
+    if (input.cursor !== null) params.set("page[cursor]", input.cursor);
+    return this.#request({
+      path: "/api/flows",
+      revision: KLAVIYO_API_REVISIONS.flows,
+      params,
+    });
+  }
+
+  async listFlowActions(input: {
+    flowId: string;
+    cursor: string | null;
+  }): Promise<KlaviyoCompoundPage> {
+    assertProviderPathId(input.flowId, "flow");
+    assertRequestCursor(input.cursor);
+    const params = new URLSearchParams({
+      "fields[flow-action]": "action_type,status,created,updated",
+    });
+    if (input.cursor !== null) params.set("page[cursor]", input.cursor);
+    return this.#request({
+      path: `/api/flows/${encodeURIComponent(input.flowId)}/flow-actions`,
+      revision: KLAVIYO_API_REVISIONS.flows,
+      params,
+    });
+  }
+
+  async listFlowMessages(input: {
+    actionId: string;
+    cursor: string | null;
+  }): Promise<KlaviyoCompoundPage> {
+    assertProviderPathId(input.actionId, "flow action");
+    assertRequestCursor(input.cursor);
+    const params = new URLSearchParams({
+      "fields[flow-message]": "name,channel,created,updated",
+    });
+    if (input.cursor !== null) params.set("page[cursor]", input.cursor);
+    return this.#request({
+      path: `/api/flow-actions/${encodeURIComponent(input.actionId)}/flow-messages`,
+      revision: KLAVIYO_API_REVISIONS.flows,
+      params,
+    });
+  }
+
+  /**
+   * Tracking configuration for one closed scope. Account scope pages the
+   * tracking-settings collection; message scopes fetch exactly one message
+   * resource's tracking fields. Configuration evidence never proves a
+   * visited URL.
+   */
+  async getTrackingSettings(input: {
+    scope: "account" | "campaign_message" | "flow_message";
+    externalId: string | null;
+    cursor: string | null;
+  }): Promise<KlaviyoCompoundPage> {
+    assertRequestCursor(input.cursor);
+    if (input.scope === "account") {
+      if (input.externalId !== null) {
+        throw new KlaviyoApiError(
+          "Klaviyo account tracking request cannot carry an object ID",
+          null,
+          false,
+        );
+      }
+      const params = new URLSearchParams({
+        "fields[tracking-setting]":
+          "auto_add_parameters,custom_parameters,utm_source,utm_medium,utm_campaign,utm_id,utm_term",
+      });
+      if (input.cursor !== null) params.set("page[cursor]", input.cursor);
+      return this.#request({
+        path: "/api/tracking-settings",
+        revision: KLAVIYO_API_REVISIONS.trackingSettings,
+        params,
+      });
+    }
+    if (typeof input.externalId !== "string" || input.cursor !== null) {
+      throw new KlaviyoApiError(
+        "Klaviyo message tracking request is invalid",
+        null,
+        false,
+      );
+    }
+    assertProviderPathId(input.externalId, "tracking message");
+    const path =
+      input.scope === "campaign_message"
+        ? `/api/campaign-messages/${encodeURIComponent(input.externalId)}`
+        : `/api/flow-messages/${encodeURIComponent(input.externalId)}`;
+    const fieldsKey =
+      input.scope === "campaign_message"
+        ? "fields[campaign-message]"
+        : "fields[flow-message]";
+    return this.#request({
+      path,
+      revision: KLAVIYO_API_REVISIONS.trackingSettings,
+      params: new URLSearchParams({
+        [fieldsKey]: "label,channel,tracking_options",
+      }),
+      singleResource: true,
     });
   }
 

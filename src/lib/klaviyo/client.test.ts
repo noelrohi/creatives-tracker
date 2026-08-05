@@ -764,3 +764,240 @@ describe("getEventById", () => {
     ).rejects.toThrow("single-event request is invalid");
   });
 });
+
+describe("dimension traversal client", () => {
+  it("pins the campaigns revision and filters one explicit channel", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        data: [{ type: "campaign", id: "campaign-1", attributes: { name: "Sale" } }],
+        links: { next: null },
+      }),
+    );
+    const client = clientWith(fetchMock);
+
+    const page = await client.listCampaigns({ channel: "email", cursor: null });
+
+    const [request, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const url = new URL(request);
+    expect(url.pathname).toBe("/api/campaigns");
+    expect(url.searchParams.get("filter")).toBe(
+      "equals(messages.channel,'email')",
+    );
+    expect(new Headers(init.headers).get("revision")).toBe(
+      KLAVIYO_API_REVISIONS.campaigns,
+    );
+    expect(page.apiRevision).toBe(KLAVIYO_API_REVISIONS.campaigns);
+    expect(page.data[0].id).toBe("campaign-1");
+  });
+
+  it("covers both campaign channels and rejects any other channel", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse({ data: [], links: { next: null } }));
+    const client = clientWith(fetchMock);
+
+    await client.listCampaigns({ channel: "sms", cursor: null });
+    const url = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(url.searchParams.get("filter")).toBe(
+      "equals(messages.channel,'sms')",
+    );
+    await expect(
+      client.listCampaigns({
+        channel: "push" as unknown as "email",
+        cursor: null,
+      }),
+    ).rejects.toThrow("invalid channel");
+  });
+
+  it("paginates campaigns by validated same-path cursor", async () => {
+    const nextLink =
+      "https://a.klaviyo.com/api/campaigns?page%5Bcursor%5D=cursor-2";
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ data: [], links: { next: nextLink } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ data: [], links: { next: null } }));
+    const client = clientWith(fetchMock);
+
+    const first = await client.listCampaigns({ channel: "email", cursor: null });
+    expect(first.nextCursor).toBe("cursor-2");
+    const second = await client.listCampaigns({
+      channel: "email",
+      cursor: first.nextCursor,
+    });
+    expect(second.nextCursor).toBeNull();
+    const secondUrl = new URL(fetchMock.mock.calls[1][0] as string);
+    expect(secondUrl.searchParams.get("page[cursor]")).toBe("cursor-2");
+  });
+
+  it("traverses campaign messages under one validated campaign path", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        data: [
+          {
+            type: "campaign-message",
+            id: "message-1",
+            attributes: { label: "Message A", channel: "email" },
+          },
+        ],
+        links: { next: null },
+      }),
+    );
+    const client = clientWith(fetchMock);
+
+    const page = await client.listCampaignMessages({
+      campaignId: "campaign-1",
+      cursor: null,
+    });
+    expect(new URL(fetchMock.mock.calls[0][0] as string).pathname).toBe(
+      "/api/campaigns/campaign-1/campaign-messages",
+    );
+    expect(page.data[0].attributes?.label).toBe("Message A");
+    await expect(
+      client.listCampaignMessages({ campaignId: "../events", cursor: null }),
+    ).rejects.toThrow("invalid identifier");
+  });
+
+  it("walks flow to action to message with the pinned flows revision", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: [{ type: "flow", id: "flow-1", attributes: { name: "Welcome" } }],
+          links: { next: null },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: [{ type: "flow-action", id: "action-1", attributes: {} }],
+          links: { next: null },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: [
+            {
+              type: "flow-message",
+              id: "flow-message-1",
+              attributes: { name: "Welcome Email" },
+            },
+          ],
+          links: { next: null },
+        }),
+      );
+    const client = clientWith(fetchMock);
+
+    await client.listFlows({ cursor: null });
+    await client.listFlowActions({ flowId: "flow-1", cursor: null });
+    const messages = await client.listFlowMessages({
+      actionId: "action-1",
+      cursor: null,
+    });
+    expect(new URL(fetchMock.mock.calls[1][0] as string).pathname).toBe(
+      "/api/flows/flow-1/flow-actions",
+    );
+    expect(new URL(fetchMock.mock.calls[2][0] as string).pathname).toBe(
+      "/api/flow-actions/action-1/flow-messages",
+    );
+    for (const call of fetchMock.mock.calls) {
+      expect(new Headers((call[1] as RequestInit).headers).get("revision")).toBe(
+        KLAVIYO_API_REVISIONS.flows,
+      );
+    }
+    expect(messages.data[0].id).toBe("flow-message-1");
+  });
+
+  it("pages account tracking settings and forbids an object ID there", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        data: [
+          {
+            type: "tracking-setting",
+            id: "tracking-1",
+            attributes: { utm_source: "klaviyo", auto_add_parameters: true },
+          },
+        ],
+        links: { next: null },
+      }),
+    );
+    const client = clientWith(fetchMock);
+
+    const page = await client.getTrackingSettings({
+      scope: "account",
+      externalId: null,
+      cursor: null,
+    });
+    expect(new URL(fetchMock.mock.calls[0][0] as string).pathname).toBe(
+      "/api/tracking-settings",
+    );
+    expect(
+      new Headers(
+        (fetchMock.mock.calls[0][1] as RequestInit).headers,
+      ).get("revision"),
+    ).toBe(KLAVIYO_API_REVISIONS.trackingSettings);
+    expect(page.data[0].attributes?.utm_source).toBe("klaviyo");
+    await expect(
+      client.getTrackingSettings({
+        scope: "account",
+        externalId: "message-1",
+        cursor: null,
+      }),
+    ).rejects.toThrow("cannot carry an object ID");
+  });
+
+  it("fetches message-scope tracking as a single resource without cursors", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        data: {
+          type: "campaign-message",
+          id: "message-1",
+          attributes: { label: "A", tracking_options: [] },
+        },
+      }),
+    );
+    const client = clientWith(fetchMock);
+
+    const page = await client.getTrackingSettings({
+      scope: "campaign_message",
+      externalId: "message-1",
+      cursor: null,
+    });
+    expect(new URL(fetchMock.mock.calls[0][0] as string).pathname).toBe(
+      "/api/campaign-messages/message-1",
+    );
+    expect(page.data).toHaveLength(1);
+    await expect(
+      client.getTrackingSettings({
+        scope: "flow_message",
+        externalId: "message-1",
+        cursor: "cursor-1",
+      }),
+    ).rejects.toThrow("message tracking request is invalid");
+  });
+
+  it("retries dimension rate limits with the shared bounded policy", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({}, 429, { "retry-after": "1" }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ data: [], links: { next: null } }));
+    const client = clientWith(fetchMock);
+
+    const page = await client.listFlows({ cursor: null });
+    expect(page.data).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects malformed dimension collections fail-closed", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse({ data: [{ type: "campaign" }] }));
+    const client = clientWith(fetchMock);
+
+    await expect(
+      client.listCampaigns({ channel: "email", cursor: null }),
+    ).rejects.toThrow("response was invalid");
+  });
+});
