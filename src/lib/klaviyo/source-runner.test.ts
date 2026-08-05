@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import {
+  parseErasureSuppressionKey,
+  parseIdentityHmacKeyring,
+} from "@/lib/identity-hmac";
 import type { KlaviyoCompoundPage } from "@/lib/klaviyo/client";
 import type { ConnectionRecord } from "@/lib/klaviyo/source-store";
 import {
@@ -25,6 +29,14 @@ const scope = {
   storeId: "store-1",
   connectionId: "connection-1",
 };
+const TEST_KEYRING = parseIdentityHmacKeyring({
+  IDENTITY_HMAC_SECRET: "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE",
+  IDENTITY_HMAC_KEY_VERSION: "v1",
+});
+const TEST_SUPPRESSION_KEY = parseErasureSuppressionKey({
+  IDENTITY_ERASURE_HMAC_SECRET: "Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M",
+  IDENTITY_ERASURE_HMAC_KEY_VERSION: "e1",
+} as unknown as NodeJS.ProcessEnv);
 const WINDOW_FROM = new Date("2026-05-02T04:00:00.000Z");
 const WINDOW_TO = new Date("2026-07-30T04:00:00.000Z");
 
@@ -191,8 +203,9 @@ function makeRunnerDependencies(input: {
     now: () => new Date("2026-07-30T12:00:00.000Z"),
     loadIdentityKeyring: vi.fn(() => {
       if (input.keyringError) throw input.keyringError;
-      return {};
+      return TEST_KEYRING;
     }),
+    loadSuppressionKey: vi.fn(() => TEST_SUPPRESSION_KEY),
     loadConnection: vi.fn(async () => connectionRecord),
     loadEnabledMetrics: vi.fn(async () => [PLACED_METRIC, ORDERED_METRIC] as [
       typeof PLACED_METRIC,
@@ -281,7 +294,7 @@ describe("processOrderCoreBatch", () => {
       expect.objectContaining({
         metricId: "external-placed",
         includeAttributions: true,
-        includeProfileEmail: false,
+        includeProfileEmail: true,
       }),
     );
     expect(deps.listEvents).toHaveBeenNthCalledWith(
@@ -469,7 +482,7 @@ describe("startOrResumeOrderCoreSync", () => {
   }
 
   const baseDeps = (state: StartState) => ({
-    loadIdentityKeyring: vi.fn(() => ({})),
+    loadIdentityKeyring: vi.fn(() => TEST_KEYRING),
     now: () => NOW,
     runStore: makeStartStore(state),
   });
@@ -712,5 +725,92 @@ describe("klaviyo source task boundary", () => {
     expect(source).toContain('createHash("sha256")');
     // Provider cursors never enter task keys directly.
     expect(source).not.toMatch(/idempotencyKeys\.create\([^)]*cursor/);
+  });
+});
+
+describe("processOrderCoreBatch identity flow", () => {
+  it("passes server-resolved keys to normalization and leaks no plaintext email", async () => {
+    const deps = makeRunnerDependencies({
+      pages: new Map([
+        [
+          "external-placed",
+          [
+            {
+              data: [
+                {
+                  ...eventResource("placed-identity", "external-placed"),
+                  relationships: {
+                    profile: {
+                      data: { type: "profile", id: "profile-identity" },
+                    },
+                    metric: {
+                      data: { type: "metric", id: "external-placed" },
+                    },
+                  },
+                },
+              ],
+              included: [
+                {
+                  type: "profile",
+                  id: "profile-identity",
+                  attributes: { email: "subject@example.com" },
+                },
+              ],
+              nextCursor: null,
+              apiRevision: "2026-07-15",
+            },
+          ],
+        ],
+        [
+          "external-ordered",
+          [
+            eventPage({
+              metricExternalId: "external-ordered",
+              eventIds: ["ordered-identity"],
+              nextCursor: null,
+            }),
+          ],
+        ],
+      ]),
+    });
+    const result = await processOrderCoreBatch(
+      { scope: deps.scope, syncRunId: "run-1", maxPages: 5 },
+      deps.services,
+    );
+    expect(result.done).toBe(true);
+    const [firstCommit] = deps.commitPage.mock.calls.map(
+      ([call]) =>
+        call as unknown as {
+          events: Array<{
+            identityDigests: Array<{ keyVersion: string }>;
+            erasureSuppressionCandidates: Array<{ kind: string }>;
+          }>;
+        },
+    );
+    expect(firstCommit.events[0].identityDigests).toEqual([
+      expect.objectContaining({ keyVersion: "v1" }),
+    ]);
+    expect(
+      firstCommit.events[0].erasureSuppressionCandidates.map((c) => c.kind).sort(),
+    ).toEqual(["email", "klaviyo_profile_id"]);
+    // No plaintext email or raw profile document crosses into persistence.
+    expect(JSON.stringify(deps.commitPage.mock.calls)).not.toContain(
+      "subject@example.com",
+    );
+  });
+
+  it("fails before any page write when the suppression key is invalid", async () => {
+    const deps = makeRunnerDependencies({});
+    deps.services.loadSuppressionKey = vi.fn(() => {
+      throw new Error("IDENTITY_ERASURE_HMAC_SECRET is required");
+    });
+    await expect(
+      processOrderCoreBatch(
+        { scope: deps.scope, syncRunId: "run-1", maxPages: 5 },
+        deps.services,
+      ),
+    ).rejects.toThrow("IDENTITY_ERASURE_HMAC_SECRET is required");
+    expect(deps.createClient).not.toHaveBeenCalled();
+    expect(deps.commitPage).not.toHaveBeenCalled();
   });
 });

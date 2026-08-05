@@ -1,7 +1,12 @@
 import "server-only";
 
 import { and, eq } from "drizzle-orm";
-import { parseIdentityHmacKeyring } from "@/lib/identity-hmac";
+import {
+  parseErasureSuppressionKey,
+  parseIdentityHmacKeyring,
+  type ErasureSuppressionKey,
+  type IdentityHmacKeyring,
+} from "@/lib/identity-hmac";
 import {
   KlaviyoApiClient,
 } from "@/lib/klaviyo/client";
@@ -109,7 +114,8 @@ export type SourceRunnerDependencies = {
   ) => Pick<KlaviyoApiClient, "listEvents">;
   credentialProvider?: KlaviyoCredentialProvider;
   now?: () => Date;
-  loadIdentityKeyring?: () => unknown;
+  loadIdentityKeyring?: () => IdentityHmacKeyring;
+  loadSuppressionKey?: () => ErasureSuppressionKey;
   loadConnection?: typeof getConnectionRecord;
   loadEnabledMetrics?: typeof loadEnabledOrderCoreMetrics;
   renewHeartbeat?: typeof renewKlaviyoSyncRunHeartbeat;
@@ -406,7 +412,14 @@ export async function processOrderCoreBatch(
   if (!Number.isInteger(input.maxPages) || input.maxPages < 1) {
     throw new Error("Klaviyo batch page bound is invalid");
   }
-  (dependencies.loadIdentityKeyring ?? parseIdentityHmacKeyring)();
+  // Both key configurations resolve server-side before any page write; a
+  // missing or invalid keyring fails the batch here.
+  const identityKeyring = (
+    dependencies.loadIdentityKeyring ?? parseIdentityHmacKeyring
+  )();
+  const suppressionKey = (
+    dependencies.loadSuppressionKey ?? parseErasureSuppressionKey
+  )();
 
   const loadEventRun = dependencies.loadEventRun ?? defaultLoadEventRun;
   const run = await loadEventRun(input.scope, input.syncRunId);
@@ -475,15 +488,16 @@ export async function processOrderCoreBatch(
     if (!metric || metric.metricKind !== checkpoint.metricKinds[checkpoint.metricIndex]) {
       throw new Error("Klaviyo event checkpoint metric binding is unavailable");
     }
-    // Source pages never request profile email; only the probe and Plan 3
-    // identity re-fetch use the sparse email fieldset.
+    // Canonical order-core pages request the sparse profile email so
+    // identity digests can be derived in memory; the email itself is
+    // discarded inside normalization and never crosses into persistence.
     const page = await client.listEvents({
       metricId: metric.externalMetricId,
       from: window.from,
       to: window.to,
       cursor: checkpoint.cursor,
       includeAttributions: true,
-      includeProfileEmail: false,
+      includeProfileEmail: true,
     });
     const events = normalizeEventPage({
       metricRowId: metric.metricRowId,
@@ -493,6 +507,14 @@ export async function processOrderCoreBatch(
       merchantHosts,
       approvedAliases: metric.approvedAliases,
       page,
+      identity: {
+        scope: {
+          organizationId: input.scope.organizationId,
+          storeId: input.scope.storeId,
+        },
+        identityKeyring,
+        suppressionKey,
+      },
     });
     const next = nextEventCheckpoint(checkpoint, page.nextCursor);
     const result = await commitPage({
