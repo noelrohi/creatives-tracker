@@ -6,8 +6,10 @@
 
 ## A. Prerequisites
 
-- [ ] Klaviyo credentials received (read-only scopes: `Accounts: Read`,
-      `Metrics: Read`, `Events: Read`)
+- [ ] Klaviyo credentials received — read-only scopes: `Accounts: Read`,
+      `Metrics: Read`, `Events: Read`, `Profiles: Read` (probe email
+      fieldset 403s without it), plus `Campaigns: Read` / `Flows: Read`
+      for Plan 4 dimensions
 - [ ] Env vars set wherever the app **and** the Trigger worker run:
   - [ ] `KLAVIYO_PRIVATE_API_KEY`
   - [ ] `KLAVIYO_REVIV_ACCOUNT_ID`
