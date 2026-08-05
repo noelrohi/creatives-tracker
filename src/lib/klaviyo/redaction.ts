@@ -505,7 +505,11 @@ export function redactEventProperties(
   }
 
   return {
-    values,
+    // The working container is prototype-free for pollution safety, but the
+    // returned object must have a normal prototype: drizzle's entity check
+    // walks getPrototypeOf(value).constructor and crashes on null-prototype
+    // values at the insert boundary.
+    values: { ...values },
     fingerprint,
     warnings: truncated ? ["redacted_evidence_truncated"] : [],
     truncated,

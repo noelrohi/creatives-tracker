@@ -14,6 +14,17 @@ import {
 } from "@/lib/klaviyo/redaction";
 
 describe("redactEventProperties", () => {
+  it("returns values with a normal prototype for the persistence boundary", () => {
+    const result = redactEventProperties(
+      { ProductID: "product-1" },
+      new Set(["ProductID"]),
+      new Set(["reviv.example.com"]),
+    );
+    // Drizzle's entity check reads getPrototypeOf(value).constructor; a
+    // null-prototype container crashes every insert carrying it.
+    expect(Object.getPrototypeOf(result.values)).toBe(Object.prototype);
+  });
+
   it("retains approved values and hashes every unknown key", () => {
     const result = redactEventProperties(
       {
@@ -204,10 +215,17 @@ describe("redactEventProperties", () => {
       new Set<string>(),
     );
 
-    expect(Object.getPrototypeOf(result.values)).toBeNull();
+    // A normal prototype is required at the persistence boundary (drizzle
+    // reads getPrototypeOf(value).constructor), while prototype-shaped keys
+    // stay safe own DATA properties: spread copies them via
+    // CreateDataProperty and never invokes the __proto__ setter.
+    expect(Object.getPrototypeOf(result.values)).toBe(Object.prototype);
     expect(Object.hasOwn(result.values, "__proto__")).toBe(true);
     expect(Object.hasOwn(result.values, "constructor")).toBe(true);
     expect(Object.hasOwn(result.values, "prototype")).toBe(true);
+    expect((result.values as Record<string, unknown>).__proto__).toBe(
+      "safe-proto-value",
+    );
     expect(JSON.parse(JSON.stringify(result.values))).toEqual(
       JSON.parse(
         '{"__proto__":"safe-proto-value","constructor":"safe-constructor-value","prototype":"safe-prototype-value"}',
