@@ -11,10 +11,13 @@ import {
   unique,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { identityMatchingKeyBindings } from "@/schema/identity-registry";
+import { klaviyoConnections, klaviyoEvents } from "@/schema/klaviyo";
 import { shopifyOrders, shopifyStores } from "@/schema/shopify";
 
 export const sourceIdentityKindEnum = pgEnum("source_identity_kind", [
   "shopify_order",
+  "klaviyo_event",
 ]);
 
 export const identityHmacRotationStateEnum = pgEnum(
@@ -24,7 +27,7 @@ export const identityHmacRotationStateEnum = pgEnum(
 
 export const identityErasureSuppressionKindEnum = pgEnum(
   "identity_erasure_suppression_kind",
-  ["email", "shopify_customer_id"],
+  ["email", "shopify_customer_id", "klaviyo_profile_id"],
 );
 
 export const shopifyEvidenceRunStatusEnum = pgEnum(
@@ -103,7 +106,9 @@ export const sourceIdentityHmacs = pgTable(
     organizationId: text("organization_id").notNull(),
     storeId: text("store_id").notNull(),
     sourceKind: sourceIdentityKindEnum("source_kind").notNull(),
-    shopifyOrderId: text("shopify_order_id").notNull(),
+    shopifyOrderId: text("shopify_order_id"),
+    klaviyoConnectionId: text("klaviyo_connection_id"),
+    klaviyoEventId: text("klaviyo_event_id"),
     keyVersion: text("key_version").notNull(),
     digest: text("digest").notNull(),
     rotationState: identityHmacRotationStateEnum("rotation_state").notNull(),
@@ -124,12 +129,59 @@ export const sourceIdentityHmacs = pgTable(
       ],
     }).onDelete("cascade"),
     check(
-      "source_identity_hmac_shopify_only",
-      sql`${table.sourceKind} = 'shopify_order' AND ${table.shopifyOrderId} IS NOT NULL`,
+      "source_identity_hmac_exactly_one_source",
+      // Text casts keep the check applyable in the same transaction that
+      // adds the new enum value (PostgreSQL check_safe_enum_use).
+      sql`((${table.sourceKind})::text = 'shopify_order' AND ${table.shopifyOrderId} IS NOT NULL
+        AND ${table.klaviyoConnectionId} IS NULL AND ${table.klaviyoEventId} IS NULL)
+      OR ((${table.sourceKind})::text = 'klaviyo_event' AND ${table.shopifyOrderId} IS NULL
+        AND ${table.klaviyoConnectionId} IS NOT NULL AND ${table.klaviyoEventId} IS NOT NULL)`,
     ),
-    unique("source_identity_hmac_shopify_version_uniq").on(
-      table.shopifyOrderId,
+    uniqueIndex("source_identity_hmac_shopify_version_uidx")
+      .on(table.shopifyOrderId, table.keyVersion)
+      .where(sql`${table.shopifyOrderId} is not null`),
+    uniqueIndex("source_identity_hmac_klaviyo_version_uidx")
+      .on(table.klaviyoConnectionId, table.klaviyoEventId, table.keyVersion)
+      .where(sql`${table.klaviyoConnectionId} is not null`),
+    foreignKey({
+      name: "source_identity_hmac_klaviyo_connection_fk",
+      columns: [
+        table.organizationId,
+        table.storeId,
+        table.klaviyoConnectionId,
+      ],
+      foreignColumns: [
+        klaviyoConnections.organizationId,
+        klaviyoConnections.storeId,
+        klaviyoConnections.id,
+      ],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "source_identity_hmac_klaviyo_event_fk",
+      columns: [
+        table.organizationId,
+        table.storeId,
+        table.klaviyoConnectionId,
+        table.klaviyoEventId,
+      ],
+      foreignColumns: [
+        klaviyoEvents.organizationId,
+        klaviyoEvents.storeId,
+        klaviyoEvents.connectionId,
+        klaviyoEvents.id,
+      ],
+    }).onDelete("cascade"),
+    unique("source_identity_hmac_scope_event_id_uniq").on(
+      table.organizationId,
+      table.storeId,
+      table.klaviyoConnectionId,
+      table.klaviyoEventId,
+      table.id,
+    ),
+    index("source_identity_hmac_klaviyo_digest_idx").on(
+      table.klaviyoConnectionId,
       table.keyVersion,
+      table.digest,
     ),
     unique("source_identity_hmac_scope_id_uniq").on(
       table.organizationId,
@@ -192,34 +244,9 @@ export const identityErasureSuppressions = pgTable(
   ],
 );
 
-export const identityMatchingKeyBindings = pgTable(
-  "identity_matching_key_binding",
-  {
-    organizationId: text("organization_id").notNull(),
-    storeId: text("store_id").notNull(),
-    keyVersion: text("key_version").notNull(),
-    keyCheck: text("key_check").notNull(),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-  },
-  (table) => [
-    foreignKey({
-      name: "identity_matching_key_binding_org_store_fk",
-      columns: [table.organizationId, table.storeId],
-      foreignColumns: [shopifyStores.organizationId, shopifyStores.id],
-    }).onDelete("cascade"),
-    unique("identity_matching_key_binding_scope_version_uniq").on(
-      table.organizationId,
-      table.storeId,
-      table.keyVersion,
-    ),
-    unique("identity_matching_key_binding_scope_version_check_uniq").on(
-      table.organizationId,
-      table.storeId,
-      table.keyVersion,
-      table.keyCheck,
-    ),
-  ],
-);
+// Moved to src/schema/identity-registry.ts so the Klaviyo connection gate
+// can reference it without a module cycle; re-exported for compatibility.
+export { identityMatchingKeyBindings } from "@/schema/identity-registry";
 
 export const identityCryptoPolicies = pgTable(
   "identity_crypto_policy",

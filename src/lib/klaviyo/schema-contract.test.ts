@@ -221,6 +221,7 @@ describeIfDb("Klaviyo source migration on PostgreSQL", () => {
     for (const migration of [
       "0053_klaviyo_shopify_evidence.sql",
       "0054_klaviyo_source_core.sql",
+      "0055_klaviyo_advisory_matching.sql",
     ]) {
       for (const statement of readMigrationStatements(migration)) {
         await testPool.query(statement);
@@ -249,11 +250,21 @@ describeIfDb("Klaviyo source migration on PostgreSQL", () => {
       "klaviyo_connection",
       "klaviyo_event",
       "klaviyo_event_alias",
+      // Plan 3 advisory-matching tables (migration 0055).
+      "klaviyo_event_match_result",
       "klaviyo_event_product",
+      "klaviyo_event_run_identity_observation",
       "klaviyo_event_run_observation",
+      "klaviyo_identity_rotation_publication_attempt",
+      "klaviyo_identity_rotation_run",
+      "klaviyo_identity_rotation_source",
       "klaviyo_join_rule",
+      "klaviyo_match_candidate",
+      "klaviyo_match_run",
       "klaviyo_metric",
+      "klaviyo_order_match_result",
       "klaviyo_probe_report",
+      "klaviyo_product_evidence_link",
       "klaviyo_sync_run",
     ]);
 

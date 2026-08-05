@@ -127,18 +127,21 @@ const PRE_0053_FIXTURE_DDL = [
    )`,
 ];
 
-const MIGRATION_PATH = path.resolve(
-  process.cwd(),
+const MIGRATION_PATHS = [
   "drizzle/0053_klaviyo_shopify_evidence.sql",
-);
+  "drizzle/0054_klaviyo_source_core.sql",
+  "drizzle/0055_klaviyo_advisory_matching.sql",
+].map((file) => path.resolve(process.cwd(), file));
 
 async function createFixtureSchema(pool: Pool): Promise<void> {
   for (const statement of PRE_0053_FIXTURE_DDL) await pool.query(statement);
-  const migration = readFileSync(MIGRATION_PATH, "utf8")
-    .split("--> statement-breakpoint")
-    .map((statement) => statement.trim())
-    .filter(Boolean);
-  for (const statement of migration) await pool.query(statement);
+  for (const migrationPath of MIGRATION_PATHS) {
+    const migration = readFileSync(migrationPath, "utf8")
+      .split("--> statement-breakpoint")
+      .map((statement) => statement.trim())
+      .filter(Boolean);
+    for (const statement of migration) await pool.query(statement);
+  }
 }
 
 async function cleanupFixture(): Promise<void> {

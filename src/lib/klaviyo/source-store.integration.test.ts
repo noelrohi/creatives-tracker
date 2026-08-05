@@ -338,6 +338,7 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
     for (const migration of [
       "0053_klaviyo_shopify_evidence.sql",
       "0054_klaviyo_source_core.sql",
+      "0055_klaviyo_advisory_matching.sql",
     ]) {
       for (const statement of migrationStatements(migration)) {
         await testPool!.query(statement);

@@ -13,6 +13,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { organization } from "./auth";
+import { identityMatchingKeyBindings } from "@/schema/identity-registry";
 import { shopifyStores } from "./shopify";
 import type {
   JsonValue,
@@ -49,6 +50,13 @@ export const klaviyoConnections = pgTable(
       .default("reviv_environment"),
     lastDiscoverySyncedAt: timestamp("last_discovery_synced_at"),
     lastEventSyncedAt: timestamp("last_event_synced_at"),
+    identityWriteMode: text("identity_write_mode")
+      .notNull()
+      .default("current_only"),
+    identityCurrentKeyVersion: text("identity_current_key_version"),
+    identityCurrentKeyCheck: text("identity_current_key_check"),
+    identityPreviousKeyVersion: text("identity_previous_key_version"),
+    identityPreviousKeyCheck: text("identity_previous_key_check"),
     initialSourceFrom: timestamp("initial_source_from"),
     initialSourceTo: timestamp("initial_source_to"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -89,6 +97,59 @@ export const klaviyoConnections = pgTable(
       "klaviyo_connection_credential_ref_check",
       sql`${table.credentialReference} = 'reviv_environment'`,
     ),
+    check(
+      "klaviyo_connection_identity_write_mode_check",
+      sql`${table.identityWriteMode} in ('current_only', 'dual')`,
+    ),
+    check(
+      "klaviyo_connection_identity_current_pair_check",
+      sql`(${table.identityCurrentKeyVersion} is null and ${table.identityCurrentKeyCheck} is null)
+        or (${table.identityCurrentKeyVersion} is not null and ${table.identityCurrentKeyCheck} is not null)`,
+    ),
+    check(
+      "klaviyo_connection_identity_previous_pair_check",
+      sql`(${table.identityPreviousKeyVersion} is null and ${table.identityPreviousKeyCheck} is null)
+        or (${table.identityPreviousKeyVersion} is not null and ${table.identityPreviousKeyCheck} is not null)`,
+    ),
+    check(
+      "klaviyo_connection_identity_gate_shape_check",
+      sql`(${table.identityWriteMode} = 'current_only' and ${table.identityPreviousKeyVersion} is null)
+        or (${table.identityWriteMode} = 'dual'
+          and ${table.identityCurrentKeyVersion} is not null
+          and ${table.identityPreviousKeyVersion} is not null
+          and ${table.identityCurrentKeyVersion} <> ${table.identityPreviousKeyVersion}
+          and ${table.identityCurrentKeyCheck} <> ${table.identityPreviousKeyCheck})`,
+    ),
+    foreignKey({
+      name: "klaviyo_connection_identity_current_binding_fk",
+      columns: [
+        table.organizationId,
+        table.storeId,
+        table.identityCurrentKeyVersion,
+        table.identityCurrentKeyCheck,
+      ],
+      foreignColumns: [
+        identityMatchingKeyBindings.organizationId,
+        identityMatchingKeyBindings.storeId,
+        identityMatchingKeyBindings.keyVersion,
+        identityMatchingKeyBindings.keyCheck,
+      ],
+    }),
+    foreignKey({
+      name: "klaviyo_connection_identity_previous_binding_fk",
+      columns: [
+        table.organizationId,
+        table.storeId,
+        table.identityPreviousKeyVersion,
+        table.identityPreviousKeyCheck,
+      ],
+      foreignColumns: [
+        identityMatchingKeyBindings.organizationId,
+        identityMatchingKeyBindings.storeId,
+        identityMatchingKeyBindings.keyVersion,
+        identityMatchingKeyBindings.keyCheck,
+      ],
+    }),
     check(
       "klaviyo_connection_initial_source_window_check",
       sql`(${table.initialSourceFrom} is null and ${table.initialSourceTo} is null)
@@ -169,6 +230,7 @@ export const klaviyoSyncRuns = pgTable(
     rowsInserted: integer("rows_inserted").notNull().default(0),
     rowsUpdated: integer("rows_updated").notNull().default(0),
     rowsIgnored: integer("rows_ignored").notNull().default(0),
+    eventsSuppressed: integer("events_suppressed").notNull().default(0),
     warningCount: integer("warning_count").notNull().default(0),
     failureCount: integer("failure_count").notNull().default(0),
     errorCode: text("error_code"),
@@ -178,6 +240,10 @@ export const klaviyoSyncRuns = pgTable(
     finishedAt: timestamp("finished_at"),
   },
   (table) => [
+    check(
+      "klaviyo_sync_run_events_suppressed_check",
+      sql`${table.eventsSuppressed} >= 0`,
+    ),
     foreignKey({
       name: "klaviyo_sync_run_scope_fk",
       columns: [table.organizationId, table.storeId, table.connectionId],

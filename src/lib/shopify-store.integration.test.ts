@@ -195,16 +195,19 @@ const LEGACY_FOREIGN_KEYS = [
   },
 ] as const;
 
-const MIGRATION_PATH = path.resolve(
-  process.cwd(),
+const MIGRATION_PATHS = [
   "drizzle/0053_klaviyo_shopify_evidence.sql",
-);
+  "drizzle/0054_klaviyo_source_core.sql",
+  "drizzle/0055_klaviyo_advisory_matching.sql",
+].map((file) => path.resolve(process.cwd(), file));
 
 function readMigrationStatements(): string[] {
-  return readFileSync(MIGRATION_PATH, "utf8")
-    .split("--> statement-breakpoint")
-    .map((statement) => statement.trim())
-    .filter(Boolean);
+  return MIGRATION_PATHS.flatMap((migrationPath) =>
+    readFileSync(migrationPath, "utf8")
+      .split("--> statement-breakpoint")
+      .map((statement) => statement.trim())
+      .filter(Boolean),
+  );
 }
 
 async function expectConstraintViolation(

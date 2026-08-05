@@ -1325,6 +1325,9 @@ export async function listNewestEvidenceCompleteOrders(
     );
   const digestsByOrder = new Map<string, string[]>();
   for (const row of digests) {
+    // Shopify-source rows always carry an order ID; the Klaviyo source kind
+    // added by Plan 3 never matches the inArray filter above.
+    if (row.orderId === null) continue;
     const bucket = digestsByOrder.get(row.orderId) ?? [];
     bucket.push(row.digest);
     digestsByOrder.set(row.orderId, bucket);
