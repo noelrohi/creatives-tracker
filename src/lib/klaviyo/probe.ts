@@ -242,8 +242,10 @@ const RECOGNIZED_ALIAS_SOURCES: Record<
   KlaviyoEventAliasField,
   readonly string[]
 > = {
-  orderId: ["OrderId", "order_id", "$order_id"],
-  uniqueEventId: ["$event_id", "EventId"],
+  // Klaviyo's Shopify integration stamps the Shopify order ID into
+  // $event_id on Placed Order / Ordered Product events.
+  orderId: ["$event_id", "OrderId", "order_id", "$order_id"],
+  uniqueEventId: ["EventId"],
   productId: ["ProductID", "product_id", "$product_id"],
   variantId: ["VariantID", "variant_id"],
   sku: ["SKU", "sku"],
@@ -532,9 +534,26 @@ export async function runKlaviyoProbe(input: {
               (key) => key in properties && Array.isArray(properties[key]),
             );
 
-      // Identifier observations for recognized order-ID shaped keys.
-      for (const sourceKey of RECOGNIZED_ALIAS_SOURCES.orderId) {
-        if (!(sourceKey in properties)) continue;
+      // Identifier observations for recognized order-ID shaped keys. Events
+      // with no recognized key still record one observation carrying the
+      // full redacted fingerprint, so the report shows what keys existed.
+      const presentOrderIdKeys = RECOGNIZED_ALIAS_SOURCES.orderId.filter(
+        (key) => key in properties,
+      );
+      if (presentOrderIdKeys.length === 0) {
+        observations.push({
+          metricKind,
+          occurredAt,
+          sourceProperty: "unrecognized",
+          sourceType: "null",
+          normalizedValue: null,
+          productComparable,
+          attributionKinds,
+          fingerprint: evidence.fingerprint,
+          warnings: evidence.warnings,
+        });
+      }
+      for (const sourceKey of presentOrderIdKeys) {
         const forms = canonicalOrderForms(properties[sourceKey]);
         const matchedForm = forms.find((form) => sampledIds.has(form)) ?? null;
         const normalizedValue = matchedForm ?? forms[0] ?? null;
@@ -597,17 +616,22 @@ export async function runKlaviyoProbe(input: {
           digests
             .map((entry) => digestToOrderGid.get(entry.digest))
             .find((gid) => gid !== undefined) ?? null;
-        observations.push({
-          metricKind,
-          occurredAt,
-          sourceProperty: "profileEmail",
-          sourceType: "string",
-          normalizedValue: matchedGid,
-          productComparable: false,
-          attributionKinds: [],
-          fingerprint: [],
-          warnings: [],
-        });
+        // Only a matched email adds an observation: it contributes overlap
+        // coverage, while an unmatched email would only double-count the
+        // event in the unmatched summary.
+        if (matchedGid !== null) {
+          observations.push({
+            metricKind,
+            occurredAt,
+            sourceProperty: "profileEmail",
+            sourceType: "string",
+            normalizedValue: matchedGid,
+            productComparable: false,
+            attributionKinds: [],
+            fingerprint: [],
+            warnings: [],
+          });
+        }
       }
     }
   }
