@@ -921,7 +921,7 @@ export type CommitShopifyEvidenceOrderResult = {
   identityHmacId: string | null;
 };
 
-function canonicalContentChecksum(input: {
+export function canonicalContentChecksum(input: {
   order: {
     id: string;
     shopifyOrderId: string;

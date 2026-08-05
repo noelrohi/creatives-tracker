@@ -175,21 +175,29 @@ function deterministicTargets(
   return matches;
 }
 
-export function computeAdvisoryMatches(input: MatchInput): MatchComputation {
-  const ruleChecksum = stableHash(
-    [...input.approvedRules].sort((a, b) =>
+export function approvedRuleChecksum(rules: ApprovedJoinRule[]): string {
+  return stableHash(
+    [...rules].sort((a, b) =>
       `${a.eventKind}:${a.sourceProperty}:${a.targetNamespace}`.localeCompare(
         `${b.eventKind}:${b.sourceProperty}:${b.targetNamespace}`,
       ),
     ),
   );
-  const configChecksum = stableHash({
+}
+
+export function matcherConfigChecksum(): string {
+  return stableHash({
     matcherVersion: MATCHER_VERSION,
     weights: MATCH_WEIGHTS,
     tolerances: MATCH_TOLERANCES,
     minScore: DIAGNOSTIC_MIN_SCORE,
     maxScore: DIAGNOSTIC_MAX_SCORE,
   });
+}
+
+export function computeAdvisoryMatches(input: MatchInput): MatchComputation {
+  const ruleChecksum = approvedRuleChecksum(input.approvedRules);
+  const configChecksum = matcherConfigChecksum();
 
   const ordersByNumericId = new Map(
     input.orders.map((order) => [order.shopifyNumericOrderId, order]),
