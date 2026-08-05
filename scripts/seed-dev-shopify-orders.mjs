@@ -160,6 +160,13 @@ async function createProduct(title, price, sku) {
   return { title, variantId };
 }
 
+// Backdating processedAt makes the 90-day sync window interesting, but the
+// probe windows on order CREATED time (the only timestamp the pipeline
+// stores) while Klaviyo stamps events with processed time — so backdated
+// orders fall outside the probe window. Default is natural timestamps;
+// pass --backdate only to exercise the long window.
+const backdate = process.argv.includes("--backdate");
+
 async function createOrder(index, variants) {
   const lineCount = 1 + (index % 2);
   const lineItems = Array.from({ length: lineCount }, (_, line) => ({
@@ -167,9 +174,11 @@ async function createOrder(index, variants) {
     quantity: 1 + ((index + line) % 3),
   }));
   const daysAgo = index % 60;
-  const processedAt = new Date(
-    Date.now() - daysAgo * 24 * 60 * 60 * 1000 - (index % 24) * 3600 * 1000,
-  ).toISOString();
+  const processedAt = backdate
+    ? new Date(
+        Date.now() - daysAgo * 24 * 60 * 60 * 1000 - (index % 24) * 3600 * 1000,
+      ).toISOString()
+    : undefined;
 
   const result = await graphql(
     `mutation OrderCreate($order: OrderCreateOrderInput!) {
