@@ -663,3 +663,104 @@ describe("KlaviyoApiClient", () => {
     ).toThrow("Klaviyo private API key is required");
   });
 });
+
+describe("getEventById", () => {
+  function singleEventResponse(id: string, includeProfile: boolean) {
+    return new Response(
+      JSON.stringify({
+        data: {
+          type: "event",
+          id,
+          attributes: { datetime: "2026-07-20T10:00:00.000Z" },
+        },
+        included: includeProfile
+          ? [
+              {
+                type: "profile",
+                id: "profile-1",
+                attributes: { email: "subject@example.com" },
+              },
+            ]
+          : [],
+      }),
+      { status: 200, headers: { "content-type": "application/vnd.api+json" } },
+    );
+  }
+
+  it("sparse-includes profile email only for identity rotation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(singleEventResponse("event-1", true));
+    const client = new KlaviyoApiClient({
+      privateApiKey: "pk_secret",
+      fetchImpl: fetchMock,
+      sleep: async () => undefined,
+      random: () => 0,
+    });
+    const result = await client.getEventById({
+      externalEventId: "event-1",
+      request: {
+        purpose: "identity_rotation",
+        include: ["profile"],
+        profileFields: ["email"],
+      },
+    });
+    expect(result).toMatchObject({
+      purpose: "identity_rotation",
+      profileId: "profile-1",
+      profileEmail: "subject@example.com",
+    });
+    const url = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(url.pathname).toBe("/api/events/event-1");
+    expect(url.searchParams.get("include")).toBe("profile");
+    expect(url.searchParams.get("fields[profile]")).toBe("email");
+  });
+
+  it("never includes profile email for claim purposes", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(singleEventResponse("event-1", false));
+    const client = new KlaviyoApiClient({
+      privateApiKey: "pk_secret",
+      fetchImpl: fetchMock,
+      sleep: async () => undefined,
+      random: () => 0,
+    });
+    const result = await client.getEventById({
+      externalEventId: "event-1",
+      request: { purpose: "attribution_claim", include: ["metric", "attributions"] },
+    });
+    expect(result.purpose).toBe("attribution_claim");
+    const url = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(url.searchParams.get("include")).toBe("metric,attributions");
+    expect(url.searchParams.has("fields[profile]")).toBe(false);
+  });
+
+  it("rejects altered includes and mismatched returned IDs", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(singleEventResponse("event-OTHER", false));
+    const client = new KlaviyoApiClient({
+      privateApiKey: "pk_secret",
+      fetchImpl: fetchMock,
+      sleep: async () => undefined,
+      random: () => 0,
+    });
+    await expect(
+      client.getEventById({
+        externalEventId: "event-1",
+        request: {
+          purpose: "identity_rotation",
+          include: ["profile", "metric"],
+          profileFields: ["email"],
+        } as never,
+      }),
+    ).rejects.toThrow("single-event request is invalid");
+    await expect(
+      client.getEventById({
+        externalEventId: "event-1",
+        request: { purpose: "referenced_interaction", include: ["metric"] },
+      }),
+    ).rejects.toThrow("different event than requested");
+    await expect(
+      client.getEventById({
+        externalEventId: "event/../1",
+        request: { purpose: "referenced_interaction", include: ["metric"] },
+      }),
+    ).rejects.toThrow("single-event request is invalid");
+  });
+});

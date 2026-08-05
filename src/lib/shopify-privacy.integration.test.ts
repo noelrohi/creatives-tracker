@@ -603,6 +603,7 @@ describeIfDb("Shopify pilot privacy", () => {
 
     expect(result).toEqual({
       ordersCleared: 1,
+      klaviyoEventsErased: 0,
       digestsDeleted: 2,
       suppressionsUpserted: 2,
     });
@@ -616,6 +617,7 @@ describeIfDb("Shopify pilot privacy", () => {
       eraseShopifySubjectByEmail({ scope, email, keyring, suppressionKey }),
     ).resolves.toEqual({
       ordersCleared: 0,
+      klaviyoEventsErased: 0,
       digestsDeleted: 0,
       suppressionsUpserted: 0,
     });
@@ -679,8 +681,8 @@ describeIfDb("Shopify pilot privacy", () => {
       suppressionKey,
     });
 
-    expect(first).toEqual({ ordersCleared: 0, digestsDeleted: 0, suppressionsUpserted: 1 });
-    expect(replay).toEqual({ ordersCleared: 0, digestsDeleted: 0, suppressionsUpserted: 0 });
+    expect(first).toEqual({ ordersCleared: 0, digestsDeleted: 0, klaviyoEventsErased: 0, suppressionsUpserted: 1 });
+    expect(replay).toEqual({ ordersCleared: 0, digestsDeleted: 0, klaviyoEventsErased: 0, suppressionsUpserted: 0 });
     expect(await readSuppressionCount()).toBe(1);
   });
 
@@ -875,6 +877,7 @@ describeIfDb("Shopify pilot privacy", () => {
 
     await expect(erasure).resolves.toEqual({
       ordersCleared: 1,
+      klaviyoEventsErased: 0,
       digestsDeleted: 2,
       suppressionsUpserted: 2,
     });
@@ -1090,5 +1093,77 @@ describeIfDb("Shopify pilot privacy", () => {
       suppressions: 0,
       other_stores: 1,
     });
+  });
+
+  it("erases matching Klaviyo events, tombstones the profile alias, and blocks replay", async () => {
+    await testPool!.query(
+      `INSERT INTO klaviyo_connection (id, organization_id, shopify_store_id, klaviyo_account_id)
+       VALUES ('connection_a', 'org_a', 'store_a', 'account_a')`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_metric
+         (id, organization_id, shopify_store_id, connection_id, external_metric_id,
+          name, canonical_kind, ingestion_enabled, api_revision)
+       VALUES ('metric_a', 'org_a', 'store_a', 'connection_a', 'ext-placed',
+         'Placed Order', 'placed_order', 1, '2026-07-15')`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_event
+         (id, organization_id, shopify_store_id, connection_id, metric_id,
+          external_event_id, occurred_at, profile_id,
+          attribution_relationship_ids, redacted_properties,
+          key_type_fingerprint, warnings, product_evidence_completeness,
+          source_checksum, api_revision)
+       VALUES ('kevent_a', 'org_a', 'store_a', 'connection_a', 'metric_a',
+         'external-kevent-a', now(), 'profile-subject', '[]', '{}', '[]', '[]',
+         'unavailable', 'checksum-a', '2026-07-15')`,
+    );
+    const eventDigests = computeIdentityDigests({ scope, email, keyring });
+    for (const digest of eventDigests) {
+      await testPool!.query(
+        `INSERT INTO source_identity_hmac
+           (id, organization_id, store_id, source_kind, klaviyo_connection_id,
+            klaviyo_event_id, key_version, digest, rotation_state)
+         VALUES ($1, 'org_a', 'store_a', 'klaviyo_event', 'connection_a',
+           'kevent_a', $2, $3, 'active')`,
+        [`khmac_${digest.keyVersion}`, digest.keyVersion, digest.digest],
+      );
+    }
+
+    const result = await eraseShopifySubjectByEmail({
+      scope,
+      email,
+      keyring,
+      suppressionKey,
+    });
+    expect(result.klaviyoEventsErased).toBe(1);
+
+    const state = await testPool!.query(
+      `SELECT
+         (SELECT count(*)::int FROM klaviyo_event WHERE id = 'kevent_a') AS events,
+         (SELECT count(*)::int FROM source_identity_hmac
+           WHERE source_kind = 'klaviyo_event') AS event_digests,
+         (SELECT count(*)::int FROM identity_erasure_suppression
+           WHERE kind = 'klaviyo_profile_id' AND store_id = 'store_a') AS profile_tombstones`,
+    );
+    expect(state.rows[0]).toEqual({
+      events: 0,
+      event_digests: 0,
+      profile_tombstones: 1,
+    });
+    // Replayed erasure is idempotent for the Klaviyo side too.
+    const replay = await eraseShopifySubjectByEmail({
+      scope,
+      email,
+      keyring,
+      suppressionKey,
+    });
+    expect(replay.klaviyoEventsErased).toBe(0);
+    // No plaintext identity leaks into stored tombstones.
+    const tombstones = await testPool!.query(
+      `SELECT digest FROM identity_erasure_suppression WHERE store_id = 'store_a'`,
+    );
+    expect(JSON.stringify(tombstones.rows)).not.toContain("person@example.com");
+    expect(JSON.stringify(tombstones.rows)).not.toContain("profile-subject");
   });
 });

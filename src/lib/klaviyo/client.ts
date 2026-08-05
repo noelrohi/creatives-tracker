@@ -52,6 +52,8 @@ type RequestOptions = {
   path: string;
   revision: string;
   params?: URLSearchParams;
+  /** Single-resource endpoints return `data: {}`; normalize to a one-item page. */
+  singleResource?: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -277,9 +279,14 @@ function compoundPage(
   status: number,
   revision: string,
   expectedPath: string,
+  singleResource = false,
 ): KlaviyoCompoundPage {
   if (!isRecord(body)) invalidResponse(status);
-  if (!Array.isArray(body.data)) {
+  if (singleResource) {
+    if (!isRecord(body.data)) invalidResponse(status);
+    body = { ...body, data: [body.data] };
+  }
+  if (!isRecord(body) || !Array.isArray(body.data)) {
     throw new KlaviyoApiError(
       "Klaviyo API response did not contain a resource collection",
       status,
@@ -397,6 +404,7 @@ export class KlaviyoApiClient {
         response.status,
         options.revision,
         options.path,
+        options.singleResource ?? false,
       );
     }
 
@@ -451,4 +459,130 @@ export class KlaviyoApiClient {
       params,
     });
   }
+
+  /**
+   * Pinned single-event fetch with a closed purpose union: callers select a
+   * purpose and cannot construct arbitrary includes. Only identity rotation
+   * sparse-includes profile email; the claim purposes never do. The primary
+   * returned resource ID must equal the requested stored external ID.
+   */
+  async getEventById(input: {
+    externalEventId: string;
+    request: KlaviyoSingleEventRequest;
+  }): Promise<KlaviyoSingleEventResult> {
+    const externalEventId = input.externalEventId;
+    if (
+      typeof externalEventId !== "string" ||
+      externalEventId.length === 0 ||
+      externalEventId.length > 512 ||
+      /[\/?#\s]/.test(externalEventId)
+    ) {
+      throw new KlaviyoApiError(
+        "Klaviyo single-event request is invalid",
+        null,
+        false,
+      );
+    }
+    const purpose = input.request.purpose;
+    const shape = SINGLE_EVENT_REQUESTS[purpose];
+    if (
+      shape === undefined ||
+      JSON.stringify(input.request) !== JSON.stringify(shape)
+    ) {
+      throw new KlaviyoApiError(
+        "Klaviyo single-event request is invalid",
+        null,
+        false,
+      );
+    }
+    const params = new URLSearchParams({
+      include: shape.include.join(","),
+      "fields[event]": "id,datetime,event_properties,timestamp,uuid",
+    });
+    if (purpose === "identity_rotation") {
+      params.set("fields[profile]", "email");
+    } else {
+      params.set("fields[metric]", "id,name,integration");
+      if (purpose === "attribution_claim") {
+        params.set("fields[attribution]", "id");
+      }
+    }
+    const page = await this.#request({
+      path: `/api/events/${encodeURIComponent(externalEventId)}`,
+      revision: KLAVIYO_API_REVISIONS.events,
+      params,
+      singleResource: true,
+    });
+    const [event] = page.data;
+    if (!event || event.type !== "event" || event.id !== externalEventId) {
+      throw new KlaviyoApiError(
+        "Klaviyo returned a different event than requested",
+        null,
+        false,
+      );
+    }
+    if (purpose === "identity_rotation") {
+      let profileId: string | null = null;
+      let profileEmail: string | null = null;
+      for (const resource of page.included) {
+        if (resource.type !== "profile") continue;
+        profileId = resource.id;
+        const attributes = resource.attributes;
+        const email =
+          attributes && typeof attributes === "object"
+            ? (attributes as Record<string, unknown>).email
+            : null;
+        if (typeof email === "string" && email.includes("@")) {
+          profileEmail = email;
+        }
+        break;
+      }
+      return { purpose, event, profileId, profileEmail };
+    }
+    if (purpose === "attribution_claim") {
+      return {
+        purpose,
+        event,
+        attributionIds: page.included
+          .filter((resource) => resource.type === "attribution")
+          .map((resource) => resource.id),
+      };
+    }
+    return { purpose, event };
+  }
 }
+
+const SINGLE_EVENT_REQUESTS = {
+  identity_rotation: {
+    purpose: "identity_rotation",
+    include: ["profile"],
+    profileFields: ["email"],
+  },
+  attribution_claim: {
+    purpose: "attribution_claim",
+    include: ["metric", "attributions"],
+  },
+  referenced_interaction: {
+    purpose: "referenced_interaction",
+    include: ["metric"],
+  },
+} as const;
+
+export type KlaviyoSingleEventRequest =
+  | { purpose: "identity_rotation"; include: ["profile"]; profileFields: ["email"] }
+  | { purpose: "attribution_claim"; include: ["metric", "attributions"] }
+  | { purpose: "referenced_interaction"; include: ["metric"] };
+
+export type KlaviyoSingleEventResult =
+  | {
+      purpose: "identity_rotation";
+      event: KlaviyoResource;
+      profileId: string | null;
+      profileEmail: string | null;
+    }
+  | {
+      purpose: "attribution_claim";
+      event: KlaviyoResource;
+      attributionIds: string[];
+    }
+  | { purpose: "referenced_interaction"; event: KlaviyoResource };

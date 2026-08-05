@@ -228,7 +228,10 @@ export async function publishMatchRun(input: {
         ) => {
           const rows = await tx
             .update(table)
-            .set({ supersededAt: publishedAt, supersessionReason: reason })
+            .set({
+              supersededAt: sql`greatest(${table.publishedAt}, now())`,
+              supersessionReason: reason,
+            })
             .where(where)
             .returning({ runId: table.runId });
           for (const row of rows) affectedRunIds.add(row.runId);
@@ -388,7 +391,9 @@ export async function publishMatchRun(input: {
         // zero-result publication.
         const zeroRows = await tx
           .update(klaviyoMatchRuns)
-          .set({ supersededAt: publishedAt })
+          .set({
+            supersededAt: sql`greatest(${klaviyoMatchRuns.publishedAt}, now())`,
+          })
           .where(
             and(
               eq(klaviyoMatchRuns.connectionId, input.scope.connectionId),

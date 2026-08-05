@@ -65,7 +65,7 @@ export async function recountMatchRunCurrentness(
 
     await tx
       .update(klaviyoMatchRuns)
-      .set({ supersededAt: new Date() })
+      .set({ supersededAt: sql`greatest(${klaviyoMatchRuns.publishedAt}, now())` })
       .where(
         and(eq(klaviyoMatchRuns.id, run.id), isNull(klaviyoMatchRuns.supersededAt)),
       );

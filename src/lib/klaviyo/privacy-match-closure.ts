@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { recountMatchRunCurrentness } from "@/lib/klaviyo/match-currentness";
 import type { KlaviyoStoreTransaction } from "@/lib/klaviyo/source-store";
 import type { KlaviyoConnectionScope } from "@/lib/klaviyo/types";
@@ -123,7 +123,9 @@ export async function eraseSuppressedKlaviyoEventEvidence(input: {
     await tx
       .update(klaviyoOrderMatchResults)
       .set({
-        supersededAt: new Date(),
+        // DB-clock supersession keeps published_at <= superseded_at under
+        // host/container clock skew.
+        supersededAt: sql`greatest(${klaviyoOrderMatchResults.publishedAt}, now())`,
         supersessionReason: "privacy_erasure",
         selectedCandidateId: null,
         selectedClass: null,
