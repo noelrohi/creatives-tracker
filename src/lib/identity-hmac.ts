@@ -13,7 +13,10 @@ export type VersionedIdentityDigest = {
   digest: string;
   rotationState: "active" | "rotation_previous";
 };
-export type ErasureSuppressionKind = "email" | "shopify_customer_id";
+export type ErasureSuppressionKind =
+  | "email"
+  | "shopify_customer_id"
+  | "klaviyo_profile_id";
 export type ErasureSuppressionKey = {
   version: string;
   secret: Uint8Array;
@@ -310,11 +313,13 @@ export function computeErasureSuppressionDigests({
   key,
   email,
   shopifyCustomerId,
+  klaviyoProfileId,
 }: {
   scope: IdentityScope;
   key: ErasureSuppressionKey;
   email?: string | null;
   shopifyCustomerId?: string | null;
+  klaviyoProfileId?: string | null;
 }): ErasureSuppressionDigest[] {
   const tenantKey = deriveErasureSuppressionTenantKey(key, scope);
   const digests: ErasureSuppressionDigest[] = [];
@@ -335,6 +340,15 @@ export function computeErasureSuppressionDigests({
         tenantKey,
         `shopify-customer-id:${shopifyCustomerId}`,
       ),
+    });
+  }
+  if (klaviyoProfileId != null) {
+    // Domain-separated alias for the opaque provider profile ID; the raw
+    // ID is never stored as a suppression value.
+    digests.push({
+      kind: "klaviyo_profile_id",
+      keyVersion: key.version,
+      digest: hmacBase64Url(tenantKey, `klaviyo-profile-id:${klaviyoProfileId}`),
     });
   }
 

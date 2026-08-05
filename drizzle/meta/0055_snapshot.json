@@ -1,5 +1,5 @@
 {
-  "id": "eb885d94-b486-40ac-b442-5b97fcaebdc0",
+  "id": "d9bfdf8f-f39a-4fda-bab8-765b656fc42e",
   "prevId": "e48f381b-6644-404d-b18d-dcc3345ec85e",
   "version": "7",
   "dialect": "postgresql",
@@ -2692,7 +2692,7 @@
         },
         "klaviyo_event_match_result_selection_check": {
           "name": "klaviyo_event_match_result_selection_check",
-          "value": "(\"klaviyo_event_match_result\".\"status\" = 'confirmed'\n          and \"klaviyo_event_match_result\".\"selected_candidate_id\" is not null\n          and \"klaviyo_event_match_result\".\"selected_class\" = 'deterministic')\n        or (\"klaviyo_event_match_result\".\"status\" = 'candidate'\n          and \"klaviyo_event_match_result\".\"selected_candidate_id\" is not null\n          and \"klaviyo_event_match_result\".\"selected_class\" = 'diagnostic')\n        or (\"klaviyo_event_match_result\".\"status\" in ('ambiguous', 'unmatched')\n          and \"klaviyo_event_match_result\".\"selected_candidate_id\" is null\n          and \"klaviyo_event_match_result\".\"selected_class\" is null)"
+          "value": "\"klaviyo_event_match_result\".\"superseded_at\" is not null\n        or (\"klaviyo_event_match_result\".\"status\" = 'confirmed'\n          and \"klaviyo_event_match_result\".\"selected_candidate_id\" is not null\n          and \"klaviyo_event_match_result\".\"selected_class\" = 'deterministic')\n        or (\"klaviyo_event_match_result\".\"status\" = 'candidate'\n          and \"klaviyo_event_match_result\".\"selected_candidate_id\" is not null\n          and \"klaviyo_event_match_result\".\"selected_class\" = 'diagnostic')\n        or (\"klaviyo_event_match_result\".\"status\" in ('ambiguous', 'unmatched')\n          and \"klaviyo_event_match_result\".\"selected_candidate_id\" is null\n          and \"klaviyo_event_match_result\".\"selected_class\" is null)"
         },
         "klaviyo_event_match_result_counts_check": {
           "name": "klaviyo_event_match_result_counts_check",
@@ -4395,7 +4395,7 @@
         },
         "klaviyo_order_match_result_selection_check": {
           "name": "klaviyo_order_match_result_selection_check",
-          "value": "(\"klaviyo_order_match_result\".\"status\" = 'confirmed'\n          and \"klaviyo_order_match_result\".\"selected_candidate_id\" is not null\n          and \"klaviyo_order_match_result\".\"selected_class\" = 'deterministic'\n          and \"klaviyo_order_match_result\".\"selected_event_id\" is not null)\n        or (\"klaviyo_order_match_result\".\"status\" = 'candidate'\n          and \"klaviyo_order_match_result\".\"selected_candidate_id\" is not null\n          and \"klaviyo_order_match_result\".\"selected_class\" = 'diagnostic'\n          and \"klaviyo_order_match_result\".\"selected_event_id\" is not null)\n        or (\"klaviyo_order_match_result\".\"status\" in ('ambiguous', 'no_klaviyo_event', 'duplicate_conversion_events')\n          and \"klaviyo_order_match_result\".\"selected_candidate_id\" is null\n          and \"klaviyo_order_match_result\".\"selected_class\" is null\n          and \"klaviyo_order_match_result\".\"selected_event_id\" is null)"
+          "value": "\"klaviyo_order_match_result\".\"superseded_at\" is not null\n        or (\"klaviyo_order_match_result\".\"status\" = 'confirmed'\n          and \"klaviyo_order_match_result\".\"selected_candidate_id\" is not null\n          and \"klaviyo_order_match_result\".\"selected_class\" = 'deterministic'\n          and \"klaviyo_order_match_result\".\"selected_event_id\" is not null)\n        or (\"klaviyo_order_match_result\".\"status\" = 'candidate'\n          and \"klaviyo_order_match_result\".\"selected_candidate_id\" is not null\n          and \"klaviyo_order_match_result\".\"selected_class\" = 'diagnostic'\n          and \"klaviyo_order_match_result\".\"selected_event_id\" is not null)\n        or (\"klaviyo_order_match_result\".\"status\" in ('ambiguous', 'no_klaviyo_event', 'duplicate_conversion_events')\n          and \"klaviyo_order_match_result\".\"selected_candidate_id\" is null\n          and \"klaviyo_order_match_result\".\"selected_class\" is null\n          and \"klaviyo_order_match_result\".\"selected_event_id\" is null)"
         },
         "klaviyo_order_match_result_product_status_check": {
           "name": "klaviyo_order_match_result_product_status_check",

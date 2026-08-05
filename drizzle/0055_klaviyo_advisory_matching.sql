@@ -52,7 +52,8 @@ CREATE TABLE "klaviyo_event_match_result" (
 	CONSTRAINT "klaviyo_event_match_result_run_event_uniq" UNIQUE("run_id","event_id"),
 	CONSTRAINT "klaviyo_event_match_result_run_status_check" CHECK ("klaviyo_event_match_result"."run_status" = 'published'),
 	CONSTRAINT "klaviyo_event_match_result_status_check" CHECK ("klaviyo_event_match_result"."status" in ('confirmed', 'candidate', 'ambiguous', 'unmatched')),
-	CONSTRAINT "klaviyo_event_match_result_selection_check" CHECK (("klaviyo_event_match_result"."status" = 'confirmed'
+	CONSTRAINT "klaviyo_event_match_result_selection_check" CHECK ("klaviyo_event_match_result"."superseded_at" is not null
+        or ("klaviyo_event_match_result"."status" = 'confirmed'
           and "klaviyo_event_match_result"."selected_candidate_id" is not null
           and "klaviyo_event_match_result"."selected_class" = 'deterministic')
         or ("klaviyo_event_match_result"."status" = 'candidate'
@@ -287,7 +288,8 @@ CREATE TABLE "klaviyo_order_match_result" (
 	CONSTRAINT "klaviyo_order_match_result_run_status_check" CHECK ("klaviyo_order_match_result"."run_status" = 'published'),
 	CONSTRAINT "klaviyo_order_match_result_status_check" CHECK ("klaviyo_order_match_result"."status" in
         ('confirmed', 'candidate', 'ambiguous', 'no_klaviyo_event', 'duplicate_conversion_events')),
-	CONSTRAINT "klaviyo_order_match_result_selection_check" CHECK (("klaviyo_order_match_result"."status" = 'confirmed'
+	CONSTRAINT "klaviyo_order_match_result_selection_check" CHECK ("klaviyo_order_match_result"."superseded_at" is not null
+        or ("klaviyo_order_match_result"."status" = 'confirmed'
           and "klaviyo_order_match_result"."selected_candidate_id" is not null
           and "klaviyo_order_match_result"."selected_class" = 'deterministic'
           and "klaviyo_order_match_result"."selected_event_id" is not null)

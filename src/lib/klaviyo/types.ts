@@ -2,6 +2,10 @@ import {
   inclusiveStoreDaysToHalfOpenUtc,
   type HalfOpenWindow,
 } from "@/lib/evidence-window";
+import type {
+  ErasureSuppressionDigest,
+  VersionedIdentityDigest,
+} from "@/lib/identity-hmac";
 
 export { inclusiveStoreDaysToHalfOpenUtc };
 export type { HalfOpenWindow };
@@ -193,6 +197,13 @@ export type NormalizedKlaviyoEvent = {
   productEvidenceCompleteness: ProductEvidenceCompleteness;
   sourceChecksum: string;
   apiRevision: string;
+  /**
+   * Versioned tenant-derived matching digests (Plan 3). Never part of the
+   * identity-free sourceChecksum.
+   */
+  identityDigests: VersionedIdentityDigest[];
+  /** Domain-separated erasure-suppression HMAC candidates (email + profile). */
+  erasureSuppressionCandidates: ErasureSuppressionDigest[];
 };
 
 export function initialEventCheckpoint(): KlaviyoEventCheckpoint {

@@ -143,6 +143,8 @@ function eventFixture(
   return {
     externalEventId: "event-external-a",
     eventUuid: "uuid-a",
+    identityDigests: [],
+    erasureSuppressionCandidates: [],
     metricId: "metric-row-placed",
     metricKind: "placed_order",
     occurredAt: new Date("2026-07-20T10:00:00.000Z"),
@@ -620,7 +622,12 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
         events: [eventFixture()],
         rowsRead: 1,
       }),
-    ).resolves.toEqual({ committed: true, inserted: 1, updated: 0 });
+    ).resolves.toEqual({
+      committed: true,
+      inserted: 1,
+      updated: 0,
+      suppressed: 0,
+    });
 
     const observation = await testPool!.query(
       `SELECT observed_source_checksum FROM klaviyo_event_run_observation
@@ -637,7 +644,12 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
       events: [eventFixture()],
       rowsRead: 1,
     });
-    expect(replay).toEqual({ committed: false, inserted: 0, updated: 0 });
+    expect(replay).toEqual({
+      committed: false,
+      inserted: 0,
+      updated: 0,
+      suppressed: 0,
+    });
 
     await store.commitKlaviyoEventPage({
       scope,

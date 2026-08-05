@@ -1,4 +1,13 @@
 import { createHash } from "node:crypto";
+import {
+  computeErasureSuppressionDigests,
+  computeIdentityDigests,
+  type ErasureSuppressionDigest,
+  type ErasureSuppressionKey,
+  type IdentityHmacKeyring,
+  type IdentityScope,
+  type VersionedIdentityDigest,
+} from "@/lib/identity-hmac";
 import type { KlaviyoCompoundPage, KlaviyoResource } from "@/lib/klaviyo/client";
 import {
   KLAVIYO_ALIAS_KEY_MAX_UTF8_BYTES,
@@ -675,7 +684,7 @@ const PROFILE_DERIVED_WARNINGS = new Set([
 
 type NormalizedEventWithoutChecksum = Omit<
   NormalizedKlaviyoEvent,
-  "sourceChecksum"
+  "sourceChecksum" | "identityDigests" | "erasureSuppressionCandidates"
 >;
 
 type NormalizedEventDraft = {
@@ -843,6 +852,85 @@ function normalizeResource(input: {
   return { event: normalizedWithoutChecksum, normalizedBytes };
 }
 
+export type NormalizeEventPageIdentityInput = {
+  scope: IdentityScope;
+  identityKeyring: IdentityHmacKeyring;
+  suppressionKey: ErasureSuppressionKey;
+};
+
+/**
+ * Extract sparse included profile emails for in-memory HMAC derivation.
+ * Emails never leave this function inside a normalized event.
+ */
+function includedProfileEmails(page: KlaviyoCompoundPage): Map<string, string> {
+  const emails = new Map<string, string>();
+  let included: unknown;
+  try {
+    included = page.included;
+  } catch {
+    return emails;
+  }
+  if (!Array.isArray(included)) return emails;
+  for (const resource of included) {
+    if (!isRecord(resource)) continue;
+    let type: unknown;
+    let id: unknown;
+    let attributes: unknown;
+    try {
+      type = resource.type;
+      id = resource.id;
+      attributes = resource.attributes;
+    } catch {
+      continue;
+    }
+    if (type !== "profile" || typeof id !== "string") continue;
+    if (!isRecord(attributes)) continue;
+    let email: unknown;
+    try {
+      email = attributes.email;
+    } catch {
+      continue;
+    }
+    if (
+      typeof email === "string" &&
+      email.includes("@") &&
+      isKlaviyoRawStringWithinBounds(email)
+    ) {
+      emails.set(id, email);
+    }
+  }
+  return emails;
+}
+
+function deriveEventIdentity(
+  event: NormalizedEventWithoutChecksum,
+  identity: NormalizeEventPageIdentityInput | undefined,
+  profileEmailById: Map<string, string>,
+): {
+  identityDigests: VersionedIdentityDigest[];
+  erasureSuppressionCandidates: ErasureSuppressionDigest[];
+} {
+  if (!identity || event.profileId === null) {
+    return { identityDigests: [], erasureSuppressionCandidates: [] };
+  }
+  const email = profileEmailById.get(event.profileId) ?? null;
+  const identityDigests =
+    email === null
+      ? []
+      : computeIdentityDigests({
+          scope: identity.scope,
+          email,
+          keyring: identity.identityKeyring,
+        });
+  const erasureSuppressionCandidates = computeErasureSuppressionDigests({
+    scope: identity.scope,
+    key: identity.suppressionKey,
+    email,
+    klaviyoProfileId: event.profileId,
+  });
+  return { identityDigests, erasureSuppressionCandidates };
+}
+
 export function normalizeEventPage(input: {
   metricRowId: string;
   externalMetricId: string;
@@ -851,6 +939,7 @@ export function normalizeEventPage(input: {
   merchantHosts: ReadonlySet<string>;
   approvedAliases: EventAliasRegistry;
   page: KlaviyoCompoundPage;
+  identity?: NormalizeEventPageIdentityInput;
 }): NormalizedKlaviyoEvent[] {
   let metricRowId: unknown;
   let externalMetricId: unknown;
@@ -921,8 +1010,14 @@ export function normalizeEventPage(input: {
   ) {
     invalidPage();
   }
+  const profileEmailById = input.identity
+    ? includedProfileEmails(page)
+    : new Map<string, string>();
   return drafts.map(({ event }) => ({
     ...event,
+    ...deriveEventIdentity(event, input.identity, profileEmailById),
+    // The content checksum stays identity-free: digests and suppression
+    // candidates never influence it.
     sourceChecksum: checksum(event),
   }));
 }

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseErasureSuppressionKey,
+  parseIdentityHmacKeyring,
+} from "@/lib/identity-hmac";
+import {
   KLAVIYO_EVENT_MAX_NORMALIZED_BYTES,
   KLAVIYO_EVENT_PAGE_MAX_EVENTS,
   KLAVIYO_EVENT_PAGE_MAX_NORMALIZED_BYTES,
@@ -1157,6 +1161,190 @@ describe("normalizeEventPage", () => {
     ).toThrow("event page is invalid");
     expect(KLAVIYO_EVENT_MAX_NORMALIZED_BYTES).toBeLessThan(
       KLAVIYO_EVENT_PAGE_MAX_NORMALIZED_BYTES,
+    );
+  });
+});
+
+describe("normalizeEventPage identity digests", () => {
+  const SECRET_A = "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE";
+  const SECRET_B = "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI";
+  const SECRET_S = "Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M";
+
+  const scope = { organizationId: "org-1", storeId: "store-1" };
+  const suppressionKey = parseErasureSuppressionKey({
+    IDENTITY_ERASURE_HMAC_SECRET: SECRET_S,
+    IDENTITY_ERASURE_HMAC_KEY_VERSION: "e1",
+  } as unknown as NodeJS.ProcessEnv);
+  const currentOnlyKeyring = parseIdentityHmacKeyring({
+    IDENTITY_HMAC_SECRET: SECRET_A,
+    IDENTITY_HMAC_KEY_VERSION: "v2",
+  });
+  const rotationKeyring = parseIdentityHmacKeyring({
+    IDENTITY_HMAC_SECRET: SECRET_A,
+    IDENTITY_HMAC_KEY_VERSION: "v2",
+    IDENTITY_HMAC_PREVIOUS_SECRET: SECRET_B,
+    IDENTITY_HMAC_PREVIOUS_KEY_VERSION: "v1",
+  });
+
+  const identityAliases = {
+    orderId: "OrderId",
+    uniqueEventId: "$event_id",
+    productId: "ProductID",
+    variantId: null,
+    sku: null,
+    productName: null,
+    variantName: null,
+    quantity: "Quantity",
+    value: null,
+    currency: null,
+    items: null,
+  };
+
+  function identityPage() {
+    return {
+      data: [
+        {
+          type: "event",
+          id: "event-identity-1",
+          attributes: {
+            datetime: "2026-07-20T10:00:00.000Z",
+            uuid: "uuid-identity-1",
+            event_properties: {
+              OrderId: "gid://shopify/Order/1001",
+              $event_id: "provider-1",
+              ProductID: "product-1",
+              Quantity: 2,
+            },
+          },
+          relationships: {
+            profile: { data: { type: "profile", id: "profile-identity-1" } },
+            metric: { data: { type: "metric", id: "metric-external-1" } },
+          },
+        },
+      ],
+      included: [
+        {
+          type: "profile",
+          id: "profile-identity-1",
+          attributes: { email: "person@example.com" },
+        },
+      ],
+      nextCursor: null,
+      apiRevision: "2026-07-15",
+    };
+  }
+
+  function normalizeWithIdentity(
+    keyring: ReturnType<typeof parseIdentityHmacKeyring>,
+  ) {
+    return normalizeEventPage({
+      metricRowId: "metric-row-1",
+      externalMetricId: "metric-external-1",
+      metricKind: "placed_order",
+      apiRevision: "2026-07-15",
+      merchantHosts: new Set(["reviv.example.com"]),
+      approvedAliases: identityAliases,
+      page: identityPage(),
+      identity: { scope, identityKeyring: keyring, suppressionKey },
+    });
+  }
+
+  it("normalizes a Shopify-native Placed Order without retaining plaintext email", () => {
+    const [event] = normalizeWithIdentity(currentOnlyKeyring);
+    expect(event.identityDigests).toHaveLength(1);
+    expect(event.identityDigests[0].keyVersion).toBe("v2");
+    expect(event.erasureSuppressionCandidates.map((c) => c.kind).sort()).toEqual(
+      ["email", "klaviyo_profile_id"],
+    );
+    const serialized = JSON.stringify(event);
+    expect(serialized).not.toContain("person@example.com");
+    expect(serialized).not.toContain("person");
+  });
+
+  it("emits current and previous tenant-derived digests during rotation", () => {
+    const [event] = normalizeWithIdentity(rotationKeyring);
+    expect(event.identityDigests.map((d) => d.keyVersion).sort()).toEqual([
+      "v1",
+      "v2",
+    ]);
+    expect(event.identityDigests[0].digest).not.toBe(
+      event.identityDigests[1].digest,
+    );
+  });
+
+  it("keeps order-id and unique-event-id candidates in separate namespaces", () => {
+    const [event] = normalizeWithIdentity(currentOnlyKeyring);
+    expect(event.explicitOrderIdCandidate).toBe("gid://shopify/Order/1001");
+    expect(event.providerUniqueIdCandidate).toBe("provider-1");
+    expect(event.explicitOrderIdCandidate).not.toBe(
+      event.providerUniqueIdCandidate,
+    );
+  });
+
+  it("normalizes duplicate product keys as quantity-bearing observations", () => {
+    const [event] = normalizeWithIdentity(currentOnlyKeyring);
+    expect(event.products).toEqual([
+      expect.objectContaining({ productId: "product-1", quantity: 2 }),
+    ]);
+  });
+
+  it("preserves Plan 2 incomplete/unavailable product completeness", () => {
+    const page = identityPage();
+    delete (
+      page.data[0].attributes.event_properties as Record<string, unknown>
+    ).ProductID;
+    const [event] = normalizeEventPage({
+      metricRowId: "metric-row-1",
+      externalMetricId: "metric-external-1",
+      metricKind: "ordered_product",
+      apiRevision: "2026-07-15",
+      merchantHosts: new Set(["reviv.example.com"]),
+      approvedAliases: identityAliases,
+      page,
+      identity: {
+        scope,
+        identityKeyring: currentOnlyKeyring,
+        suppressionKey,
+      },
+    });
+    expect(event.productEvidenceCompleteness).not.toBe("complete");
+  });
+
+  it("keeps Plan 2 redaction and separate identifier namespaces unchanged", () => {
+    const withIdentity = normalizeWithIdentity(currentOnlyKeyring)[0];
+    const [withoutIdentity] = normalizeEventPage({
+      metricRowId: "metric-row-1",
+      externalMetricId: "metric-external-1",
+      metricKind: "placed_order",
+      apiRevision: "2026-07-15",
+      merchantHosts: new Set(["reviv.example.com"]),
+      approvedAliases: identityAliases,
+      page: identityPage(),
+    });
+    expect(withIdentity.evidence).toEqual(withoutIdentity.evidence);
+    expect(withoutIdentity.identityDigests).toEqual([]);
+    expect(withoutIdentity.erasureSuppressionCandidates).toEqual([]);
+  });
+
+  it("keeps the event content checksum stable when identity digest versions change", () => {
+    const currentOnly = normalizeWithIdentity(currentOnlyKeyring)[0];
+    const rotating = normalizeWithIdentity(rotationKeyring)[0];
+    const bare = normalizeEventPage({
+      metricRowId: "metric-row-1",
+      externalMetricId: "metric-external-1",
+      metricKind: "placed_order",
+      apiRevision: "2026-07-15",
+      merchantHosts: new Set(["reviv.example.com"]),
+      approvedAliases: identityAliases,
+      page: identityPage(),
+    })[0];
+    expect(currentOnly.sourceChecksum).toBe(rotating.sourceChecksum);
+    expect(currentOnly.sourceChecksum).toBe(bare.sourceChecksum);
+    const serializedChecksumInput = JSON.stringify({
+      digests: currentOnly.identityDigests,
+    });
+    expect(currentOnly.sourceChecksum).not.toContain(
+      serializedChecksumInput.slice(0, 12),
     );
   });
 });

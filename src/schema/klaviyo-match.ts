@@ -382,8 +382,11 @@ export const klaviyoEventMatchResults = pgTable(
       sql`${table.status} in ('confirmed', 'candidate', 'ambiguous', 'unmatched')`,
     ),
     check(
+      // Shape applies to CURRENT rows; superseded history may have edges
+      // detached by privacy erasure before its candidate cascaded away.
       "klaviyo_event_match_result_selection_check",
-      sql`(${table.status} = 'confirmed'
+      sql`${table.supersededAt} is not null
+        or (${table.status} = 'confirmed'
           and ${table.selectedCandidateId} is not null
           and ${table.selectedClass} = 'deterministic')
         or (${table.status} = 'candidate'
@@ -513,8 +516,11 @@ export const klaviyoOrderMatchResults = pgTable(
         ('confirmed', 'candidate', 'ambiguous', 'no_klaviyo_event', 'duplicate_conversion_events')`,
     ),
     check(
+      // Shape applies to CURRENT rows; superseded history may have edges
+      // detached by privacy erasure before its candidate cascaded away.
       "klaviyo_order_match_result_selection_check",
-      sql`(${table.status} = 'confirmed'
+      sql`${table.supersededAt} is not null
+        or (${table.status} = 'confirmed'
           and ${table.selectedCandidateId} is not null
           and ${table.selectedClass} = 'deterministic'
           and ${table.selectedEventId} is not null)

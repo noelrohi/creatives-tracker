@@ -13,7 +13,14 @@ import {
   sql,
 } from "drizzle-orm";
 import { db } from "@/db";
-import { parseIdentityHmacKeyring } from "@/lib/identity-hmac";
+import { timingSafeEqual } from "node:crypto";
+import {
+  computeIdentityCryptoKeyChecks,
+  parseIdentityHmacKeyring,
+  type ErasureSuppressionKey,
+  type IdentityHmacKeyring,
+} from "@/lib/identity-hmac";
+import { eraseSuppressedKlaviyoEventEvidence } from "@/lib/klaviyo/privacy-match-closure";
 import {
   EnvironmentKlaviyoCredentialProvider,
   type KlaviyoCredentialProvider,
@@ -38,7 +45,11 @@ import {
   klaviyoSyncRuns,
 } from "@/schema/klaviyo";
 import { shopifyOrders, shopifyStores } from "@/schema/shopify";
+import { identityMatchingKeyBindings } from "@/schema/identity-registry";
+import { klaviyoEventRunIdentityObservations } from "@/schema/klaviyo-match";
 import {
+  identityCryptoPolicies,
+  identityErasureSuppressions,
   shopifyOrderLines,
   sourceIdentityHmacs,
 } from "@/schema/shopify-evidence";
@@ -163,6 +174,215 @@ export async function withKlaviyoConnectionLock<T>(
   return runInTransaction(executor, async (tx) => {
     await lockConnection(tx, scope);
     return work(tx);
+  });
+}
+
+function constantTimeEqual(left: string, right: string): boolean {
+  const a = Buffer.from(left, "utf8");
+  const b = Buffer.from(right, "utf8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+const SAFE_GATE_ERROR = {
+  code: "KLAVIYO_IDENTITY_GATE_BOOTSTRAP_FAILED",
+  message:
+    "Klaviyo identity write gate bootstrap failed; resolve key configuration manually",
+} as const;
+
+function gateBootstrapFailure(): never {
+  throw new Error(SAFE_GATE_ERROR.message);
+}
+
+/**
+ * Store→connection lock order shared by identity-bearing writers. Required
+ * because a suppression hit may close Shopify-order incident results; the
+ * store lock must never be acquired after the connection lock.
+ */
+export async function withKlaviyoStoreConnectionLock<T>(
+  scope: KlaviyoConnectionScope,
+  work: (tx: KlaviyoStoreTransaction) => Promise<T>,
+  executor: TransactionExecutor = db,
+): Promise<T> {
+  return runInTransaction(executor, async (tx) => {
+    const [store] = await tx
+      .select({ id: shopifyStores.id })
+      .from(shopifyStores)
+      .where(
+        and(
+          eq(shopifyStores.organizationId, scope.organizationId),
+          eq(shopifyStores.id, scope.storeId),
+        ),
+      )
+      .for("update");
+    if (!store) throw new Error("Klaviyo store is outside this scope");
+    await lockConnection(tx, scope);
+    return work(tx);
+  });
+}
+
+/**
+ * Explicit durable identity-write-gate bootstrap. Never called implicitly
+ * by ordinary writers or rotation preparation; the Plan 3 setup/manual gate
+ * invokes it once before the first identity backfill or match.
+ */
+export async function initializeIdentityWriteGate(input: {
+  scope: KlaviyoConnectionScope;
+  keyring: IdentityHmacKeyring;
+  suppressionKey: ErasureSuppressionKey;
+}): Promise<{ initialized: boolean }> {
+  const identityScope = {
+    organizationId: input.scope.organizationId,
+    storeId: input.scope.storeId,
+  };
+  const checks = computeIdentityCryptoKeyChecks({
+    scope: identityScope,
+    keyring: input.keyring,
+    suppressionKey: input.suppressionKey,
+  });
+  const environmentCurrent = checks.matching[0];
+
+  return withKlaviyoStoreConnectionLock(input.scope, async (tx) => {
+    const [connection] = await tx
+      .select({
+        mode: klaviyoConnections.identityWriteMode,
+        currentVersion: klaviyoConnections.identityCurrentKeyVersion,
+        currentCheck: klaviyoConnections.identityCurrentKeyCheck,
+        previousVersion: klaviyoConnections.identityPreviousKeyVersion,
+      })
+      .from(klaviyoConnections)
+      .where(scopePredicate(input.scope));
+    if (!connection) throw new Error("Klaviyo connection is outside this scope");
+
+    const [policy] = await tx
+      .select({
+        matchingCurrentVersion: identityCryptoPolicies.matchingCurrentVersion,
+        matchingCurrentKeyCheck: identityCryptoPolicies.matchingCurrentKeyCheck,
+        matchingPreviousVersion: identityCryptoPolicies.matchingPreviousVersion,
+        suppressionVersion: identityCryptoPolicies.suppressionVersion,
+        suppressionKeyCheck: identityCryptoPolicies.suppressionKeyCheck,
+      })
+      .from(identityCryptoPolicies)
+      .where(
+        and(
+          eq(identityCryptoPolicies.organizationId, identityScope.organizationId),
+          eq(identityCryptoPolicies.storeId, identityScope.storeId),
+        ),
+      )
+      .for("update");
+
+    if (connection.currentVersion !== null) {
+      // Replay of an identical bootstrap is a no-op; anything else fails.
+      const identical =
+        connection.mode === "current_only" &&
+        connection.previousVersion === null &&
+        connection.currentVersion === environmentCurrent.keyVersion &&
+        constantTimeEqual(
+          connection.currentCheck ?? "",
+          environmentCurrent.keyCheck,
+        ) &&
+        policy !== undefined &&
+        policy.matchingCurrentVersion === environmentCurrent.keyVersion &&
+        constantTimeEqual(
+          policy.matchingCurrentKeyCheck,
+          environmentCurrent.keyCheck,
+        );
+      if (identical) return { initialized: false };
+      gateBootstrapFailure();
+    }
+
+    const retainedVersions = await tx
+      .selectDistinct({ keyVersion: sourceIdentityHmacs.keyVersion })
+      .from(sourceIdentityHmacs)
+      .where(
+        and(
+          eq(sourceIdentityHmacs.organizationId, identityScope.organizationId),
+          eq(sourceIdentityHmacs.storeId, identityScope.storeId),
+        ),
+      );
+    const retained = retainedVersions.map((row) => row.keyVersion);
+
+    if (policy) {
+      // Constant-time validate every environment pair against the policy.
+      if (
+        policy.matchingPreviousVersion !== null ||
+        policy.matchingCurrentVersion !== environmentCurrent.keyVersion ||
+        !constantTimeEqual(
+          policy.matchingCurrentKeyCheck,
+          environmentCurrent.keyCheck,
+        ) ||
+        policy.suppressionVersion !== checks.suppression.keyVersion ||
+        !constantTimeEqual(
+          policy.suppressionKeyCheck,
+          checks.suppression.keyCheck,
+        )
+      ) {
+        gateBootstrapFailure();
+      }
+      if (
+        retained.length > 1 ||
+        (retained.length === 1 && retained[0] !== policy.matchingCurrentVersion)
+      ) {
+        gateBootstrapFailure();
+      }
+    } else {
+      // Without a policy, retained identity rows cannot prove key
+      // possession; fail for explicit remediation.
+      if (retained.length > 0) gateBootstrapFailure();
+      const [existingBinding] = await tx
+        .select({ keyCheck: identityMatchingKeyBindings.keyCheck })
+        .from(identityMatchingKeyBindings)
+        .where(
+          and(
+            eq(
+              identityMatchingKeyBindings.organizationId,
+              identityScope.organizationId,
+            ),
+            eq(identityMatchingKeyBindings.storeId, identityScope.storeId),
+            eq(
+              identityMatchingKeyBindings.keyVersion,
+              environmentCurrent.keyVersion,
+            ),
+          ),
+        );
+      if (
+        existingBinding &&
+        !constantTimeEqual(existingBinding.keyCheck, environmentCurrent.keyCheck)
+      ) {
+        gateBootstrapFailure();
+      }
+      if (!existingBinding) {
+        await tx.insert(identityMatchingKeyBindings).values({
+          organizationId: identityScope.organizationId,
+          storeId: identityScope.storeId,
+          keyVersion: environmentCurrent.keyVersion,
+          keyCheck: environmentCurrent.keyCheck,
+        });
+      }
+      await tx.insert(identityCryptoPolicies).values({
+        organizationId: identityScope.organizationId,
+        storeId: identityScope.storeId,
+        matchingCurrentVersion: environmentCurrent.keyVersion,
+        matchingCurrentKeyCheck: environmentCurrent.keyCheck,
+        suppressionVersion: checks.suppression.keyVersion,
+        suppressionKeyCheck: checks.suppression.keyCheck,
+      });
+    }
+
+    const updated = await tx
+      .update(klaviyoConnections)
+      .set({
+        identityWriteMode: "current_only",
+        identityCurrentKeyVersion: environmentCurrent.keyVersion,
+        identityCurrentKeyCheck: environmentCurrent.keyCheck,
+        identityPreviousKeyVersion: null,
+        identityPreviousKeyCheck: null,
+        updatedAt: new Date(),
+      })
+      .where(scopePredicate(input.scope))
+      .returning({ id: klaviyoConnections.id });
+    if (updated.length !== 1) gateBootstrapFailure();
+    return { initialized: true };
   });
 }
 
@@ -923,7 +1143,9 @@ export async function commitKlaviyoEventPage(input: {
     throw new Error("Klaviyo page row count is invalid");
   }
 
-  return withKlaviyoConnectionLock(input.scope, async (tx) => {
+  // Store→connection→run lock order: a suppression hit may close
+  // Shopify-order incident results, so the store lock comes first.
+  return withKlaviyoStoreConnectionLock(input.scope, async (tx) => {
     const [run] = await tx
       .select({
         checkpoint: klaviyoSyncRuns.checkpoint,
@@ -945,7 +1167,7 @@ export async function commitKlaviyoEventPage(input: {
     assertExactOrderCoreRequestParameters(run.requestParameters);
     if (run.checkpoint !== null) assertExactEventCheckpoint(run.checkpoint);
     if (!sameCheckpoint(run.checkpoint, input.expectedCheckpoint)) {
-      return { committed: false as const, inserted: 0, updated: 0 };
+      return { committed: false as const, inserted: 0, updated: 0, suppressed: 0 };
     }
 
     const enabledOrderMetrics = await tx
@@ -1000,10 +1222,128 @@ export async function commitKlaviyoEventPage(input: {
       }
     }
 
+    const [gate] = await tx
+      .select({
+        mode: klaviyoConnections.identityWriteMode,
+        currentVersion: klaviyoConnections.identityCurrentKeyVersion,
+        currentCheck: klaviyoConnections.identityCurrentKeyCheck,
+        previousVersion: klaviyoConnections.identityPreviousKeyVersion,
+        previousCheck: klaviyoConnections.identityPreviousKeyCheck,
+      })
+      .from(klaviyoConnections)
+      .where(scopePredicate(input.scope));
+    const identityBearing = input.events.some(
+      (event) =>
+        event.identityDigests.length > 0 ||
+        event.erasureSuppressionCandidates.length > 0,
+    );
+    if (identityBearing) {
+      if (!gate || gate.currentVersion === null) {
+        throw new Error(
+          "Klaviyo identity write gate is not initialized for this connection",
+        );
+      }
+      const [policy] = await tx
+        .select({
+          matchingCurrentVersion: identityCryptoPolicies.matchingCurrentVersion,
+          matchingCurrentKeyCheck:
+            identityCryptoPolicies.matchingCurrentKeyCheck,
+          matchingPreviousVersion:
+            identityCryptoPolicies.matchingPreviousVersion,
+          matchingPreviousKeyCheck:
+            identityCryptoPolicies.matchingPreviousKeyCheck,
+        })
+        .from(identityCryptoPolicies)
+        .where(
+          and(
+            eq(
+              identityCryptoPolicies.organizationId,
+              input.scope.organizationId,
+            ),
+            eq(identityCryptoPolicies.storeId, input.scope.storeId),
+          ),
+        );
+      const policyAgrees =
+        policy !== undefined &&
+        policy.matchingCurrentVersion === gate.currentVersion &&
+        constantTimeEqual(
+          policy.matchingCurrentKeyCheck,
+          gate.currentCheck ?? "",
+        ) &&
+        (gate.mode !== "dual" ||
+          (policy.matchingPreviousVersion === gate.previousVersion &&
+            constantTimeEqual(
+              policy.matchingPreviousKeyCheck ?? "",
+              gate.previousCheck ?? "",
+            )));
+      if (!policyAgrees) {
+        throw new Error(
+          "Klaviyo identity write gate disagrees with the store crypto policy",
+        );
+      }
+    }
+    const authorizedVersions: string[] =
+      gate === undefined || gate.currentVersion === null
+        ? []
+        : gate.mode === "dual" && gate.previousVersion !== null
+          ? [gate.currentVersion, gate.previousVersion]
+          : [gate.currentVersion];
+
     let inserted = 0;
     let updated = 0;
+    let suppressedCount = 0;
     const pageCommittedAt = new Date();
     for (const event of input.events) {
+      if (event.erasureSuppressionCandidates.length > 0) {
+        const [suppressionHit] = await tx
+          .select({ id: identityErasureSuppressions.id })
+          .from(identityErasureSuppressions)
+          .where(
+            and(
+              eq(
+                identityErasureSuppressions.organizationId,
+                input.scope.organizationId,
+              ),
+              eq(identityErasureSuppressions.storeId, input.scope.storeId),
+              or(
+                ...event.erasureSuppressionCandidates.map((candidate) =>
+                  and(
+                    eq(identityErasureSuppressions.kind, candidate.kind),
+                    eq(identityErasureSuppressions.keyVersion, candidate.keyVersion),
+                    eq(identityErasureSuppressions.digest, candidate.digest),
+                  ),
+                ),
+              ),
+            ),
+          )
+          .limit(1);
+        if (suppressionHit) {
+          const [existingSuppressed] = await tx
+            .select({ id: klaviyoEvents.id })
+            .from(klaviyoEvents)
+            .where(
+              and(
+                eq(klaviyoEvents.organizationId, input.scope.organizationId),
+                eq(klaviyoEvents.storeId, input.scope.storeId),
+                eq(klaviyoEvents.connectionId, input.scope.connectionId),
+                eq(klaviyoEvents.externalEventId, event.externalEventId),
+              ),
+            )
+            .limit(1);
+          if (existingSuppressed) {
+            await eraseSuppressedKlaviyoEventEvidence({
+              scope: input.scope,
+              eventId: existingSuppressed.id,
+              suppressionId: suppressionHit.id,
+              tx,
+            });
+          }
+          // Only a safe counter survives; no event, product, profile ID,
+          // digest, or observation is written for a suppressed subject.
+          suppressedCount += 1;
+          continue;
+        }
+      }
       const [existing] = await tx
         .select({ id: klaviyoEvents.id, checksum: klaviyoEvents.sourceChecksum })
         .from(klaviyoEvents)
@@ -1130,6 +1470,108 @@ export async function commitKlaviyoEventPage(input: {
         }
       }
 
+      if (event.identityDigests.length > 0 && gate?.currentVersion) {
+        const digestByVersion = new Map(
+          event.identityDigests.map((entry) => [entry.keyVersion, entry.digest]),
+        );
+        let currentRowId: string | null = null;
+        for (const version of authorizedVersions) {
+          const digest = digestByVersion.get(version);
+          if (digest === undefined) continue;
+          const [existingRow] = await tx
+            .select({
+              id: sourceIdentityHmacs.id,
+              digest: sourceIdentityHmacs.digest,
+            })
+            .from(sourceIdentityHmacs)
+            .where(
+              and(
+                eq(sourceIdentityHmacs.organizationId, input.scope.organizationId),
+                eq(sourceIdentityHmacs.storeId, input.scope.storeId),
+                eq(sourceIdentityHmacs.klaviyoConnectionId, input.scope.connectionId),
+                eq(sourceIdentityHmacs.klaviyoEventId, stored.id),
+                eq(sourceIdentityHmacs.keyVersion, version),
+              ),
+            );
+          let rowId: string;
+          if (existingRow && existingRow.digest === digest) {
+            // Identical digest replay reuses the immutable row ID.
+            rowId = existingRow.id;
+          } else {
+            if (existingRow) {
+              // Changed digest replaces the row so dependent identity
+              // observations cascade before the fresh link.
+              await tx
+                .delete(sourceIdentityHmacs)
+                .where(eq(sourceIdentityHmacs.id, existingRow.id));
+            }
+            const [insertedRow] = await tx
+              .insert(sourceIdentityHmacs)
+              .values({
+                organizationId: input.scope.organizationId,
+                storeId: input.scope.storeId,
+                sourceKind: "klaviyo_event",
+                klaviyoConnectionId: input.scope.connectionId,
+                klaviyoEventId: stored.id,
+                keyVersion: version,
+                digest,
+                rotationState: "active",
+              })
+              .returning({ id: sourceIdentityHmacs.id });
+            rowId = insertedRow.id;
+          }
+          if (version === gate.currentVersion) currentRowId = rowId;
+        }
+        if (currentRowId !== null) {
+          const linked = await tx
+            .insert(klaviyoEventRunIdentityObservations)
+            .values({
+              organizationId: input.scope.organizationId,
+              storeId: input.scope.storeId,
+              connectionId: input.scope.connectionId,
+              syncRunId: input.syncRunId,
+              eventId: stored.id,
+              identityHmacId: currentRowId,
+            })
+            .onConflictDoNothing({
+              target: [
+                klaviyoEventRunIdentityObservations.connectionId,
+                klaviyoEventRunIdentityObservations.syncRunId,
+                klaviyoEventRunIdentityObservations.eventId,
+              ],
+            })
+            .returning({
+              identityHmacId: klaviyoEventRunIdentityObservations.identityHmacId,
+            });
+          if (linked.length === 0) {
+            const [prior] = await tx
+              .select({
+                identityHmacId:
+                  klaviyoEventRunIdentityObservations.identityHmacId,
+              })
+              .from(klaviyoEventRunIdentityObservations)
+              .where(
+                and(
+                  eq(
+                    klaviyoEventRunIdentityObservations.connectionId,
+                    input.scope.connectionId,
+                  ),
+                  eq(
+                    klaviyoEventRunIdentityObservations.syncRunId,
+                    input.syncRunId,
+                  ),
+                  eq(klaviyoEventRunIdentityObservations.eventId, stored.id),
+                ),
+              );
+            if (prior?.identityHmacId !== currentRowId) {
+              throw new Error(
+                "Klaviyo run identity observation changed during replay",
+              );
+            }
+          }
+        }
+      }
+
       if (!existing) inserted += 1;
       else if (existing.checksum !== event.sourceChecksum) updated += 1;
     }
@@ -1145,6 +1587,7 @@ export async function commitKlaviyoEventPage(input: {
         rowsRead: sql`${klaviyoSyncRuns.rowsRead} + ${input.rowsRead}`,
         rowsInserted: sql`${klaviyoSyncRuns.rowsInserted} + ${inserted}`,
         rowsUpdated: sql`${klaviyoSyncRuns.rowsUpdated} + ${updated}`,
+        eventsSuppressed: sql`${klaviyoSyncRuns.eventsSuppressed} + ${suppressedCount}`,
       })
       .where(
         and(
@@ -1158,7 +1601,12 @@ export async function commitKlaviyoEventPage(input: {
       )
       .returning({ id: klaviyoSyncRuns.id });
     if (advanced.length !== 1) throw new Error("Klaviyo event checkpoint raced");
-    return { committed: true as const, inserted, updated };
+    return {
+      committed: true as const,
+      inserted,
+      updated,
+      suppressed: suppressedCount,
+    };
   });
 }
 

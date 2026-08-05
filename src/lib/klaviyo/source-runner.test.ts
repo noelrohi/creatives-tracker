@@ -165,6 +165,7 @@ function makeRunnerDependencies(input: {
         committed: committed as true,
         inserted: committed ? commit.events.length : 0,
         updated: 0,
+        suppressed: 0,
       };
     },
   );
