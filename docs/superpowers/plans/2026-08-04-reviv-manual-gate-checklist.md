@@ -171,11 +171,15 @@ SELECT count(*) FROM klaviyo_event
 - [ ] Any section fails → **STOP**: record what failed and why; fix or amend
       the design before proceeding
 
-| Measured | Value |
-| --- | --- |
-| Sampled Shopify orders | |
-| Binding overlap count | |
-| Identifier coverage (top property) | |
-| Collisions on approved rules | 0 (required) |
-| Events ingested (90d) | |
-| Decision / date / reviewer | |
+| Measured | Sandbox dry-run (framesignal) | Reviv |
+| --- | --- | --- |
+| Sampled Shopify orders | 30 | |
+| Binding overlap count | 25 (25/25 events matched) | |
+| Identifier coverage (top property) | `$event_id`: 25 | |
+| Collisions on approved rules | 0 | 0 (required) |
+| Events ingested (90d) | 135 placed_order; 0 ordered_product (Klaviyo emitted none) | |
+| Replay idempotency | 135 read / 0 inserted / 0 updated | |
+| Decision / date / reviewer | sandbox PASS / 2026-08-05 / owner dry-run | |
+
+Sandbox limitations (retest on Reviv): email-diagnostic overlap (dev-store
+PII block), Ordered Product product evidence (no OP events emitted).
