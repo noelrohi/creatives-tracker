@@ -103,6 +103,7 @@ export async function applyMatchFixture(pool: Pool): Promise<void> {
     "0053_klaviyo_shopify_evidence.sql",
     "0054_klaviyo_source_core.sql",
     "0055_klaviyo_advisory_matching.sql",
+      "0056_klaviyo_claims_reporting.sql",
   ]) {
     for (const statement of migrationStatements(migration)) {
       await pool.query(statement);

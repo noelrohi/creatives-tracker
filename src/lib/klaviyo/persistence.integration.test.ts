@@ -226,6 +226,97 @@ async function seedBase(): Promise<void> {
   );
 }
 
+async function seedMarketingObject(
+  id: string,
+  connection: "a" | "b",
+  objectType: string,
+  externalId: string,
+  parentId: string | null = null,
+): Promise<void> {
+  const suffix = connection;
+  await testPool!.query(
+    `INSERT INTO klaviyo_marketing_object
+       (id, organization_id, shopify_store_id, connection_id, object_type,
+        external_id, parent_id, name, tracking_projection, source_checksum,
+        api_revision)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'Name', '{}', 'checksum', '2026-07-15')`,
+    [
+      id,
+      `org-${suffix}`,
+      `store-${suffix}`,
+      `connection-${suffix}`,
+      objectType,
+      externalId,
+      parentId,
+    ],
+  );
+}
+
+async function seedReportRun(id: string, status = "running"): Promise<void> {
+  await testPool!.query(
+    `INSERT INTO klaviyo_sync_run
+       (id, organization_id, shopify_store_id, connection_id, operation,
+        trigger_type, status)
+     VALUES ($1, 'org-a', 'store-a', 'connection-a', 'reports', 'manual', $2)`,
+    [id, status],
+  );
+}
+
+async function seedGeneration(
+  id: string,
+  syncRunId: string,
+  kind: string,
+  status: string,
+  scopeFingerprint: string,
+  refreshFingerprint: string,
+): Promise<void> {
+  await testPool!.query(
+    `INSERT INTO klaviyo_report_generation
+       (id, organization_id, shopify_store_id, connection_id, sync_run_id, kind,
+        requested_from, requested_to, account_timezone,
+        publication_scope_fingerprint, refresh_fingerprint, status,
+        published_at, superseded_at)
+     VALUES ($1, 'org-a', 'store-a', 'connection-a', $2, $3,
+       now() - interval '30 day', now(), 'America/New_York', $4, $5, $6,
+       CASE WHEN $6::text IN ('current', 'superseded') THEN now() END,
+       CASE WHEN $6::text = 'superseded' THEN now() END)`,
+    [id, syncRunId, kind, scopeFingerprint, refreshFingerprint, status],
+  );
+}
+
+async function seedReportFact(
+  id: string,
+  generationId: string,
+  kind: string,
+  factFingerprint: string,
+): Promise<void> {
+  await testPool!.query(
+    `INSERT INTO klaviyo_report_fact
+       (id, organization_id, shopify_store_id, connection_id, generation_id,
+        report_kind, conversion_metric_id, requested_from, requested_to,
+        account_timezone, grouping, request_fingerprint, fact_fingerprint,
+        conversions, additional_statistics, api_revision, as_of)
+     VALUES ($1, 'org-a', 'store-a', 'connection-a', $2, $3, 'metric-a',
+       now() - interval '30 day', now(), 'America/New_York', '{}', 'req-fp',
+       $4, 5, '{}', '2026-07-15', now())`,
+    [id, generationId, kind, factFingerprint],
+  );
+}
+
+async function seedClaimAnchor(): Promise<void> {
+  await testPool!.query(
+    `INSERT INTO klaviyo_match_run ${PUBLISHED_RUN_COLUMNS}
+     VALUES ${publishedRunValues("run-claims", "invocation-claims")}`,
+  );
+  await testPool!.query(
+    `INSERT INTO klaviyo_event_match_result
+       (id, organization_id, shopify_store_id, connection_id, run_id,
+        event_id, status, reason_codes, published_at)
+     VALUES ('result-claims', 'org-a', 'store-a', 'connection-a', 'run-claims',
+       'event-a', 'unmatched', '[]', now())`,
+  );
+}
+
 describeIfDb("Klaviyo advisory-matching persistence on PostgreSQL", () => {
   let adminPool: Pool | null = null;
 
@@ -238,6 +329,7 @@ describeIfDb("Klaviyo advisory-matching persistence on PostgreSQL", () => {
       "0053_klaviyo_shopify_evidence.sql",
       "0054_klaviyo_source_core.sql",
       "0055_klaviyo_advisory_matching.sql",
+      "0056_klaviyo_claims_reporting.sql",
     ]) {
       for (const statement of migrationStatements(migration)) {
         await testPool!.query(statement);
@@ -805,6 +897,506 @@ describeIfDb("Klaviyo advisory-matching persistence on PostgreSQL", () => {
       "klaviyo_order_match_result",
       "klaviyo_product_evidence_link",
       "klaviyo_event_run_identity_observation",
+    ]) {
+      const count = await testPool!.query(
+        `SELECT count(*)::int AS count FROM ${table} WHERE connection_id = 'connection-a'`,
+      );
+      expect(count.rows[0].count).toBe(0);
+    }
+  });
+
+  it("rejects a marketing object whose parent belongs to another connection", async () => {
+    await seedMarketingObject("campaign-b", "b", "campaign", "ext-campaign-b");
+    await expectSqlError(
+      `INSERT INTO klaviyo_marketing_object
+         (id, organization_id, shopify_store_id, connection_id, object_type,
+          external_id, parent_id, name, tracking_projection, source_checksum,
+          api_revision)
+       VALUES ('message-cross', 'org-a', 'store-a', 'connection-a',
+         'campaign_message', 'ext-message-x', 'campaign-b', 'Name', '{}',
+         'checksum', '2026-07-15')`,
+      ["23503"],
+    );
+  });
+
+  it("deduplicates marketing objects by connection, type, and external id", async () => {
+    await seedMarketingObject("campaign-a", "a", "campaign", "ext-shared");
+    await expectSqlError(
+      `INSERT INTO klaviyo_marketing_object
+         (id, organization_id, shopify_store_id, connection_id, object_type,
+          external_id, name, tracking_projection, source_checksum, api_revision)
+       VALUES ('campaign-dup', 'org-a', 'store-a', 'connection-a', 'campaign',
+         'ext-shared', 'Name', '{}', 'checksum', '2026-07-15')`,
+      ["23505"],
+    );
+    await seedMarketingObject("flow-a", "a", "flow", "ext-shared");
+  });
+
+  it("allows every unproven claim relationship to remain null", async () => {
+    await testPool!.query(
+      `INSERT INTO klaviyo_attribution_claim
+         (id, organization_id, shopify_store_id, connection_id,
+          conversion_event_id, klaviyo_attribution_id, unknown_reason_codes,
+          source_checksum, api_revision)
+       VALUES ('claim-null', 'org-a', 'store-a', 'connection-a', 'event-a',
+         'attribution-1', '["relationship_unavailable"]', 'checksum',
+         '2026-07-15')`,
+    );
+    const claim = await testPool!.query(
+      `SELECT attributed_interaction_event_id, campaign_object_id,
+              flow_object_id, message_object_id, variation_object_id,
+              interaction_type, interaction_occurred_at, bot_click
+         FROM klaviyo_attribution_claim WHERE id = 'claim-null'`,
+    );
+    expect(Object.values(claim.rows[0]).every((value) => value === null)).toBe(
+      true,
+    );
+  });
+
+  it("rejects a claim whose conversion event belongs to another connection", async () => {
+    await expectSqlError(
+      `INSERT INTO klaviyo_attribution_claim
+         (id, organization_id, shopify_store_id, connection_id,
+          conversion_event_id, klaviyo_attribution_id, unknown_reason_codes,
+          source_checksum, api_revision)
+       VALUES ('claim-cross', 'org-a', 'store-a', 'connection-a', 'event-b',
+         'attribution-2', '[]', 'checksum', '2026-07-15')`,
+      ["23503"],
+    );
+  });
+
+  it("rejects an attributed interaction event outside the claim connection", async () => {
+    await expectSqlError(
+      `INSERT INTO klaviyo_attribution_claim
+         (id, organization_id, shopify_store_id, connection_id,
+          conversion_event_id, klaviyo_attribution_id,
+          attributed_interaction_event_id, unknown_reason_codes,
+          source_checksum, api_revision)
+       VALUES ('claim-cross-interaction', 'org-a', 'store-a', 'connection-a',
+         'event-a', 'attribution-3', 'event-b', '[]', 'checksum',
+         '2026-07-15')`,
+      ["23503"],
+    );
+  });
+
+  it("keeps one scoped replay state per source run match run and conversion event", async () => {
+    await seedClaimAnchor();
+    await testPool!.query(
+      `INSERT INTO klaviyo_claim_replay_state
+         (id, organization_id, shopify_store_id, connection_id, source_run_id,
+          match_run_id, conversion_event_id, source_checksum, status,
+          reason_codes, attempted_at, completed_at)
+       VALUES ('state-1', 'org-a', 'store-a', 'connection-a', 'source-run-a',
+         'run-claims', 'event-a', 'checksum', 'complete', '[]', now(), now())`,
+    );
+    await expectSqlError(
+      `INSERT INTO klaviyo_claim_replay_state
+         (id, organization_id, shopify_store_id, connection_id, source_run_id,
+          match_run_id, conversion_event_id, source_checksum, status,
+          reason_codes, attempted_at, completed_at)
+       VALUES ('state-dup', 'org-a', 'store-a', 'connection-a', 'source-run-a',
+         'run-claims', 'event-a', 'checksum', 'complete', '[]', now(), now())`,
+      ["23505"],
+    );
+    await expectSqlError(
+      `INSERT INTO klaviyo_claim_replay_state
+         (id, organization_id, shopify_store_id, connection_id, source_run_id,
+          match_run_id, conversion_event_id, source_checksum, status,
+          reason_codes, attempted_at, completed_at)
+       VALUES ('state-no-anchor', 'org-a', 'store-a', 'connection-a',
+         'source-run-a', 'run-claims', 'event-po', 'checksum', 'complete',
+         '[]', now(), now())`,
+      ["23503"],
+    );
+  });
+
+  it("keeps one live claim replay graph per connection with a durable checkpoint and lease", async () => {
+    await seedClaimAnchor();
+    await testPool!.query(
+      `INSERT INTO klaviyo_claim_replay_run
+         (id, organization_id, shopify_store_id, connection_id, source_run_id,
+          match_run_id, checkpoint, status)
+       VALUES ('graph-1', 'org-a', 'store-a', 'connection-a', 'source-run-a',
+         'run-claims', '{"phase":"missing","stage":"idle"}', 'running')`,
+    );
+    const lease = await testPool!.query(
+      `SELECT checkpoint->>'phase' AS phase, heartbeat_at
+         FROM klaviyo_claim_replay_run WHERE id = 'graph-1'`,
+    );
+    expect(lease.rows[0].phase).toBe("missing");
+    expect(lease.rows[0].heartbeat_at).not.toBeNull();
+    await expectSqlError(
+      `INSERT INTO klaviyo_claim_replay_run
+         (id, organization_id, shopify_store_id, connection_id, source_run_id,
+          match_run_id, checkpoint, status)
+       VALUES ('graph-dup', 'org-a', 'store-a', 'connection-a', 'source-run-a',
+         'run-claims', '{"phase":"missing","stage":"idle"}', 'running')`,
+      ["23505"],
+    );
+    await expectSqlError(
+      `UPDATE klaviyo_claim_replay_run SET status = 'success'
+        WHERE id = 'graph-1'`,
+      ["23514"],
+    );
+    await testPool!.query(
+      `UPDATE klaviyo_claim_replay_run
+          SET status = 'success', finished_at = now() WHERE id = 'graph-1'`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_claim_replay_run
+         (id, organization_id, shopify_store_id, connection_id, source_run_id,
+          match_run_id, checkpoint, status)
+       VALUES ('graph-2', 'org-a', 'store-a', 'connection-a', 'source-run-a',
+         'run-claims', '{"phase":"missing","stage":"idle"}', 'running')`,
+    );
+  });
+
+  it("preserves replay-state history and claims on incomplete refresh", async () => {
+    await seedClaimAnchor();
+    await testPool!.query(
+      `INSERT INTO klaviyo_attribution_claim
+         (id, organization_id, shopify_store_id, connection_id,
+          conversion_event_id, klaviyo_attribution_id, unknown_reason_codes,
+          source_checksum, api_revision)
+       VALUES ('claim-history', 'org-a', 'store-a', 'connection-a', 'event-a',
+         'attribution-h', '[]', 'checksum', '2026-07-15')`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_claim_replay_state
+         (id, organization_id, shopify_store_id, connection_id, source_run_id,
+          match_run_id, conversion_event_id, source_checksum, status,
+          reason_codes, attempted_at, completed_at)
+       VALUES ('state-history', 'org-a', 'store-a', 'connection-a',
+         'source-run-a', 'run-claims', 'event-a', 'checksum', 'complete',
+         '[]', now(), now())`,
+    );
+    await testPool!.query(
+      `UPDATE klaviyo_claim_replay_state
+          SET status = 'incomplete',
+              reason_codes = '["attribution_relationship_truncated"]',
+              attempt_count = attempt_count + 1, completed_at = NULL
+        WHERE id = 'state-history'`,
+    );
+    const survivors = await testPool!.query(
+      `SELECT
+         (SELECT count(*)::int FROM klaviyo_attribution_claim
+           WHERE id = 'claim-history') AS claims,
+         (SELECT status FROM klaviyo_claim_replay_state
+           WHERE id = 'state-history') AS state_status`,
+    );
+    expect(survivors.rows[0]).toEqual({ claims: 1, state_status: "incomplete" });
+  });
+
+  it("keeps tracking settings scoped to their connection and marketing object", async () => {
+    await seedMarketingObject("campaign-a", "a", "campaign", "ext-campaign-a");
+    await seedMarketingObject(
+      "cm-a",
+      "a",
+      "campaign_message",
+      "ext-cm-a",
+      "campaign-a",
+    );
+    await seedMarketingObject("campaign-b", "b", "campaign", "ext-campaign-b");
+    await seedMarketingObject(
+      "cm-b",
+      "b",
+      "campaign_message",
+      "ext-cm-b",
+      "campaign-b",
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_tracking_setting
+         (id, organization_id, shopify_store_id, connection_id, scope,
+          parameter_name, value_mode, api_revision)
+       VALUES ('tracking-account', 'org-a', 'store-a', 'connection-a',
+         'account', 'utm_source', 'static', '2026-07-15')`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_tracking_setting
+         (id, organization_id, shopify_store_id, connection_id, scope,
+          marketing_object_id, marketing_object_type, parameter_name,
+          value_mode, api_revision)
+       VALUES ('tracking-message', 'org-a', 'store-a', 'connection-a',
+         'campaign_message', 'cm-a', 'campaign_message', 'utm_campaign',
+         'dynamic', '2026-07-15')`,
+    );
+    await expectSqlError(
+      `INSERT INTO klaviyo_tracking_setting
+         (id, organization_id, shopify_store_id, connection_id, scope,
+          marketing_object_id, marketing_object_type, parameter_name,
+          value_mode, api_revision)
+       VALUES ('tracking-account-obj', 'org-a', 'store-a', 'connection-a',
+         'account', 'cm-a', 'campaign_message', 'utm_source', 'static',
+         '2026-07-15')`,
+      ["23514"],
+    );
+    await expectSqlError(
+      `INSERT INTO klaviyo_tracking_setting
+         (id, organization_id, shopify_store_id, connection_id, scope,
+          parameter_name, value_mode, api_revision)
+       VALUES ('tracking-message-null', 'org-a', 'store-a', 'connection-a',
+         'campaign_message', 'utm_source', 'static', '2026-07-15')`,
+      ["23514"],
+    );
+    await expectSqlError(
+      `INSERT INTO klaviyo_tracking_setting
+         (id, organization_id, shopify_store_id, connection_id, scope,
+          marketing_object_id, marketing_object_type, parameter_name,
+          value_mode, api_revision)
+       VALUES ('tracking-cross', 'org-a', 'store-a', 'connection-a',
+         'campaign_message', 'cm-b', 'campaign_message', 'utm_source',
+         'static', '2026-07-15')`,
+      ["23503"],
+    );
+  });
+
+  it("deduplicates report facts by request fingerprint and fact dimensions", async () => {
+    await seedReportRun("report-run-1");
+    await seedGeneration(
+      "generation-1",
+      "report-run-1",
+      "campaign",
+      "staging",
+      "scope-campaign",
+      "refresh-1",
+    );
+    await seedReportFact("fact-1", "generation-1", "campaign", "fact-fp-1");
+    await expectSqlError(
+      `INSERT INTO klaviyo_report_fact
+         (id, organization_id, shopify_store_id, connection_id, generation_id,
+          report_kind, conversion_metric_id, requested_from, requested_to,
+          account_timezone, grouping, request_fingerprint, fact_fingerprint,
+          additional_statistics, api_revision, as_of)
+       VALUES ('fact-dup', 'org-a', 'store-a', 'connection-a', 'generation-1',
+         'campaign', 'metric-a', now() - interval '30 day', now(),
+         'America/New_York', '{}', 'req-fp', 'fact-fp-1', '{}', '2026-07-15',
+         now())`,
+      ["23505"],
+    );
+    await expectSqlError(
+      `INSERT INTO klaviyo_report_fact
+         (id, organization_id, shopify_store_id, connection_id, generation_id,
+          report_kind, conversion_metric_id, requested_from, requested_to,
+          account_timezone, grouping, request_fingerprint, fact_fingerprint,
+          additional_statistics, api_revision, as_of)
+       VALUES ('fact-kind-mismatch', 'org-a', 'store-a', 'connection-a',
+         'generation-1', 'flow', 'metric-a', now() - interval '30 day', now(),
+         'America/New_York', '{}', 'req-fp', 'fact-fp-2', '{}', '2026-07-15',
+         now())`,
+      ["23503"],
+    );
+  });
+
+  it("exposes report facts only from the current successful generation", async () => {
+    await seedReportRun("report-run-old", "success");
+    await seedReportRun("report-run-new", "success");
+    await seedGeneration(
+      "generation-old",
+      "report-run-old",
+      "campaign",
+      "superseded",
+      "scope-campaign",
+      "refresh-old",
+    );
+    await seedGeneration(
+      "generation-new",
+      "report-run-new",
+      "campaign",
+      "current",
+      "scope-campaign",
+      "refresh-new",
+    );
+    await seedReportFact("fact-old", "generation-old", "campaign", "fact-a");
+    await seedReportFact("fact-new", "generation-new", "campaign", "fact-a");
+    const current = await testPool!.query(
+      `SELECT f.id FROM klaviyo_report_fact f
+        JOIN klaviyo_report_generation g ON g.id = f.generation_id
+       WHERE g.connection_id = 'connection-a'
+         AND g.publication_scope_fingerprint = 'scope-campaign'
+         AND g.status = 'current'`,
+    );
+    expect(current.rows).toEqual([{ id: "fact-new" }]);
+  });
+
+  it("keeps one current report generation per logical kind scope across asOf refreshes", async () => {
+    await seedReportRun("report-run-cur-1", "success");
+    await seedReportRun("report-run-cur-2", "success");
+    await seedGeneration(
+      "generation-cur-1",
+      "report-run-cur-1",
+      "campaign",
+      "current",
+      "scope-campaign",
+      "refresh-a",
+    );
+    await expectSqlError(
+      `INSERT INTO klaviyo_report_generation
+         (id, organization_id, shopify_store_id, connection_id, sync_run_id,
+          kind, requested_from, requested_to, account_timezone,
+          publication_scope_fingerprint, refresh_fingerprint, status,
+          published_at)
+       VALUES ('generation-cur-2', 'org-a', 'store-a', 'connection-a',
+         'report-run-cur-2', 'campaign', now() - interval '30 day', now(),
+         'America/New_York', 'scope-campaign', 'refresh-b', 'current', now())`,
+      ["23505"],
+    );
+    await testPool!.query(
+      `UPDATE klaviyo_report_generation
+          SET status = 'superseded', superseded_at = now()
+        WHERE id = 'generation-cur-1'`,
+    );
+    await seedGeneration(
+      "generation-cur-3",
+      "report-run-cur-2",
+      "campaign",
+      "current",
+      "scope-campaign",
+      "refresh-b",
+    );
+  });
+
+  it("allows one staging generation per requested kind in a report sync run", async () => {
+    await seedReportRun("report-run-staging");
+    await seedGeneration(
+      "generation-staging-campaign",
+      "report-run-staging",
+      "campaign",
+      "staging",
+      "scope-campaign",
+      "refresh-s",
+    );
+    await seedGeneration(
+      "generation-staging-flow",
+      "report-run-staging",
+      "flow",
+      "staging",
+      "scope-flow",
+      "refresh-s",
+    );
+    await expectSqlError(
+      `INSERT INTO klaviyo_report_generation
+         (id, organization_id, shopify_store_id, connection_id, sync_run_id,
+          kind, requested_from, requested_to, account_timezone,
+          publication_scope_fingerprint, refresh_fingerprint, status)
+       VALUES ('generation-staging-dup', 'org-a', 'store-a', 'connection-a',
+         'report-run-staging', 'campaign', now() - interval '30 day', now(),
+         'America/New_York', 'scope-campaign-2', 'refresh-s2', 'staging')`,
+      ["23505"],
+    );
+  });
+
+  it("stores the connection's nullable last successful report-sync timestamp", async () => {
+    const before = await testPool!.query(
+      `SELECT last_report_synced_at FROM klaviyo_connection
+        WHERE id = 'connection-a'`,
+    );
+    expect(before.rows[0].last_report_synced_at).toBeNull();
+    await testPool!.query(
+      `UPDATE klaviyo_connection SET last_report_synced_at = now()
+        WHERE id = 'connection-a'`,
+    );
+    const after = await testPool!.query(
+      `SELECT last_report_synced_at FROM klaviyo_connection
+        WHERE id = 'connection-a'`,
+    );
+    expect(after.rows[0].last_report_synced_at).not.toBeNull();
+  });
+
+  it("allows one running dimension or report sync per connection and operation", async () => {
+    await testPool!.query(
+      `INSERT INTO klaviyo_sync_run
+         (id, organization_id, shopify_store_id, connection_id, operation,
+          trigger_type, status)
+       VALUES ('dimension-run-1', 'org-a', 'store-a', 'connection-a',
+         'dimensions', 'manual', 'running')`,
+    );
+    await expectSqlError(
+      `INSERT INTO klaviyo_sync_run
+         (id, organization_id, shopify_store_id, connection_id, operation,
+          trigger_type, status)
+       VALUES ('dimension-run-2', 'org-a', 'store-a', 'connection-a',
+         'dimensions', 'manual', 'running')`,
+      ["23505"],
+    );
+    await seedReportRun("report-run-parallel");
+    await expectSqlError(
+      `INSERT INTO klaviyo_sync_run
+         (id, organization_id, shopify_store_id, connection_id, operation,
+          trigger_type, status)
+       VALUES ('report-run-parallel-2', 'org-a', 'store-a', 'connection-a',
+         'reports', 'manual', 'running')`,
+      ["23505"],
+    );
+  });
+
+  it("cascades dimensions, claims, tracking, and reports on organization, store, or connection deletion", async () => {
+    await seedClaimAnchor();
+    await seedMarketingObject("campaign-a", "a", "campaign", "ext-campaign-a");
+    await seedMarketingObject(
+      "cm-a",
+      "a",
+      "campaign_message",
+      "ext-cm-a",
+      "campaign-a",
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_tracking_setting
+         (id, organization_id, shopify_store_id, connection_id, scope,
+          parameter_name, value_mode, api_revision)
+       VALUES ('tracking-cascade', 'org-a', 'store-a', 'connection-a',
+         'account', 'utm_source', 'static', '2026-07-15')`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_attribution_claim
+         (id, organization_id, shopify_store_id, connection_id,
+          conversion_event_id, klaviyo_attribution_id, campaign_object_id,
+          unknown_reason_codes, source_checksum, api_revision)
+       VALUES ('claim-cascade', 'org-a', 'store-a', 'connection-a', 'event-a',
+         'attribution-cascade', 'campaign-a', '[]', 'checksum', '2026-07-15')`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_claim_replay_state
+         (id, organization_id, shopify_store_id, connection_id, source_run_id,
+          match_run_id, conversion_event_id, source_checksum, status,
+          reason_codes, attempted_at, completed_at)
+       VALUES ('state-cascade', 'org-a', 'store-a', 'connection-a',
+         'source-run-a', 'run-claims', 'event-a', 'checksum', 'complete',
+         '[]', now(), now())`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_claim_replay_run
+         (id, organization_id, shopify_store_id, connection_id, source_run_id,
+          match_run_id, checkpoint, status)
+       VALUES ('graph-cascade', 'org-a', 'store-a', 'connection-a',
+         'source-run-a', 'run-claims', '{"phase":"missing","stage":"idle"}',
+         'running')`,
+    );
+    await seedReportRun("report-run-cascade");
+    await seedGeneration(
+      "generation-cascade",
+      "report-run-cascade",
+      "campaign",
+      "staging",
+      "scope-cascade",
+      "refresh-cascade",
+    );
+    await seedReportFact(
+      "fact-cascade",
+      "generation-cascade",
+      "campaign",
+      "fact-cascade",
+    );
+    await testPool!.query(
+      `DELETE FROM klaviyo_connection WHERE id = 'connection-a'`,
+    );
+    for (const table of [
+      "klaviyo_marketing_object",
+      "klaviyo_tracking_setting",
+      "klaviyo_attribution_claim",
+      "klaviyo_claim_replay_state",
+      "klaviyo_claim_replay_run",
+      "klaviyo_report_generation",
+      "klaviyo_report_fact",
     ]) {
       const count = await testPool!.query(
         `SELECT count(*)::int AS count FROM ${table} WHERE connection_id = 'connection-a'`,

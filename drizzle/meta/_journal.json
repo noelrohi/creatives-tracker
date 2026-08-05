@@ -393,6 +393,13 @@
       "when": 1785917602058,
       "tag": "0055_klaviyo_advisory_matching",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1785931806691,
+      "tag": "0056_klaviyo_claims_reporting",
+      "breakpoints": true
     }
   ]
 }

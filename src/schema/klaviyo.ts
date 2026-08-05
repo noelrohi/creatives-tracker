@@ -50,6 +50,7 @@ export const klaviyoConnections = pgTable(
       .default("reviv_environment"),
     lastDiscoverySyncedAt: timestamp("last_discovery_synced_at"),
     lastEventSyncedAt: timestamp("last_event_synced_at"),
+    lastReportSyncedAt: timestamp("last_report_synced_at"),
     identityWriteMode: text("identity_write_mode")
       .notNull()
       .default("current_only"),
@@ -270,6 +271,11 @@ export const klaviyoSyncRuns = pgTable(
     uniqueIndex("klaviyo_sync_run_one_running_events_uidx")
       .on(table.connectionId)
       .where(sql`${table.operation} = 'events' and ${table.status} = 'running'`),
+    uniqueIndex("klaviyo_sync_run_one_running_dimension_report_uidx")
+      .on(table.connectionId, table.operation)
+      .where(
+        sql`${table.operation} in ('dimensions', 'reports') and ${table.status} = 'running'`,
+      ),
     check(
       "klaviyo_sync_run_operation_check",
       sql`${table.operation} in ('discovery', 'probe', 'dimensions', 'events', 'reports')`,
