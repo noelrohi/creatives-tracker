@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
-import { and, asc, eq, gte, inArray, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt } from "drizzle-orm";
 import { db } from "@/db";
 import { MATCHER_VERSION } from "@/lib/klaviyo/match-types";
 import {
@@ -599,6 +599,94 @@ async function identityEqualPairs(
     }
   }
   return pairs;
+}
+
+/**
+ * Select the newest acceptable source pair for recompute: the latest
+ * successful terminal order-core Klaviyo run and the latest acceptable
+ * Shopify evidence run — never a generic events run or unrelated latest.
+ */
+export async function selectLatestMatchInputs(
+  scope: KlaviyoConnectionScope,
+): Promise<{
+  sourceRunId: string;
+  shopifyEvidenceRunId: string;
+  invocationFingerprint: string;
+  publicationScopeFingerprint: string;
+  window: { from: Date; to: Date };
+}> {
+  const candidateRuns = await db
+    .select({
+      id: klaviyoSyncRuns.id,
+      finishedAt: klaviyoSyncRuns.finishedAt,
+    })
+    .from(klaviyoSyncRuns)
+    .where(
+      and(
+        eq(klaviyoSyncRuns.organizationId, scope.organizationId),
+        eq(klaviyoSyncRuns.storeId, scope.storeId),
+        eq(klaviyoSyncRuns.connectionId, scope.connectionId),
+        eq(klaviyoSyncRuns.operation, "events"),
+        eq(klaviyoSyncRuns.status, "success"),
+      ),
+    )
+    .orderBy(desc(klaviyoSyncRuns.finishedAt));
+  let klaviyo: KlaviyoProjection | null = null;
+  for (const run of candidateRuns) {
+    try {
+      klaviyo = await loadKlaviyoProjection({ scope, sourceRunId: run.id });
+      break;
+    } catch (error) {
+      if (error instanceof MatchInputStaleError) continue;
+      throw error;
+    }
+  }
+  if (!klaviyo) throw new MatchInputStaleError("no_acceptable_source_run");
+
+  const evidenceRuns = await db
+    .select({ id: shopifyEvidenceSyncRuns.id })
+    .from(shopifyEvidenceSyncRuns)
+    .where(
+      and(
+        eq(shopifyEvidenceSyncRuns.organizationId, scope.organizationId),
+        eq(shopifyEvidenceSyncRuns.storeId, scope.storeId),
+        inArray(shopifyEvidenceSyncRuns.status, ["success", "partial"]),
+      ),
+    )
+    .orderBy(desc(shopifyEvidenceSyncRuns.startedAt));
+  let shopify: ShopifyProjection | null = null;
+  for (const run of evidenceRuns) {
+    try {
+      shopify = await loadShopifyProjection({
+        scope,
+        shopifyEvidenceRunId: run.id,
+      });
+      break;
+    } catch (error) {
+      if (error instanceof MatchInputStaleError) continue;
+      throw error;
+    }
+  }
+  if (!shopify) throw new MatchInputStaleError("no_acceptable_evidence_run");
+
+  const rules = await loadApprovedRules(scope);
+  const { approvedRuleChecksum, matcherConfigChecksum } = await import(
+    "@/lib/klaviyo/matcher"
+  );
+  const fingerprints = deriveFingerprints({
+    scope,
+    klaviyo,
+    shopify,
+    ruleChecksum: approvedRuleChecksum(rules),
+    configChecksum: matcherConfigChecksum(),
+  });
+  return {
+    sourceRunId: klaviyo.sourceRunId,
+    shopifyEvidenceRunId: shopify.shopifyEvidenceRunId,
+    invocationFingerprint: fingerprints.invocationFingerprint,
+    publicationScopeFingerprint: fingerprints.publicationScopeFingerprint,
+    window: klaviyo.window,
+  };
 }
 
 export type ComputeAndPublishInput = {

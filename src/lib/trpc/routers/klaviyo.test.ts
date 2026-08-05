@@ -29,6 +29,14 @@ const mocks = vi.hoisted(() => {
     uninstallKlaviyoConnection: vi.fn(),
     idempotencyCreate: vi.fn(),
     taskTrigger: vi.fn(),
+    runsRetrieve: vi.fn(),
+    loadEvidenceCoverage: vi.fn(),
+    listEvidenceOrders: vi.fn(),
+    loadOrderExplanation: vi.fn(),
+    loadOrderProducts: vi.fn(),
+    listUnmatchedEvents: vi.fn(),
+    selectLatestMatchInputs: vi.fn(),
+    triggerOrRepairMatchInvocation: vi.fn(),
   };
 });
 
@@ -37,7 +45,23 @@ vi.mock("server-only", () => ({}));
 vi.mock("@trigger.dev/sdk", () => ({
   idempotencyKeys: { create: mocks.idempotencyCreate },
   tasks: { trigger: mocks.taskTrigger },
+  runs: { retrieve: mocks.runsRetrieve },
 }));
+vi.mock("@/lib/klaviyo/queries", () => ({
+  loadEvidenceCoverage: mocks.loadEvidenceCoverage,
+  listEvidenceOrders: mocks.listEvidenceOrders,
+  loadOrderExplanation: mocks.loadOrderExplanation,
+  loadOrderProducts: mocks.loadOrderProducts,
+  listUnmatchedEvents: mocks.listUnmatchedEvents,
+}));
+vi.mock("@/lib/klaviyo/match-service", () => ({
+  selectLatestMatchInputs: mocks.selectLatestMatchInputs,
+}));
+vi.mock("@/lib/klaviyo/match-invocation", () => ({
+  MATCH_INVOCATION_KEY_TTL: "7d",
+  triggerOrRepairMatchInvocation: mocks.triggerOrRepairMatchInvocation,
+}));
+vi.mock("@/schema/klaviyo-match", () => ({ klaviyoMatchRuns: {} }));
 vi.mock("@/lib/klaviyo/source-store", () => ({
   getKlaviyoHealthForOrganization: mocks.getKlaviyoHealthForOrganization,
   getPilotConnectionForOrganization: mocks.getPilotConnectionForOrganization,
@@ -153,6 +177,49 @@ beforeEach(() => {
   mocks.uninstallKlaviyoConnection.mockResolvedValue({
     shopifyIdentity: { ordersCleared: 2, digestsDeleted: 2 },
   });
+  mocks.loadEvidenceCoverage.mockResolvedValue({
+    orders: {},
+    events: {},
+    boundaryWarnings: 0,
+  });
+  mocks.listEvidenceOrders.mockResolvedValue({ items: [], nextCursor: null });
+  mocks.loadOrderExplanation.mockResolvedValue({
+    orderId: "order-1",
+    orderStatus: "confirmed",
+    matchRunId: "run-1",
+    matcherVersion: "klaviyo-v1",
+    reasonCodes: [],
+    boundaryWarning: false,
+    candidates: [],
+  });
+  mocks.loadOrderProducts.mockResolvedValue({
+    kind: "canonical",
+    productStatus: "unavailable",
+    links: [],
+  });
+  mocks.listUnmatchedEvents.mockResolvedValue({ items: [], nextCursor: null });
+  mocks.selectLatestMatchInputs.mockResolvedValue({
+    sourceRunId: "source-run-1",
+    shopifyEvidenceRunId: "evidence-run-1",
+    invocationFingerprint: "fingerprint-1",
+    publicationScopeFingerprint: "scope-fp-1",
+    window: {
+      from: new Date("2026-05-01T00:00:00.000Z"),
+      to: new Date("2026-07-30T00:00:00.000Z"),
+    },
+  });
+  mocks.triggerOrRepairMatchInvocation.mockResolvedValue({
+    triggerRunId: "trigger-run-match",
+    key: "klaviyo-match:fingerprint-1",
+  });
+  mocks.runsRetrieve.mockResolvedValue({
+    taskIdentifier: "klaviyo-match",
+    status: "EXECUTING",
+    payload: {
+      connectionId: "connection-1",
+      invocationFingerprint: "fingerprint-1",
+    },
+  });
   mocks.idempotencyCreate.mockImplementation(async (key: string) => ({ key }));
   mocks.taskTrigger.mockResolvedValue({ id: "trigger-run-1" });
 });
@@ -188,6 +255,26 @@ const PROCEDURE_CALLS: Array<[string, (caller: ReturnType<typeof sessionCaller>)
       }),
   ],
   ["uninstall", (caller) => caller.uninstall()],
+  [
+    "coverage",
+    (caller) => caller.coverage({ dateFrom: "2026-07-01", dateTo: "2026-07-30" }),
+  ],
+  [
+    "orders",
+    (caller) => caller.orders({ dateFrom: "2026-07-01", dateTo: "2026-07-30" }),
+  ],
+  ["orderExplanation", (caller) => caller.orderExplanation({ orderId: "o" })],
+  ["orderProducts", (caller) => caller.orderProducts({ orderId: "o" })],
+  [
+    "unmatchedEvents",
+    (caller) =>
+      caller.unmatchedEvents({ dateFrom: "2026-07-01", dateTo: "2026-07-30" }),
+  ],
+  ["recomputeMatches", (caller) => caller.recomputeMatches()],
+  [
+    "matchInvocationStatus",
+    (caller) => caller.matchInvocationStatus({ triggerRunId: "run" }),
+  ],
 ];
 
 describe("klaviyo router RBAC", () => {
@@ -443,5 +530,78 @@ describe("klaviyo router behavior", () => {
       "klaviyo:probe:first:probe-run-1",
       "klaviyo:probe:first:probe-run-1",
     ]);
+  });
+});
+
+describe("klaviyo match procedures", () => {
+  it("recomputeMatches delegates to the invocation repair chain", async () => {
+    const result = await sessionCaller("admin").recomputeMatches();
+    expect(result).toEqual({
+      triggerRunId: "trigger-run-match",
+      invocationFingerprint: "fingerprint-1",
+    });
+    expect(mocks.selectLatestMatchInputs).toHaveBeenCalledWith(mocks.connection);
+    expect(mocks.triggerOrRepairMatchInvocation).toHaveBeenCalledWith(
+      expect.objectContaining({ invocationFingerprint: "fingerprint-1" }),
+    );
+  });
+
+  it("maps invocation status into the closed safe union", async () => {
+    await expect(
+      sessionCaller("admin").matchInvocationStatus({ triggerRunId: "run-1" }),
+    ).resolves.toEqual({
+      status: "running",
+      invocationFingerprint: "fingerprint-1",
+    });
+
+    mocks.runsRetrieve.mockResolvedValue({
+      taskIdentifier: "klaviyo-match",
+      status: "CANCELED",
+      payload: {
+        connectionId: "connection-1",
+        invocationFingerprint: "fingerprint-1",
+      },
+    });
+    await expect(
+      sessionCaller("admin").matchInvocationStatus({ triggerRunId: "run-1" }),
+    ).resolves.toEqual({
+      status: "failed",
+      invocationFingerprint: "fingerprint-1",
+    });
+
+    mocks.runsRetrieve.mockResolvedValue({
+      taskIdentifier: "other-task",
+      status: "EXECUTING",
+      payload: {},
+    });
+    await expect(
+      sessionCaller("admin").matchInvocationStatus({ triggerRunId: "run-1" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    mocks.runsRetrieve.mockResolvedValue({
+      taskIdentifier: "klaviyo-match",
+      status: "EXECUTING",
+      payload: {
+        connectionId: "other-connection",
+        invocationFingerprint: "fingerprint-1",
+      },
+    });
+    await expect(
+      sessionCaller("admin").matchInvocationStatus({ triggerRunId: "run-1" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("derives windows server-side for evidence queries", async () => {
+    await sessionCaller("admin").orders({
+      dateFrom: "2026-03-08",
+      dateTo: "2026-03-08",
+    });
+    const call = mocks.listEvidenceOrders.mock.calls[0]![0] as {
+      window: { from: Date; to: Date };
+    };
+    // DST spring-forward day in America/New_York is 23 hours.
+    expect(call.window.to.getTime() - call.window.from.getTime()).toBe(
+      23 * 60 * 60 * 1000,
+    );
   });
 });

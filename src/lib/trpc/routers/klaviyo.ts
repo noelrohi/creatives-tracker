@@ -1,12 +1,27 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { idempotencyKeys, tasks } from "@trigger.dev/sdk";
+import { idempotencyKeys, runs, tasks } from "@trigger.dev/sdk";
 import { router, orgAdminProcedure } from "../init";
 import { uninstallKlaviyoConnection } from "@/lib/klaviyo/connection-lifecycle";
 import { prepareKlaviyoDiscoveryRun } from "@/lib/klaviyo/discovery";
 import { reviewJoinRule, reviewProbeReport } from "@/lib/klaviyo/join-rules";
 import { prepareKlaviyoProbeRun } from "@/lib/klaviyo/probe";
+import {
+  MATCH_INVOCATION_KEY_TTL,
+  triggerOrRepairMatchInvocation,
+} from "@/lib/klaviyo/match-invocation";
+import { selectLatestMatchInputs } from "@/lib/klaviyo/match-service";
+import {
+  listEvidenceOrders,
+  listUnmatchedEvents,
+  loadEvidenceCoverage,
+  loadOrderExplanation,
+  loadOrderProducts,
+} from "@/lib/klaviyo/queries";
 import { startOrResumeOrderCoreSync } from "@/lib/klaviyo/source-runner";
+import { klaviyoMatchRuns } from "@/schema/klaviyo-match";
+import { and, eq } from "drizzle-orm";
+import { db } from "@/db";
 import {
   ensurePilotConnection,
   failKlaviyoSyncRunAfterRetryExhaustion,
@@ -226,6 +241,237 @@ export const klaviyoRouter = router({
         syncRunId: run.syncRunId,
         resumed: run.resumed,
       };
+    }),
+
+  coverage: orgAdminProcedure
+    .input(z.object({ dateFrom: storeDaySchema, dateTo: storeDaySchema }))
+    .query(async ({ input, ctx }) => {
+      const connection = await requirePilotConnection(ctx.organizationId);
+      const window = inclusiveStoreDaysToHalfOpenUtc({
+        ...input,
+        timeZone: connection.storeTimezone,
+      });
+      return loadEvidenceCoverage({ scope: connection, window });
+    }),
+
+  orders: orgAdminProcedure
+    .input(
+      z.object({
+        dateFrom: storeDaySchema,
+        dateTo: storeDaySchema,
+        orderStatus: z
+          .enum([
+            "confirmed",
+            "candidate",
+            "ambiguous",
+            "no_klaviyo_event",
+            "duplicate_conversion_events",
+            "not_evaluated",
+          ])
+          .optional(),
+        productStatus: z
+          .enum(["exact", "partial", "contradictory", "unavailable"])
+          .optional(),
+        cursor: z.string().nullish(),
+        limit: z.number().int().min(1).max(100).optional(),
+      }),
+    )
+    .query(async ({ input, ctx }) => {
+      const connection = await requirePilotConnection(ctx.organizationId);
+      const window = inclusiveStoreDaysToHalfOpenUtc({
+        dateFrom: input.dateFrom,
+        dateTo: input.dateTo,
+        timeZone: connection.storeTimezone,
+      });
+      return listEvidenceOrders({
+        scope: connection,
+        window,
+        orderStatus: input.orderStatus,
+        productStatus: input.productStatus,
+        cursor: input.cursor,
+        limit: input.limit,
+      });
+    }),
+
+  orderExplanation: orgAdminProcedure
+    .input(z.object({ orderId: resourceIdSchema }))
+    .query(async ({ input, ctx }) => {
+      const connection = await requirePilotConnection(ctx.organizationId);
+      const explanation = await loadOrderExplanation({
+        scope: connection,
+        orderId: input.orderId,
+      });
+      if (!explanation) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Order not found" });
+      }
+      return explanation;
+    }),
+
+  orderProducts: orgAdminProcedure
+    .input(
+      z.object({
+        orderId: resourceIdSchema,
+        candidateId: resourceIdSchema.optional(),
+      }),
+    )
+    .query(async ({ input, ctx }) => {
+      const connection = await requirePilotConnection(ctx.organizationId);
+      const response = await loadOrderProducts({
+        scope: connection,
+        orderId: input.orderId,
+        candidateId: input.candidateId,
+      });
+      if (response.kind === "not_found") {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Not found" });
+      }
+      return response;
+    }),
+
+  unmatchedEvents: orgAdminProcedure
+    .input(
+      z.object({
+        dateFrom: storeDaySchema,
+        dateTo: storeDaySchema,
+        eventStatus: z
+          .enum(["confirmed", "candidate", "ambiguous", "unmatched", "not_evaluated"])
+          .optional(),
+        cursor: z.string().nullish(),
+        limit: z.number().int().min(1).max(100).optional(),
+      }),
+    )
+    .query(async ({ input, ctx }) => {
+      const connection = await requirePilotConnection(ctx.organizationId);
+      const window = inclusiveStoreDaysToHalfOpenUtc({
+        dateFrom: input.dateFrom,
+        dateTo: input.dateTo,
+        timeZone: connection.storeTimezone,
+      });
+      return listUnmatchedEvents({
+        scope: connection,
+        window,
+        eventStatus: input.eventStatus,
+        cursor: input.cursor,
+        limit: input.limit,
+      });
+    }),
+
+  recomputeMatches: orgAdminProcedure.mutation(async ({ ctx }) => {
+    const connection = await requirePilotConnection(ctx.organizationId);
+    const inputs = await selectLatestMatchInputs(connection);
+    const payload = {
+      invocationFingerprint: inputs.invocationFingerprint,
+      connectionId: connection.connectionId,
+      sourceRunId: inputs.sourceRunId,
+      shopifyEvidenceRunId: inputs.shopifyEvidenceRunId,
+      from: inputs.window.from.toISOString(),
+      to: inputs.window.to.toISOString(),
+      reason: "manual" as const,
+    };
+    const { triggerRunId } = await triggerOrRepairMatchInvocation({
+      invocationFingerprint: inputs.invocationFingerprint,
+      adapters: {
+        async triggerWithKey(key) {
+          const idempotencyKey = await idempotencyKeys.create(key, {
+            scope: "global",
+          });
+          const handle = await tasks.trigger("klaviyo-match", payload, {
+            idempotencyKey,
+            idempotencyKeyTTL: MATCH_INVOCATION_KEY_TTL,
+          });
+          return { triggerRunId: handle.id };
+        },
+        async getRunStatus(runId) {
+          const run = await runs.retrieve(runId);
+          return { status: run.status };
+        },
+        async verifyPublishedRun(runId) {
+          const run = await runs.retrieve(runId);
+          const output = run.output as { matchRunId?: string } | undefined;
+          if (!output?.matchRunId) return false;
+          const [row] = await db
+            .select({ id: klaviyoMatchRuns.id })
+            .from(klaviyoMatchRuns)
+            .where(
+              and(
+                eq(klaviyoMatchRuns.id, output.matchRunId),
+                eq(klaviyoMatchRuns.organizationId, connection.organizationId),
+                eq(klaviyoMatchRuns.storeId, connection.storeId),
+                eq(klaviyoMatchRuns.connectionId, connection.connectionId),
+                eq(
+                  klaviyoMatchRuns.invocationFingerprint,
+                  inputs.invocationFingerprint,
+                ),
+                eq(klaviyoMatchRuns.status, "published"),
+              ),
+            )
+            .limit(1);
+          return row !== undefined;
+        },
+      },
+    });
+    return {
+      triggerRunId,
+      invocationFingerprint: inputs.invocationFingerprint,
+    };
+  }),
+
+  matchInvocationStatus: orgAdminProcedure
+    .input(z.object({ triggerRunId: resourceIdSchema }))
+    .query(async ({ input, ctx }) => {
+      const connection = await requirePilotConnection(ctx.organizationId);
+      const run = await runs.retrieve(input.triggerRunId).catch(() => null);
+      if (!run || run.taskIdentifier !== "klaviyo-match") {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Run not found" });
+      }
+      const payload = run.payload as
+        | { connectionId?: string; invocationFingerprint?: string }
+        | undefined;
+      if (
+        !payload?.connectionId ||
+        !payload.invocationFingerprint ||
+        payload.connectionId !== connection.connectionId
+      ) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Run not found" });
+      }
+      const invocationFingerprint = payload.invocationFingerprint;
+      const status = run.status.toUpperCase();
+      if (
+        ["QUEUED", "PENDING", "EXECUTING", "WAITING", "REATTEMPTING", "DELAYED", "FROZEN"].includes(
+          status,
+        )
+      ) {
+        return { status: "running" as const, invocationFingerprint };
+      }
+      if (status === "COMPLETED") {
+        const output = run.output as { matchRunId?: string } | undefined;
+        if (output?.matchRunId) {
+          const [row] = await db
+            .select({ id: klaviyoMatchRuns.id })
+            .from(klaviyoMatchRuns)
+            .where(
+              and(
+                eq(klaviyoMatchRuns.id, output.matchRunId),
+                eq(klaviyoMatchRuns.organizationId, connection.organizationId),
+                eq(klaviyoMatchRuns.storeId, connection.storeId),
+                eq(klaviyoMatchRuns.connectionId, connection.connectionId),
+                eq(
+                  klaviyoMatchRuns.invocationFingerprint,
+                  invocationFingerprint,
+                ),
+                eq(klaviyoMatchRuns.status, "published"),
+              ),
+            )
+            .limit(1);
+          if (row) {
+            return {
+              status: "published" as const,
+              invocationFingerprint,
+              matchRunId: row.id,
+            };
+          }
+        }
+      }
+      return { status: "failed" as const, invocationFingerprint };
     }),
 
   uninstall: orgAdminProcedure.mutation(async ({ ctx }) => {
