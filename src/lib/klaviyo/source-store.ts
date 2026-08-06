@@ -64,7 +64,6 @@ import type {
   KlaviyoEventCheckpoint,
   KlaviyoMetricKind,
   NormalizedKlaviyoEvent,
-  OrderCoreSourceContract,
   PropertyFingerprintEntry,
   RedactedProbeExample,
 } from "@/lib/klaviyo/types";
