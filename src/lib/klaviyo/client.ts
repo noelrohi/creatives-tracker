@@ -708,15 +708,22 @@ export class KlaviyoApiClient {
       return { purpose, event, profileId, profileEmail };
     }
     if (purpose === "attribution_claim") {
+      const attributions = page.included.filter(
+        (resource) => resource.type === "attribution",
+      );
       return {
         purpose,
         event,
-        attributionIds: page.included
-          .filter((resource) => resource.type === "attribution")
-          .map((resource) => resource.id),
+        attributionIds: attributions.map((resource) => resource.id),
+        attributions,
       };
     }
-    return { purpose, event };
+    return {
+      purpose,
+      event,
+      metric:
+        page.included.find((resource) => resource.type === "metric") ?? null,
+    };
   }
 }
 
@@ -752,5 +759,10 @@ export type KlaviyoSingleEventResult =
       purpose: "attribution_claim";
       event: KlaviyoResource;
       attributionIds: string[];
+      attributions: KlaviyoResource[];
     }
-  | { purpose: "referenced_interaction"; event: KlaviyoResource };
+  | {
+      purpose: "referenced_interaction";
+      event: KlaviyoResource;
+      metric: KlaviyoResource | null;
+    };
