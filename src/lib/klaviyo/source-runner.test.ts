@@ -44,6 +44,7 @@ const connectionRecord: ConnectionRecord = {
   ...scope,
   shopDomain: "reviv.example.myshopify.com",
   storeTimezone: "America/New_York",
+      accountTimezone: null,
   klaviyoAccountId: "account-reviv",
   initialSourceFrom: null,
   initialSourceTo: null,

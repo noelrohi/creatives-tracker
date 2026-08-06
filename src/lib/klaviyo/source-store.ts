@@ -114,6 +114,7 @@ export function safeSyncError(_error: unknown) {
 export type ConnectionRecord = KlaviyoConnectionScope & {
   shopDomain: string;
   storeTimezone: string;
+  accountTimezone: string | null;
   klaviyoAccountId: string | null;
   initialSourceFrom: Date | null;
   initialSourceTo: Date | null;
@@ -127,6 +128,7 @@ const connectionProjection = {
   connectionId: klaviyoConnections.id,
   shopDomain: shopifyStores.shopDomain,
   storeTimezone: shopifyStores.ianaTimezone,
+  accountTimezone: klaviyoConnections.timezone,
   klaviyoAccountId: klaviyoConnections.klaviyoAccountId,
   initialSourceFrom: klaviyoConnections.initialSourceFrom,
   initialSourceTo: klaviyoConnections.initialSourceTo,

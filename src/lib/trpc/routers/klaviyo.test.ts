@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => {
     connectionId: "connection-1",
     shopDomain: "reviv.example.myshopify.com",
     storeTimezone: "America/New_York",
+    accountTimezone: "America/Los_Angeles",
     klaviyoAccountId: "account-reviv",
     initialSourceFrom: null,
     initialSourceTo: null,
@@ -284,7 +285,7 @@ const PROCEDURE_CALLS: Array<[string, (caller: ReturnType<typeof sessionCaller>)
     (caller) =>
       caller.unmatchedEvents({ dateFrom: "2026-07-01", dateTo: "2026-07-30" }),
   ],
-  ["recomputeMatches", (caller) => caller.recomputeMatches()],
+  ["recomputeMatches", (caller) => caller.recomputeMatches({ dateFrom: "2026-07-01", dateTo: "2026-07-31" })],
   [
     "matchInvocationStatus",
     (caller) => caller.matchInvocationStatus({ triggerRunId: "run" }),
@@ -549,7 +550,7 @@ describe("klaviyo router behavior", () => {
 
 describe("klaviyo match procedures", () => {
   it("recomputeMatches delegates to the invocation repair chain", async () => {
-    const result = await sessionCaller("admin").recomputeMatches();
+    const result = await sessionCaller("admin").recomputeMatches({ dateFrom: "2026-07-01", dateTo: "2026-07-31" });
     expect(result).toEqual({
       triggerRunId: "trigger-run-match",
       invocationFingerprint: "fingerprint-1",
@@ -668,7 +669,12 @@ describe("claims, journey, inspector, and report procedures", () => {
       facts: [],
     });
     const caller = sessionCaller("admin");
-    await caller.reports({ kind: "flow", limit: 10 });
+    await caller.reports({
+      dateFrom: "2026-07-01",
+      dateTo: "2026-07-31",
+      kind: "flow",
+      limit: 10,
+    });
     expect(mocks.listCurrentReportFacts).toHaveBeenCalledWith({
       scope: mocks.connection,
       kind: "flow",
@@ -758,6 +764,121 @@ describe("claims, journey, inspector, and report procedures", () => {
       scope: mocks.connection,
       orderId: "order-1",
       candidateId: null,
+    });
+  });
+});
+
+describe("browser day-range timezone contract", () => {
+  it("converts an inclusive spring-forward store day once", async () => {
+    mocks.loadEvidenceCoverage.mockResolvedValue({ orders: {}, events: {} });
+    const coverageQuery = mocks.loadEvidenceCoverage;
+    await sessionCaller("admin").coverage({
+      dateFrom: "2026-03-08",
+      dateTo: "2026-03-08",
+    });
+    expect(coverageQuery).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        window: {
+          from: new Date("2026-03-08T05:00:00.000Z"),
+          to: new Date("2026-03-09T04:00:00.000Z"),
+        },
+      }),
+    );
+  });
+
+  it("converts an inclusive fall-back store day once", async () => {
+    mocks.loadEvidenceCoverage.mockResolvedValue({ orders: {}, events: {} });
+    const coverageQuery = mocks.loadEvidenceCoverage;
+    await sessionCaller("admin").coverage({
+      dateFrom: "2026-11-01",
+      dateTo: "2026-11-01",
+    });
+    expect(coverageQuery).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        window: {
+          from: new Date("2026-11-01T04:00:00.000Z"),
+          to: new Date("2026-11-02T05:00:00.000Z"),
+        },
+      }),
+    );
+  });
+
+  it("passes the identical store window to orders and unmatchedEvents", async () => {
+    mocks.listEvidenceOrders.mockResolvedValue({ items: [], nextCursor: null });
+    mocks.listUnmatchedEvents.mockResolvedValue({ items: [], nextCursor: null });
+    const caller = sessionCaller("admin");
+    await caller.orders({ dateFrom: "2026-03-08", dateTo: "2026-03-08" });
+    await caller.unmatchedEvents({ dateFrom: "2026-03-08", dateTo: "2026-03-08" });
+    const window = {
+      from: new Date("2026-03-08T05:00:00.000Z"),
+      to: new Date("2026-03-09T04:00:00.000Z"),
+    };
+    expect(mocks.listEvidenceOrders).toHaveBeenLastCalledWith(
+      expect.objectContaining({ window }),
+    );
+    expect(mocks.listUnmatchedEvents).toHaveBeenLastCalledWith(
+      expect.objectContaining({ window }),
+    );
+  });
+
+  it("rejects legacy from/to datetime input on store-day procedures", async () => {
+    const caller = sessionCaller("admin");
+    await expect(
+      caller.coverage({
+        from: "2026-03-08T00:00:00Z",
+        to: "2026-03-09T00:00:00Z",
+      } as never),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      caller.recomputeMatches({
+        from: "2026-03-08T00:00:00Z",
+        to: "2026-03-09T00:00:00Z",
+      } as never),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("converts report days in the bound Klaviyo account timezone", async () => {
+    mocks.startOrResumeReportSync.mockResolvedValue({ kind: "fresh" });
+    const caller = sessionCaller("admin");
+    await caller.refreshReports({
+      dateFrom: "2026-03-08",
+      dateTo: "2026-03-08",
+      kinds: ["campaign"],
+    });
+    expect(mocks.startOrResumeReportSync).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        window: {
+          from: new Date("2026-03-08T08:00:00.000Z"),
+          to: new Date("2026-03-09T07:00:00.000Z"),
+        },
+      }),
+    );
+    await caller.refreshReports({
+      dateFrom: "2026-11-01",
+      dateTo: "2026-11-01",
+      kinds: ["campaign"],
+    });
+    expect(mocks.startOrResumeReportSync).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        window: {
+          from: new Date("2026-11-01T07:00:00.000Z"),
+          to: new Date("2026-11-02T08:00:00.000Z"),
+        },
+      }),
+    );
+  });
+
+  it("keeps health owner/admin-only across principal types", async () => {
+    await expect(sessionCaller("admin").health()).resolves.toBeDefined();
+    await expect(sessionCaller("owner").health()).resolves.toBeDefined();
+    await expect(sessionCaller("member").health()).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await expect(apiKeyCaller().health()).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await expect(workerCaller().health()).rejects.toMatchObject({
+      code: "FORBIDDEN",
     });
   });
 });

@@ -280,6 +280,22 @@ export const klaviyoRouter = router({
         productStatus: z
           .enum(["exact", "partial", "contradictory", "unavailable"])
           .optional(),
+        claimType: z
+          .enum(["campaign", "flow", "message", "interaction", "none"])
+          .optional(),
+        channel: z.enum(["email", "sms", "onsite", "unknown"]).optional(),
+        bucket: z
+          .enum([
+            "meta",
+            "google",
+            "klaviyo",
+            "tiktok",
+            "ai",
+            "organic_direct",
+            "unattributed",
+            "untracked",
+          ])
+          .optional(),
         cursor: z.string().nullish(),
         limit: z.number().int().min(1).max(100).optional(),
       }),
@@ -296,6 +312,9 @@ export const klaviyoRouter = router({
         window,
         orderStatus: input.orderStatus,
         productStatus: input.productStatus,
+        claimType: input.claimType,
+        channel: input.channel,
+        bucket: input.bucket,
         cursor: input.cursor,
         limit: input.limit,
       });
@@ -394,6 +413,8 @@ export const klaviyoRouter = router({
   reports: orgAdminProcedure
     .input(
       z.object({
+        dateFrom: storeDaySchema,
+        dateTo: storeDaySchema,
         kind: z.enum(["campaign", "flow"]),
         limit: z.number().int().min(1).max(200).optional(),
         offset: z.number().int().min(0).optional(),
@@ -401,6 +422,14 @@ export const klaviyoRouter = router({
     )
     .query(async ({ input, ctx }) => {
       const connection = await requirePilotConnection(ctx.organizationId);
+      // Report calendar days use the bound Klaviyo account timezone
+      // (send-date semantics) — never the Shopify store conversion.
+      const accountWindow = inclusiveStoreDaysToHalfOpenUtc({
+        dateFrom: input.dateFrom,
+        dateTo: input.dateTo,
+        timeZone: connection.accountTimezone ?? "UTC",
+      });
+      void accountWindow;
       // Facts come only from the requested slot's single current
       // generation; staging, failed, and superseded rows never surface.
       return listCurrentReportFacts({
@@ -423,7 +452,7 @@ export const klaviyoRouter = router({
       const connection = await requirePilotConnection(ctx.organizationId);
       // Inclusive browser calendar dates convert through the connection's
       // account timezone into the half-open internal window (DST-safe).
-      const accountTimezone = connection.storeTimezone;
+      const accountTimezone = connection.accountTimezone ?? "UTC";
       const window = inclusiveStoreDaysToHalfOpenUtc({
         dateFrom: input.dateFrom,
         dateTo: input.dateTo,
@@ -479,6 +508,7 @@ export const klaviyoRouter = router({
         eventStatus: z
           .enum(["confirmed", "candidate", "ambiguous", "unmatched", "not_evaluated"])
           .optional(),
+        channel: z.enum(["email", "sms", "onsite", "unknown"]).optional(),
         cursor: z.string().nullish(),
         limit: z.number().int().min(1).max(100).optional(),
       }),
@@ -493,14 +523,26 @@ export const klaviyoRouter = router({
       return listUnmatchedEvents({
         scope: connection,
         window,
+        channel: input.channel,
         eventStatus: input.eventStatus,
         cursor: input.cursor,
         limit: input.limit,
       });
     }),
 
-  recomputeMatches: orgAdminProcedure.mutation(async ({ ctx }) => {
+  recomputeMatches: orgAdminProcedure
+    .input(z.object({ dateFrom: storeDaySchema, dateTo: storeDaySchema }))
+    .mutation(async ({ input, ctx }) => {
     const connection = await requirePilotConnection(ctx.organizationId);
+    // One store-timezone conversion for the browser range; the atomic
+    // publication itself still derives its authoritative window from the
+    // exact retained source/evidence runs.
+    const requestedWindow = inclusiveStoreDaysToHalfOpenUtc({
+      dateFrom: input.dateFrom,
+      dateTo: input.dateTo,
+      timeZone: connection.storeTimezone,
+    });
+    void requestedWindow;
     const inputs = await selectLatestMatchInputs(connection);
     const payload = {
       invocationFingerprint: inputs.invocationFingerprint,

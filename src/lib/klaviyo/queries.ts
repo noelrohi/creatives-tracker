@@ -78,11 +78,51 @@ export type OrderLedgerRow = {
   boundaryWarning: boolean;
 };
 
+export type OrderClaimTypeFilter =
+  | "campaign"
+  | "flow"
+  | "message"
+  | "interaction"
+  | "none";
+
+export type OrderChannelFilter = "email" | "sms" | "onsite" | "unknown";
+
+function claimTypePredicate(filter: OrderClaimTypeFilter) {
+  const base = sql`select 1 from klaviyo_attribution_claim c
+    where c.connection_id = ${klaviyoOrderMatchResults.connectionId}
+      and c.conversion_event_id = ${klaviyoOrderMatchResults.selectedEventId}`;
+  switch (filter) {
+    case "campaign":
+      return sql`exists (${base} and c.campaign_object_id is not null)`;
+    case "flow":
+      return sql`exists (${base} and c.flow_object_id is not null)`;
+    case "message":
+      return sql`exists (${base} and c.message_object_id is not null)`;
+    case "interaction":
+      return sql`exists (${base} and (c.attributed_interaction_external_event_id is not null
+        or c.interaction_type is not null))`;
+    case "none":
+      return sql`not exists (${base})`;
+  }
+}
+
+function channelPredicate(filter: OrderChannelFilter, eventIdColumn: unknown) {
+  const base = sql`select 1 from klaviyo_attribution_claim c
+    where c.conversion_event_id = ${eventIdColumn as never}`;
+  if (filter === "unknown") {
+    return sql`exists (${base} and c.interaction_channel is null)`;
+  }
+  return sql`exists (${base} and c.interaction_channel = ${filter})`;
+}
+
 export async function listEvidenceOrders(input: {
   scope: KlaviyoConnectionScope;
   window: HalfOpenUtcWindow;
   orderStatus?: OrderEvidenceStatus;
   productStatus?: ProductMatchStatus;
+  claimType?: OrderClaimTypeFilter;
+  channel?: OrderChannelFilter;
+  bucket?: string;
   cursor?: string | null;
   limit?: number;
 }): Promise<{ items: OrderLedgerRow[]; nextCursor: string | null }> {
@@ -108,6 +148,17 @@ export async function listEvidenceOrders(input: {
   if (input.productStatus) {
     conditions.push(
       eq(klaviyoOrderMatchResults.productStatus, input.productStatus),
+    );
+  }
+  if (input.bucket) {
+    conditions.push(sql`(${shopifyOrders.bucket})::text = ${input.bucket}`);
+  }
+  if (input.claimType) {
+    conditions.push(claimTypePredicate(input.claimType));
+  }
+  if (input.channel) {
+    conditions.push(
+      channelPredicate(input.channel, klaviyoOrderMatchResults.selectedEventId),
     );
   }
 
@@ -456,6 +507,7 @@ export async function listUnmatchedEvents(input: {
   scope: KlaviyoConnectionScope;
   window: HalfOpenUtcWindow;
   eventStatus?: EventEvidenceStatus;
+  channel?: OrderChannelFilter;
   cursor?: string | null;
   limit?: number;
 }): Promise<{ items: UnmatchedEventRow[]; nextCursor: string | null }> {
@@ -485,6 +537,9 @@ export async function listUnmatchedEvents(input: {
       sql`(${klaviyoEventMatchResults.status} is null
         or ${klaviyoEventMatchResults.status} <> 'confirmed')`,
     );
+  }
+  if (input.channel) {
+    conditions.push(channelPredicate(input.channel, klaviyoEvents.id));
   }
 
   const rows = await db

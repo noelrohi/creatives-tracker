@@ -52,6 +52,7 @@ function makeDiscoveryDependencies(input: {
     ...scope,
     shopDomain: "reviv.example.myshopify.com",
     storeTimezone: "America/New_York",
+    accountTimezone: null,
     klaviyoAccountId: input.persistedAccountId,
     initialSourceFrom: null,
     initialSourceTo: null,
