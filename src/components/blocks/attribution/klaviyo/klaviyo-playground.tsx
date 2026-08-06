@@ -91,8 +91,14 @@ export function KlaviyoPlayground() {
       (invocationData.status === "published" ||
         invocationData.status === "failed")
     ) {
+      const terminal = invocationData.status;
       const timer = setTimeout(() => {
         setQueuedRecompute(null);
+        if (terminal === "published") {
+          toast.success("Match recompute complete");
+        } else {
+          toast.error("Match recompute failed");
+        }
         void queryClient.invalidateQueries();
       }, 0);
       return () => clearTimeout(timer);

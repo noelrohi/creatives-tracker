@@ -20,6 +20,7 @@ export type LabHealth = {
     todayInAccountTz: string | null;
     lastDiscoverySyncedAt: string | Date | null;
     lastEventSyncedAt: string | Date | null;
+    lastMatchPublishedAt: string | Date | null;
   } | null;
 };
 
@@ -91,7 +92,8 @@ export function LabHeader(props: {
           Store {props.health.store?.ianaTimezone ?? "—"} · Account{" "}
           {connection.timezone ?? "—"} · {connection.currency ?? "—"} · Last
           discovery {freshness(connection.lastDiscoverySyncedAt)} · Last events{" "}
-          {freshness(connection.lastEventSyncedAt)}
+          {freshness(connection.lastEventSyncedAt)} · Last match{" "}
+          {freshness(connection.lastMatchPublishedAt)}
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">

@@ -7,6 +7,7 @@ import {
   eq,
   exists,
   inArray,
+  isNull,
   lt,
   lte,
   or,
@@ -47,7 +48,10 @@ import {
 } from "@/schema/klaviyo";
 import { shopifyOrders, shopifyStores } from "@/schema/shopify";
 import { identityMatchingKeyBindings } from "@/schema/identity-registry";
-import { klaviyoEventRunIdentityObservations } from "@/schema/klaviyo-match";
+import {
+  klaviyoEventRunIdentityObservations,
+  klaviyoMatchRuns,
+} from "@/schema/klaviyo-match";
 import {
   identityCryptoPolicies,
   identityErasureSuppressions,
@@ -2059,6 +2063,7 @@ export type KlaviyoHealth = {
     todayInAccountTz: string | null;
     lastDiscoverySyncedAt: Date | null;
     lastEventSyncedAt: Date | null;
+    lastMatchPublishedAt: Date | null;
   } | null;
 };
 
@@ -2087,6 +2092,7 @@ export async function getKlaviyoHealthForOrganization(
       accountCurrency: klaviyoConnections.currency,
       lastDiscoverySyncedAt: klaviyoConnections.lastDiscoverySyncedAt,
       lastEventSyncedAt: klaviyoConnections.lastEventSyncedAt,
+      connectionId: klaviyoConnections.id,
     })
     .from(shopifyStores)
     .leftJoin(
@@ -2113,6 +2119,23 @@ export async function getKlaviyoHealthForOrganization(
     todayInStoreTz: deriveDayInTimezone(now, row.ianaTimezone),
   };
   if (row.status === null) return { configured: true, store, connection: null };
+  const [latestMatch] =
+    row.connectionId === null
+      ? []
+      : await db
+          .select({ publishedAt: klaviyoMatchRuns.publishedAt })
+          .from(klaviyoMatchRuns)
+          .where(
+            and(
+              eq(klaviyoMatchRuns.organizationId, organizationId),
+              eq(klaviyoMatchRuns.storeId, row.id),
+              eq(klaviyoMatchRuns.connectionId, row.connectionId),
+              eq(klaviyoMatchRuns.status, "published"),
+              isNull(klaviyoMatchRuns.supersededAt),
+            ),
+          )
+          .orderBy(desc(klaviyoMatchRuns.publishedAt))
+          .limit(1);
   return {
     configured: true,
     store,
@@ -2130,6 +2153,7 @@ export async function getKlaviyoHealthForOrganization(
         : null,
       lastDiscoverySyncedAt: row.lastDiscoverySyncedAt,
       lastEventSyncedAt: row.lastEventSyncedAt,
+      lastMatchPublishedAt: latestMatch?.publishedAt ?? null,
     },
   };
 }

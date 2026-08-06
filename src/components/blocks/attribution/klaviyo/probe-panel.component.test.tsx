@@ -259,6 +259,7 @@ describe("LabHeader", () => {
             todayInAccountTz: "2026-07-31",
             lastDiscoverySyncedAt: null,
             lastEventSyncedAt: null,
+            lastMatchPublishedAt: null,
           },
         }}
         healthError={false}
