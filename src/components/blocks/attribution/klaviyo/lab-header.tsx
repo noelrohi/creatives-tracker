@@ -40,6 +40,8 @@ export function LabHeader(props: {
   healthError: boolean;
   onRetryHealth: () => void;
   busy: boolean;
+  syncPending: boolean;
+  recomputePending: boolean;
   syncLocked: boolean;
   recomputeLocked: boolean;
   onStartDiscovery: () => void;
@@ -101,7 +103,7 @@ export function LabHeader(props: {
           size="sm"
           variant="outline"
           onClick={props.onSyncNow}
-          disabled={props.busy || props.syncLocked}
+          disabled={props.syncPending || props.syncLocked}
         >
           Sync now
         </Button>
@@ -109,7 +111,7 @@ export function LabHeader(props: {
           size="sm"
           variant="outline"
           onClick={props.onRecompute}
-          disabled={props.busy || props.recomputeLocked}
+          disabled={props.recomputePending || props.recomputeLocked}
         >
           Recompute matches
         </Button>

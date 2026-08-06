@@ -553,7 +553,7 @@ export const klaviyoRouter = router({
       to: inputs.window.to.toISOString(),
       reason: "manual" as const,
     };
-    const { triggerRunId } = await triggerOrRepairMatchInvocation({
+    const { triggerRunId, alreadyPublished } = await triggerOrRepairMatchInvocation({
       invocationFingerprint: inputs.invocationFingerprint,
       adapters: {
         async triggerWithKey(key) {
@@ -598,6 +598,7 @@ export const klaviyoRouter = router({
     return {
       triggerRunId,
       invocationFingerprint: inputs.invocationFingerprint,
+      alreadyPublished,
     };
   }),
 

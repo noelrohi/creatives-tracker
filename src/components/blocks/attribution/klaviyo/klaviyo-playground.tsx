@@ -263,6 +263,13 @@ export function KlaviyoPlayground() {
       // confirmation window starts at the click, not after the roundtrip.
       onMutate: () => ({ queuedAt: clickInstant() }),
       onSuccess: (result, _variables, context) => {
+        if (result.alreadyPublished) {
+          // Idempotent replay: the current inputs are already published, so
+          // no new run exists and nothing needs watching.
+          toast.success("Matches already up to date");
+          void queryClient.invalidateQueries();
+          return;
+        }
         toast.success("Match recompute queued");
         setQueuedRecompute({
           triggerRunId: result.triggerRunId,
@@ -345,6 +352,8 @@ export function KlaviyoPlayground() {
         healthError={health.isError}
         onRetryHealth={() => void health.refetch()}
         busy={anyMutationPending}
+        syncPending={startOrderCoreSync.isPending}
+        recomputePending={recomputeMatches.isPending}
         syncLocked={
           !probePassed || queuedOperation !== null || serverRunning
         }

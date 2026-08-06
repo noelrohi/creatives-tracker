@@ -99,7 +99,7 @@ export type MatchInvocationAdapters = {
 export async function triggerOrRepairMatchInvocation(input: {
   invocationFingerprint: string;
   adapters: MatchInvocationAdapters;
-}): Promise<{ triggerRunId: string; key: string }> {
+}): Promise<{ triggerRunId: string; key: string; alreadyPublished: boolean }> {
   let key = baseInvocationKey(input.invocationFingerprint);
   for (let hop = 0; hop <= MATCH_INVOCATION_MAX_RECOVERY_HOPS; hop += 1) {
     const { triggerRunId } = await input.adapters.triggerWithKey(key);
@@ -107,19 +107,20 @@ export async function triggerOrRepairMatchInvocation(input: {
     const state = mapProviderRunState(status);
     if (state === "live") {
       // In-flight runs are never reset or versioned.
-      return { triggerRunId, key };
+      return { triggerRunId, key, alreadyPublished: false };
     }
     if (state === "completed") {
       if (await input.adapters.verifyPublishedRun(triggerRunId)) {
-        // A valid completed run keeps its key untouched.
-        return { triggerRunId, key };
+        // A valid completed run keeps its key untouched: the caller learns
+        // this invocation is already published and no new run exists.
+        return { triggerRunId, key, alreadyPublished: true };
       }
       // Completed without a verified publication: recovery hop.
     } else if (state === "failed_auto_cleared") {
       // The provider auto-clears a failed run's key; retriggering the same
       // exact key starts the retry.
       const retry = await input.adapters.triggerWithKey(key);
-      return { triggerRunId: retry.triggerRunId, key };
+      return { triggerRunId: retry.triggerRunId, key, alreadyPublished: false };
     }
     if (hop === MATCH_INVOCATION_MAX_RECOVERY_HOPS) break;
     key = recoveryInvocationKey(input.invocationFingerprint, triggerRunId);

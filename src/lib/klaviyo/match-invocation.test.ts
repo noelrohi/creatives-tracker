@@ -63,7 +63,11 @@ describe("triggerOrRepairMatchInvocation", () => {
       invocationFingerprint: "fp",
       adapters,
     });
-    expect(result).toEqual({ triggerRunId: "run-1", key: baseInvocationKey("fp") });
+    expect(result).toEqual({
+      triggerRunId: "run-1",
+      key: baseInvocationKey("fp"),
+      alreadyPublished: false,
+    });
     expect(triggered).toEqual([baseInvocationKey("fp")]);
   });
 
