@@ -63,6 +63,36 @@ describe("match service fingerprints", () => {
     );
   });
 
+  it("ignores extra caller fields on the scope object", () => {
+    const base = deriveFingerprints({
+      scope,
+      klaviyo,
+      shopify,
+      ruleChecksum: "rules",
+      configChecksum: "config",
+    });
+    // A tRPC caller holds a full connection record; its extra fields must
+    // never change the fingerprint another process derives from the exact
+    // scope triple.
+    const widened = deriveFingerprints({
+      scope: {
+        ...scope,
+        shopDomain: "a.example.com",
+        storeTimezone: "America/New_York",
+        status: "ready",
+        credentialReference: "reviv_environment",
+      } as typeof scope,
+      klaviyo,
+      shopify,
+      ruleChecksum: "rules",
+      configChecksum: "config",
+    });
+    expect(widened.invocationFingerprint).toBe(base.invocationFingerprint);
+    expect(widened.publicationScopeFingerprint).toBe(
+      base.publicationScopeFingerprint,
+    );
+  });
+
   it("changes both fingerprints when windows, rules, or config change", () => {
     const base = deriveFingerprints({
       scope,

@@ -534,8 +534,17 @@ export function deriveFingerprints(input: {
   ruleChecksum: string;
   configChecksum: string;
 }): { publicationScopeFingerprint: string; invocationFingerprint: string } {
+  // Hash only the closed scope triple. Callers may hold wider
+  // connection-record shapes; extra fields must never reach the
+  // fingerprint or two processes will derive different values for the
+  // same publication.
+  const scope: KlaviyoConnectionScope = {
+    organizationId: input.scope.organizationId,
+    storeId: input.scope.storeId,
+    connectionId: input.scope.connectionId,
+  };
   const publicationScopeFingerprint = stableHash({
-    scope: input.scope,
+    scope,
     eventWindow: {
       from: input.klaviyo.window.from.toISOString(),
       to: input.klaviyo.window.to.toISOString(),
