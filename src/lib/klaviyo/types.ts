@@ -98,6 +98,87 @@ export function assertExactOrderCoreRequestParameters(
   }
 }
 
+export const KLAVIYO_JOURNEY_KINDS = [
+  "clicked_email",
+  "clicked_sms",
+  "active_on_site",
+  "viewed_product",
+  "added_to_cart",
+  "checkout_started",
+] as const;
+
+export type JourneySourceContract = {
+  sourceMode: "journey";
+  metricKinds: [
+    "clicked_email",
+    "clicked_sms",
+    "active_on_site",
+    "viewed_product",
+    "added_to_cart",
+    "checkout_started",
+  ];
+};
+
+/**
+ * Closed event-source union: resume can never reinterpret a journey metric
+ * index as order core or vice versa, and the canonical tuple is never
+ * shortened or reordered.
+ */
+export type KlaviyoEventSourceContract =
+  | OrderCoreSourceContract
+  | JourneySourceContract;
+
+export type KlaviyoEventRunParameters = KlaviyoEventSourceContract;
+
+export function journeySourceContract(): JourneySourceContract {
+  return {
+    sourceMode: "journey",
+    metricKinds: [...KLAVIYO_JOURNEY_KINDS] as JourneySourceContract["metricKinds"],
+  };
+}
+
+export function assertJourneySourceContract(
+  value: unknown,
+): asserts value is JourneySourceContract {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Klaviyo event run has an invalid source contract");
+  }
+  const candidate = value as { sourceMode?: unknown; metricKinds?: unknown };
+  const metricKinds = candidate.metricKinds;
+  if (
+    candidate.sourceMode !== "journey" ||
+    !Array.isArray(metricKinds) ||
+    metricKinds.length !== KLAVIYO_JOURNEY_KINDS.length ||
+    metricKinds.some((kind, index) => kind !== KLAVIYO_JOURNEY_KINDS[index])
+  ) {
+    throw new Error("Klaviyo event run has an invalid source contract");
+  }
+}
+
+export function assertExactEventSourceContract(
+  value: unknown,
+): asserts value is KlaviyoEventSourceContract {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Klaviyo event run has an invalid source contract");
+  }
+  const sourceMode = (value as { sourceMode?: unknown }).sourceMode;
+  if (sourceMode === "order_core") {
+    assertOrderCoreSourceContract(value);
+  } else if (sourceMode === "journey") {
+    assertJourneySourceContract(value);
+  } else {
+    throw new Error("Klaviyo event run has an invalid source contract");
+  }
+  if (
+    JSON.stringify(Object.keys(value as object).sort()) !==
+    JSON.stringify(["metricKinds", "sourceMode"])
+  ) {
+    throw new Error(
+      "Klaviyo event run request parameters are not an immutable source contract",
+    );
+  }
+}
+
 export type EnabledOrderCoreMetric = {
   metricRowId: string;
   externalMetricId: string;
@@ -123,7 +204,7 @@ export function assertHalfOpenWindow(window: HalfOpenWindow): void {
   }
 }
 
-export type KlaviyoEventCheckpoint = OrderCoreSourceContract & {
+export type KlaviyoEventCheckpoint = KlaviyoEventSourceContract & {
   metricIndex: number;
   cursor: string | null;
   page: number;

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { idempotencyKeys, metadata, tags, task, tasks } from "@trigger.dev/sdk";
 import { runKlaviyoDiscovery } from "@/lib/klaviyo/discovery";
 import { runKlaviyoProbe } from "@/lib/klaviyo/probe";
-import { processOrderCoreBatch } from "@/lib/klaviyo/source-runner";
+import { processEventSourceBatch } from "@/lib/klaviyo/source-runner";
 import {
   failKlaviyoSyncRunAfterRetryExhaustion,
   resolveTaskSyncRun,
@@ -126,18 +126,21 @@ export const klaviyoOrderCoreBatchTask = task({
       throw new Error("Klaviyo batch payload does not reference an event run");
     }
     await tags.add(orgTag(run.scope.organizationId));
-    const result = await processOrderCoreBatch({
+    // The durable run's immutable parameters — never the payload — decide
+    // order-core versus journey processing inside the one engine.
+    const result = await processEventSourceBatch({
       scope: run.scope,
       syncRunId: payload.syncRunId,
       maxPages: MAX_PAGES_PER_BATCH,
     });
     metadata.set("pagesProcessed", result.pagesProcessed);
     metadata.set("eventsRead", result.eventsRead);
+    metadata.set("sourceMode", result.sourceMode);
     if (!result.done) {
       // The key hashes the validated persisted next checkpoint, so provider
       // cursors never appear in task keys or logs.
       const idempotencyKey = await idempotencyKeys.create(
-        `klaviyo-order-core:${payload.syncRunId}:${checkpointFingerprint(result.checkpoint)}`,
+        `klaviyo-${result.sourceMode === "journey" ? "journey" : "order-core"}:${payload.syncRunId}:${checkpointFingerprint(result.checkpoint)}`,
         { scope: "global" },
       );
       await tasks.trigger<typeof klaviyoOrderCoreBatchTask>(

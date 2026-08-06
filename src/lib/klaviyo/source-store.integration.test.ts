@@ -12,7 +12,11 @@ import {
   it,
   vi,
 } from "vitest";
-import { orderCoreSourceContract, type NormalizedKlaviyoEvent } from "@/lib/klaviyo/types";
+import {
+  journeySourceContract,
+  orderCoreSourceContract,
+  type NormalizedKlaviyoEvent,
+} from "@/lib/klaviyo/types";
 import { klaviyoSyncRuns } from "@/schema/klaviyo";
 
 function resolveConnectionString(): string | null {
@@ -810,7 +814,7 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
         events: [eventFixture()],
         rowsRead: 1,
       }),
-    ).rejects.toThrow("not immutable order core");
+    ).rejects.toThrow("not an immutable source contract");
     expect(
       (await testPool!.query(`SELECT count(*)::int AS count FROM klaviyo_event`)).rows[0]
         .count,
@@ -2430,4 +2434,121 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
       }
     }
   });
+
+  it("commits journey pages under the closed contract and rejects cross-mode reuse", async () => {
+    const journeyContract = journeySourceContract();
+    const journeyCheckpoint = {
+      ...journeyContract,
+      metricIndex: 0,
+      cursor: null,
+      page: 0,
+    };
+    await seedRun({
+      id: "run-journey",
+      requestParameters: journeyContract,
+      checkpoint: journeyCheckpoint,
+    });
+    await testPool!.query(
+      `INSERT INTO klaviyo_metric
+         (id, organization_id, shopify_store_id, connection_id,
+          external_metric_id, name, canonical_kind, ingestion_enabled,
+          api_revision)
+       VALUES ('metric-row-click', 'org-a', 'store-a', 'connection-a',
+         'metric-external-click', 'Clicked Email', 'clicked_email', 0,
+         '2026-07-15')`,
+    );
+    const journeyEvent = eventFixture({
+      externalEventId: "journey-event-a",
+      metricId: "metric-row-click",
+      metricKind: "clicked_email",
+      explicitOrderIdCandidate: null,
+      providerUniqueIdCandidate: null,
+      attributionRelationshipIds: [],
+      products: [],
+      productEvidenceCompleteness: "unavailable",
+      sourceChecksum: "journey-checksum-a",
+    });
+    const committed = await store.commitKlaviyoEventPage({
+      scope,
+      syncRunId: "run-journey",
+      sourceContract: journeyContract,
+      expectedCheckpoint: journeyCheckpoint,
+      nextCheckpoint: { ...journeyCheckpoint, metricIndex: 1 },
+      events: [journeyEvent],
+      rowsRead: 1,
+    });
+    expect(committed.committed).toBe(true);
+    const stored = await testPool!.query(
+      `SELECT count(*)::int AS count FROM klaviyo_event
+        WHERE external_event_id = 'journey-event-a'`,
+    );
+    expect(stored.rows[0].count).toBe(1);
+    await expect(
+      store.commitKlaviyoEventPage({
+        scope,
+        syncRunId: "run-journey",
+        sourceContract: orderCoreSourceContract(),
+        expectedCheckpoint: checkpoint0,
+        nextCheckpoint: null,
+        events: [],
+        rowsRead: 0,
+      }),
+    ).rejects.toThrow("source contract does not match the run");
+    await expect(
+      store.commitKlaviyoEventPage({
+        scope,
+        syncRunId: "run-journey",
+        sourceContract: journeyContract,
+        expectedCheckpoint: checkpoint0,
+        nextCheckpoint: null,
+        events: [],
+        rowsRead: 0,
+      }),
+    ).rejects.toThrow("checkpoint source contract changed");
+  });
+
+  it("commits an unavailable journey metric slot as an empty canonical page", async () => {
+    const journeyContract = journeySourceContract();
+    const atSms = { ...journeyContract, metricIndex: 1, cursor: null, page: 0 };
+    await seedRun({
+      id: "run-journey-empty",
+      requestParameters: journeyContract,
+      checkpoint: atSms,
+    });
+    const committed = await store.commitKlaviyoEventPage({
+      scope,
+      syncRunId: "run-journey-empty",
+      sourceContract: journeyContract,
+      expectedCheckpoint: atSms,
+      nextCheckpoint: { ...atSms, metricIndex: 2 },
+      events: [],
+      rowsRead: 0,
+    });
+    expect(committed.committed).toBe(true);
+  });
+
+  it("keeps terminal order-core and journey runs distinguishable by immutable parameters", async () => {
+    await seedRun({
+      id: "run-terminal-core",
+      status: "success",
+      checkpoint: null,
+    });
+    await seedRun({
+      id: "run-terminal-journey",
+      status: "success",
+      checkpoint: null,
+      requestParameters: journeySourceContract(),
+    });
+    const modes = await testPool!.query(
+      `SELECT id, request_parameters->>'sourceMode' AS source_mode
+         FROM klaviyo_sync_run
+        WHERE id in ('run-terminal-core', 'run-terminal-journey')
+        ORDER BY id`,
+    );
+    expect(modes.rows).toEqual([
+      { id: "run-terminal-core", source_mode: "order_core" },
+      { id: "run-terminal-journey", source_mode: "journey" },
+    ]);
+  });
+
 });

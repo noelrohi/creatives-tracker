@@ -30,7 +30,8 @@ import {
   KLAVIYO_ORDER_CORE_KINDS,
   assertExactOrderCoreRequestParameters,
   assertHalfOpenWindow,
-  assertOrderCoreSourceContract,
+  assertExactEventSourceContract,
+  type KlaviyoEventSourceContract,
 } from "@/lib/klaviyo/types";
 import { deriveDayInTimezone } from "@/lib/shopify-ingest";
 import {
@@ -97,10 +98,8 @@ export function sameCheckpoint(
   if (left === null || right === null) return left === right;
   return (
     left.sourceMode === right.sourceMode &&
-    left.metricKinds.length === 2 &&
-    right.metricKinds.length === 2 &&
-    left.metricKinds[0] === right.metricKinds[0] &&
-    left.metricKinds[1] === right.metricKinds[1] &&
+    left.metricKinds.length === right.metricKinds.length &&
+    left.metricKinds.every((kind, index) => kind === right.metricKinds[index]) &&
     left.metricIndex === right.metricIndex &&
     left.cursor === right.cursor &&
     left.page === right.page
@@ -1096,8 +1095,14 @@ function sourceContractFromCheckpoint(checkpoint: KlaviyoEventCheckpoint) {
 function assertExactEventCheckpoint(
   value: unknown,
 ): asserts value is KlaviyoEventCheckpoint {
-  assertOrderCoreSourceContract(value);
-  const candidate = value as Partial<KlaviyoEventCheckpoint>;
+  const candidate = value as Partial<KlaviyoEventCheckpoint> | null;
+  if (typeof candidate !== "object" || candidate === null) {
+    throw new Error("Klaviyo event checkpoint is invalid");
+  }
+  assertExactEventSourceContract({
+    sourceMode: candidate.sourceMode,
+    metricKinds: candidate.metricKinds,
+  });
   if (
     JSON.stringify(Object.keys(value as object).sort()) !==
       JSON.stringify([
@@ -1109,7 +1114,7 @@ function assertExactEventCheckpoint(
       ]) ||
     !Number.isInteger(candidate.metricIndex) ||
     candidate.metricIndex! < 0 ||
-    candidate.metricIndex! >= KLAVIYO_ORDER_CORE_KINDS.length ||
+    candidate.metricIndex! >= candidate.metricKinds!.length ||
     (candidate.cursor !== null && typeof candidate.cursor !== "string") ||
     !Number.isInteger(candidate.page) ||
     candidate.page! < 0
@@ -1121,13 +1126,13 @@ function assertExactEventCheckpoint(
 export async function commitKlaviyoEventPage(input: {
   scope: KlaviyoConnectionScope;
   syncRunId: string;
-  sourceContract: OrderCoreSourceContract;
+  sourceContract: KlaviyoEventSourceContract;
   expectedCheckpoint: KlaviyoEventCheckpoint;
   nextCheckpoint: KlaviyoEventCheckpoint | null;
   events: NormalizedKlaviyoEvent[];
   rowsRead: number;
 }) {
-  assertExactOrderCoreRequestParameters(input.sourceContract);
+  assertExactEventSourceContract(input.sourceContract);
   assertExactEventCheckpoint(input.expectedCheckpoint);
   if (input.nextCheckpoint) assertExactEventCheckpoint(input.nextCheckpoint);
   if (
@@ -1164,61 +1169,108 @@ export async function commitKlaviyoEventPage(input: {
       )
       .for("update");
     if (!run) throw new Error("Klaviyo event sync run is not active in this scope");
-    assertExactOrderCoreRequestParameters(run.requestParameters);
+    assertExactEventSourceContract(run.requestParameters);
+    if (
+      JSON.stringify(run.requestParameters) !==
+      JSON.stringify(input.sourceContract)
+    ) {
+      throw new Error(
+        "Klaviyo event page source contract does not match the run",
+      );
+    }
     if (run.checkpoint !== null) assertExactEventCheckpoint(run.checkpoint);
     if (!sameCheckpoint(run.checkpoint, input.expectedCheckpoint)) {
       return { committed: false as const, inserted: 0, updated: 0, suppressed: 0 };
     }
 
-    const enabledOrderMetrics = await tx
-      .select({
-        metricRowId: klaviyoMetrics.id,
-        metricKind: klaviyoMetrics.canonicalKind,
-      })
-      .from(klaviyoMetrics)
-      .where(
-        and(
-          eq(klaviyoMetrics.organizationId, input.scope.organizationId),
-          eq(klaviyoMetrics.storeId, input.scope.storeId),
-          eq(klaviyoMetrics.connectionId, input.scope.connectionId),
-          eq(klaviyoMetrics.ingestionEnabled, 1),
-          inArray(klaviyoMetrics.canonicalKind, [...KLAVIYO_ORDER_CORE_KINDS]),
-        ),
-      );
-    const metricsByKind = new Map<
-      (typeof KLAVIYO_ORDER_CORE_KINDS)[number],
-      string
-    >();
-    for (const metric of enabledOrderMetrics) {
-      if (
-        metric.metricKind === null ||
-        !KLAVIYO_ORDER_CORE_KINDS.includes(metric.metricKind as never) ||
-        metricsByKind.has(
-          metric.metricKind as (typeof KLAVIYO_ORDER_CORE_KINDS)[number],
-        )
-      ) {
-        throw new Error("Klaviyo enabled order-core metric binding is ambiguous");
-      }
-      metricsByKind.set(
-        metric.metricKind as (typeof KLAVIYO_ORDER_CORE_KINDS)[number],
-        metric.metricRowId,
-      );
-    }
-    if (metricsByKind.size !== KLAVIYO_ORDER_CORE_KINDS.length) {
-      throw new Error("Klaviyo enabled order-core metric binding is incomplete");
-    }
     const expectedMetricKind =
-      KLAVIYO_ORDER_CORE_KINDS[input.expectedCheckpoint.metricIndex];
-    const expectedMetricRowId = metricsByKind.get(expectedMetricKind);
-    if (!expectedMetricRowId) {
-      throw new Error("Klaviyo event checkpoint metric binding is unavailable");
-    }
-    for (const event of input.events) {
-      if (
-        event.metricKind !== expectedMetricKind ||
-        event.metricId !== expectedMetricRowId
-      ) {
-        throw new Error("Klaviyo event does not match the active scoped metric binding");
+      input.sourceContract.metricKinds[input.expectedCheckpoint.metricIndex];
+    if (input.sourceContract.sourceMode === "order_core") {
+      const enabledOrderMetrics = await tx
+        .select({
+          metricRowId: klaviyoMetrics.id,
+          metricKind: klaviyoMetrics.canonicalKind,
+        })
+        .from(klaviyoMetrics)
+        .where(
+          and(
+            eq(klaviyoMetrics.organizationId, input.scope.organizationId),
+            eq(klaviyoMetrics.storeId, input.scope.storeId),
+            eq(klaviyoMetrics.connectionId, input.scope.connectionId),
+            eq(klaviyoMetrics.ingestionEnabled, 1),
+            inArray(klaviyoMetrics.canonicalKind, [...KLAVIYO_ORDER_CORE_KINDS]),
+          ),
+        );
+      const metricsByKind = new Map<
+        (typeof KLAVIYO_ORDER_CORE_KINDS)[number],
+        string
+      >();
+      for (const metric of enabledOrderMetrics) {
+        if (
+          metric.metricKind === null ||
+          !KLAVIYO_ORDER_CORE_KINDS.includes(metric.metricKind as never) ||
+          metricsByKind.has(
+            metric.metricKind as (typeof KLAVIYO_ORDER_CORE_KINDS)[number],
+          )
+        ) {
+          throw new Error("Klaviyo enabled order-core metric binding is ambiguous");
+        }
+        metricsByKind.set(
+          metric.metricKind as (typeof KLAVIYO_ORDER_CORE_KINDS)[number],
+          metric.metricRowId,
+        );
+      }
+      if (metricsByKind.size !== KLAVIYO_ORDER_CORE_KINDS.length) {
+        throw new Error("Klaviyo enabled order-core metric binding is incomplete");
+      }
+      const expectedMetricRowId = metricsByKind.get(
+        expectedMetricKind as (typeof KLAVIYO_ORDER_CORE_KINDS)[number],
+      );
+      if (!expectedMetricRowId) {
+        throw new Error("Klaviyo event checkpoint metric binding is unavailable");
+      }
+      for (const event of input.events) {
+        if (
+          event.metricKind !== expectedMetricKind ||
+          event.metricId !== expectedMetricRowId
+        ) {
+          throw new Error("Klaviyo event does not match the active scoped metric binding");
+        }
+      }
+    } else {
+      // Journey pages bind by discovered canonical kind; an unavailable
+      // metric commits an empty canonical slot rather than shortening the
+      // tuple, so any event present must match the exact scoped binding.
+      const journeyMetrics = await tx
+        .select({
+          metricRowId: klaviyoMetrics.id,
+          metricKind: klaviyoMetrics.canonicalKind,
+        })
+        .from(klaviyoMetrics)
+        .where(
+          and(
+            eq(klaviyoMetrics.organizationId, input.scope.organizationId),
+            eq(klaviyoMetrics.storeId, input.scope.storeId),
+            eq(klaviyoMetrics.connectionId, input.scope.connectionId),
+            eq(klaviyoMetrics.canonicalKind, expectedMetricKind),
+          ),
+        );
+      if (input.events.length > 0) {
+        if (journeyMetrics.length !== 1) {
+          throw new Error(
+            "Klaviyo journey metric binding is unavailable or ambiguous",
+          );
+        }
+        for (const event of input.events) {
+          if (
+            event.metricKind !== expectedMetricKind ||
+            event.metricId !== journeyMetrics[0].metricRowId
+          ) {
+            throw new Error(
+              "Klaviyo event does not match the active scoped metric binding",
+            );
+          }
+        }
       }
     }
 

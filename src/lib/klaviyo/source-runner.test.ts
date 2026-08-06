@@ -718,7 +718,7 @@ describe("klaviyo source task boundary", () => {
 
   it("hashes the persisted checkpoint into a global seven-day continuation key", () => {
     expect(source).toContain(
-      "`klaviyo-order-core:${payload.syncRunId}:${checkpointFingerprint(result.checkpoint)}`",
+      "`klaviyo-${result.sourceMode === \"journey\" ? \"journey\" : \"order-core\"}:${payload.syncRunId}:${checkpointFingerprint(result.checkpoint)}`",
     );
     expect(source).toContain('{ scope: "global" }');
     expect(source).toContain('idempotencyKeyTTL: "7d"');
