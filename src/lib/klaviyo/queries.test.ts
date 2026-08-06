@@ -168,7 +168,9 @@ describeIfDb("Klaviyo evidence queries on PostgreSQL", () => {
       orderId: "order-b",
       candidateId,
     });
-    expect(wrongOrder.kind).toBe("not_found");
+    // In-scope order without a current result: visibly not evaluated, and
+    // the foreign candidate stays unreachable either way.
+    expect(wrongOrder.kind).toBe("not_evaluated");
 
     // Superseding the requested order's result makes its candidate
     // inaccessible even though the run row still exists.
@@ -182,7 +184,14 @@ describeIfDb("Klaviyo evidence queries on PostgreSQL", () => {
       orderId: "order-a",
       candidateId,
     });
-    expect(afterSupersede.kind).toBe("not_found");
+    expect(afterSupersede.kind).toBe("not_evaluated");
+
+    const outOfScope = await queries.loadOrderProducts({
+      scope,
+      orderId: "order-missing",
+      candidateId,
+    });
+    expect(outOfScope.kind).toBe("not_found");
   });
 
   it("lists unmatched events symmetrically with the read-union filter", async () => {

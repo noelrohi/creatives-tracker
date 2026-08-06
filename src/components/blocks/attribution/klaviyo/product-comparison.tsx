@@ -10,6 +10,7 @@ export type ProductsData =
     }
   | { kind: "non_canonical"; orderStatus: string }
   | { kind: "diagnostic"; matcherVersion: string; comparison: unknown }
+  | { kind: "not_evaluated" }
   | { kind: "not_found" };
 
 /**
@@ -24,6 +25,14 @@ export function ProductComparison(props: {
 }) {
   if (props.data.kind === "not_found") {
     return <p className="text-sm text-muted-foreground">Not found.</p>;
+  }
+  if (props.data.kind === "not_evaluated") {
+    return (
+      <p className="text-sm text-muted-foreground">
+        This order has not been evaluated by a published match run yet. Run
+        “Recompute matches” to produce evidence conclusions.
+      </p>
+    );
   }
   if (props.data.kind === "non_canonical") {
     return (

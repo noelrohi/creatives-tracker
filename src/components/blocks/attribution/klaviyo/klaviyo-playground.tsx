@@ -1,6 +1,11 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -262,7 +267,7 @@ export function KlaviyoPlayground() {
     syncRuns.data?.items.some((run) => run.status === "running") ?? false;
 
   return (
-    <div className="space-y-4 p-6">
+    <div className="space-y-4 overflow-x-hidden p-6">
       <div className="flex items-center gap-3">
         <Link
           href="/attribution"
@@ -304,7 +309,7 @@ export function KlaviyoPlayground() {
       />
 
       <Tabs value={view} onValueChange={(value) => lab.setView(value as LabView)}>
-        <TabsList>
+        <TabsList className="max-w-full overflow-x-auto">
           {LAB_VIEWS.map((value) => (
             <TabsTrigger key={value} value={value}>
               {VIEW_LABELS[value]}
@@ -447,45 +452,40 @@ function OrdersView(props: {
 }) {
   const trpc = useTRPC();
   const { state } = props.lab;
-  const [cursor, setCursor] = useState<string | null>(null);
-  const filterKey = JSON.stringify([
-    props.range,
-    state.orderStatus,
-    state.productStatus,
-    state.claimType,
-    state.channel,
-    state.bucket,
-  ]);
-  const [previousFilterKey, setPreviousFilterKey] = useState(filterKey);
-  if (previousFilterKey !== filterKey) {
-    setPreviousFilterKey(filterKey);
-    setCursor(null);
-  }
-  const orders = useQuery(
-    trpc.klaviyo.orders.queryOptions({
-      dateFrom: props.range.dateFrom,
-      dateTo: props.range.dateTo,
-      orderStatus: state.orderStatus === "all" ? undefined : state.orderStatus,
-      productStatus:
-        state.productStatus === "all" ? undefined : state.productStatus,
-      claimType: state.claimType === "all" ? undefined : state.claimType,
-      channel: state.channel === "all" ? undefined : state.channel,
-      bucket:
-        state.bucket === "all"
-          ? undefined
-          : (state.bucket as
-              | "meta"
-              | "google"
-              | "klaviyo"
-              | "tiktok"
-              | "ai"
-              | "organic_direct"
-              | "unattributed"
-              | "untracked"),
-      cursor,
-      limit: 25,
-    }),
+  // Filter changes reset pagination through the query key; loaded pages
+  // accumulate so "Load more" appends instead of replacing the batch.
+  const orders = useInfiniteQuery(
+    trpc.klaviyo.orders.infiniteQueryOptions(
+      {
+        dateFrom: props.range.dateFrom,
+        dateTo: props.range.dateTo,
+        orderStatus:
+          state.orderStatus === "all" ? undefined : state.orderStatus,
+        productStatus:
+          state.productStatus === "all" ? undefined : state.productStatus,
+        claimType: state.claimType === "all" ? undefined : state.claimType,
+        channel: state.channel === "all" ? undefined : state.channel,
+        bucket:
+          state.bucket === "all"
+            ? undefined
+            : (state.bucket as
+                | "meta"
+                | "google"
+                | "klaviyo"
+                | "tiktok"
+                | "ai"
+                | "organic_direct"
+                | "unattributed"
+                | "untracked"),
+        limit: 25,
+      },
+      {
+        initialCursor: null,
+        getNextPageParam: (lastPage) => lastPage.nextCursor,
+      },
+    ),
   );
+  const items = orders.data?.pages.flatMap((page) => page.items) ?? null;
   const filtered =
     state.orderStatus !== "all" ||
     state.productStatus !== "all" ||
@@ -494,13 +494,17 @@ function OrdersView(props: {
     state.bucket !== "all";
   return (
     <OrdersTable
-      data={orders.data ?? null}
+      data={
+        items === null
+          ? null
+          : { items, nextCursor: orders.hasNextPage ? "next" : null }
+      }
       error={orders.isError}
       filtered={filtered}
       onRetry={() => void orders.refetch()}
       onClearFilters={props.lab.clearFilters}
       onOpenOrder={props.lab.openOrder}
-      onNextPage={(next) => setCursor(next)}
+      onNextPage={() => void orders.fetchNextPage()}
     />
   );
 }
@@ -511,22 +515,31 @@ function UnmatchedView(props: {
 }) {
   const trpc = useTRPC();
   const { state } = props.lab;
-  const [cursor, setCursor] = useState<string | null>(null);
-  const events = useQuery(
-    trpc.klaviyo.unmatchedEvents.queryOptions({
-      dateFrom: props.range.dateFrom,
-      dateTo: props.range.dateTo,
-      channel: state.channel === "all" ? undefined : state.channel,
-      cursor,
-      limit: 25,
-    }),
+  const events = useInfiniteQuery(
+    trpc.klaviyo.unmatchedEvents.infiniteQueryOptions(
+      {
+        dateFrom: props.range.dateFrom,
+        dateTo: props.range.dateTo,
+        channel: state.channel === "all" ? undefined : state.channel,
+        limit: 25,
+      },
+      {
+        initialCursor: null,
+        getNextPageParam: (lastPage) => lastPage.nextCursor,
+      },
+    ),
   );
+  const items = events.data?.pages.flatMap((page) => page.items) ?? null;
   return (
     <UnmatchedEventsTable
-      data={events.data ?? null}
+      data={
+        items === null
+          ? null
+          : { items, nextCursor: events.hasNextPage ? "next" : null }
+      }
       error={events.isError}
       onRetry={() => void events.refetch()}
-      onNextPage={(next) => setCursor(next)}
+      onNextPage={() => void events.fetchNextPage()}
     />
   );
 }

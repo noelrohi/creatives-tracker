@@ -78,7 +78,7 @@ export function LabHeader(props: {
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-4">
       <div className="space-y-1">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <p className="text-sm font-medium">
             {connection.accountName ?? "Klaviyo account"}
           </p>
@@ -93,7 +93,7 @@ export function LabHeader(props: {
           {freshness(connection.lastEventSyncedAt)}
         </p>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           size="sm"
           variant="outline"

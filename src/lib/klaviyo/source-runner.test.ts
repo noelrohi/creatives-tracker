@@ -484,6 +484,8 @@ describe("startOrResumeOrderCoreSync", () => {
 
   const baseDeps = (state: StartState) => ({
     loadIdentityKeyring: vi.fn(() => TEST_KEYRING),
+    loadSuppressionKey: vi.fn(() => TEST_SUPPRESSION_KEY),
+    initializeGate: vi.fn(async () => ({ initialized: false })),
     now: () => NOW,
     runStore: makeStartStore(state),
   });

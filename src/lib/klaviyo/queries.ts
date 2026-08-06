@@ -421,6 +421,7 @@ export type OrderProductsResponse =
       matcherVersion: string;
       comparison: unknown;
     }
+  | { kind: "not_evaluated" }
   | { kind: "not_found" };
 
 export async function loadOrderProducts(input: {
@@ -445,7 +446,23 @@ export async function loadOrderProducts(input: {
       ),
     )
     .limit(1);
-  if (!result) return { kind: "not_found" };
+  if (!result) {
+    // A scoped order without a current result is visibly not evaluated;
+    // only an order outside this tenant scope stays indistinguishable
+    // from a missing one.
+    const [order] = await db
+      .select({ id: shopifyOrders.id })
+      .from(shopifyOrders)
+      .where(
+        and(
+          eq(shopifyOrders.organizationId, input.scope.organizationId),
+          eq(shopifyOrders.storeId, input.scope.storeId),
+          eq(shopifyOrders.id, input.orderId),
+        ),
+      )
+      .limit(1);
+    return order ? { kind: "not_evaluated" } : { kind: "not_found" };
+  }
 
   if (input.candidateId !== undefined) {
     // The candidate must belong to the requested order AND be reachable

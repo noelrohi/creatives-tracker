@@ -21,6 +21,7 @@ import {
   failExpiredKlaviyoSyncRun,
   finishKlaviyoSyncRun,
   getConnectionRecord,
+  initializeIdentityWriteGate,
   loadEnabledOrderCoreMetrics,
   renewKlaviyoSyncRunHeartbeat,
   withKlaviyoConnectionLock,
@@ -128,6 +129,7 @@ export type SourceRunnerDependencies = {
   now?: () => Date;
   loadIdentityKeyring?: () => IdentityHmacKeyring;
   loadSuppressionKey?: () => ErasureSuppressionKey;
+  initializeGate?: typeof initializeIdentityWriteGate;
   loadConnection?: typeof getConnectionRecord;
   loadEnabledMetrics?: typeof loadEnabledOrderCoreMetrics;
   renewHeartbeat?: typeof renewKlaviyoSyncRunHeartbeat;
@@ -300,8 +302,20 @@ export async function startOrResumeOrderCoreSync(
   },
   dependencies: SourceRunnerDependencies = {},
 ): Promise<{ syncRunId: string; resumed: boolean }> {
-  (dependencies.loadIdentityKeyring ?? parseIdentityHmacKeyring)();
+  const keyring = (dependencies.loadIdentityKeyring ?? parseIdentityHmacKeyring)();
+  const suppressionKey = (
+    dependencies.loadSuppressionKey ?? parseErasureSuppressionKey
+  )();
   assertHalfOpenWindow(input.window);
+  // Idempotent gate bootstrap: a fresh connection gets its current_only
+  // identity gate from the environment keyring before any identity-bearing
+  // page can commit; an identical replay is a no-op and a mismatched
+  // environment fails loudly here instead of mid-batch.
+  await (dependencies.initializeGate ?? initializeIdentityWriteGate)({
+    scope: input.scope,
+    keyring,
+    suppressionKey,
+  });
   const now = dependencies.now ?? (() => new Date());
   const runStore = dependencies.runStore ?? databaseEventRunStore;
 
@@ -628,8 +642,20 @@ export async function startOrResumeJourneySync(
   },
   dependencies: SourceRunnerDependencies = {},
 ): Promise<{ syncRunId: string; resumed: boolean }> {
-  (dependencies.loadIdentityKeyring ?? parseIdentityHmacKeyring)();
+  const keyring = (dependencies.loadIdentityKeyring ?? parseIdentityHmacKeyring)();
+  const suppressionKey = (
+    dependencies.loadSuppressionKey ?? parseErasureSuppressionKey
+  )();
   assertHalfOpenWindow(input.window);
+  // Idempotent gate bootstrap: a fresh connection gets its current_only
+  // identity gate from the environment keyring before any identity-bearing
+  // page can commit; an identical replay is a no-op and a mismatched
+  // environment fails loudly here instead of mid-batch.
+  await (dependencies.initializeGate ?? initializeIdentityWriteGate)({
+    scope: input.scope,
+    keyring,
+    suppressionKey,
+  });
   const now = dependencies.now ?? (() => new Date());
   const runStore = dependencies.runStore ?? databaseEventRunStore;
 
