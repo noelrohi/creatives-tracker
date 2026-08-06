@@ -142,22 +142,30 @@ export function KlaviyoPlayground() {
 
   const startDiscovery = useMutation(
     trpc.klaviyo.startDiscovery.mutationOptions({
+      // Stamp before the request: the run row is inserted during the
+      // mutation, so a post-roundtrip stamp can never confirm it.
+      onMutate: () => markQueued("discovery"),
       onSuccess: () => {
         toast.success("Discovery queued");
-        markQueued("discovery");
         invalidateEvidence();
       },
-      onError: onActionError("Discovery could not start"),
+      onError: (error) => {
+        setQueuedOperation(null);
+        onActionError("Discovery could not start")(error);
+      },
     }),
   );
   const runProbe = useMutation(
     trpc.klaviyo.runProbe.mutationOptions({
+      onMutate: () => markQueued("probe"),
       onSuccess: () => {
         toast.success("Probe queued");
-        markQueued("probe");
         invalidateEvidence();
       },
-      onError: onActionError("Probe could not start"),
+      onError: (error) => {
+        setQueuedOperation(null);
+        onActionError("Probe could not start")(error);
+      },
     }),
   );
   const approveProbe = useMutation(
@@ -198,22 +206,28 @@ export function KlaviyoPlayground() {
   );
   const startOrderCoreSync = useMutation(
     trpc.klaviyo.startOrderCoreSync.mutationOptions({
+      onMutate: () => markQueued("events"),
       onSuccess: () => {
         toast.success("Order-core sync queued");
-        markQueued("events");
         invalidateEvidence();
       },
-      onError: onActionError("Sync could not start"),
+      onError: (error) => {
+        setQueuedOperation(null);
+        onActionError("Sync could not start")(error);
+      },
     }),
   );
   const recomputeMatches = useMutation(
     trpc.klaviyo.recomputeMatches.mutationOptions({
-      onSuccess: (result) => {
+      // The pre-request instant travels through the mutation context so the
+      // confirmation window starts at the click, not after the roundtrip.
+      onMutate: () => ({ queuedAt: clickInstant() }),
+      onSuccess: (result, _variables, context) => {
         toast.success("Match recompute queued");
         setQueuedRecompute({
           triggerRunId: result.triggerRunId,
           invocationFingerprint: result.invocationFingerprint,
-          at: clickInstant(),
+          at: context?.queuedAt ?? clickInstant(),
         });
       },
       onError: onActionError("Recompute could not start"),
@@ -221,14 +235,18 @@ export function KlaviyoPlayground() {
   );
   const refreshReports = useMutation(
     trpc.klaviyo.refreshReports.mutationOptions({
+      onMutate: () => markQueued("reports"),
       onSuccess: (result) => {
         toast.success(
           result.kind === "fresh" ? "Reports already fresh" : "Report refresh queued",
         );
-        if (result.kind !== "fresh") markQueued("reports");
+        if (result.kind === "fresh") setQueuedOperation(null);
         invalidateEvidence();
       },
-      onError: onActionError("Report refresh could not start"),
+      onError: (error) => {
+        setQueuedOperation(null);
+        onActionError("Report refresh could not start")(error);
+      },
     }),
   );
 
