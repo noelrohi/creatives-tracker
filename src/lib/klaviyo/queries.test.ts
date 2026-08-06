@@ -233,4 +233,228 @@ describeIfDb("Klaviyo evidence queries on PostgreSQL", () => {
     expect(serialized).not.toMatch(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
     expect(serialized).not.toContain("digest");
   });
+
+  it("returns canonical claim chains with nullable named nodes and replay freshness", async () => {
+    await testPool!.query(
+      `INSERT INTO klaviyo_marketing_object
+         (id, organization_id, shopify_store_id, connection_id, object_type,
+          external_id, name, tracking_projection, source_checksum, api_revision)
+       VALUES ('campaign-row-1', 'org-a', 'store-a', 'connection-a',
+         'campaign', 'campaign-ext-1', 'Summer Sale', '{}', 'checksum',
+         '2026-07-15')`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_attribution_claim
+         (id, organization_id, shopify_store_id, connection_id,
+          conversion_event_id, klaviyo_attribution_id, campaign_object_id,
+          interaction_type, interaction_host, interaction_path,
+          unknown_reason_codes, source_checksum, api_revision)
+       VALUES ('claim-1', 'org-a', 'store-a', 'connection-a', 'event-a',
+         'attribution-1', 'campaign-row-1', 'click', 'shop.example.com',
+         '/products/x', '["message_unknown"]', 'checksum', '2026-07-15')`,
+    );
+    const run = await testPool!.query(
+      `SELECT run_id FROM klaviyo_order_match_result
+        WHERE order_id = 'order-a' AND superseded_at IS NULL`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_claim_replay_state
+         (id, organization_id, shopify_store_id, connection_id, source_run_id,
+          match_run_id, conversion_event_id, source_checksum, status,
+          reason_codes, attempted_at)
+       VALUES ('state-1', 'org-a', 'store-a', 'connection-a', 'source-run-a',
+         $1, 'event-a', 'event-checksum-a', 'incomplete',
+         '["attribution_relationship_truncated"]', now())`,
+      [run.rows[0].run_id],
+    );
+    const claims = await queries.loadOrderClaims({ scope, orderId: "order-a" });
+    expect(claims).not.toBeNull();
+    if (claims === null || claims.kind === "none") throw new Error("no chain");
+    expect(claims.kind).toBe("canonical");
+    expect(claims.claims[0]).toMatchObject({
+      attributionId: "attribution-1",
+      campaign: { id: "campaign-row-1", name: "Summer Sale" },
+      flow: null,
+      message: null,
+      interaction: { type: "click", host: "shop.example.com" },
+      unknownReasonCodes: ["message_unknown"],
+    });
+    expect(claims.replay?.status).toBe("incomplete");
+    expect(claims.caveats).toContain("claims_stale_or_incomplete");
+    const notEvaluated = await queries.loadOrderClaims({
+      scope,
+      orderId: "order-b",
+    });
+    expect(notEvaluated).toEqual({ kind: "none", reason: "order_not_evaluated" });
+    const badCandidate = await queries.loadOrderClaims({
+      scope,
+      orderId: "order-a",
+      candidateId: "candidate-from-elsewhere",
+    });
+    expect(badCandidate).toBeNull();
+  });
+
+  it("builds journeys only from canonical journey observations of the exact profile", async () => {
+    await testPool!.query(
+      `UPDATE klaviyo_event SET profile_id = 'profile-a' WHERE id = 'event-a'`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_metric
+         (id, organization_id, shopify_store_id, connection_id,
+          external_metric_id, name, canonical_kind, ingestion_enabled, api_revision)
+       VALUES ('metric-click', 'org-a', 'store-a', 'connection-a',
+         'metric-ext-click', 'Clicked Email', 'clicked_email', 0, '2026-07-15')`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_event
+         (id, organization_id, shopify_store_id, connection_id, metric_id,
+          external_event_id, occurred_at, profile_id,
+          attribution_relationship_ids, redacted_properties,
+          key_type_fingerprint, warnings, product_evidence_completeness,
+          source_checksum, api_revision)
+       VALUES
+         ('event-click', 'org-a', 'store-a', 'connection-a', 'metric-click',
+          'external-click', '2026-07-20T09:00:00Z', 'profile-a', '[]', '{}',
+          '[]', '[]', 'unavailable', 'click-checksum', '2026-07-15'),
+         ('event-click-other', 'org-a', 'store-a', 'connection-a',
+          'metric-click', 'external-click-other', '2026-07-20T09:30:00Z',
+          'profile-other', '[]', '{}', '[]', '[]', 'unavailable',
+          'other-checksum', '2026-07-15')`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_sync_run
+         (id, organization_id, shopify_store_id, connection_id, operation,
+          trigger_type, status, checkpoint, request_parameters,
+          requested_from, requested_to, finished_at)
+       VALUES ('journey-run-a', 'org-a', 'store-a', 'connection-a', 'events',
+         'manual', 'success', NULL,
+         '{"sourceMode":"journey","metricKinds":["clicked_email","clicked_sms","active_on_site","viewed_product","added_to_cart","checkout_started"]}',
+         '2026-07-01T00:00:00Z', '2026-07-30T00:00:00Z', now())`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_event_run_observation
+         (organization_id, shopify_store_id, connection_id, sync_run_id,
+          event_id, observed_source_checksum)
+       VALUES
+         ('org-a', 'store-a', 'connection-a', 'journey-run-a', 'event-click',
+          'click-checksum'),
+         ('org-a', 'store-a', 'connection-a', 'journey-run-a',
+          'event-click-other', 'other-checksum')`,
+    );
+    const journey = await queries.loadOrderJourney({
+      scope,
+      orderId: "order-a",
+      lookbackDays: 7,
+    });
+    if (journey.kind !== "journey") throw new Error("expected journey");
+    expect(journey.label).toBe("same_klaviyo_profile");
+    expect(journey.events.map((event) => event.eventRowId)).toEqual([
+      "event-click",
+    ]);
+    expect(JSON.stringify(journey)).not.toContain("profile-a");
+    const notEvaluated = await queries.loadOrderJourney({
+      scope,
+      orderId: "order-b",
+      lookbackDays: 7,
+    });
+    expect(notEvaluated.kind).toBe("none");
+  });
+
+  it("excludes checksum-mismatched and failed-run-only journey observations", async () => {
+    await testPool!.query(
+      `UPDATE klaviyo_event SET profile_id = 'profile-a' WHERE id = 'event-a'`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_metric
+         (id, organization_id, shopify_store_id, connection_id,
+          external_metric_id, name, canonical_kind, ingestion_enabled, api_revision)
+       VALUES ('metric-click', 'org-a', 'store-a', 'connection-a',
+         'metric-ext-click', 'Clicked Email', 'clicked_email', 0, '2026-07-15')`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_event
+         (id, organization_id, shopify_store_id, connection_id, metric_id,
+          external_event_id, occurred_at, profile_id,
+          attribution_relationship_ids, redacted_properties,
+          key_type_fingerprint, warnings, product_evidence_completeness,
+          source_checksum, api_revision)
+       VALUES
+         ('event-mutated', 'org-a', 'store-a', 'connection-a', 'metric-click',
+          'external-mutated', '2026-07-20T09:00:00Z', 'profile-a', '[]', '{}',
+          '[]', '[]', 'unavailable', 'newer-checksum', '2026-07-15'),
+         ('event-failed-only', 'org-a', 'store-a', 'connection-a',
+          'metric-click', 'external-failed-only', '2026-07-20T09:10:00Z',
+          'profile-a', '[]', '{}', '[]', '[]', 'unavailable',
+          'failed-checksum', '2026-07-15')`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_sync_run
+         (id, organization_id, shopify_store_id, connection_id, operation,
+          trigger_type, status, checkpoint, request_parameters, finished_at)
+       VALUES
+         ('journey-run-b', 'org-a', 'store-a', 'connection-a', 'events',
+          'manual', 'success', NULL,
+          '{"sourceMode":"journey","metricKinds":["clicked_email","clicked_sms","active_on_site","viewed_product","added_to_cart","checkout_started"]}',
+          now()),
+         ('journey-run-failed', 'org-a', 'store-a', 'connection-a', 'events',
+          'manual', 'failed', NULL,
+          '{"sourceMode":"journey","metricKinds":["clicked_email","clicked_sms","active_on_site","viewed_product","added_to_cart","checkout_started"]}',
+          now())`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_event_run_observation
+         (organization_id, shopify_store_id, connection_id, sync_run_id,
+          event_id, observed_source_checksum)
+       VALUES
+         ('org-a', 'store-a', 'connection-a', 'journey-run-b', 'event-mutated',
+          'stale-checksum'),
+         ('org-a', 'store-a', 'connection-a', 'journey-run-failed',
+          'event-failed-only', 'failed-checksum')`,
+    );
+    const journey = await queries.loadOrderJourney({
+      scope,
+      orderId: "order-a",
+      lookbackDays: 7,
+    });
+    if (journey.kind !== "journey") throw new Error("expected journey");
+    expect(journey.events).toEqual([]);
+  });
+
+  it("projects a redacted inspector without raw journeys, profiles, or reports", async () => {
+    await testPool!.query(
+      `UPDATE shopify_order
+          SET customer_journey = '{"moments":[{"landing_page":"https://x.example/secret?email=a@b.com"}]}',
+              last_click_utm_source = 'klaviyo',
+              last_click_utm_medium = 'email'
+        WHERE id = 'order-a'`,
+    );
+    await testPool!.query(
+      `UPDATE klaviyo_event SET profile_id = 'profile-a' WHERE id = 'event-a'`,
+    );
+    const inspector = await queries.loadOrderInspector({
+      scope,
+      orderId: "order-a",
+    });
+    expect(inspector).not.toBeNull();
+    expect(inspector?.order.lastClickUtm).toEqual({
+      source: "klaviyo",
+      medium: "email",
+      campaign: null,
+    });
+    expect(inspector?.conversionEvent).toMatchObject({
+      externalEventId: "external-event-a",
+      profile: "present",
+    });
+    const serialized = JSON.stringify(inspector);
+    expect(serialized).not.toContain("profile-a");
+    expect(serialized).not.toContain("landing_page");
+    expect(serialized).not.toContain("customer_journey");
+    expect(serialized).not.toContain("a@b.com");
+    const missing = await queries.loadOrderInspector({
+      scope,
+      orderId: "order-missing",
+    });
+    expect(missing).toBeNull();
+  });
+
 });

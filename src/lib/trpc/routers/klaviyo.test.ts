@@ -35,6 +35,12 @@ const mocks = vi.hoisted(() => {
     loadOrderExplanation: vi.fn(),
     loadOrderProducts: vi.fn(),
     listUnmatchedEvents: vi.fn(),
+    loadOrderClaims: vi.fn(),
+    loadOrderInspector: vi.fn(),
+    loadOrderJourney: vi.fn(),
+    failReportSync: vi.fn(),
+    listCurrentReportFacts: vi.fn(),
+    startOrResumeReportSync: vi.fn(),
     selectLatestMatchInputs: vi.fn(),
     triggerOrRepairMatchInvocation: vi.fn(),
   };
@@ -53,6 +59,14 @@ vi.mock("@/lib/klaviyo/queries", () => ({
   loadOrderExplanation: mocks.loadOrderExplanation,
   loadOrderProducts: mocks.loadOrderProducts,
   listUnmatchedEvents: mocks.listUnmatchedEvents,
+  loadOrderClaims: mocks.loadOrderClaims,
+  loadOrderInspector: mocks.loadOrderInspector,
+  loadOrderJourney: mocks.loadOrderJourney,
+}));
+vi.mock("@/lib/klaviyo/report-repository", () => ({
+  failReportSync: mocks.failReportSync,
+  listCurrentReportFacts: mocks.listCurrentReportFacts,
+  startOrResumeReportSync: mocks.startOrResumeReportSync,
 }));
 vi.mock("@/lib/klaviyo/match-service", () => ({
   selectLatestMatchInputs: mocks.selectLatestMatchInputs,
@@ -603,5 +617,147 @@ describe("klaviyo match procedures", () => {
     expect(call.window.to.getTime() - call.window.from.getTime()).toBe(
       23 * 60 * 60 * 1000,
     );
+  });
+});
+
+describe("claims, journey, inspector, and report procedures", () => {
+  it("passes bounded lookbacks to orderJourney and rejects others", async () => {
+    mocks.loadOrderJourney.mockResolvedValue({
+      kind: "journey",
+      label: "same_klaviyo_profile",
+      events: [],
+      clipped: false,
+      caveats: [],
+    });
+    const caller = sessionCaller("admin");
+    await caller.orderJourney({ orderId: "order-1", lookbackDays: 30 });
+    expect(mocks.loadOrderJourney).toHaveBeenCalledWith({
+      scope: mocks.connection,
+      orderId: "order-1",
+      lookbackDays: 30,
+    });
+    await expect(
+      caller.orderJourney({
+        orderId: "order-1",
+        lookbackDays: 14 as unknown as 7,
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("returns NOT_FOUND for cross-tenant claim and inspector candidates", async () => {
+    mocks.loadOrderClaims.mockResolvedValue(null);
+    mocks.loadOrderInspector.mockResolvedValue(null);
+    const caller = sessionCaller("owner");
+    await expect(
+      caller.orderClaims({ orderId: "order-1", candidateId: "candidate-x" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      caller.orderInspector({ orderId: "order-1", candidateId: "candidate-x" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(mocks.loadOrderClaims).toHaveBeenCalledWith({
+      scope: mocks.connection,
+      orderId: "order-1",
+      candidateId: "candidate-x",
+    });
+  });
+
+  it("reads report facts only through the current-slot query", async () => {
+    mocks.listCurrentReportFacts.mockResolvedValue({
+      generationId: "generation-1",
+      publishedAt: new Date(),
+      facts: [],
+    });
+    const caller = sessionCaller("admin");
+    await caller.reports({ kind: "flow", limit: 10 });
+    expect(mocks.listCurrentReportFacts).toHaveBeenCalledWith({
+      scope: mocks.connection,
+      kind: "flow",
+      limit: 10,
+      offset: undefined,
+    });
+  });
+
+  it("refreshReports supplies server-derived manual reason and the exact global key", async () => {
+    mocks.startOrResumeReportSync.mockResolvedValue({
+      kind: "started",
+      syncRunId: "report-run-1",
+      asOf: "2026-08-05T00:00:00.000Z",
+      stagedKinds: ["campaign"],
+    });
+    mocks.idempotencyCreate.mockResolvedValue("key-1");
+    mocks.taskTrigger.mockResolvedValue({ id: "trigger-run-1" });
+    const caller = sessionCaller("admin");
+    const result = await caller.refreshReports({
+      dateFrom: "2026-07-01",
+      dateTo: "2026-07-31",
+      kinds: ["campaign"],
+    });
+    expect(result).toEqual({
+      kind: "started",
+      syncRunId: "report-run-1",
+      stagedKinds: ["campaign"],
+    });
+    expect(mocks.startOrResumeReportSync).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "manual", kinds: ["campaign"] }),
+    );
+    expect(mocks.idempotencyCreate).toHaveBeenCalledWith(
+      "klaviyo:reports:first:report-run-1",
+      { scope: "global" },
+    );
+    expect(mocks.taskTrigger).toHaveBeenCalledWith(
+      "klaviyo-reports",
+      { syncRunId: "report-run-1" },
+      { idempotencyKey: "key-1", idempotencyKeyTTL: "7d" },
+    );
+  });
+
+  it("short-circuits an all-fresh refresh without any trigger", async () => {
+    mocks.startOrResumeReportSync.mockResolvedValue({ kind: "fresh" });
+    const caller = sessionCaller("admin");
+    const result = await caller.refreshReports({
+      dateFrom: "2026-07-01",
+      dateTo: "2026-07-31",
+      kinds: ["campaign", "flow"],
+    });
+    expect(result).toEqual({ kind: "fresh" });
+    expect(mocks.taskTrigger).not.toHaveBeenCalled();
+  });
+
+  it("finalizes the exact report row on an ambiguous handoff error", async () => {
+    mocks.startOrResumeReportSync.mockResolvedValue({
+      kind: "started",
+      syncRunId: "report-run-2",
+      asOf: "2026-08-05T00:00:00.000Z",
+      stagedKinds: ["flow"],
+    });
+    mocks.idempotencyCreate.mockResolvedValue("key-2");
+    mocks.taskTrigger.mockRejectedValue(new Error("ambiguous handoff"));
+    mocks.failReportSync.mockResolvedValue({ changed: true });
+    const caller = sessionCaller("admin");
+    await expect(
+      caller.refreshReports({
+        dateFrom: "2026-07-01",
+        dateTo: "2026-07-31",
+        kinds: ["flow"],
+      }),
+    ).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+    expect(mocks.failReportSync).toHaveBeenCalledWith(
+      expect.objectContaining({ syncRunId: "report-run-2" }),
+    );
+  });
+
+  it("never exposes connection or run authority supplied by the browser", async () => {
+    mocks.loadOrderClaims.mockResolvedValue({ kind: "none", reason: "order_not_evaluated" });
+    const caller = sessionCaller("admin");
+    await caller.orderClaims({
+      orderId: "order-1",
+      // Hostile extra fields are stripped by the closed input schema.
+      ...( { connectionId: "connection-evil", organizationId: "org-evil" } as object),
+    });
+    expect(mocks.loadOrderClaims).toHaveBeenCalledWith({
+      scope: mocks.connection,
+      orderId: "order-1",
+      candidateId: null,
+    });
   });
 });

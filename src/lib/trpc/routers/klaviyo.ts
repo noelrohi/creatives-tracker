@@ -15,9 +15,17 @@ import {
   listEvidenceOrders,
   listUnmatchedEvents,
   loadEvidenceCoverage,
+  loadOrderClaims,
   loadOrderExplanation,
+  loadOrderInspector,
+  loadOrderJourney,
   loadOrderProducts,
 } from "@/lib/klaviyo/queries";
+import {
+  failReportSync,
+  listCurrentReportFacts,
+  startOrResumeReportSync,
+} from "@/lib/klaviyo/report-repository";
 import { startOrResumeOrderCoreSync } from "@/lib/klaviyo/source-runner";
 import { klaviyoMatchRuns } from "@/schema/klaviyo-match";
 import { and, eq } from "drizzle-orm";
@@ -325,6 +333,142 @@ export const klaviyoRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Not found" });
       }
       return response;
+    }),
+
+  orderJourney: orgAdminProcedure
+    .input(
+      z.object({
+        orderId: resourceIdSchema,
+        lookbackDays: z.union([z.literal(7), z.literal(30), z.literal(90)]),
+      }),
+    )
+    .query(async ({ input, ctx }) => {
+      const connection = await requirePilotConnection(ctx.organizationId);
+      return loadOrderJourney({
+        scope: connection,
+        orderId: input.orderId,
+        lookbackDays: input.lookbackDays,
+      });
+    }),
+
+  orderClaims: orgAdminProcedure
+    .input(
+      z.object({
+        orderId: resourceIdSchema,
+        candidateId: resourceIdSchema.optional(),
+      }),
+    )
+    .query(async ({ input, ctx }) => {
+      const connection = await requirePilotConnection(ctx.organizationId);
+      const response = await loadOrderClaims({
+        scope: connection,
+        orderId: input.orderId,
+        candidateId: input.candidateId ?? null,
+      });
+      if (response === null) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Not found" });
+      }
+      return response;
+    }),
+
+  orderInspector: orgAdminProcedure
+    .input(
+      z.object({
+        orderId: resourceIdSchema,
+        candidateId: resourceIdSchema.optional(),
+      }),
+    )
+    .query(async ({ input, ctx }) => {
+      const connection = await requirePilotConnection(ctx.organizationId);
+      const response = await loadOrderInspector({
+        scope: connection,
+        orderId: input.orderId,
+        candidateId: input.candidateId ?? null,
+      });
+      if (response === null) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Not found" });
+      }
+      return response;
+    }),
+
+  reports: orgAdminProcedure
+    .input(
+      z.object({
+        kind: z.enum(["campaign", "flow"]),
+        limit: z.number().int().min(1).max(200).optional(),
+        offset: z.number().int().min(0).optional(),
+      }),
+    )
+    .query(async ({ input, ctx }) => {
+      const connection = await requirePilotConnection(ctx.organizationId);
+      // Facts come only from the requested slot's single current
+      // generation; staging, failed, and superseded rows never surface.
+      return listCurrentReportFacts({
+        scope: connection,
+        kind: input.kind,
+        limit: input.limit,
+        offset: input.offset,
+      });
+    }),
+
+  refreshReports: orgAdminProcedure
+    .input(
+      z.object({
+        dateFrom: storeDaySchema,
+        dateTo: storeDaySchema,
+        kinds: z.array(z.enum(["campaign", "flow"])).min(1),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const connection = await requirePilotConnection(ctx.organizationId);
+      // Inclusive browser calendar dates convert through the connection's
+      // account timezone into the half-open internal window (DST-safe).
+      const accountTimezone = connection.storeTimezone;
+      const window = inclusiveStoreDaysToHalfOpenUtc({
+        dateFrom: input.dateFrom,
+        dateTo: input.dateTo,
+        timeZone: accountTimezone,
+      });
+      const prepared = await startOrResumeReportSync({
+        scope: connection,
+        window,
+        kinds: input.kinds,
+        // The router is the only manual caller; the incremental supervisor
+        // alone supplies "scheduled". Browser input never carries reason.
+        reason: "manual",
+        now: new Date(),
+      });
+      if (prepared.kind === "fresh") return { kind: "fresh" as const };
+      try {
+        const idempotencyKey = await idempotencyKeys.create(
+          `klaviyo:reports:first:${prepared.syncRunId}`,
+          { scope: "global" },
+        );
+        await tasks.trigger(
+          "klaviyo-reports",
+          { syncRunId: prepared.syncRunId },
+          { idempotencyKey, idempotencyKeyTTL: "7d" },
+        );
+      } catch {
+        try {
+          await failReportSync({
+            scope: connection,
+            syncRunId: prepared.syncRunId,
+            now: new Date(),
+          });
+        } catch {
+          // Lease reconciliation covers a finalizer race.
+        }
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Klaviyo report handoff failed",
+        });
+      }
+      return {
+        kind: prepared.kind,
+        syncRunId: prepared.syncRunId,
+        stagedKinds: prepared.stagedKinds,
+      };
     }),
 
   unmatchedEvents: orgAdminProcedure
