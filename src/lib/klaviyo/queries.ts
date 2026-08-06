@@ -71,6 +71,8 @@ export type OrderLedgerRow = {
   orderId: string;
   orderName: string | null;
   orderDay: string;
+  netSales: string;
+  bucket: string | null;
   orderStatus: OrderEvidenceStatus;
   productStatus: ProductMatchStatus | null;
   claimCount: number;
@@ -167,6 +169,8 @@ export async function listEvidenceOrders(input: {
       orderId: shopifyOrders.id,
       orderName: shopifyOrders.orderName,
       orderDay: shopifyOrders.orderDay,
+      netSales: shopifyOrders.netSales,
+      bucket: sql<string | null>`(${shopifyOrders.bucket})::text`,
       orderCreatedAt: shopifyOrders.orderCreatedAt,
       status: klaviyoOrderMatchResults.status,
       productStatus: klaviyoOrderMatchResults.productStatus,
@@ -197,6 +201,8 @@ export async function listEvidenceOrders(input: {
     orderId: row.orderId,
     orderName: row.orderName,
     orderDay: row.orderDay,
+    netSales: row.netSales,
+    bucket: row.bucket,
     orderStatus: (row.status ?? "not_evaluated") as OrderEvidenceStatus,
     productStatus: (row.productStatus ?? null) as ProductMatchStatus | null,
     claimCount: row.claimCount ?? 0,
