@@ -136,6 +136,40 @@ export function KlaviyoPlayground() {
     return () => clearTimeout(timer);
   }, [latestRunStart, queuedOperation]);
 
+  // Completion notification: runs already terminal at first load are
+  // seeded silently; only a run reaching terminal state while this page is
+  // open toasts once, then refreshes health so "last synced" advances.
+  const [announcedRuns, setAnnouncedRuns] = useState<Record<
+    string,
+    string
+  > | null>(null);
+  const latestRuns = syncRuns.data?.items ?? null;
+  useEffect(() => {
+    if (latestRuns === null) return;
+    if (announcedRuns === null) {
+      const seeded: Record<string, string> = {};
+      for (const run of latestRuns) {
+        if (run.status !== "running") seeded[run.id] = run.status;
+      }
+      const timer = setTimeout(() => setAnnouncedRuns(seeded), 0);
+      return () => clearTimeout(timer);
+    }
+    for (const run of latestRuns) {
+      if (run.status === "running") continue;
+      if (announcedRuns[run.id] !== undefined) continue;
+      const timer = setTimeout(() => {
+        setAnnouncedRuns((prior) => ({ ...prior, [run.id]: run.status }));
+        if (run.status === "success") {
+          toast.success(`${run.operation} sync complete`);
+        } else {
+          toast.error(`${run.operation} sync ${run.status}`);
+        }
+        void queryClient.invalidateQueries();
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+  }, [latestRuns, announcedRuns, queryClient]);
+
   const onActionError = (fallback: string) => (error: unknown) => {
     toast.error(getUserFacingErrorMessage(error, fallback));
   };

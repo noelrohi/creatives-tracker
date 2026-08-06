@@ -1,5 +1,6 @@
 "use client";
 
+import { formatDistanceToNow } from "date-fns";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { LabPanelState } from "./panel-state";
@@ -25,7 +26,7 @@ export type LabHealth = {
 function freshness(value: string | Date | null): string {
   if (value === null) return "never";
   const date = typeof value === "string" ? new Date(value) : value;
-  return date.toISOString().slice(0, 16).replace("T", " ");
+  return formatDistanceToNow(date, { addSuffix: true });
 }
 
 /**

@@ -192,6 +192,9 @@ export function matcherConfigChecksum(): string {
     tolerances: MATCH_TOLERANCES,
     minScore: DIAGNOSTIC_MIN_SCORE,
     maxScore: DIAGNOSTIC_MAX_SCORE,
+    // Behavior revision: order-side IDs join through the canonical
+    // shopify_order_gid namespace, not raw string equality.
+    orderIdJoin: "canonical_both_sides@1",
   });
 }
 
@@ -199,8 +202,18 @@ export function computeAdvisoryMatches(input: MatchInput): MatchComputation {
   const ruleChecksum = approvedRuleChecksum(input.approvedRules);
   const configChecksum = matcherConfigChecksum();
 
+  // Key orders by the same canonical order-ID namespace the event side
+  // uses: a stored full GID and a bare numeric candidate must meet on the
+  // numeric value. Non-canonicalizable IDs keep exact raw equality.
   const ordersByNumericId = new Map(
-    input.orders.map((order) => [order.shopifyNumericOrderId, order]),
+    input.orders.map((order) => {
+      const canonical = canonicalizeOrderIdCandidate(order.shopifyNumericOrderId);
+      const key =
+        canonical !== null && canonical.namespace === "shopify_order_gid"
+          ? canonical.value
+          : order.shopifyNumericOrderId;
+      return [key, order] as const;
+    }),
   );
   const ordersById = new Map(input.orders.map((order) => [order.orderId, order]));
   const identityPairs = new Set(

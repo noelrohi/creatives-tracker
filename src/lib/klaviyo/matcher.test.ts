@@ -103,6 +103,25 @@ describe("computeAdvisoryMatches policy", () => {
     expect(edge.confidence).toBe(1);
   });
 
+  it("joins a GID-stored order to a bare numeric event candidate", () => {
+    const computation = computeAdvisoryMatches(
+      baseInput({
+        events: [
+          event("event-gid", { explicitOrderIdCandidate: "6892186108118" }),
+        ],
+        orders: [order("order-gid", "gid://shopify/Order/6892186108118")],
+      }),
+    );
+    expect(computation.eventResults[0]).toMatchObject({
+      status: "confirmed",
+      selectedClass: "deterministic",
+    });
+    expect(computation.orderResults[0]).toMatchObject({
+      status: "confirmed",
+      selectedEventId: "event-gid",
+    });
+  });
+
   it("confirms one approved unique-event rule resolving uniquely", () => {
     const computation = computeAdvisoryMatches(
       baseInput({
