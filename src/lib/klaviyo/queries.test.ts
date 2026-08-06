@@ -174,7 +174,7 @@ describeIfDb("Klaviyo evidence queries on PostgreSQL", () => {
     // inaccessible even though the run row still exists.
     await testPool!.query(
       `UPDATE klaviyo_order_match_result
-          SET superseded_at = now(), supersession_reason = 'entity_replaced'
+          SET superseded_at = greatest(published_at, now()), supersession_reason = 'entity_replaced'
         WHERE order_id = 'order-a'`,
     );
     const afterSupersede = await queries.loadOrderProducts({
@@ -197,7 +197,7 @@ describeIfDb("Klaviyo evidence queries on PostgreSQL", () => {
     // becomes API-only not_evaluated with a boundary warning.
     await testPool!.query(
       `UPDATE klaviyo_event_match_result
-          SET superseded_at = now(),
+          SET superseded_at = greatest(published_at, now()),
               supersession_reason = 'incident_edge_boundary',
               selected_candidate_id = NULL, selected_class = NULL
         WHERE event_id = 'event-a'`,

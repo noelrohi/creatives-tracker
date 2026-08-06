@@ -144,7 +144,7 @@ describeIfDb("Klaviyo match freshness on PostgreSQL", () => {
     );
     await testPool!.query(
       `UPDATE klaviyo_event_match_result
-          SET superseded_at = now(), supersession_reason = 'entity_replaced'
+          SET superseded_at = greatest(published_at, now()), supersession_reason = 'entity_replaced'
         WHERE run_id = $1 AND event_id = 'event-a'`,
       [runId],
     );
