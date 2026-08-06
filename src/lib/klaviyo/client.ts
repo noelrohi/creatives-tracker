@@ -1,5 +1,10 @@
 import "server-only";
 
+import {
+  assertExactReportRequest,
+  type KlaviyoReportRequest,
+} from "@/lib/klaviyo/reports";
+
 const KLAVIYO_ORIGIN = "https://a.klaviyo.com";
 const MAX_ATTEMPTS = 4;
 const MAX_RETRY_DELAY_MS = 60_000;
@@ -58,6 +63,8 @@ type RequestOptions = {
   params?: URLSearchParams;
   /** Single-resource endpoints return `data: {}`; normalize to a one-item page. */
   singleResource?: boolean;
+  method?: "GET" | "POST";
+  body?: unknown;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -360,12 +367,18 @@ export class KlaviyoApiClient {
       let response: Response;
       try {
         response = await this.#fetchImpl(url.toString(), {
-          method: "GET",
+          method: options.method ?? "GET",
           headers: {
             accept: "application/vnd.api+json",
             authorization: `Klaviyo-API-Key ${this.#privateApiKey}`,
             revision: options.revision,
+            ...(options.body !== undefined
+              ? { "content-type": "application/vnd.api+json" }
+              : {}),
           },
+          ...(options.body !== undefined
+            ? { body: JSON.stringify(options.body) }
+            : {}),
         });
       } catch {
         if (attempt === MAX_ATTEMPTS - 1) {
@@ -624,6 +637,46 @@ export class KlaviyoApiClient {
       params: new URLSearchParams({
         [fieldsKey]: "label,channel,tracking_options",
       }),
+      singleResource: true,
+    });
+  }
+
+  /**
+   * Low-quota aggregate report query on the pinned reports revision. The
+   * request shape is closed and deterministic: only the provider external
+   * conversion metric ID is sent, statistics/grouping are allowlisted, and
+   * the internal metric row ID never reaches the wire.
+   */
+  async queryValuesReport(input: {
+    request: KlaviyoReportRequest;
+    pageCursor: string | null;
+  }): Promise<KlaviyoCompoundPage> {
+    assertExactReportRequest(input.request);
+    assertRequestCursor(input.pageCursor);
+    const isCampaign = input.request.kind === "campaign";
+    const body = {
+      data: {
+        type: isCampaign ? "campaign-values-report" : "flow-values-report",
+        attributes: {
+          timeframe: {
+            start: input.request.timeframe.from,
+            end: input.request.timeframe.to,
+          },
+          conversion_metric_id: input.request.conversionExternalMetricId,
+          statistics: [...input.request.statistics],
+          ...(input.pageCursor !== null
+            ? { page_cursor: input.pageCursor }
+            : {}),
+        },
+      },
+    };
+    return this.#request({
+      path: isCampaign
+        ? "/api/campaign-values-reports"
+        : "/api/flow-values-reports",
+      revision: KLAVIYO_API_REVISIONS.reports,
+      method: "POST",
+      body,
       singleResource: true,
     });
   }

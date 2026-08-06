@@ -1001,3 +1001,58 @@ describe("dimension traversal client", () => {
     ).rejects.toThrow("response was invalid");
   });
 });
+
+describe("queryValuesReport", () => {
+  const request = {
+    connectionId: "connection-a",
+    kind: "campaign" as const,
+    conversionMetricRowId: "metric-row-1",
+    conversionExternalMetricId: "metric-ext-1",
+    timeframe: {
+      from: "2026-07-01T00:00:00.000Z",
+      to: "2026-08-01T00:00:00.000Z",
+    },
+    statistics: ["conversions" as const],
+    grouping: ["campaign_id" as const, "send_date" as const],
+    apiRevision: "2026-07-15",
+    asOf: "2026-08-05T00:00:00.000Z",
+  };
+
+  it("POSTs only the external conversion metric ID on the reports revision", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        data: {
+          type: "campaign-values-report",
+          id: "report-1",
+          attributes: { results: [] },
+        },
+      }),
+    );
+    const client = clientWith(fetchMock);
+
+    const page = await client.queryValuesReport({ request, pageCursor: null });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(new URL(url).pathname).toBe("/api/campaign-values-reports");
+    expect(init.method).toBe("POST");
+    expect(new Headers(init.headers).get("revision")).toBe(
+      KLAVIYO_API_REVISIONS.reports,
+    );
+    const body = JSON.parse(init.body as string);
+    expect(body.data.attributes.conversion_metric_id).toBe("metric-ext-1");
+    expect(JSON.stringify(body)).not.toContain("metric-row-1");
+    expect(page.data).toHaveLength(1);
+  });
+
+  it("rejects malformed report requests before any provider call", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    const client = clientWith(fetchMock);
+    await expect(
+      client.queryValuesReport({
+        request: { ...request, statistics: [] },
+        pageCursor: null,
+      }),
+    ).rejects.toThrow("report request is invalid");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

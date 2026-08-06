@@ -256,9 +256,35 @@ export function assertExactDimensionCheckpoint(
   }
 }
 
+export type KlaviyoReportSyncCheckpoint = {
+  operation: "reports";
+  kindIndex: number;
+  cursor: string | null;
+  page: number;
+};
+
+export function assertExactReportSyncCheckpoint(
+  value: unknown,
+): asserts value is KlaviyoReportSyncCheckpoint {
+  const checkpoint = value as Record<string, unknown> | null;
+  if (
+    !checkpoint ||
+    checkpoint.operation !== "reports" ||
+    !Number.isInteger(checkpoint.kindIndex) ||
+    (checkpoint.kindIndex as number) < 0 ||
+    (checkpoint.cursor !== null && typeof checkpoint.cursor !== "string") ||
+    !Number.isInteger(checkpoint.page) ||
+    (checkpoint.page as number) < 0 ||
+    Object.keys(checkpoint).length !== 4
+  ) {
+    throw new Error("Klaviyo report checkpoint is malformed");
+  }
+}
+
 export type KlaviyoSyncRunCheckpoint =
   | KlaviyoEventCheckpoint
-  | KlaviyoDimensionCheckpoint;
+  | KlaviyoDimensionCheckpoint
+  | KlaviyoReportSyncCheckpoint;
 
 export type ProductEvidenceCompleteness =
   | "complete"
