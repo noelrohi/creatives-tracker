@@ -93,6 +93,51 @@ describe("summarizeProbe", () => {
     });
     expect(report.redactionVerified).toBe(false);
   });
+
+  it("does not mistake digit-heavy truncated hash keys for phone numbers", () => {
+    // A 24-hex-char truncated key hash with a 15-digit run — our own
+    // fingerprint hashing output, observed on real store data.
+    const hashedKey = "a09338232733950761563bcd";
+    const report = summarizeProbe({
+      sampledShopifyOrderIds: [],
+      observations: [
+        {
+          metricKind: "ordered_product",
+          occurredAt: new Date("2026-07-20T10:00:00.000Z"),
+          sourceProperty: "$event_id",
+          sourceType: "string",
+          normalizedValue: null,
+          productComparable: true,
+          attributionKinds: [],
+          fingerprint: [
+            { key: hashedKey, keyKind: "sha256", type: "string" },
+          ],
+          warnings: [],
+        },
+      ],
+      redactionVerified: true,
+    });
+    expect(report.redactionVerified).toBe(true);
+
+    const realPhone = summarizeProbe({
+      sampledShopifyOrderIds: [],
+      observations: [
+        {
+          metricKind: "placed_order",
+          occurredAt: new Date("2026-07-20T10:00:00.000Z"),
+          sourceProperty: "OrderId",
+          sourceType: "string",
+          normalizedValue: null,
+          productComparable: false,
+          attributionKinds: [],
+          fingerprint: [],
+          warnings: ["call +1 (555) 123-4567"],
+        },
+      ],
+      redactionVerified: true,
+    });
+    expect(realPhone.redactionVerified).toBe(false);
+  });
 });
 
 describe("prepareKlaviyoProbeRun", () => {

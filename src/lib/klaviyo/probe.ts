@@ -70,12 +70,17 @@ const REDACTION_DENYLIST: readonly RegExp[] = [
 ];
 const PHONE_CANDIDATE = /(?:\+?\d[\d\s().-]{7,}\d)/g;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+// Truncated key hashes (our own sha256-derived fingerprint keys, always
+// shorter than 32 hex chars) can contain long digit runs that mimic phone
+// numbers. Strip them before the phone scan only; 32+ hex stays denied.
+const TRUNCATED_HASH_TOKEN = /\b[a-f0-9]{16,31}\b/gi;
 
 function containsDeniedContent(serialized: string): boolean {
   if (REDACTION_DENYLIST.some((pattern) => pattern.test(serialized))) {
     return true;
   }
-  for (const candidate of serialized.match(PHONE_CANDIDATE) ?? []) {
+  const withoutHashTokens = serialized.replace(TRUNCATED_HASH_TOKEN, "");
+  for (const candidate of withoutHashTokens.match(PHONE_CANDIDATE) ?? []) {
     if (ISO_DAY.test(candidate)) continue;
     const digits = candidate.replace(/\D/g, "");
     if (digits.length >= 9) return true;
