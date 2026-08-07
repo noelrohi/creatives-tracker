@@ -1132,6 +1132,9 @@ describe("normalizeEventPage", () => {
       ),
     ).toThrow("event page is invalid");
 
+    // A full page of individually bounded events must pass: the aggregate
+    // cap is derived from page size times the per-event cap. Real stores
+    // exceeded the previous fixed 256KB with entirely valid events.
     const mediumItems = Array.from({ length: 30 }, (_, index) => ({
       ProductID: `product-${index}`,
       ProductName: "M".repeat(300),
@@ -1158,9 +1161,12 @@ describe("normalizeEventPage", () => {
           },
         }),
       ),
-    ).toThrow("event page is invalid");
-    expect(KLAVIYO_EVENT_MAX_NORMALIZED_BYTES).toBeLessThan(
-      KLAVIYO_EVENT_PAGE_MAX_NORMALIZED_BYTES,
+    ).not.toThrow();
+
+    // The count guard above remains the aggregate backstop; the byte cap
+    // is exactly its product with the per-event cap.
+    expect(KLAVIYO_EVENT_PAGE_MAX_NORMALIZED_BYTES).toBe(
+      KLAVIYO_EVENT_PAGE_MAX_EVENTS * KLAVIYO_EVENT_MAX_NORMALIZED_BYTES,
     );
   });
 });

@@ -63,7 +63,8 @@ export function ProbePanel(props: {
   }) => void;
 }) {
   const [probeNote, setProbeNote] = useState("");
-  const [ruleNote, setRuleNote] = useState("");
+  // Per-rule notes: one shared field would mirror typing across rows.
+  const [ruleNotes, setRuleNotes] = useState<Record<string, string>>({});
   const latest = props.reports[0] ?? null;
   const probePassed = latest?.status === "passed";
 
@@ -190,9 +191,14 @@ export function ProbePanel(props: {
                           <Input
                             aria-label={`Rule review note ${rule.id}`}
                             placeholder="Review note (required)"
-                            value={ruleNote}
+                            value={ruleNotes[rule.id] ?? ""}
                             maxLength={1000}
-                            onChange={(event) => setRuleNote(event.target.value)}
+                            onChange={(event) =>
+                              setRuleNotes((prior) => ({
+                                ...prior,
+                                [rule.id]: event.target.value,
+                              }))
+                            }
                             className="h-8 w-44"
                           />
                           <Button
@@ -200,14 +206,14 @@ export function ProbePanel(props: {
                             disabled={
                               props.busy ||
                               !probePassed ||
-                              ruleNote.trim().length === 0 ||
+                              (ruleNotes[rule.id] ?? "").trim().length === 0 ||
                               rule.observedCollisions > 0
                             }
                             onClick={() =>
                               props.onReviewRule({
                                 ruleId: rule.id,
                                 decision: "approve",
-                                reviewNote: ruleNote.trim(),
+                                reviewNote: (ruleNotes[rule.id] ?? "").trim(),
                               })
                             }
                           >
@@ -217,13 +223,13 @@ export function ProbePanel(props: {
                             size="sm"
                             variant="outline"
                             disabled={
-                              props.busy || ruleNote.trim().length === 0
+                              props.busy || (ruleNotes[rule.id] ?? "").trim().length === 0
                             }
                             onClick={() =>
                               props.onReviewRule({
                                 ruleId: rule.id,
                                 decision: "reject",
-                                reviewNote: ruleNote.trim(),
+                                reviewNote: (ruleNotes[rule.id] ?? "").trim(),
                               })
                             }
                           >

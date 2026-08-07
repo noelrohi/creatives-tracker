@@ -34,7 +34,11 @@ export const NORMALIZED_ATTRIBUTION_MAX_IDS = 100;
 export const KLAVIYO_PRODUCT_ITEM_MAX_RAW_KEYS = 64;
 export const KLAVIYO_EVENT_PAGE_MAX_EVENTS = 200;
 export const KLAVIYO_EVENT_MAX_NORMALIZED_BYTES = 64 * 1024;
-export const KLAVIYO_EVENT_PAGE_MAX_NORMALIZED_BYTES = 256 * 1024;
+// The page bound is derived from its own inputs: a full provider page of
+// individually-bounded events must never fail the aggregate check. Real
+// stores routinely exceeded the previous fixed 256KB with valid events.
+export const KLAVIYO_EVENT_PAGE_MAX_NORMALIZED_BYTES =
+  KLAVIYO_EVENT_PAGE_MAX_EVENTS * KLAVIYO_EVENT_MAX_NORMALIZED_BYTES;
 
 const ATTRIBUTION_SCAN_MAX_ITEMS = 1_000;
 const SOURCE_CHECKSUM_SERIALIZED_OVERHEAD_BYTES = 80;
