@@ -6,7 +6,35 @@
 
 ## A. Prerequisites
 
-- [ ] Klaviyo credentials received — read-only scopes: `Accounts: Read`,
+### Credential staging (2026-08-07 status)
+
+Real Reviv credentials are staged in `.env` under a `_PROD` suffix
+(`KLAVIYO_PRIVATE_API_KEY_PROD`, `KLAVIYO_REVIV_ACCOUNT_ID_PROD`,
+`KLAVIYO_REVIV_SHOP_DOMAIN_PROD`, `KLAVIYO_REVIV_ALLOWED_URL_HOSTS_PROD`).
+The app reads only the unsuffixed names, so the sandbox stays active until
+the suffixes are swapped. Verified 2026-08-07 (status codes only, no
+values logged): key authenticates against the real, non-test Reviv
+account; the returned account ID matches `_PROD`; account timezone
+Asia/Bangkok; `Profiles: Read`, `Events`, `Metrics`, `Campaigns` all
+readable; 69 metrics visible including native Shopify `Placed Order` and
+`Ordered Product`.
+
+Fix before swapping:
+
+- [ ] `KLAVIYO_REVIV_ALLOWED_URL_HOSTS_PROD` second entry is an email
+      address — remove it; entries must be bare hostnames or credential
+      resolution throws at startup
+- [ ] `KLAVIYO_REVIV_SHOP_DOMAIN_PROD` currently holds the custom
+      storefront domain. It must be Reviv's `*.myshopify.com` **admin**
+      domain — the same value the Shopify store row is ingested under —
+      or the connection binding will not match the store. Keep the custom
+      storefront domain as an `ALLOWED_URL_HOSTS` entry instead.
+
+To run the gate: rename the four `_PROD` vars to the unsuffixed names
+(stash the sandbox values under `_SANDBOX`), restart **both** `bun dev`
+and `npm run trigger:dev`, then proceed below.
+
+- [x] Klaviyo credentials received — read-only scopes: `Accounts: Read`,
       `Metrics: Read`, `Events: Read`, `Profiles: Read` (probe email
       fieldset 403s without it), plus `Campaigns: Read` / `Flows: Read`
       for Plan 4 dimensions
