@@ -211,3 +211,21 @@ SELECT count(*) FROM klaviyo_event
 
 Sandbox limitations (retest on Reviv): email-diagnostic overlap (dev-store
 PII block), Ordered Product product evidence (no OP events emitted).
+
+## H. Reviv gate verdict — 2026-08-11: **PASS**
+
+Recorded from published match run `be8241bb` (fingerprint `4L9n17Mc…`),
+computed over evidence run success/complete 14,398 orders (identity
+available on all) and 34,430 stored events (2026-05-09 → 2026-08-10).
+
+| Criterion | Result |
+| --- | --- |
+| Probe | 30 orders / 67 events sampled, 94 overlap, 0 join collisions, redaction verified (report `8a957b10`, passed) |
+| Approved rules | `placed_order/$event_id` only; `ordered_product/$event_id` rejected (per-line-item ID, 0/37 order matches) |
+| Order results | 5,400 confirmed · 8,993 no_klaviyo_event · 5 duplicate_conversion_events (flagged, no canonical pick) |
+| Event results | 5,410 / 5,410 placed_order events confirmed — zero unmatched, zero ambiguous |
+| Candidates | 5,410 deterministic (approved rule) + 110 diagnostic (advisory only, none selected) |
+| Product status | `unavailable` across confirmed orders — expected until a product join key is proven |
+| PII sweep | 0 email-shaped strings in 34,430 redacted event property blobs; digests only (34,475, single key v1); no email/phone columns |
+| Klaviyo coverage note | Klaviyo recorded Placed Order for ~37.5% of Shopify orders in-window — a provider-side coverage fact, visible as `no_klaviyo_event`, never guessed around |
+| Operational note | Long evidence backfills must not overlap Shopify ingest (`shopify-incremental-scheduled`, daily 09:00 UTC) or dev-worker restarts; membership guard correctly stales overlapped runs |
