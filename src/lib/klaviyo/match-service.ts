@@ -41,8 +41,17 @@ import { canonicalContentChecksum } from "@/lib/shopify-evidence-store";
 type Executor = typeof db | KlaviyoStoreTransaction;
 
 export class MatchInputStaleError extends Error {
-  constructor(readonly reason: string) {
-    super(`Klaviyo match input is stale or unacceptable: ${reason}`);
+  constructor(
+    readonly reason: string,
+    /** Safe reason code from the last per-run rejection a selection loop
+     * swallowed — codes only, never provider or row content. */
+    readonly lastRejection: string | null = null,
+  ) {
+    super(
+      `Klaviyo match input is stale or unacceptable: ${reason}${
+        lastRejection === null ? "" : ` (last run rejected: ${lastRejection})`
+      }`,
+    );
     this.name = "MatchInputStaleError";
   }
 }
@@ -641,16 +650,25 @@ export async function selectLatestMatchInputs(
     )
     .orderBy(desc(klaviyoSyncRuns.finishedAt));
   let klaviyo: KlaviyoProjection | null = null;
+  let lastSourceRejection: string | null = null;
   for (const run of candidateRuns) {
     try {
       klaviyo = await loadKlaviyoProjection({ scope, sourceRunId: run.id });
       break;
     } catch (error) {
-      if (error instanceof MatchInputStaleError) continue;
+      if (error instanceof MatchInputStaleError) {
+        lastSourceRejection = error.reason;
+        continue;
+      }
       throw error;
     }
   }
-  if (!klaviyo) throw new MatchInputStaleError("no_acceptable_source_run");
+  if (!klaviyo) {
+    throw new MatchInputStaleError(
+      "no_acceptable_source_run",
+      lastSourceRejection,
+    );
+  }
 
   const evidenceRuns = await db
     .select({ id: shopifyEvidenceSyncRuns.id })
@@ -664,6 +682,7 @@ export async function selectLatestMatchInputs(
     )
     .orderBy(desc(shopifyEvidenceSyncRuns.startedAt));
   let shopify: ShopifyProjection | null = null;
+  let lastEvidenceRejection: string | null = null;
   for (const run of evidenceRuns) {
     try {
       shopify = await loadShopifyProjection({
@@ -672,11 +691,19 @@ export async function selectLatestMatchInputs(
       });
       break;
     } catch (error) {
-      if (error instanceof MatchInputStaleError) continue;
+      if (error instanceof MatchInputStaleError) {
+        lastEvidenceRejection = error.reason;
+        continue;
+      }
       throw error;
     }
   }
-  if (!shopify) throw new MatchInputStaleError("no_acceptable_evidence_run");
+  if (!shopify) {
+    throw new MatchInputStaleError(
+      "no_acceptable_evidence_run",
+      lastEvidenceRejection,
+    );
+  }
 
   const rules = await loadApprovedRules(scope);
   const { approvedRuleChecksum, matcherConfigChecksum } = await import(
