@@ -46,20 +46,27 @@ describe("apiKey router RBAC", () => {
     });
   });
 
+  // Resolves when a database is reachable, rejects at the DB layer when not —
+  // either way, anything but FORBIDDEN proves the RBAC middleware passed.
+  async function expectPastAuthorization(call: Promise<unknown>) {
+    const rejection = await call.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    if (rejection !== null) {
+      expect(rejection).not.toMatchObject({ code: "FORBIDDEN" });
+    }
+  }
+
   describe("admin passes middleware", () => {
     it("list proceeds past authorization", async () => {
-      // Will fail at DB layer, not at middleware — proves RBAC passed
-      await expect(adminCaller.apiKey.list()).rejects.not.toMatchObject({
-        code: "FORBIDDEN",
-      });
+      await expectPastAuthorization(adminCaller.apiKey.list());
     });
   });
 
   describe("owner passes middleware", () => {
     it("list proceeds past authorization", async () => {
-      await expect(ownerCaller.apiKey.list()).rejects.not.toMatchObject({
-        code: "FORBIDDEN",
-      });
+      await expectPastAuthorization(ownerCaller.apiKey.list());
     });
   });
 });
