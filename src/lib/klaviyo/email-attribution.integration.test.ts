@@ -143,6 +143,61 @@ async function seedOrderResult(
   );
 }
 
+/**
+ * One event_match_result row, mirroring seedOrderResult's shape guards. Per
+ * klaviyo_event_match_result_selection_check, a superseded row (any status)
+ * is exempt from the selected-candidate requirement, so only a CURRENT
+ * confirmed row needs a backing deterministic candidate. That candidate is
+ * anchored to `order-c` (an order with no other candidates in this world)
+ * purely to satisfy the candidate table's not-null order_id — it has no
+ * bearing on which order the event actually resolves to.
+ */
+async function seedEventResult(
+  id: string,
+  eventId: string,
+  status: string,
+  options?: { runId?: string; supersededAt?: string; anchorOrderId?: string },
+): Promise<void> {
+  const runId = options?.runId ?? "match-run-1";
+  const supersededAt = options?.supersededAt ?? null;
+  let selectedCandidateId: string | null = null;
+  let selectedClass: string | null = null;
+  if (supersededAt === null && status === "confirmed") {
+    selectedCandidateId = `${id}-cand`;
+    selectedClass = "deterministic";
+    await testPool!.query(
+      `INSERT INTO klaviyo_match_candidate
+         (id, organization_id, shopify_store_id, connection_id, run_id,
+          event_id, order_id, candidate_class, method, feature_vector,
+          weights, tolerances, score, confidence, reason_codes)
+       VALUES ($1, 'org-a', 'store-a', 'connection-a', $2,
+         $3, $4, 'deterministic', 'explicit_order_id', '{}', '{}', '{}',
+         '1', '1', '[]')`,
+      [selectedCandidateId, runId, eventId, options?.anchorOrderId ?? "order-c"],
+    );
+  }
+  // Superseded rows need published_at <= superseded_at and a supersession
+  // reason, same as seedOrderResult's rows.
+  await testPool!.query(
+    `INSERT INTO klaviyo_event_match_result
+       (id, organization_id, shopify_store_id, connection_id, run_id, event_id,
+        status, selected_candidate_id, selected_class, reason_codes,
+        published_at, superseded_at, supersession_reason)
+     VALUES ($1, 'org-a', 'store-a', 'connection-a', $6, $2,
+       $3, $4, $5, '[]', coalesce($7::timestamp, now()), $7, $8)`,
+    [
+      id,
+      eventId,
+      status,
+      selectedCandidateId,
+      selectedClass,
+      runId,
+      supersededAt,
+      supersededAt === null ? null : "entity_replaced",
+    ],
+  );
+}
+
 /** One current campaign-kind report generation all facts hang off. */
 async function seedReportGeneration(): Promise<void> {
   await testPool!.query(
@@ -472,6 +527,18 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
          ('line-f2', 'org-a', 'store-a', 'order-f', 'li-f2', '99', 'Other Thing', 4, now()),
          ('line-b1', 'org-a', 'store-a', 'order-b', 'li-b1', '77', 'Product', 9, now())`,
     );
+    // A second, distinct line for the same product on the SAME order
+    // (e.g. a separate variant line) must add to units without doubling
+    // order-f's revenue — the inner query groups by (product, order) before
+    // summing net_sales, so one order contributes its revenue once no
+    // matter how many lines of a product it has.
+    await testPool!.query(
+      `INSERT INTO shopify_order_line
+         (id, organization_id, store_id, order_id, shopify_line_item_id,
+          shopify_product_id, product_title, quantity, parent_order_updated_at)
+       VALUES
+         ('line-f3', 'org-a', 'store-a', 'order-f', 'li-f3', '77', 'Product', 2, now())`,
+    );
     const summary = await loadEmailAttribution({ scope, window });
 
     // order-b is NOT email-linked; its 9 units never appear.
@@ -479,7 +546,9 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
       {
         productKey: "77",
         title: "Product",
-        units: 3,
+        // 2 (order-a) + 1 (order-f, line-f1) + 2 (order-f, line-f3) = 5;
+        // orderCount and orderRevenue are unaffected by the extra line.
+        units: 5,
         orderCount: 2,
         orderRevenue: "72.50",
       },
@@ -495,12 +564,31 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
 
   it("counts non-confirmed placed-order events in range as unmatched", async () => {
     await seedAggregateWorld();
-    // No row in this test file ever inserts into klaviyo_event_match_result,
-    // so every placed-order event in range is unmatched: event-a
-    // (seedMatchWorld), event-f and event-b (seedAggregateWorld), plus the
-    // extra stray event-x seeded below. Four total.
+    // Before this point, no row in this test file inserts into
+    // klaviyo_event_match_result, so every placed-order event in range is
+    // unmatched: event-a (seedMatchWorld), event-f and event-b
+    // (seedAggregateWorld), plus the extra stray event-x seeded below. Four
+    // total.
     await seedEvent("event-x", "external-event-x");
-    const summary = await loadEmailAttribution({ scope, window });
+    let summary = await loadEmailAttribution({ scope, window });
     expect(summary.gaps.unmatchedEvents).toBe(4);
+
+    // A CURRENT confirmed event-match-result excludes event-b from the
+    // count: only 3 remain (a, f, x).
+    await seedEventResult("evres-b", "event-b", "confirmed");
+    summary = await loadEmailAttribution({ scope, window });
+    expect(summary.gaps.unmatchedEvents).toBe(3);
+
+    // Symmetry with the order-side "ignores superseded results" test: a
+    // SUPERSEDED confirmed result does NOT exclude its event. event-x keeps
+    // its confirmed row, but that row is history (superseded_at is not
+    // null), so event-x still counts and the total stays 3, not 2.
+    await seedPublishedRun("match-run-x");
+    await seedEventResult("evres-x-old", "event-x", "confirmed", {
+      runId: "match-run-x",
+      supersededAt: "2026-07-22T00:00:00Z",
+    });
+    summary = await loadEmailAttribution({ scope, window });
+    expect(summary.gaps.unmatchedEvents).toBe(3);
   });
 });
