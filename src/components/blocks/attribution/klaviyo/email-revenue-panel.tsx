@@ -10,19 +10,20 @@ import { isPrivilegedOrgRole } from "@/lib/organization-access";
 import { useTRPC } from "@/lib/trpc/client";
 import { emailRevenue as copy } from "./copy";
 import { EmailRevenueGaps } from "./email-revenue-gaps";
+import { centsOf } from "./email-revenue-math";
 import { EmailRevenueTables } from "./email-revenue-tables";
 
 function percentOf(part: string, total: string): string {
-  const totalNumber = Number(total);
-  if (!Number.isFinite(totalNumber) || totalNumber <= 0) return "0%";
-  return `${Math.round((Number(part) / totalNumber) * 100)}%`;
+  const totalCents = centsOf(total);
+  if (!Number.isFinite(totalCents) || totalCents <= 0) return "0%";
+  return `${Math.round((centsOf(part) / totalCents) * 100)}%`;
 }
 
-/** Width helper for the share bar; display-only, never money math. */
+/** Width helper for the share bar; ratio of cents, display-only. */
 function widthPercent(part: string, total: string): number {
-  const totalNumber = Number(total);
-  if (!Number.isFinite(totalNumber) || totalNumber <= 0) return 0;
-  return Math.min(100, Math.max(0, (Number(part) / totalNumber) * 100));
+  const totalCents = centsOf(total);
+  if (!Number.isFinite(totalCents) || totalCents <= 0) return 0;
+  return Math.min(100, Math.max(0, (centsOf(part) / totalCents) * 100));
 }
 
 export function EmailRevenueHeadline({
@@ -35,13 +36,16 @@ export function EmailRevenueHeadline({
   currency: string;
 }) {
   const { email, klaviyoSays } = summary;
-  const delta =
+  const deltaCents =
     klaviyoSays === null
       ? null
-      : Number(klaviyoSays.conversionValue) - Number(email.revenue);
+      : centsOf(klaviyoSays.conversionValue) - centsOf(email.revenue);
   const campaignsWidth = widthPercent(email.campaignsRevenue, shopifyTotal);
   const flowsWidth = widthPercent(email.flowsRevenue, shopifyTotal);
-  const restRevenue = Math.max(0, Number(shopifyTotal) - Number(email.revenue));
+  const restRevenueCents = Math.max(
+    0,
+    centsOf(shopifyTotal) - centsOf(email.revenue),
+  );
   return (
     <div>
       <div className="flex flex-wrap gap-x-7 gap-y-2">
@@ -80,14 +84,15 @@ export function EmailRevenueHeadline({
             </p>
             <p className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
               {copy.says}
-              {delta !== null && delta > 0 ? (
+              {deltaCents !== null && deltaCents > 0 ? (
                 <span
                   className="ml-1 text-amber-600"
                   data-testid="klaviyo-says-delta"
                 >
                   ·{" "}
                   {copy.saysUnconfirmed(
-                    formatMoneyExact(delta, currency) ?? "0.00",
+                    formatMoneyExact((deltaCents / 100).toFixed(2), currency) ??
+                      "0.00",
                   )}
                 </span>
               ) : null}
@@ -121,7 +126,10 @@ export function EmailRevenueHeadline({
         </span>
         <span>
           <span className="mr-1 inline-block size-2 rounded-[2px] bg-muted" />
-          {copy.segRest(formatMoneyExact(restRevenue, currency) ?? "0.00")}
+          {copy.segRest(
+            formatMoneyExact((restRevenueCents / 100).toFixed(2), currency) ??
+              "0.00",
+          )}
         </span>
       </div>
     </div>

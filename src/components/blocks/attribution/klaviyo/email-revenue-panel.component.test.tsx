@@ -1,9 +1,37 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
-import { EmailRevenueHeadline } from "./email-revenue-panel";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EmailRevenueHeadline, EmailRevenuePanel } from "./email-revenue-panel";
 import { EmailRevenueGaps } from "./email-revenue-gaps";
 import { EmailRevenueTables } from "./email-revenue-tables";
 import type { EmailAttributionSummary } from "@/lib/klaviyo/email-attribution";
+
+const queryState = vi.hoisted(() => ({
+  attributionFn: (): Promise<unknown> => Promise.resolve(null),
+  healthFn: (): Promise<unknown> => Promise.resolve(null),
+}));
+
+vi.mock("@/lib/trpc/client", () => ({
+  useTRPC: () => ({
+    klaviyo: {
+      emailAttribution: {
+        queryOptions: (input: unknown) => ({
+          queryKey: ["ea", input],
+          queryFn: queryState.attributionFn,
+          retry: false,
+        }),
+      },
+      health: {
+        queryOptions: () => ({
+          queryKey: ["health"],
+          queryFn: queryState.healthFn,
+          retry: false,
+        }),
+      },
+    },
+  }),
+}));
 
 function summary(
   overrides: Partial<EmailAttributionSummary> = {},
@@ -128,6 +156,68 @@ describe("EmailRevenueTables", () => {
     expect(screen.getByTestId("source-flow-1-says")).toHaveTextContent("—");
     expect(screen.getByText("Collagen Peptides 500g")).toBeInTheDocument();
   });
+
+  it("shows the amber says-delta on campaigns and none on flows", () => {
+    render(<EmailRevenueTables summary={summary()} currency="USD" />);
+    // (50500 − 34000) / 34000 = 48.53% → rounds to 49
+    expect(screen.getByTestId("source-campaign-1-delta")).toHaveTextContent(
+      "+49%",
+    );
+    expect(screen.queryByTestId("source-flow-1-delta")).toBeNull();
+  });
+
+  it("suppresses the delta when Klaviyo says no more than we confirm", () => {
+    render(
+      <EmailRevenueTables
+        summary={summary({
+          sources: [
+            {
+              objectId: "campaign-1",
+              objectType: "campaign",
+              name: "Summer Sale",
+              orderCount: 21,
+              revenue: "340.00",
+              klaviyoConversionValue: "340.00",
+              klaviyoWindow: {
+                requestedFrom: new Date("2026-06-01T00:00:00Z"),
+                requestedTo: new Date("2026-08-01T00:00:00Z"),
+                asOf: new Date("2026-08-01T00:00:00Z"),
+              },
+            },
+          ],
+        })}
+        currency="USD"
+      />,
+    );
+    expect(screen.getByTestId("source-campaign-1-says")).toHaveTextContent(
+      "$340.00",
+    );
+    expect(screen.queryByTestId("source-campaign-1-delta")).toBeNull();
+  });
+
+  it("shows ten products with a one-way expander for the rest", async () => {
+    const user = userEvent.setup();
+    const products = Array.from({ length: 12 }, (_, index) => ({
+      productKey: `p-${index + 1}`,
+      title: `Product ${index + 1}`,
+      units: 5,
+      orderCount: 4,
+      orderRevenue: "50.00",
+    }));
+    render(<EmailRevenueTables summary={summary({ products })} currency="USD" />);
+    expect(screen.getByText("Product 10")).toBeInTheDocument();
+    expect(screen.queryByText("Product 11")).toBeNull();
+    const more = screen.getByRole("button", { name: /…2 more/ });
+    await user.click(more);
+    expect(screen.getByText("Product 11")).toBeInTheDocument();
+    expect(screen.getByText("Product 12")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /more/ })).toBeNull();
+  });
+
+  it("renders no expander when ten or fewer products exist", () => {
+    render(<EmailRevenueTables summary={summary()} currency="USD" />);
+    expect(screen.queryByRole("button", { name: /more/ })).toBeNull();
+  });
 });
 
 describe("EmailRevenueGaps", () => {
@@ -155,5 +245,83 @@ describe("EmailRevenueGaps", () => {
     expect(
       screen.getByTestId("gap-unmatched-href").getAttribute("href"),
     ).toContain("view=unmatched");
+  });
+});
+
+describe("EmailRevenuePanel", () => {
+  function renderPanel(
+    props: Partial<Parameters<typeof EmailRevenuePanel>[0]> = {},
+  ) {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    return render(
+      <QueryClientProvider client={client}>
+        <EmailRevenuePanel
+          role="admin"
+          dateFrom="2026-05-14"
+          dateTo="2026-08-11"
+          currency="USD"
+          shopifyTotal="10000.00"
+          {...props}
+        />
+      </QueryClientProvider>,
+    );
+  }
+
+  beforeEach(() => {
+    queryState.attributionFn = () => Promise.resolve(summary());
+    queryState.healthFn = () =>
+      Promise.resolve({
+        connection: {
+          status: "ready",
+          lastMatchPublishedAt: "2026-08-11T00:00:00Z",
+        },
+      });
+  });
+
+  it("renders nothing for members", () => {
+    const { container } = renderPanel({ role: "member" });
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("renders nothing when the pilot connection is missing (NOT_FOUND)", async () => {
+    queryState.attributionFn = () =>
+      Promise.reject(
+        Object.assign(new Error("nf"), { data: { code: "NOT_FOUND" } }),
+      );
+    const { container } = renderPanel();
+    await waitFor(() => expect(container.firstChild).toBeNull());
+  });
+
+  it("shows the error line and refetches on Retry", async () => {
+    const attributionFn = vi.fn(() => Promise.reject(new Error("boom")));
+    queryState.attributionFn = attributionFn;
+    const user = userEvent.setup();
+    renderPanel();
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect(screen.getByText(/Couldn’t load email revenue\./)).toBeInTheDocument();
+    expect(attributionFn).toHaveBeenCalledTimes(1);
+    await user.click(retry);
+    await waitFor(() => expect(attributionFn).toHaveBeenCalledTimes(2));
+  });
+
+  it("shows the not-ready chip instead of the headline before matches publish", async () => {
+    queryState.healthFn = () =>
+      Promise.resolve({
+        connection: { status: "pending", lastMatchPublishedAt: null },
+      });
+    renderPanel();
+    await screen.findByText("No data yet");
+    expect(screen.queryByTestId("email-linked-revenue")).toBeNull();
+  });
+
+  it("renders the headline when the connection is ready", async () => {
+    renderPanel();
+    expect(await screen.findByTestId("email-linked-revenue")).toHaveTextContent(
+      "$1,000.00",
+    );
+    expect(screen.getByTestId("klaviyo-says")).toHaveTextContent("$1,450.00");
+    expect(screen.getByText(/matches published/)).toBeInTheDocument();
   });
 });

@@ -81,6 +81,7 @@ export const emailRevenue = {
   segRest: (amount: string) => `Everything else ${amount}`,
   sourcesHeading: "By campaign & flow — we confirm vs Klaviyo says",
   productsHeading: "Top products in email-linked orders",
+  productsMore: (n: number) => `…${n} more`,
   productsRevenueNote:
     "Order revenue: net sales of email-linked orders containing the product; an order with several products counts toward each",
   gapsLead: "Where the rest is:",

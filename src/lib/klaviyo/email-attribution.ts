@@ -378,7 +378,8 @@ export async function loadEmailAttribution(input: {
        and f.conversion_value is not null`);
   const says = saysTotal.rows[0];
 
-  // 5. Top products inside email-linked orders. shopify_order_line has no
+  // 5. Top products inside email-linked orders (UI shows 10, expands to the
+  // fetched 25). shopify_order_line has no
   // money column, so "orderRevenue" is the summed net_sales of the linked
   // orders containing the product — an order with several products counts
   // toward each (labeled in the UI).
@@ -415,7 +416,7 @@ export async function loadEmailAttribution(input: {
       ) per_order
      group by product_key
      order by sum(net_sales) desc, product_key asc
-     limit 10`);
+     limit 25`);
 
   // 6. Range's non-confirmed placed-order events (same predicate as the
   // Lab's unmatched ledger).
