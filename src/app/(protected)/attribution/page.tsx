@@ -45,6 +45,7 @@ import {
 } from "@/components/blocks/attribution/days";
 import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role";
 import { KlaviyoLabLink } from "@/components/blocks/attribution/klaviyo/lab-link";
+import { EmailRevenuePanel } from "@/components/blocks/attribution/klaviyo/email-revenue-panel";
 import type { AttributionBucket } from "@/lib/attribution-bucket";
 import { formatDateOnly } from "@/lib/date";
 import { useTRPC } from "@/lib/trpc/client";
@@ -396,6 +397,16 @@ export default function AttributionPage() {
           />
         </div>
       </section>
+
+      {range ? (
+        <EmailRevenuePanel
+          role={role}
+          dateFrom={range.dateFrom}
+          dateTo={range.dateTo}
+          currency={currency}
+          shopifyTotal={data?.total != null ? String(data.total) : null}
+        />
+      ) : null}
 
       <DetailFolds
         findings={findingsContext}

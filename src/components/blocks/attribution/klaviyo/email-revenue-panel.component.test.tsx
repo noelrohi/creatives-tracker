@@ -87,6 +87,25 @@ describe("EmailRevenueHeadline", () => {
     );
   });
 
+  it("omits the delta when Klaviyo says no more than we confirmed", () => {
+    render(
+      <EmailRevenueHeadline
+        summary={summary({
+          klaviyoSays: {
+            conversionValue: "900.00",
+            requestedFrom: new Date("2026-06-01T00:00:00Z"),
+            requestedTo: new Date("2026-08-01T00:00:00Z"),
+            asOf: new Date("2026-08-01T00:00:00Z"),
+          },
+        })}
+        shopifyTotal="10000.00"
+        currency="USD"
+      />,
+    );
+    expect(screen.getByTestId("klaviyo-says")).toHaveTextContent("$900.00");
+    expect(screen.queryByTestId("klaviyo-says-delta")).toBeNull();
+  });
+
   it("omits the Klaviyo-says figure when no report exists", () => {
     render(
       <EmailRevenueHeadline

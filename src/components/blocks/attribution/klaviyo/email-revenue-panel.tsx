@@ -1,8 +1,15 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import type { EmailAttributionSummary } from "@/lib/klaviyo/email-attribution";
 import { formatMoneyExact } from "@/components/blocks/attribution/format";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
+import { isPrivilegedOrgRole } from "@/lib/organization-access";
+import { useTRPC } from "@/lib/trpc/client";
 import { emailRevenue as copy } from "./copy";
+import { EmailRevenueGaps } from "./email-revenue-gaps";
+import { EmailRevenueTables } from "./email-revenue-tables";
 
 function percentOf(part: string, total: string): string {
   const totalNumber = Number(total);
@@ -117,5 +124,96 @@ export function EmailRevenueHeadline({
         </span>
       </div>
     </div>
+  );
+}
+
+/**
+ * Privileged-only panel: hiding it is UX; `orgAdminProcedure` on the
+ * queries remains the security boundary (same stance as KlaviyoLabLink).
+ * NOT_FOUND means no pilot connection — the section renders nothing.
+ */
+export function EmailRevenuePanel({
+  role,
+  dateFrom,
+  dateTo,
+  currency,
+  shopifyTotal,
+}: {
+  role: string | null;
+  dateFrom: string;
+  dateTo: string;
+  currency: string;
+  shopifyTotal: string | null;
+}) {
+  const trpc = useTRPC();
+  const privileged = isPrivilegedOrgRole(
+    role as Parameters<typeof isPrivilegedOrgRole>[0],
+  );
+  const attribution = useQuery({
+    ...trpc.klaviyo.emailAttribution.queryOptions({ dateFrom, dateTo }),
+    enabled: privileged,
+    retry: false,
+  });
+  const health = useQuery({
+    ...trpc.klaviyo.health.queryOptions(),
+    enabled: privileged,
+    retry: false,
+  });
+
+  if (!privileged) return null;
+  if (attribution.error?.data?.code === "NOT_FOUND") return null;
+
+  const connectionReady =
+    health.data?.connection?.status === "ready" || health.data == null;
+  const publishedAt = health.data?.connection?.lastMatchPublishedAt ?? null;
+
+  return (
+    <section className="rounded-md border border-border bg-card px-3 py-3 sm:px-4">
+      <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h2 className="text-[13px] font-semibold tracking-tight">
+          {copy.title}
+        </h2>
+        {publishedAt !== null ? (
+          <span className="text-[10px] text-muted-foreground/70">
+            {copy.freshness(new Date(publishedAt).toLocaleString())}
+          </span>
+        ) : null}
+      </div>
+      {attribution.isPending || shopifyTotal === null ? (
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-6 w-72" />
+          <Skeleton className="h-5 w-full" />
+          <Skeleton className="h-24 w-full" />
+        </div>
+      ) : attribution.isError ? (
+        <p className="text-[11px] text-muted-foreground">
+          {copy.error}{" "}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => void attribution.refetch()}
+          >
+            {copy.retry}
+          </Button>
+        </p>
+      ) : !connectionReady ? (
+        <p className="text-[11px] text-muted-foreground">{copy.noDataYet}</p>
+      ) : (
+        <div className="flex flex-col gap-4">
+          <EmailRevenueHeadline
+            summary={attribution.data}
+            shopifyTotal={shopifyTotal}
+            currency={currency}
+          />
+          <EmailRevenueTables summary={attribution.data} currency={currency} />
+          <EmailRevenueGaps
+            summary={attribution.data}
+            currency={currency}
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+          />
+        </div>
+      )}
+    </section>
   );
 }

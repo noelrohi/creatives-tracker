@@ -41,6 +41,8 @@ export function EmailRevenueGaps({
       key: "no-email-link",
       text: copy.gapNoEmailLink(gaps.noEmailLink.orders),
       revenue: gaps.noEmailLink.revenue,
+      // Narrower than the loader's no_email_link bucket (which also absorbs
+      // candidate/ambiguous statuses) — no composite Lab filter exists.
       href: labUrl(
         { view: "orders", orderStatus: "confirmed", claimType: "none" },
         range,
@@ -85,6 +87,7 @@ export function EmailRevenueGaps({
             : ""}
           {entry.text}{" "}
           <Link
+            aria-label={entry.text}
             className="text-muted-foreground underline-offset-2 hover:underline"
             data-testid={`gap-${entry.key}-href`}
             href={entry.href}
