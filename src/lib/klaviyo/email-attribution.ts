@@ -11,6 +11,13 @@ import { klaviyoMarketingObjects } from "@/schema/klaviyo-claim";
  * panel. Reads Shopify money and reads claims; never mutates buckets,
  * order rows, or match results. Every money value is summed in SQL and
  * travels as a numeric string.
+ *
+ * Revenue figures are refund-NET, mirroring the overview's
+ * `getBucketTotals`: orders are windowed by `order_created_at` (half-open
+ * UTC), refunds independently by the store-day `refund_day` column, and
+ * every refund inherits its PARENT ORDER's classification — even when
+ * that parent lies outside the window. That keeps the panel's partition
+ * summing to the page's headline total by construction.
  */
 
 export type EmailAttributionBucket = { orders: number; revenue: string };
@@ -89,9 +96,39 @@ const PRIMARY_CLAIM_LATERAL = sql`
             c.klaviyo_attribution_id desc
    limit 1`;
 
-function emailLinkedFrom(scope: KlaviyoConnectionScope, window: HalfOpenUtcWindow) {
+/**
+ * Bucket assignment shared by the order partition and its refund mirror.
+ * `r` is the current (unsuperseded) match-result alias left-joined in the
+ * enclosing query.
+ */
+const BUCKET_CASE = sql`
+  case
+    when r.id is null then 'not_evaluated'
+    when r.status = 'no_klaviyo_event' then 'no_klaviyo_event'
+    when r.status = 'duplicate_conversion_events' then 'duplicate_flagged'
+    when r.status = 'confirmed'
+         and r.selected_event_id is not null
+         and exists (${QUALIFYING_CLAIM}) then 'email_linked'
+    else 'no_email_link'
+  end`;
+
+/** Left join of the current match result onto an `o` shopify_order alias. */
+function currentResultLeftJoin(scope: KlaviyoConnectionScope) {
   return sql`
-    from shopify_order o
+    left join klaviyo_order_match_result r
+      on r.organization_id = o.organization_id
+     and r.shopify_store_id = o.store_id
+     and r.connection_id = ${scope.connectionId}
+     and r.order_id = o.id
+     and r.superseded_at is null`;
+}
+
+/**
+ * Confirms an `o` shopify_order alias as email-linked and exposes the
+ * primary claim as `pc` (kind, object_id).
+ */
+function emailLinkJoin(scope: KlaviyoConnectionScope) {
+  return sql`
     join klaviyo_order_match_result r
       on r.organization_id = o.organization_id
      and r.shopify_store_id = o.store_id
@@ -100,48 +137,92 @@ function emailLinkedFrom(scope: KlaviyoConnectionScope, window: HalfOpenUtcWindo
      and r.superseded_at is null
      and r.status = 'confirmed'
      and r.selected_event_id is not null
-    cross join lateral (${PRIMARY_CLAIM_LATERAL}) pc
+    cross join lateral (${PRIMARY_CLAIM_LATERAL}) pc`;
+}
+
+function emailLinkedFrom(scope: KlaviyoConnectionScope, window: HalfOpenUtcWindow) {
+  return sql`
+    from shopify_order o
+    ${emailLinkJoin(scope)}
    where o.organization_id = ${scope.organizationId}
      and o.store_id = ${scope.storeId}
      and o.order_created_at >= ${window.from}
      and o.order_created_at < ${window.to}`;
 }
 
+/**
+ * In-window refunds (store-day windowed on `refund_day`, mirroring the
+ * overview's `refundRangeWhere`) whose parent order is email-linked. The
+ * parent carries NO window filter: a refund landing in range nets against
+ * its source even when the order itself is out of range, exactly like
+ * `getBucketTotals`.
+ */
+function emailLinkedRefundsFrom(
+  scope: KlaviyoConnectionScope,
+  days: StoreDayRange,
+) {
+  return sql`
+    from shopify_refund rf
+    join shopify_order o
+      on o.organization_id = rf.organization_id
+     and o.store_id = rf.store_id
+     and o.id = rf.order_id
+    ${emailLinkJoin(scope)}
+   where rf.organization_id = ${scope.organizationId}
+     and rf.store_id = ${scope.storeId}
+     and rf.refund_day between ${days.dateFrom} and ${days.dateTo}`;
+}
+
+/** Inclusive store-timezone day strings, e.g. "2026-07-01". */
+export type StoreDayRange = { dateFrom: string; dateTo: string };
+
 export async function loadEmailAttribution(input: {
   scope: KlaviyoConnectionScope;
   window: HalfOpenUtcWindow;
+  /** Refund window: refunds are day-bucketed, not timestamped. */
+  days: StoreDayRange;
 }): Promise<EmailAttributionSummary> {
-  const { scope, window } = input;
+  const { scope, window, days } = input;
 
-  // 1. Partition: every order in range lands in exactly one bucket.
+  // 1. Partition: every order in range lands in exactly one bucket;
+  // in-window refunds net against their parent order's bucket.
   const partition = await db.execute<{
     bucket: string;
     orders: number;
     revenue: string;
   }>(sql`
-    select case
-             when r.id is null then 'not_evaluated'
-             when r.status = 'no_klaviyo_event' then 'no_klaviyo_event'
-             when r.status = 'duplicate_conversion_events' then 'duplicate_flagged'
-             when r.status = 'confirmed'
-                  and r.selected_event_id is not null
-                  and exists (${QUALIFYING_CLAIM}) then 'email_linked'
-             else 'no_email_link'
-           end as bucket,
-           count(*)::int as orders,
-           round(coalesce(sum(o.net_sales), 0), 2)::text as revenue
-      from shopify_order o
-      left join klaviyo_order_match_result r
-        on r.organization_id = o.organization_id
-       and r.shopify_store_id = o.store_id
-       and r.connection_id = ${scope.connectionId}
-       and r.order_id = o.id
-       and r.superseded_at is null
-     where o.organization_id = ${scope.organizationId}
-       and o.store_id = ${scope.storeId}
-       and o.order_created_at >= ${window.from}
-       and o.order_created_at < ${window.to}
-     group by 1`);
+    with order_buckets as (
+      select ${BUCKET_CASE} as bucket,
+             count(*)::int as orders,
+             coalesce(sum(o.net_sales), 0) as gross
+        from shopify_order o
+        ${currentResultLeftJoin(scope)}
+       where o.organization_id = ${scope.organizationId}
+         and o.store_id = ${scope.storeId}
+         and o.order_created_at >= ${window.from}
+         and o.order_created_at < ${window.to}
+       group by 1
+    ),
+    refund_buckets as (
+      select ${BUCKET_CASE} as bucket,
+             sum(rf.amount) as refunded
+        from shopify_refund rf
+        join shopify_order o
+          on o.organization_id = rf.organization_id
+         and o.store_id = rf.store_id
+         and o.id = rf.order_id
+        ${currentResultLeftJoin(scope)}
+       where rf.organization_id = ${scope.organizationId}
+         and rf.store_id = ${scope.storeId}
+         and rf.refund_day between ${days.dateFrom} and ${days.dateTo}
+       group by 1
+    )
+    select coalesce(ob.bucket, rb.bucket) as bucket,
+           coalesce(ob.orders, 0) as orders,
+           round(coalesce(ob.gross, 0) - coalesce(rb.refunded, 0), 2)::text
+             as revenue
+      from order_buckets ob
+      full outer join refund_buckets rb on rb.bucket = ob.bucket`);
 
   const buckets = new Map(
     partition.rows.map((row) => [
@@ -153,34 +234,70 @@ export async function loadEmailAttribution(input: {
     buckets.get(key) ?? ZERO_BUCKET;
 
   // 2. Headline split, summed in SQL so money never crosses JS floats.
+  // Revenue is refund-net; orderCount stays the in-window linked orders.
   const headline = await db.execute<{
     orders: number;
     revenue: string;
     campaigns_revenue: string;
     flows_revenue: string;
   }>(sql`
-    select count(*)::int as orders,
-           round(coalesce(sum(o.net_sales), 0), 2)::text as revenue,
-           round(coalesce(sum(o.net_sales)
-             filter (where pc.kind = 'campaign'), 0), 2)::text as campaigns_revenue,
-           round(coalesce(sum(o.net_sales)
-             filter (where pc.kind = 'flow'), 0), 2)::text as flows_revenue
-    ${emailLinkedFrom(scope, window)}`);
+    with linked_orders as (
+      select count(*)::int as orders,
+             coalesce(sum(o.net_sales), 0) as gross,
+             coalesce(sum(o.net_sales)
+               filter (where pc.kind = 'campaign'), 0) as campaigns_gross,
+             coalesce(sum(o.net_sales)
+               filter (where pc.kind = 'flow'), 0) as flows_gross
+      ${emailLinkedFrom(scope, window)}
+    ),
+    linked_refunds as (
+      select coalesce(sum(rf.amount), 0) as refunded,
+             coalesce(sum(rf.amount)
+               filter (where pc.kind = 'campaign'), 0) as campaigns_refunded,
+             coalesce(sum(rf.amount)
+               filter (where pc.kind = 'flow'), 0) as flows_refunded
+      ${emailLinkedRefundsFrom(scope, days)}
+    )
+    select lo.orders,
+           round(lo.gross - lr.refunded, 2)::text as revenue,
+           round(lo.campaigns_gross - lr.campaigns_refunded, 2)::text
+             as campaigns_revenue,
+           round(lo.flows_gross - lr.flows_refunded, 2)::text as flows_revenue
+      from linked_orders lo
+     cross join linked_refunds lr`);
   const head = headline.rows[0];
 
-  // 3. Per-source rows by primary claim.
+  // 3. Per-source rows by primary claim, net of refunds classified through
+  // the parent order's own primary claim.
   const sourceRows = await db.execute<{
     kind: "campaign" | "flow";
     object_id: string;
     orders: number;
     revenue: string;
   }>(sql`
-    select pc.kind, pc.object_id,
-           count(*)::int as orders,
-           round(coalesce(sum(o.net_sales), 0), 2)::text as revenue
-    ${emailLinkedFrom(scope, window)}
-     group by 1, 2
-     order by sum(o.net_sales) desc, pc.object_id asc`);
+    with source_orders as (
+      select pc.kind, pc.object_id,
+             count(*)::int as orders,
+             coalesce(sum(o.net_sales), 0) as gross
+      ${emailLinkedFrom(scope, window)}
+       group by 1, 2
+    ),
+    source_refunds as (
+      select pc.kind, pc.object_id,
+             sum(rf.amount) as refunded
+      ${emailLinkedRefundsFrom(scope, days)}
+       group by 1, 2
+    )
+    select coalesce(so.kind, sr.kind) as kind,
+           coalesce(so.object_id, sr.object_id) as object_id,
+           coalesce(so.orders, 0) as orders,
+           round(coalesce(so.gross, 0) - coalesce(sr.refunded, 0), 2)::text
+             as revenue
+      from source_orders so
+      full outer join source_refunds sr
+        on sr.kind = so.kind and sr.object_id = so.object_id
+     order by coalesce(so.gross, 0) - coalesce(sr.refunded, 0) desc,
+              coalesce(so.object_id, sr.object_id) asc`);
 
   const objectIds = sourceRows.rows.map((row) => row.object_id);
   const objects = objectIds.length

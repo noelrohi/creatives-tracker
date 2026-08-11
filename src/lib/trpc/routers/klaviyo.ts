@@ -271,7 +271,7 @@ export const klaviyoRouter = router({
         ...input,
         timeZone: connection.storeTimezone,
       });
-      return loadEmailAttribution({ scope: connection, window });
+      return loadEmailAttribution({ scope: connection, window, days: input });
     }),
 
   orders: orgAdminProcedure

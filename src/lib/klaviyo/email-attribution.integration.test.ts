@@ -35,6 +35,8 @@ const window = {
   from: new Date("2026-07-01T00:00:00.000Z"),
   to: new Date("2026-08-01T00:00:00.000Z"),
 };
+// Refunds are windowed separately by store-day strings on refund_day.
+const days = { dateFrom: "2026-07-01", dateTo: "2026-07-31" };
 
 /**
  * Insert one published match run all result rows can hang off. The
@@ -66,13 +68,35 @@ async function seedOrder(
   id: string,
   shopifyOrderId: string,
   netSales: string,
+  options?: { createdAt?: string; orderDay?: string },
 ): Promise<void> {
   await testPool!.query(
     `INSERT INTO shopify_order
        (id, organization_id, store_id, shopify_order_id, order_created_at,
         order_day, net_sales)
-     VALUES ($1, 'org-a', 'store-a', $2, '2026-07-21T12:00:00Z', '2026-07-21', $3)`,
-    [id, shopifyOrderId, netSales],
+     VALUES ($1, 'org-a', 'store-a', $2, $4, $5, $3)`,
+    [
+      id,
+      shopifyOrderId,
+      netSales,
+      options?.createdAt ?? "2026-07-21T12:00:00Z",
+      options?.orderDay ?? "2026-07-21",
+    ],
+  );
+}
+
+async function seedRefund(
+  id: string,
+  orderId: string,
+  refundDay: string,
+  amount: string,
+): Promise<void> {
+  await testPool!.query(
+    `INSERT INTO shopify_refund
+       (id, organization_id, store_id, order_id, shopify_refund_id,
+        refund_day, amount)
+     VALUES ($1, 'org-a', 'store-a', $2, $1 || '-shopify', $3, $4)`,
+    [id, orderId, refundDay, amount],
   );
 }
 
@@ -377,7 +401,7 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
 
   it("partitions every order into exactly one bucket and sums to the total", async () => {
     await seedAggregateWorld();
-    const summary = await loadEmailAttribution({ scope, window });
+    const summary = await loadEmailAttribution({ scope, window, days });
 
     expect(summary.email).toEqual({
       revenue: "72.50",
@@ -400,9 +424,89 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
     expect(total).toBeCloseTo(114.75, 2);
   });
 
+  it("nets in-window refunds against the parent order's bucket and source", async () => {
+    await seedAggregateWorld();
+    // order-a (email-linked via campaign) gives back 5.00 inside the window.
+    await seedRefund("refund-a", "order-a", "2026-07-22", "5.00");
+    const summary = await loadEmailAttribution({ scope, window, days });
+
+    expect(summary.email).toEqual({
+      // 72.50 gross - 5.00 refunded = 67.50; the refund hits the campaign
+      // side (42.50 - 5.00 = 37.50) and leaves flows untouched. The two
+      // linked orders still both count — refunds move money, not orders.
+      revenue: "67.50",
+      orderCount: 2,
+      campaignsRevenue: "37.50",
+      flowsRevenue: "30.00",
+    });
+    const campaignSource = summary.sources.find(
+      (source) => source.objectId === "campaign-row-1",
+    );
+    expect(campaignSource?.revenue).toBe("37.50");
+    expect(campaignSource?.orderCount).toBe(1);
+
+    // Partition invariant survives netting: bucket revenues sum to the
+    // overview-style total, 114.75 gross - 5.00 in-window refunds = 109.75.
+    const total =
+      Number(summary.email.revenue) +
+      Number(summary.gaps.noEmailLink.revenue) +
+      Number(summary.gaps.notEvaluated.revenue) +
+      Number(summary.gaps.noKlaviyoEvent.revenue) +
+      Number(summary.gaps.duplicateFlagged.revenue);
+    expect(total).toBeCloseTo(109.75, 2);
+  });
+
+  it("nets an in-window refund whose parent order is outside the window", async () => {
+    await seedAggregateWorld();
+    // order-g was placed in June — outside the July window — but is
+    // email-linked (confirmed result + flow claim) and gives back 3.00 on
+    // an in-window day. Mirroring getBucketTotals, the refund nets against
+    // email revenue even though order-g itself never counts.
+    await seedOrder("order-g", "9007", "50.00", {
+      createdAt: "2026-06-15T12:00:00Z",
+      orderDay: "2026-06-15",
+    });
+    await seedEvent("event-g", "external-event-g");
+    await seedOrderResult("res-g", "order-g", "confirmed", "event-g");
+    await seedClaim({
+      id: "claim-g-flow",
+      conversionEventId: "event-g",
+      attributionId: "attr-g-flow",
+      flowObjectId: "flow-row-1",
+      interactionOccurredAt: "2026-06-15T11:00:00Z",
+    });
+    await seedRefund("refund-g", "order-g", "2026-07-22", "3.00");
+    const summary = await loadEmailAttribution({ scope, window, days });
+
+    expect(summary.email).toEqual({
+      // 72.50 - 3.00 = 69.50; order-g's 50.00 gross stays out (June), so
+      // orderCount holds at 2 and only the flow side drops: 30.00 - 3.00.
+      revenue: "69.50",
+      orderCount: 2,
+      campaignsRevenue: "42.50",
+      flowsRevenue: "27.00",
+    });
+    const flowSource = summary.sources.find(
+      (source) => source.objectId === "flow-row-1",
+    );
+    expect(flowSource?.revenue).toBe("27.00");
+    expect(flowSource?.orderCount).toBe(1);
+  });
+
+  it("nets a refund on a non-email-linked order against its gap bucket", async () => {
+    await seedAggregateWorld();
+    // order-b (confirmed but claimless -> no_email_link) gives back 2.00.
+    await seedRefund("refund-b", "order-b", "2026-07-23", "2.00");
+    const summary = await loadEmailAttribution({ scope, window, days });
+
+    // 10.00 - 2.00 = 8.00; email revenue is untouched.
+    expect(summary.gaps.noEmailLink).toEqual({ orders: 1, revenue: "8.00" });
+    expect(summary.email.revenue).toBe("72.50");
+  });
+
   it("assigns sources by the last non-bot touch and names them from the graph", async () => {
     await seedAggregateWorld();
-    const summary = await loadEmailAttribution({ scope, window });
+    const summary = await loadEmailAttribution({ scope, window, days });
 
     expect(summary.sources).toEqual([
       {
@@ -435,7 +539,7 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
     await seedReportFact("fact-2", "campaign-row-1", "15.50");
     await seedReportFact("fact-3", null, "4.50");
 
-    const summary = await loadEmailAttribution({ scope, window });
+    const summary = await loadEmailAttribution({ scope, window, days });
 
     const campaignSource = summary.sources.find(
       (source) => source.objectId === "campaign-row-1",
@@ -475,7 +579,7 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
     // ...replaced by a current no_klaviyo_event result.
     await seedOrderResult("res-a-new", "order-a", "no_klaviyo_event", null);
 
-    const summary = await loadEmailAttribution({ scope, window });
+    const summary = await loadEmailAttribution({ scope, window, days });
     expect(summary.email.orderCount).toBe(0);
     expect(summary.gaps.noKlaviyoEvent).toEqual({ orders: 1, revenue: "42.50" });
   });
@@ -492,7 +596,7 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
       interactionOccurredAt: "2026-07-20T09:00:00Z",
       botClick: 1,
     });
-    const summary = await loadEmailAttribution({ scope, window });
+    const summary = await loadEmailAttribution({ scope, window, days });
     expect(summary.email.orderCount).toBe(0);
     expect(summary.gaps.noEmailLink).toEqual({ orders: 1, revenue: "42.50" });
   });
@@ -504,6 +608,7 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
         from: new Date("2025-01-01T00:00:00.000Z"),
         to: new Date("2025-02-01T00:00:00.000Z"),
       },
+      days: { dateFrom: "2025-01-01", dateTo: "2025-01-31" },
     });
     expect(summary.email).toEqual({
       revenue: "0.00",
@@ -539,7 +644,7 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
        VALUES
          ('line-f3', 'org-a', 'store-a', 'order-f', 'li-f3', '77', 'Product', 2, now())`,
     );
-    const summary = await loadEmailAttribution({ scope, window });
+    const summary = await loadEmailAttribution({ scope, window, days });
 
     // order-b is NOT email-linked; its 9 units never appear.
     expect(summary.products).toEqual([
@@ -570,13 +675,13 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
     // (seedAggregateWorld), plus the extra stray event-x seeded below. Four
     // total.
     await seedEvent("event-x", "external-event-x");
-    let summary = await loadEmailAttribution({ scope, window });
+    let summary = await loadEmailAttribution({ scope, window, days });
     expect(summary.gaps.unmatchedEvents).toBe(4);
 
     // A CURRENT confirmed event-match-result excludes event-b from the
     // count: only 3 remain (a, f, x).
     await seedEventResult("evres-b", "event-b", "confirmed");
-    summary = await loadEmailAttribution({ scope, window });
+    summary = await loadEmailAttribution({ scope, window, days });
     expect(summary.gaps.unmatchedEvents).toBe(3);
 
     // Symmetry with the order-side "ignores superseded results" test: a
@@ -588,7 +693,7 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
       runId: "match-run-x",
       supersededAt: "2026-07-22T00:00:00Z",
     });
-    summary = await loadEmailAttribution({ scope, window });
+    summary = await loadEmailAttribution({ scope, window, days });
     expect(summary.gaps.unmatchedEvents).toBe(3);
 
     // A CURRENT non-confirmed result also does NOT exclude its event: event-x
@@ -599,7 +704,7 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
     // here (er.status is 'ambiguous', not null) and would wrongly drop
     // event-x from the count.
     await seedEventResult("evres-x-new", "event-x", "ambiguous");
-    summary = await loadEmailAttribution({ scope, window });
+    summary = await loadEmailAttribution({ scope, window, days });
     expect(summary.gaps.unmatchedEvents).toBe(3);
   });
 });
