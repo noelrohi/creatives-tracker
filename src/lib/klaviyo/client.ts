@@ -524,7 +524,9 @@ export class KlaviyoApiClient {
     assertProviderPathId(input.campaignId, "campaign");
     assertRequestCursor(input.cursor);
     const params = new URLSearchParams({
-      "fields[campaign-message]": "label,channel,created_at,updated_at",
+      // Sparse fields on this revision: label/channel live inside
+      // `definition`; top-level label is not a valid field.
+      "fields[campaign-message]": "definition,created_at,updated_at",
     });
     if (input.cursor !== null) params.set("page[cursor]", input.cursor);
     return this.#request({
@@ -557,7 +559,9 @@ export class KlaviyoApiClient {
     assertProviderPathId(input.flowId, "flow");
     assertRequestCursor(input.cursor);
     const params = new URLSearchParams({
-      "fields[flow-action]": "action_type,status,created,updated",
+      // Only the action IDs matter for traversal; this revision's sparse
+      // fields are created/definition/id/updated.
+      "fields[flow-action]": "created",
     });
     if (input.cursor !== null) params.set("page[cursor]", input.cursor);
     return this.#request({
@@ -574,7 +578,8 @@ export class KlaviyoApiClient {
     assertProviderPathId(input.actionId, "flow action");
     assertRequestCursor(input.cursor);
     const params = new URLSearchParams({
-      "fields[flow-message]": "name,channel,created,updated",
+      // The message name lives inside `definition` on this revision.
+      "fields[flow-message]": "definition,channel,created,updated",
     });
     if (input.cursor !== null) params.set("page[cursor]", input.cursor);
     return this.#request({

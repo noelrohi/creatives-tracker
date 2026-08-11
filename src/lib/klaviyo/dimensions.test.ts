@@ -134,6 +134,77 @@ describe("normalizeDimensionSnapshot", () => {
     expect(snapshot.warnings).toContain("flow_message_parent_missing");
   });
 
+  it("hoists message names and channels out of the definition object", () => {
+    const snapshot = normalizeDimensionSnapshot(
+      traversal({
+        campaigns: [
+          {
+            channel: "email",
+            resource: {
+              type: "campaign",
+              id: "campaign-1",
+              attributes: { name: "Sale" },
+            },
+          },
+        ],
+        campaignMessages: [
+          {
+            campaignExternalId: "campaign-1",
+            resource: {
+              type: "campaign-message",
+              id: "message-def",
+              attributes: {
+                definition: {
+                  label: "Definition Label",
+                  channel: "email",
+                  content: { subject: "never read" },
+                },
+                created_at: "2026-07-01T00:00:00Z",
+              },
+            },
+          },
+        ],
+        flows: [
+          { type: "flow", id: "flow-1", attributes: { name: "Welcome" } },
+        ],
+        flowActions: [
+          {
+            flowExternalId: "flow-1",
+            resource: { type: "flow-action", id: "action-1" },
+          },
+        ],
+        flowMessages: [
+          {
+            flowExternalId: "flow-1",
+            actionExternalId: "action-1",
+            resource: {
+              type: "flow-message",
+              id: "fm-def",
+              attributes: {
+                channel: "email",
+                definition: { name: "Definition Name", from_email: "x@y.com" },
+              },
+            },
+          },
+        ],
+      }),
+    );
+    const message = snapshot.objects.find(
+      (object) => object.externalId === "message-def",
+    );
+    expect(message).toMatchObject({
+      name: "Definition Label",
+      channel: "email",
+    });
+    const flowMessage = snapshot.objects.find(
+      (object) => object.externalId === "fm-def",
+    );
+    expect(flowMessage?.name).toBe("Definition Name");
+    // Nothing else from the definition survives normalization.
+    expect(JSON.stringify(snapshot)).not.toContain("x@y.com");
+    expect(JSON.stringify(snapshot)).not.toContain("never read");
+  });
+
   it("keeps the same external ID distinct across object types", () => {
     const snapshot = normalizeDimensionSnapshot(
       traversal({

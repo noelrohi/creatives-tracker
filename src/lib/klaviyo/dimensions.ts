@@ -145,6 +145,30 @@ function stableChecksum(value: unknown): string {
     .digest("hex");
 }
 
+/**
+ * Hoist allowlisted scalar fields out of a message `definition` object:
+ * this revision exposes label/name/channel only inside it. Nothing else in
+ * the definition (template content, sender addresses) is ever read.
+ */
+function withDefinitionFields(
+  resource: KlaviyoResource,
+  mapping: Record<string, string>,
+): KlaviyoResource {
+  const attributes = resource.attributes ?? {};
+  const definition = attributes.definition;
+  if (!definition || typeof definition !== "object" || Array.isArray(definition)) {
+    return resource;
+  }
+  const hoisted: Record<string, unknown> = { ...attributes };
+  for (const [target, sourceKey] of Object.entries(mapping)) {
+    if (hoisted[target] === undefined) {
+      hoisted[target] = (definition as Record<string, unknown>)[sourceKey];
+    }
+  }
+  delete hoisted.definition;
+  return { ...resource, attributes: hoisted };
+}
+
 function normalizeObject(input: {
   objectType: MarketingObjectType;
   resource: KlaviyoResource;
@@ -285,7 +309,10 @@ export function normalizeDimensionSnapshot(
     push(
       normalizeObject({
         objectType: "campaign_message",
-        resource: message.resource,
+        resource: withDefinitionFields(message.resource, {
+          label: "label",
+          channel: "channel",
+        }),
         channel: null,
         parentExternalId: message.campaignExternalId,
         parentObjectType: "campaign",
@@ -332,7 +359,7 @@ export function normalizeDimensionSnapshot(
     push(
       normalizeObject({
         objectType: "flow_message",
-        resource: message.resource,
+        resource: withDefinitionFields(message.resource, { name: "name" }),
         channel: null,
         parentExternalId: flowExternalId,
         parentObjectType: "flow",
