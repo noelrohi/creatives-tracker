@@ -765,6 +765,39 @@ describe("getEventById", () => {
   });
 });
 
+describe("listEvents include/fields coherence", () => {
+  it("omits attribution fields when attributions are not included", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () =>
+        jsonResponse({ data: [], links: { next: null } }),
+      );
+    const client = clientWith(fetchMock);
+    await client.listEvents({
+      metricId: "metric-1",
+      from: new Date("2026-08-01T00:00:00Z"),
+      to: new Date("2026-08-08T00:00:00Z"),
+      cursor: null,
+      includeAttributions: false,
+      includeProfileEmail: true,
+    });
+    const journeyUrl = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(journeyUrl.searchParams.get("fields[attribution]")).toBeNull();
+    expect(journeyUrl.searchParams.get("include")).toBe("profile,metric");
+
+    await client.listEvents({
+      metricId: "metric-1",
+      from: new Date("2026-08-01T00:00:00Z"),
+      to: new Date("2026-08-08T00:00:00Z"),
+      cursor: null,
+      includeAttributions: true,
+      includeProfileEmail: false,
+    });
+    const orderCoreUrl = new URL(fetchMock.mock.calls[1][0] as string);
+    expect(orderCoreUrl.searchParams.get("fields[attribution]")).toBe("id");
+  });
+});
+
 describe("dimension traversal client", () => {
   it("pins the campaigns revision and filters one explicit channel", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(

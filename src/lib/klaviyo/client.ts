@@ -477,10 +477,14 @@ export class KlaviyoApiClient {
       include,
       "fields[event]": "id,datetime,event_properties,timestamp,uuid",
       "fields[metric]": "id,name,integration",
-      "fields[attribution]": "id",
       "page[size]": "200",
       sort: "datetime",
     });
+    // Sparse fields for a non-included resource type are a provider 400:
+    // attribution fields ride along only when attributions are included.
+    if (snapshot.includeAttributions) {
+      params.set("fields[attribution]", "id");
+    }
     if (snapshot.includeProfileEmail) params.set("fields[profile]", "email");
     if (snapshot.cursor !== null) {
       params.set("page[cursor]", snapshot.cursor);
