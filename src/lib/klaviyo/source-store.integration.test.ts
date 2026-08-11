@@ -338,6 +338,11 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
 
   beforeAll(async () => {
     adminPool = new Pool({ connectionString: baseConnectionString! });
+    // A DROP DATABASE ... WITH (FORCE) from a leftover or concurrent run kills
+    // idle clients, which surfaces as a pool-level error; without a listener
+    // that crashes the worker even when every assertion passed.
+    adminPool.on("error", () => {});
+    testPool?.on("error", () => {});
     await adminPool.query(`DROP DATABASE IF EXISTS ${TEST_DATABASE} WITH (FORCE)`);
     await adminPool.query(`CREATE DATABASE ${TEST_DATABASE}`);
     for (const statement of PRE_0053_FIXTURE_DDL) await testPool!.query(statement);
