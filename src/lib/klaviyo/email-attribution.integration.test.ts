@@ -41,7 +41,7 @@ const window = {
  * terminal-shape check requires every window, checksum, and count column
  * to be populated on a 'published' row.
  */
-async function seedPublishedRun(): Promise<void> {
+async function seedPublishedRun(id = "match-run-1"): Promise<void> {
   await testPool!.query(
     `INSERT INTO klaviyo_match_run
        (id, organization_id, shopify_store_id, connection_id, source_run_id,
@@ -52,12 +52,13 @@ async function seedPublishedRun(): Promise<void> {
         rule_checksum, config_checksum, expected_order_count,
         expected_event_count, result_order_count, result_event_count,
         candidate_count)
-     VALUES ('match-run-1', 'org-a', 'store-a', 'connection-a', 'source-run-a',
-       'evidence-run-a', 'klaviyo-v1', 'scope-fp-1', 'invocation-fp-1',
+     VALUES ($1, 'org-a', 'store-a', 'connection-a', 'source-run-a',
+       'evidence-run-a', 'klaviyo-v1', $1 || '-scope-fp', $1 || '-invocation-fp',
        'published', now(), now(), now(),
        '2026-07-01T00:00:00Z', '2026-08-01T00:00:00Z', '2026-07-01T00:00:00Z',
        '2026-08-01T00:00:00Z', 'source-checksum-1', 'evidence-checksum-1',
        'rule-checksum-1', 'config-checksum-1', 0, 0, 0, 0, 0)`,
+    [id],
   );
 }
 
@@ -95,7 +96,10 @@ async function seedOrderResult(
   orderId: string,
   status: string,
   selectedEventId: string | null,
+  options?: { runId?: string; supersededAt?: string },
 ): Promise<void> {
+  const runId = options?.runId ?? "match-run-1";
+  const supersededAt = options?.supersededAt ?? null;
   // The selection-shape check requires confirmed rows to point at a
   // deterministic candidate edge in the same run; statuses without a
   // selected event must leave all three selection columns null.
@@ -107,19 +111,24 @@ async function seedOrderResult(
          (id, organization_id, shopify_store_id, connection_id, run_id,
           event_id, order_id, candidate_class, method, feature_vector,
           weights, tolerances, score, confidence, reason_codes)
-       VALUES ($1, 'org-a', 'store-a', 'connection-a', 'match-run-1',
+       VALUES ($1, 'org-a', 'store-a', 'connection-a', $4,
          $2, $3, 'deterministic', 'explicit_order_id', '{}', '{}', '{}',
          '1', '1', '[]')`,
-      [selectedCandidateId, selectedEventId, orderId],
+      [selectedCandidateId, selectedEventId, orderId, runId],
     );
   }
+  // Superseded rows need published_at <= superseded_at and a supersession
+  // reason; they are exempt from the current-row partial unique index but
+  // must live in a different run than the current row (run+order unique).
   await testPool!.query(
     `INSERT INTO klaviyo_order_match_result
        (id, organization_id, shopify_store_id, connection_id, run_id, order_id,
         status, selected_candidate_id, selected_class, selected_event_id,
-        reason_codes, matcher_version, published_at)
-     VALUES ($1, 'org-a', 'store-a', 'connection-a', 'match-run-1', $2,
-       $3, $4, $5, $6, '[]', 'klaviyo-v1', now())`,
+        reason_codes, matcher_version, published_at, superseded_at,
+        supersession_reason)
+     VALUES ($1, 'org-a', 'store-a', 'connection-a', $7, $2,
+       $3, $4, $5, $6, '[]', 'klaviyo-v1', coalesce($8::timestamp, now()),
+       $8, $9)`,
     [
       id,
       orderId,
@@ -127,7 +136,45 @@ async function seedOrderResult(
       selectedCandidateId,
       selectedCandidateId === null ? null : "deterministic",
       selectedEventId,
+      runId,
+      supersededAt,
+      supersededAt === null ? null : "entity_replaced",
     ],
+  );
+}
+
+/** One current campaign-kind report generation all facts hang off. */
+async function seedReportGeneration(): Promise<void> {
+  await testPool!.query(
+    `INSERT INTO klaviyo_report_generation
+       (id, organization_id, shopify_store_id, connection_id, sync_run_id,
+        kind, requested_from, requested_to, account_timezone,
+        publication_scope_fingerprint, refresh_fingerprint, status,
+        fact_count, published_at)
+     VALUES ('report-gen-1', 'org-a', 'store-a', 'connection-a', 'source-run-a',
+       'campaign', '2026-07-01T00:00:00Z', '2026-08-01T00:00:00Z',
+       'America/New_York', 'report-scope-fp-1', 'report-refresh-fp-1',
+       'current', 0, now())`,
+  );
+}
+
+/** Facts are unique on (generation_id, fact_fingerprint): one per seed id. */
+async function seedReportFact(
+  id: string,
+  campaignObjectId: string | null,
+  conversionValue: string,
+): Promise<void> {
+  await testPool!.query(
+    `INSERT INTO klaviyo_report_fact
+       (id, organization_id, shopify_store_id, connection_id, generation_id,
+        report_kind, conversion_metric_id, campaign_object_id, requested_from,
+        requested_to, account_timezone, grouping, request_fingerprint,
+        fact_fingerprint, conversion_value, api_revision, as_of)
+     VALUES ($1, 'org-a', 'store-a', 'connection-a', 'report-gen-1',
+       'campaign', 'metric-placed', $2, '2026-07-01T00:00:00Z',
+       '2026-08-01T00:00:00Z', 'America/New_York', '{}', $1 || '-req',
+       $1 || '-fact', $3, '2026-07-15', '2026-08-01T00:00:00Z')`,
+    [id, campaignObjectId, conversionValue],
   );
 }
 
@@ -322,6 +369,55 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
         klaviyoWindow: null,
       },
     ]);
+  });
+
+  it("sums multi-send campaign report facts and counts unattributed facts toward the total", async () => {
+    await seedAggregateWorld();
+    await seedReportGeneration();
+    // Two send-date groupings for the same campaign plus one fact Klaviyo
+    // reported without a campaign attribution.
+    await seedReportFact("fact-1", "campaign-row-1", "60.00");
+    await seedReportFact("fact-2", "campaign-row-1", "15.50");
+    await seedReportFact("fact-3", null, "4.50");
+
+    const summary = await loadEmailAttribution({ scope, window });
+
+    const campaignSource = summary.sources.find(
+      (source) => source.objectId === "campaign-row-1",
+    );
+    expect(campaignSource?.klaviyoConversionValue).toBe("75.50");
+    expect(summary.klaviyoSays?.conversionValue).toBe("80.00");
+    // Same generation, so the per-campaign window equals the headline's
+    // (asserted relatively: timestamp columns round-trip via local time).
+    expect(campaignSource?.klaviyoWindow).toEqual({
+      requestedFrom: summary.klaviyoSays?.requestedFrom,
+      requestedTo: summary.klaviyoSays?.requestedTo,
+      asOf: summary.klaviyoSays?.asOf,
+    });
+  });
+
+  it("ignores superseded results in favor of the current row", async () => {
+    await seedPublishedRun("match-run-0");
+    await seedPublishedRun();
+    await seedMarketingObject("campaign-row-1", "campaign", "Summer Sale");
+    // Superseded confirmed result with a qualifying claim...
+    await seedOrderResult("res-a-old", "order-a", "confirmed", "event-a", {
+      runId: "match-run-0",
+      supersededAt: "2026-07-22T00:00:00Z",
+    });
+    await seedClaim({
+      id: "claim-a",
+      conversionEventId: "event-a",
+      attributionId: "attr-a",
+      campaignObjectId: "campaign-row-1",
+      interactionOccurredAt: "2026-07-20T09:00:00Z",
+    });
+    // ...replaced by a current no_klaviyo_event result.
+    await seedOrderResult("res-a-new", "order-a", "no_klaviyo_event", null);
+
+    const summary = await loadEmailAttribution({ scope, window });
+    expect(summary.email.orderCount).toBe(0);
+    expect(summary.gaps.noKlaviyoEvent).toEqual({ orders: 1, revenue: "42.50" });
   });
 
   it("treats an order whose only claims are bot clicks as not email-linked", async () => {

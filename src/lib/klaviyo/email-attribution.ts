@@ -200,27 +200,35 @@ export async function loadEmailAttribution(input: {
   const nameById = new Map(objects.map((object) => [object.id, object.name]));
 
   // 4. Klaviyo's own campaign report facts (current generation only) —
-  // their windows travel with the numbers; nothing is re-sliced.
+  // their windows travel with the numbers; nothing is re-sliced. Facts
+  // arrive one row per (campaign, send-date) grouping, so per-campaign
+  // values are summed in SQL; the headline total below spans the same
+  // generation without the campaign filter, so facts with no campaign
+  // attribution still count toward it.
   const factRows = await db.execute<{
-    campaign_object_id: string | null;
-    conversion_value: string | null;
+    campaign_object_id: string;
+    conversion_value: string;
     requested_from: Date;
     requested_to: Date;
     as_of: Date;
   }>(sql`
-    select f.campaign_object_id, f.conversion_value,
-           f.requested_from, f.requested_to, f.as_of
+    select f.campaign_object_id,
+           round(sum(f.conversion_value), 2)::text as conversion_value,
+           min(f.requested_from) as requested_from,
+           max(f.requested_to) as requested_to,
+           max(f.as_of) as as_of
       from klaviyo_report_fact f
       join klaviyo_report_generation g on g.id = f.generation_id
      where g.organization_id = ${scope.organizationId}
        and g.shopify_store_id = ${scope.storeId}
        and g.connection_id = ${scope.connectionId}
        and g.kind = 'campaign'
-       and g.status = 'current'`);
+       and g.status = 'current'
+       and f.conversion_value is not null
+       and f.campaign_object_id is not null
+     group by f.campaign_object_id`);
   const factByCampaign = new Map(
-    factRows.rows
-      .filter((row) => row.campaign_object_id !== null)
-      .map((row) => [row.campaign_object_id as string, row]),
+    factRows.rows.map((row) => [row.campaign_object_id, row]),
   );
   const saysTotal = await db.execute<{
     conversion_value: string | null;
@@ -301,10 +309,10 @@ export async function loadEmailAttribution(input: {
 
   return {
     email: {
-      revenue: head?.revenue ?? "0",
+      revenue: head?.revenue ?? "0.00",
       orderCount: head?.orders ?? 0,
-      campaignsRevenue: head?.campaigns_revenue ?? "0",
-      flowsRevenue: head?.flows_revenue ?? "0",
+      campaignsRevenue: head?.campaigns_revenue ?? "0.00",
+      flowsRevenue: head?.flows_revenue ?? "0.00",
     },
     klaviyoSays:
       says?.conversion_value != null &&
