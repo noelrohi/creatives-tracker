@@ -100,7 +100,11 @@ async function seedRefund(
   );
 }
 
-async function seedEvent(id: string, externalEventId: string): Promise<void> {
+async function seedEvent(
+  id: string,
+  externalEventId: string,
+  occurredAt = "2026-07-21T12:05:00Z",
+): Promise<void> {
   await testPool!.query(
     `INSERT INTO klaviyo_event
        (id, organization_id, shopify_store_id, connection_id, metric_id,
@@ -109,9 +113,9 @@ async function seedEvent(id: string, externalEventId: string): Promise<void> {
         key_type_fingerprint, warnings, product_evidence_completeness,
         source_checksum, api_revision)
      VALUES ($1, 'org-a', 'store-a', 'connection-a', 'metric-placed',
-       $2, '2026-07-21T12:05:00Z', NULL, '[]', '{}', '[]', '[]',
+       $2, $3, NULL, '[]', '{}', '[]', '[]',
        'unavailable', $2 || '-checksum', '2026-07-15')`,
-    [id, externalEventId],
+    [id, externalEventId, occurredAt],
   );
 }
 
@@ -767,5 +771,40 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
     await seedEventResult("evres-x-new", "event-x", "ambiguous");
     summary = await loadEmailAttribution({ scope, window, days });
     expect(summary.gaps.unmatchedEvents).toBe(3);
+  });
+
+  it("windows orders and events by UTC wall time regardless of process timezone", async () => {
+    // node-postgres serializes a raw Date parameter for a naive timestamp
+    // column in the PROCESS's local time; before the utcTimestamp() fix,
+    // any off-UTC environment shifted every window boundary by the local
+    // offset (live repro: Asia/Manila, +8h — the first 8 hours of orders
+    // vanished from the partition). These seeds straddle both edges so a
+    // shifted boundary moves money in a direction the assertions catch:
+    // under a +8h shift, both in-edge orders fall out and the past-range
+    // order falls in, yielding { orders: 2, revenue: "122.50" }.
+    await seedOrder("order-edge-in-lo", "9101", "10.00", {
+      createdAt: "2026-07-01T00:00:00Z", // exact from-boundary: included
+      orderDay: "2026-07-01",
+    });
+    await seedOrder("order-edge-in-hi", "9102", "20.00", {
+      createdAt: "2026-07-01T03:00:00Z", // early window: a +8h shift drops it
+      orderDay: "2026-07-01",
+    });
+    await seedOrder("order-edge-out-lo", "9103", "40.00", {
+      createdAt: "2026-06-30T23:59:59Z", // 1s before the range: excluded
+      orderDay: "2026-06-30",
+    });
+    await seedOrder("order-edge-out-hi", "9104", "80.00", {
+      createdAt: "2026-08-01T05:00:00Z", // past the range: a +8h shift admits it
+      orderDay: "2026-08-01",
+    });
+    await seedEvent("event-edge-in", "external-event-edge-in", "2026-07-01T03:00:00Z");
+    await seedEvent("event-edge-out", "external-event-edge-out", "2026-08-01T05:00:00Z");
+
+    const summary = await loadEmailAttribution({ scope, window, days });
+    // order-a (harness, 42.50, mid-window) + the two in-edge orders.
+    expect(summary.gaps.notEvaluated).toEqual({ orders: 3, revenue: "72.50" });
+    // event-a (harness, mid-window) + event-edge-in only.
+    expect(summary.gaps.unmatchedEvents).toBe(2);
   });
 });

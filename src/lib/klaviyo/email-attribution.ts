@@ -112,6 +112,17 @@ const BUCKET_CASE = sql`
     else 'no_email_link'
   end`;
 
+/**
+ * node-postgres serializes a raw Date parameter for a naive `timestamp`
+ * column in the PROCESS's local time, while these columns store UTC wall
+ * time — off-UTC environments would shift every window boundary by the
+ * local offset. Interpolate the UTC ISO text and cast; Postgres drops the
+ * trailing Z and keeps the UTC wall-clock value.
+ */
+function utcTimestamp(value: Date) {
+  return sql`${value.toISOString()}::timestamp`;
+}
+
 /** Left join of the current match result onto an `o` shopify_order alias. */
 function currentResultLeftJoin(scope: KlaviyoConnectionScope) {
   return sql`
@@ -146,8 +157,8 @@ function emailLinkedFrom(scope: KlaviyoConnectionScope, window: HalfOpenUtcWindo
     ${emailLinkJoin(scope)}
    where o.organization_id = ${scope.organizationId}
      and o.store_id = ${scope.storeId}
-     and o.order_created_at >= ${window.from}
-     and o.order_created_at < ${window.to}`;
+     and o.order_created_at >= ${utcTimestamp(window.from)}
+     and o.order_created_at < ${utcTimestamp(window.to)}`;
 }
 
 /**
@@ -199,8 +210,8 @@ export async function loadEmailAttribution(input: {
         ${currentResultLeftJoin(scope)}
        where o.organization_id = ${scope.organizationId}
          and o.store_id = ${scope.storeId}
-         and o.order_created_at >= ${window.from}
-         and o.order_created_at < ${window.to}
+         and o.order_created_at >= ${utcTimestamp(window.from)}
+         and o.order_created_at < ${utcTimestamp(window.to)}
        group by 1
     ),
     refund_buckets as (
@@ -420,8 +431,8 @@ export async function loadEmailAttribution(input: {
        and e.shopify_store_id = ${scope.storeId}
        and e.connection_id = ${scope.connectionId}
        and m.canonical_kind = 'placed_order'
-       and e.occurred_at >= ${window.from}
-       and e.occurred_at < ${window.to}
+       and e.occurred_at >= ${utcTimestamp(window.from)}
+       and e.occurred_at < ${utcTimestamp(window.to)}
        and (er.status is null or er.status <> 'confirmed')`);
 
   return {
