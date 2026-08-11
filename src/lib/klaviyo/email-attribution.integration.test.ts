@@ -493,6 +493,67 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
     expect(flowSource?.orderCount).toBe(1);
   });
 
+  it("surfaces a refund-only source with zero orders and negative revenue", async () => {
+    await seedAggregateWorld();
+    // campaign-row-2 has NO in-window orders at all: its only order sits in
+    // June, email-linked to it via a confirmed result + campaign claim, and
+    // gives back 3.00 on an in-window day. The source must still surface —
+    // this exercises the refund-only side of the FULL OUTER JOIN (a LEFT
+    // JOIN from orders would silently drop the row and re-break
+    // reconciliation).
+    await seedMarketingObject("campaign-row-2", "campaign", "Winter Promo");
+    await seedOrder("order-h", "9008", "40.00", {
+      createdAt: "2026-06-10T12:00:00Z",
+      orderDay: "2026-06-10",
+    });
+    await seedEvent("event-h", "external-event-h");
+    await seedOrderResult("res-h", "order-h", "confirmed", "event-h");
+    await seedClaim({
+      id: "claim-h-camp",
+      conversionEventId: "event-h",
+      attributionId: "attr-h-camp",
+      campaignObjectId: "campaign-row-2",
+      interactionOccurredAt: "2026-06-10T11:00:00Z",
+    });
+    await seedRefund("refund-h", "order-h", "2026-07-24", "3.00");
+    const summary = await loadEmailAttribution({ scope, window, days });
+
+    // Ordered by net revenue desc, the refund-only source comes last.
+    expect(summary.sources).toEqual([
+      expect.objectContaining({ objectId: "campaign-row-1", revenue: "42.50" }),
+      expect.objectContaining({ objectId: "flow-row-1", revenue: "30.00" }),
+      {
+        objectId: "campaign-row-2",
+        objectType: "campaign",
+        name: "Winter Promo",
+        // 0 in-window orders - 3.00 refunded = pure give-back.
+        orderCount: 0,
+        revenue: "-3.00",
+        klaviyoConversionValue: null,
+        klaviyoWindow: null,
+      },
+    ]);
+
+    expect(summary.email).toEqual({
+      // 72.50 - 3.00 = 69.50 and 42.50 - 3.00 = 39.50: the headline nets
+      // the refund on the campaign side while order-h's 40.00 gross stays
+      // out (June), so orderCount holds at 2.
+      revenue: "69.50",
+      orderCount: 2,
+      campaignsRevenue: "39.50",
+      flowsRevenue: "30.00",
+    });
+
+    // Partition invariant: 114.75 gross - 3.00 in-window refunds = 111.75.
+    const total =
+      Number(summary.email.revenue) +
+      Number(summary.gaps.noEmailLink.revenue) +
+      Number(summary.gaps.notEvaluated.revenue) +
+      Number(summary.gaps.noKlaviyoEvent.revenue) +
+      Number(summary.gaps.duplicateFlagged.revenue);
+    expect(total).toBeCloseTo(111.75, 2);
+  });
+
   it("nets a refund on a non-email-linked order against its gap bucket", async () => {
     await seedAggregateWorld();
     // order-b (confirmed but claimless -> no_email_link) gives back 2.00.
