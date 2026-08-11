@@ -212,7 +212,21 @@ SELECT count(*) FROM klaviyo_event
 Sandbox limitations (retest on Reviv): email-diagnostic overlap (dev-store
 PII block), Ordered Product product evidence (no OP events emitted).
 
-## H. Reviv gate verdict — 2026-08-11: **PASS**
+## H2. Corrected verdict — 2026-08-11, full 90-day event window: **PASS**
+
+The H1 verdict below was computed against a ~30-day event window (the UI
+range filter drove every sync); its "37.5% Klaviyo coverage" line is an
+artifact of that window, not a provider fact. Corrected from published run
+over event window 2026-05-14 → 2026-08-11 (store days, Asia/Bangkok):
+
+| Criterion | Result |
+| --- | --- |
+| Orders | **14,172 confirmed** · **1 no_klaviyo_event** · 12 duplicate_conversion_events · 120 not_evaluated (orders newer than the evidence window) |
+| Events | **14,196 confirmed** · 141 unmatched · 0 ambiguous |
+| Klaviyo coverage | ~**99.99%** of evaluated orders have a deterministic Klaviyo event edge (15,070 Placed Order events stored vs 14,398 orders) |
+| Reports | campaign generation `current`, 29 facts / 23 campaigns over the window; statistic wire names fixed in `fcf9d29` |
+
+## H1. Initial verdict — 2026-08-11 (30-day event window): superseded by H2
 
 Recorded from published match run `be8241bb` (fingerprint `4L9n17Mc…`),
 computed over evidence run success/complete 14,398 orders (identity
