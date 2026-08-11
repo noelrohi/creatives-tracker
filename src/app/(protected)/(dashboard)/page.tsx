@@ -44,6 +44,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { ExportPreviewDialog } from "@/components/blocks/export-preview-dialog";
+import { FORMATS } from "@/components/blocks/creatives/creative-list-filters";
 import { useState } from "react";
 
 const EXPORT_COLUMNS = [
@@ -99,6 +100,7 @@ export default function DashboardPage() {
   const [exportOpen, setExportOpen] = useState(false);
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
   const [teamId, setTeamId] = useQueryState("team", parseAsString.withDefault(""));
+  const [format, setFormat] = useQueryState("format", parseAsString.withDefault(""));
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
   const [to, setTo] = useQueryState("to", parseAsString.withDefault(formatDateOnly(new Date())));
   const [tab, setTab] = useQueryState("tab", parseAsString.withDefault("overview"));
@@ -106,6 +108,7 @@ export default function DashboardPage() {
 
   const selectedAccountId = accountId ? accountId : undefined;
   const selectedTeamId = teamId || undefined;
+  const selectedFormat = FORMATS.find((value) => value === format);
   const fromValue = isDateOnlyString(from) ? from : formatDateOnly(subDays(new Date(), 6));
   const toValue = isDateOnlyString(to) ? to : formatDateOnly(new Date());
   const fromDate = parseDateOnly(fromValue);
@@ -120,6 +123,7 @@ export default function DashboardPage() {
       to: toValue,
       accountId: selectedAccountId,
       teamId: selectedTeamId,
+      format: selectedFormat,
     }),
   );
 
@@ -129,6 +133,7 @@ export default function DashboardPage() {
       to: toValue,
       accountId: selectedAccountId,
       teamId: selectedTeamId,
+      format: selectedFormat,
     }),
     enabled: tab === "charts",
   });
@@ -140,6 +145,7 @@ export default function DashboardPage() {
       to: toValue,
       accountId: selectedAccountId,
       teamId: selectedTeamId,
+      format: selectedFormat,
     }),
     enabled: tab === "demographics",
   });
@@ -158,6 +164,7 @@ export default function DashboardPage() {
   baseCreativesParams.set("to", toValue);
   if (accountId) baseCreativesParams.set("account", accountId);
   if (teamId) baseCreativesParams.set("team", teamId);
+  if (selectedFormat) baseCreativesParams.set("format", selectedFormat);
   const baseHref = `/creatives${baseCreativesParams.toString() ? `?${baseCreativesParams}` : ""}`;
   const creativeDetailParams = new URLSearchParams();
   creativeDetailParams.set("from", fromValue);
@@ -188,6 +195,17 @@ export default function DashboardPage() {
               }
             }}
           />
+          <Select value={selectedFormat ?? "all"} onValueChange={(value) => setFormat(value === "all" ? "" : value)}>
+            <SelectTrigger className="h-7 w-auto gap-1 text-[13px] capitalize">
+              <SelectValue placeholder="All formats" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All formats</SelectItem>
+              {FORMATS.map((value) => (
+                <SelectItem key={value} value={value} className="capitalize">{value}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {accounts.data && accounts.data.length > 0 && (
             <Select value={accountId || "all"} onValueChange={(v) => setAccountId(v === "all" ? "" : v)}>
               <SelectTrigger className="h-7 w-auto gap-1 text-[13px]">
@@ -239,6 +257,7 @@ export default function DashboardPage() {
                           to: toValue,
                           accountId: selectedAccountId,
                           teamId: selectedTeamId,
+                          format: selectedFormat,
                         }),
                       );
                       if (!rows.length) {
@@ -371,6 +390,7 @@ export default function DashboardPage() {
           to: toValue,
           accountId: selectedAccountId,
           teamId: selectedTeamId,
+          format: selectedFormat,
         }}
         filterLabels={[
           ...(accountId
@@ -378,6 +398,9 @@ export default function DashboardPage() {
                 label: "Account",
                 value: accounts.data?.find((a) => a.id === accountId)?.name ?? accountId,
               }]
+            : []),
+          ...(selectedFormat
+            ? [{ label: "Format", value: selectedFormat }]
             : []),
           ...(teamId
             ? [{

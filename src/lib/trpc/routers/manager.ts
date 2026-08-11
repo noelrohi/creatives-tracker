@@ -32,6 +32,9 @@ const managerCampaignRowSchema = managerRowSchema.extend({
 });
 
 const managerAdSetRowSchema = managerRowSchema.extend(hasMatchesField);
+const managerAdRowSchema = managerRowSchema.extend({
+  creativeId: z.string().nullable(),
+});
 
 type AggregateRow = {
   id: string;
@@ -48,6 +51,10 @@ type AggregateRow = {
 
 type MatchAggregateRow = AggregateRow & {
   has_matches: boolean | null;
+};
+
+type AdAggregateRow = AggregateRow & {
+  creative_id: string | null;
 };
 
 type CampaignAggregateRow = MatchAggregateRow & {
@@ -339,7 +346,7 @@ export const managerRouter = router({
         ...filterInput,
       }),
     )
-    .output(z.array(managerRowSchema))
+    .output(z.array(managerAdRowSchema))
     .query(async ({ input, ctx }) => {
       const org = ctx.organizationId;
       const pattern = searchPattern(input.search);
@@ -360,7 +367,7 @@ export const managerRouter = router({
           WHERE ast.id = ${input.adSetId} AND ast.organization_id = ${org}
         ),
         scoped AS (
-          SELECT a.id, a.meta_id, a.name, a.status
+          SELECT a.id, a.meta_id, a.name, a.status, a.ad_creative_id
           FROM parent par
           JOIN ad a ON a.ad_set_id = par.id AND a.organization_id = ${org}
           WHERE ${statusMatches("a.status", input.status)} ${adSearchFilter}
@@ -376,6 +383,7 @@ export const managerRouter = router({
           s.meta_id,
           s.name,
           s.status,
+          s.ad_creative_id AS creative_id,
           ${metricProjection},
           FALSE AS has_children
         FROM scoped s
@@ -383,6 +391,9 @@ export const managerRouter = router({
         ORDER BY coalesce(perf.spend_sum, 0) DESC, s.name ASC
       `);
 
-      return (result.rows as AggregateRow[]).map(mapRow);
+      return (result.rows as AdAggregateRow[]).map((row) => ({
+        ...mapRow(row),
+        creativeId: row.creative_id,
+      }));
     }),
 });

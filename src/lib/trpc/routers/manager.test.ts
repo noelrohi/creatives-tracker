@@ -80,6 +80,7 @@ const FIXTURE_DDL = [
      name text NOT NULL DEFAULT 'Untitled Ad',
      ad_set_id text REFERENCES ad_set(id) ON DELETE SET NULL,
      account_id text REFERENCES ad_account(id) ON DELETE SET NULL,
+     ad_creative_id text,
      meta_id text UNIQUE,
      organization_id text,
      status "status" NOT NULL DEFAULT 'active'
@@ -169,12 +170,12 @@ async function seedAd(
   id: string,
   adSetId: string,
   name: string,
-  opts: { status?: string; organizationId?: string } = {},
+  opts: { status?: string; organizationId?: string; creativeId?: string } = {},
 ) {
   await testDb!.execute(sql`
-    INSERT INTO ad (id, name, ad_set_id, meta_id, status, organization_id)
+    INSERT INTO ad (id, name, ad_set_id, ad_creative_id, meta_id, status, organization_id)
     VALUES (
-      ${id}, ${name}, ${adSetId}, ${`meta_${id}`},
+      ${id}, ${name}, ${adSetId}, ${opts.creativeId ?? null}, ${`meta_${id}`},
       ${opts.status ?? "active"}, ${opts.organizationId ?? ORG}
     )
   `);
@@ -230,7 +231,7 @@ describeIfDb("manager router aggregates", () => {
       await seedAccount("acc_1", "Acme");
       await seedCampaign("cmp_1", "Prospecting", { accountId: "acc_1" });
       await seedAdSet("set_1", "cmp_1", "Broad");
-      await seedAd("ad_1", "set_1", "Video A");
+      await seedAd("ad_1", "set_1", "Video A", { creativeId: "creative_1" });
       await seedAd("ad_2", "set_1", "Video B");
       // ad_1: two days. ad_2: one day. CTR differs wildly from impressions so a
       // plain average and an impression-weighted average cannot coincide.
@@ -338,6 +339,8 @@ describeIfDb("manager router aggregates", () => {
       expect(sum(ads)).toBe(Number(campaign.spend));
       expect(ads.map((ad) => ad.id).sort()).toEqual(["ad_1", "ad_2"]);
       expect(ads.every((ad) => ad.hasChildren === false)).toBe(true);
+      expect(ads.find((ad) => ad.id === "ad_1")?.creativeId).toBe("creative_1");
+      expect(ads.find((ad) => ad.id === "ad_2")?.creativeId).toBeNull();
       // Ad rows aggregate only their own days: ad_1 = 100 + 50.
       expect(Number(ads.find((ad) => ad.id === "ad_1")!.spend)).toBe(150);
     });
