@@ -1,5 +1,6 @@
 "use client";
 
+import { formatDistanceToNow } from "date-fns";
 import { useQuery } from "@tanstack/react-query";
 import type { EmailAttributionSummary } from "@/lib/klaviyo/email-attribution";
 import { formatMoneyExact } from "@/components/blocks/attribution/format";
@@ -175,7 +176,9 @@ export function EmailRevenuePanel({
         </h2>
         {publishedAt !== null ? (
           <span className="text-[10px] text-muted-foreground/70">
-            {copy.freshness(new Date(publishedAt).toLocaleString())}
+            {copy.freshness(
+              formatDistanceToNow(new Date(publishedAt), { addSuffix: true }),
+            )}
           </span>
         ) : null}
       </div>

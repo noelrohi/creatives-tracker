@@ -590,5 +590,16 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
     });
     summary = await loadEmailAttribution({ scope, window });
     expect(summary.gaps.unmatchedEvents).toBe(3);
+
+    // A CURRENT non-confirmed result also does NOT exclude its event: event-x
+    // gains a current 'ambiguous' row (its only prior row was superseded, so
+    // no current-row conflict), and the total stays 3, not 2. This exercises
+    // the second arm of `er.status is null or er.status <> 'confirmed'` —
+    // dropping that arm would leave only `er.status is null`, which is false
+    // here (er.status is 'ambiguous', not null) and would wrongly drop
+    // event-x from the count.
+    await seedEventResult("evres-x-new", "event-x", "ambiguous");
+    summary = await loadEmailAttribution({ scope, window });
+    expect(summary.gaps.unmatchedEvents).toBe(3);
   });
 });
