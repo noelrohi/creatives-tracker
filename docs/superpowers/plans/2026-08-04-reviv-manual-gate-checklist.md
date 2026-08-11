@@ -21,10 +21,10 @@ readable; 69 metrics visible including native Shopify `Placed Order` and
 
 Fix before swapping:
 
-- [ ] `KLAVIYO_REVIV_ALLOWED_URL_HOSTS_PROD` second entry is an email
+- [x] `KLAVIYO_REVIV_ALLOWED_URL_HOSTS_PROD` second entry is an email
       address — remove it; entries must be bare hostnames or credential
       resolution throws at startup
-- [ ] `KLAVIYO_REVIV_SHOP_DOMAIN_PROD` currently holds the custom
+- [x] `KLAVIYO_REVIV_SHOP_DOMAIN_PROD` currently holds the custom
       storefront domain. It must be Reviv's `*.myshopify.com` **admin**
       domain — the same value the Shopify store row is ingested under —
       or the connection binding will not match the store. Keep the custom
@@ -38,23 +38,23 @@ and `npm run trigger:dev`, then proceed below.
       `Metrics: Read`, `Events: Read`, `Profiles: Read` (probe email
       fieldset 403s without it), plus `Campaigns: Read` / `Flows: Read`
       for Plan 4 dimensions
-- [ ] Env vars set wherever the app **and** the Trigger worker run:
-  - [ ] `KLAVIYO_PRIVATE_API_KEY`
-  - [ ] `KLAVIYO_REVIV_ACCOUNT_ID`
-  - [ ] `KLAVIYO_REVIV_SHOP_DOMAIN`
-  - [ ] `KLAVIYO_REVIV_ALLOWED_URL_HOSTS` (comma-separated bare hostnames —
+- [x] Env vars set wherever the app **and** the Trigger worker run:
+  - [x] `KLAVIYO_PRIVATE_API_KEY`
+  - [x] `KLAVIYO_REVIV_ACCOUNT_ID`
+  - [x] `KLAVIYO_REVIV_SHOP_DOMAIN`
+  - [x] `KLAVIYO_REVIV_ALLOWED_URL_HOSTS` (comma-separated bare hostnames —
         no schemes, paths, ports, or wildcards)
-  - [ ] Existing `IDENTITY_HMAC_*` and `IDENTITY_ERASURE_HMAC_*` secrets present
-- [ ] Migrations applied: `npm run db:migrate` (0053 + 0054 in `_journal`)
-- [ ] **Plan 1 Shopify evidence backfill completed** for the Reviv store
+  - [x] Existing `IDENTITY_HMAC_*` and `IDENTITY_ERASURE_HMAC_*` secrets present
+- [x] Migrations applied: `npm run db:migrate` (0053 + 0054 in `_journal`)
+- [x] **Plan 1 Shopify evidence backfill completed** for the Reviv store
       (`shopify-evidence-start` mode `initial_90d`, run status success).
       The probe samples only evidence-complete orders; without
       `shopify_order_line` rows it fails with
       "requires at least 20 evidence-complete Shopify orders".
-- [ ] Trigger.dev worker running: `npm run trigger:dev` (or deployed) and the
+- [x] Trigger.dev worker running: `npm run trigger:dev` (or deployed) and the
       three tasks registered: `klaviyo-discovery`, `klaviyo-probe`,
       `klaviyo-order-core-batch`
-- [ ] Signed in to the app as an **owner or admin** of the org that owns the
+- [x] Signed in to the app as an **owner or admin** of the org that owns the
       Reviv store (no UI until Plan 5 — calls go through browser devtools)
 
 ### Console helpers (paste in devtools on the app origin)
@@ -87,15 +87,15 @@ const trpcGet = async (proc, input) => {
 
 ## B. Discovery
 
-- [ ] `await trpc("klaviyo.startDiscovery")` returns `{ runId, syncRunId }`
-- [ ] Trigger run completes without retries exhausting
-- [ ] `await trpcGet("klaviyo.health")` shows `connection.status: "pending"`
+- [x] `await trpc("klaviyo.startDiscovery")` returns `{ runId, syncRunId }`
+- [x] Trigger run completes without retries exhausting
+- [x] `await trpcGet("klaviyo.health")` shows `connection.status: "pending"`
       with `accountName` populated
-- [ ] `klaviyo.syncRuns` shows the discovery run `success`
-- [ ] Sanity: the persisted account equals `KLAVIYO_REVIV_ACCOUNT_ID`
+- [x] `klaviyo.syncRuns` shows the discovery run `success`
+- [x] Sanity: the persisted account equals `KLAVIYO_REVIV_ACCOUNT_ID`
       (a mismatch fails the run with **no** rows written — if discovery
       failed, check the env binding before anything else)
-- [ ] Exactly one enabled metric per kind:
+- [x] Exactly one enabled metric per kind:
 
 ```sql
 SELECT canonical_kind, external_metric_id FROM klaviyo_metric
@@ -105,19 +105,19 @@ SELECT canonical_kind, external_metric_id FROM klaviyo_metric
 
 ## C. Probe
 
-- [ ] `await trpc("klaviyo.runProbe", { sampleSize: 30 })` (any 20–50);
+- [x] `await trpc("klaviyo.runProbe", { sampleSize: 30 })` (any 20–50);
       Trigger run completes
-- [ ] Task payload contained only `syncRunId` (visible in the Trigger.dev run)
-- [ ] `await trpcGet("klaviyo.probe")` returns the pending report
+- [x] Task payload contained only `syncRunId` (visible in the Trigger.dev run)
+- [x] `await trpcGet("klaviyo.probe")` returns the pending report
 
 ### Report review (human judgment — the actual gate)
 
-- [ ] `sampledShopifyOrders` between 20 and 50
-- [ ] `bindingOverlapCount > 0` (real Reviv order overlap)
-- [ ] `redactionVerified: true`
-- [ ] Candidate alias set unambiguous, every `observedMalformed = 0`
-- [ ] `collisionSummary` inspected; note which properties have collisions
-- [ ] No leakage in persisted evidence:
+- [x] `sampledShopifyOrders` between 20 and 50
+- [x] `bindingOverlapCount > 0` (real Reviv order overlap)
+- [x] `redactionVerified: true`
+- [x] Candidate alias set unambiguous, every `observedMalformed = 0`
+- [x] `collisionSummary` inspected; note which properties have collisions
+- [x] No leakage in persisted evidence:
 
 ```sql
 -- must return 0
@@ -127,16 +127,16 @@ SELECT count(*) FROM klaviyo_probe_report
        ~* '[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}';
 ```
 
-- [ ] Eyeball `unmatched_examples`: no URL queries/fragments, no
+- [x] Eyeball `unmatched_examples`: no URL queries/fragments, no
       `/profiles/<id>` or `/customer/<id>` path IDs; benign product paths
       (e.g. `/products/summer-dress`) remain readable
 
 ## D. Review decisions
 
-- [ ] If all of section C holds:
+- [x] If all of section C holds:
       `await trpc("klaviyo.approveProbe", { reportId, reviewNote: "..." })`
       — else `rejectProbe` and stop here (record why)
-- [ ] After approval: `klaviyo.health` shows `status: "ready"`; the report's
+- [x] After approval: `klaviyo.health` shows `status: "ready"`; the report's
       aliases are `approved`:
 
 ```sql
@@ -144,29 +144,29 @@ SELECT canonical_field, source_property, state FROM klaviyo_event_alias
  WHERE state = 'approved' ORDER BY canonical_field;
 ```
 
-- [ ] For each candidate join rule with `observedCollisions = 0` and
+- [x] For each candidate join rule with `observedCollisions = 0` and
       populated observations:
       `await trpc("klaviyo.approveJoinRule", { ruleId, reviewNote: "..." })`
-- [ ] `rejectJoinRule` for everything else (roadmap gate: **zero collisions
+- [x] `rejectJoinRule` for everything else (roadmap gate: **zero collisions
       on any approved rule** — the server enforces this too)
 
 ## E. Order-core source backfill
 
-- [ ] `await trpc("klaviyo.startOrderCoreSync", { dateFrom, dateTo })` with
+- [x] `await trpc("klaviyo.startOrderCoreSync", { dateFrom, dateTo })` with
       the inclusive 90-store-day range (`dateFrom` = today − 89 in the
       store's IANA timezone, `dateTo` = today)
-- [ ] Batches self-chain (5 pages each); poll `klaviyo.syncRuns` until the
+- [x] Batches self-chain (5 pages each); poll `klaviyo.syncRuns` until the
       events run is `success`
-- [ ] `klaviyo.health` shows `lastEventSyncedAt` set
-- [ ] Request parameters and checkpoint carried the direct order-core
+- [x] `klaviyo.health` shows `lastEventSyncedAt` set
+- [x] Request parameters and checkpoint carried the direct order-core
       contract (`sourceMode: "order_core"`,
       `metricKinds: ["placed_order","ordered_product"]`)
 
 ## F. Negative and replay checks
 
-- [ ] A `dateFrom` older than 90 store-days is rejected **before** any task
+- [x] A `dateFrom` older than 90 store-days is rejected **before** any task
       fires (error mentions the 90-store-day boundary / approved floor)
-- [ ] Re-running the same window returns `resumed: true` and creates no
+- [x] Re-running the same window returns `resumed: true` and creates no
       duplicate provider rows:
 
 ```sql
@@ -175,7 +175,7 @@ SELECT external_event_id, count(*) FROM klaviyo_event
  GROUP BY 1 HAVING count(*) > 1;
 ```
 
-- [ ] Events persisted with internal metric row IDs only:
+- [x] Events persisted with internal metric row IDs only:
 
 ```sql
 -- must return 0
@@ -184,7 +184,7 @@ SELECT count(*) FROM klaviyo_event e
  WHERE m.id IS NULL;
 ```
 
-- [ ] No plaintext email in stored events:
+- [x] No plaintext email in stored events:
 
 ```sql
 -- must return 0
@@ -194,20 +194,26 @@ SELECT count(*) FROM klaviyo_event
 
 ## G. Verdict
 
-- [ ] All sections pass → **GO**: record the measured overlap/coverage rates
+- [x] All sections pass → **GO**: record the measured overlap/coverage rates
       below and start Plan 3 (`2026-07-31-klaviyo-03-advisory-matching.md`)
 - [ ] Any section fails → **STOP**: record what failed and why; fix or amend
       the design before proceeding
 
 | Measured | Sandbox dry-run (framesignal) | Reviv |
 | --- | --- | --- |
-| Sampled Shopify orders | 30 | |
-| Binding overlap count | 25 (25/25 events matched) | |
-| Identifier coverage (top property) | `$event_id`: 25 | |
-| Collisions on approved rules | 0 | 0 (required) |
-| Events ingested (90d) | 135 placed_order; 0 ordered_product (Klaviyo emitted none) | |
-| Replay idempotency | 135 read / 0 inserted / 0 updated | |
-| Decision / date / reviewer | sandbox PASS / 2026-08-05 / owner dry-run | |
+| Sampled Shopify orders | 30 | 30 (67 events sampled) |
+| Binding overlap count | 25 (25/25 events matched) | 94 |
+| Identifier coverage (top property) | `$event_id`: 25 | `$event_id` (report `8a957b10`, passed) |
+| Collisions on approved rules | 0 | 0 (`placed_order/$event_id` only; `ordered_product/$event_id` rejected — per-line-item ID) |
+| Events ingested (90d) | 135 placed_order; 0 ordered_product (Klaviyo emitted none) | 15,070 placed_order (see H2) |
+| Replay idempotency | 135 read / 0 inserted / 0 updated | re-runs resumed; 0 duplicate provider rows (SQL re-verified 2026-08-11) |
+| Decision / date / reviewer | sandbox PASS / 2026-08-05 / owner dry-run | **PASS** / 2026-08-11 / owner (verdict H2) |
+
+> Boxes above ticked 2026-08-11 after live execution on the Reviv account;
+> the §B/§C/§F database assertions were re-run against the ingested data the
+> same day (all clean: 0 duplicates, 0 orphan metric refs, 0 email-shaped
+> strings in events or probe reports, one enabled metric per kind on the
+> ready connection).
 
 Sandbox limitations (retest on Reviv): email-diagnostic overlap (dev-store
 PII block), Ordered Product product evidence (no OP events emitted).
