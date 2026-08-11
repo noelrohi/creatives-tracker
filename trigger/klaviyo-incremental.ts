@@ -60,9 +60,11 @@ function buildChildren(): IncrementalChildren {
         `klaviyo:incremental:evidence:${scope.connectionId}:incremental_7d`,
         { scope: "global" },
       );
+      // Mode-only payload: the evidence task is bound to the environment
+      // store and rejects any extra keys by exact shape.
       const result = await tasks.triggerAndWait(
         "shopify-evidence-start",
-        { organizationId: scope.organizationId, mode: "incremental_7d" },
+        { mode: "incremental_7d" },
         { idempotencyKey, idempotencyKeyTTL: "7d" },
       );
       metadata.set("shopifyTriggerRunId", result.id);

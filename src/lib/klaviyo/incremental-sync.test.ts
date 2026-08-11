@@ -224,6 +224,13 @@ describe("klaviyo-incremental trigger source boundary", () => {
     expect(source).not.toContain("schedules.task");
   });
 
+  it("hands Plan 1 evidence start its exact mode-only payload", () => {
+    // The evidence task is env-store-bound and rejects extra keys by
+    // exact shape — the supervisor must never add organizationId to it.
+    expect(source).toContain('{ mode: "incremental_7d" }');
+    expect(source).not.toMatch(/organizationId[^\n]*mode: "incremental_7d"/);
+  });
+
   it("uses explicit global keys with seven-day TTLs for every handoff", () => {
     const globalKeys = source.match(/\{\s*scope: "global",?\s*\}/g) ?? [];
     const ttls = source.match(/idempotencyKeyTTL: "7d"/g) ?? [];
