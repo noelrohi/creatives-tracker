@@ -212,7 +212,9 @@ function buildChildren(): IncrementalChildren {
         shopifyEvidenceRunId: inputs.shopifyEvidenceRunId,
         from: inputs.window.from.toISOString(),
         to: inputs.window.to.toISOString(),
-        reason: "scheduled" as const,
+        // The match task's closed reason union: a chain that follows a
+        // fresh source sync is exactly "source_sync".
+        reason: "source_sync" as const,
       };
       await triggerOrRepairMatchInvocation({
         invocationFingerprint: inputs.invocationFingerprint,

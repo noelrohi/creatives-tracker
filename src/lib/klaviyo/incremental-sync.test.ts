@@ -231,6 +231,11 @@ describe("klaviyo-incremental trigger source boundary", () => {
     expect(source).not.toMatch(/organizationId[^\n]*mode: "incremental_7d"/);
   });
 
+  it("sends the match task a reason from its closed union", () => {
+    expect(source).toContain('reason: "source_sync" as const');
+    expect(source).not.toContain('reason: "scheduled" as const');
+  });
+
   it("uses explicit global keys with seven-day TTLs for every handoff", () => {
     const globalKeys = source.match(/\{\s*scope: "global",?\s*\}/g) ?? [];
     const ttls = source.match(/idempotencyKeyTTL: "7d"/g) ?? [];
