@@ -65,3 +65,36 @@ export const EVENT_STATUS_LABELS: Record<string, string> = {
   unmatched: "Unmatched",
   not_evaluated: "Not evaluated",
 };
+
+export const emailRevenue = {
+  title: "Email revenue · Klaviyo",
+  freshness: (publishedAgo: string) => `matches published ${publishedAgo}`,
+  netSales: "Shopify net sales",
+  linked: (percent: string, orders: number) =>
+    `Tied to email · ${percent} · ${orders} order${orders === 1 ? "" : "s"}`,
+  says: "Klaviyo says",
+  saysUnconfirmed: (amount: string) => `+${amount} unconfirmed`,
+  saysWindowNote:
+    "“Klaviyo says” is their report over each campaign’s own window, not this date range",
+  segCampaigns: (amount: string) => `Campaigns ${amount}`,
+  segFlows: (amount: string) => `Flows ${amount}`,
+  segRest: (amount: string) => `Everything else ${amount}`,
+  sourcesHeading: "By campaign & flow — we confirm vs Klaviyo says",
+  productsHeading: "Top products in email-linked orders",
+  productsRevenueNote:
+    "Order revenue: net sales of email-linked orders containing the product; an order with several products counts toward each",
+  gapsLead: "Where the rest is:",
+  gapNoEmailLink: (orders: number) =>
+    `${orders} order${orders === 1 ? "" : "s"} had a Klaviyo event but no campaign/flow link`,
+  gapNotEvaluated: (orders: number) =>
+    `${orders} not evaluated yet (newer than evidence)`,
+  gapNoEvent: (orders: number) =>
+    `${orders} with no Klaviyo event at all`,
+  gapDuplicates: (orders: number) =>
+    `${orders} flagged for duplicate conversion events`,
+  gapUnmatched: (count: number) =>
+    `${count} Klaviyo event${count === 1 ? "" : "s"} matched no order`,
+  noDataYet: "No data yet",
+  error: "Couldn’t load email revenue.",
+  retry: "Retry",
+} as const;
