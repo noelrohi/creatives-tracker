@@ -7,12 +7,14 @@ export const KLAVIYO_REPORT_MIN_INTERVAL_MS = 1_100;
 export const KLAVIYO_REPORT_KINDS = ["campaign", "flow"] as const;
 export type KlaviyoReportKind = (typeof KLAVIYO_REPORT_KINDS)[number];
 
+// Wire names pinned to the 2026-07-15 reporting revision: the provider
+// uses suffix form (clicks_unique), verified against the live endpoint.
 export const KLAVIYO_REPORT_STATISTICS = [
   "conversions",
   "conversion_value",
   "recipients",
-  "unique_clicks",
-  "unique_opens",
+  "clicks_unique",
+  "opens_unique",
 ] as const;
 export type KlaviyoReportStatistic = (typeof KLAVIYO_REPORT_STATISTICS)[number];
 
@@ -156,8 +158,8 @@ const STATISTIC_COLUMN_BY_KEY: Record<
   conversions: "conversions",
   conversion_value: "conversionValue",
   recipients: "recipients",
-  unique_clicks: "uniqueClicks",
-  unique_opens: "uniqueOpens",
+  clicks_unique: "uniqueClicks",
+  opens_unique: "uniqueOpens",
 };
 
 const MAX_ADDITIONAL_STATISTICS = 16;
