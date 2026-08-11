@@ -138,11 +138,24 @@ function buildChildren(): IncrementalChildren {
         dateTo,
         timeZone: connection.storeTimezone,
       });
-      const prepared = await startOrResumeOrderCoreSync({
-        scope,
-        window,
-        triggerType: "scheduled",
-      });
+      // A busy events slot (for example a still-live journey run straddling
+      // into this pass) is a recorded stage failure for this run, never a
+      // supervisor crash — the next scheduled pass retries after the lease.
+      let prepared: { syncRunId: string };
+      try {
+        prepared = await startOrResumeOrderCoreSync({
+          scope,
+          window,
+          triggerType: "scheduled",
+        });
+      } catch {
+        return {
+          syncRunId: null,
+          status: "failed" as const,
+          checkpointNull: false,
+          orderCoreParameters: false,
+        };
+      }
       const idempotencyKey = await idempotencyKeys.create(
         `klaviyo:events:first:${prepared.syncRunId}`,
         { scope: "global" },
