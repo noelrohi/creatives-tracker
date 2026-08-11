@@ -18,6 +18,7 @@ import {
   startOrResumeOrderCoreSync,
 } from "@/lib/klaviyo/source-runner";
 import { getConnectionRecord } from "@/lib/klaviyo/source-store";
+import { deriveDayInTimezone } from "@/lib/shopify-ingest";
 import { db } from "@/db";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { klaviyoSyncRuns } from "@/schema/klaviyo";
@@ -61,8 +62,15 @@ function buildChildren(): IncrementalChildren {
   return {
     async runShopifyEvidence(scope) {
       await flushStage("shopify_evidence", { storeId: scope.storeId });
+      // The key carries the store day: each store day gets exactly one
+      // evidence pass per connection, and a fresh day always starts a
+      // fresh pass instead of deduping to yesterday's completed child
+      // (which a later ingest would have staled anyway).
+      const connection = await getConnectionRecord(scope);
+      if (!connection) throw new Error("Klaviyo connection is outside scope");
+      const storeDay = deriveDayInTimezone(new Date(), connection.storeTimezone);
       const idempotencyKey = await idempotencyKeys.create(
-        `klaviyo:incremental:evidence:${scope.connectionId}:incremental_7d`,
+        `klaviyo:incremental:evidence:${scope.connectionId}:incremental_7d:${storeDay}`,
         { scope: "global" },
       );
       // Mode-only payload: the evidence task is bound to the environment

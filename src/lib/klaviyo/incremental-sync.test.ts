@@ -224,6 +224,12 @@ describe("klaviyo-incremental trigger source boundary", () => {
     expect(source).not.toContain("schedules.task");
   });
 
+  it("keys evidence handoffs by connection and store day", () => {
+    expect(source).toContain(
+      "`klaviyo:incremental:evidence:${scope.connectionId}:incremental_7d:${storeDay}`",
+    );
+  });
+
   it("hands Plan 1 evidence start its exact mode-only payload", () => {
     // The evidence task is env-store-bound and rejects extra keys by
     // exact shape — the supervisor must never add organizationId to it.
