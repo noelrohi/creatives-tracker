@@ -394,6 +394,11 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
       requestedTo: summary.klaviyoSays?.requestedTo,
       asOf: summary.klaviyoSays?.asOf,
     });
+    // The flow source has no campaign report fact to join against.
+    const flowSource = summary.sources.find(
+      (source) => source.objectId === "flow-row-1",
+    );
+    expect(flowSource?.klaviyoConversionValue).toBeNull();
   });
 
   it("ignores superseded results in favor of the current row", async () => {
@@ -453,5 +458,49 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
     });
     expect(summary.sources).toEqual([]);
     expect(summary.gaps.notEvaluated).toEqual({ orders: 0, revenue: "0.00" });
+  });
+
+  it("aggregates products over email-linked orders with order revenue", async () => {
+    await seedAggregateWorld();
+    // seedMatchWorld gave order-a line-a: product 77 "Product" qty 2.
+    await testPool!.query(
+      `INSERT INTO shopify_order_line
+         (id, organization_id, store_id, order_id, shopify_line_item_id,
+          shopify_product_id, product_title, quantity, parent_order_updated_at)
+       VALUES
+         ('line-f1', 'org-a', 'store-a', 'order-f', 'li-f1', '77', 'Product', 1, now()),
+         ('line-f2', 'org-a', 'store-a', 'order-f', 'li-f2', '99', 'Other Thing', 4, now()),
+         ('line-b1', 'org-a', 'store-a', 'order-b', 'li-b1', '77', 'Product', 9, now())`,
+    );
+    const summary = await loadEmailAttribution({ scope, window });
+
+    // order-b is NOT email-linked; its 9 units never appear.
+    expect(summary.products).toEqual([
+      {
+        productKey: "77",
+        title: "Product",
+        units: 3,
+        orderCount: 2,
+        orderRevenue: "72.50",
+      },
+      {
+        productKey: "99",
+        title: "Other Thing",
+        units: 4,
+        orderCount: 1,
+        orderRevenue: "30.00",
+      },
+    ]);
+  });
+
+  it("counts non-confirmed placed-order events in range as unmatched", async () => {
+    await seedAggregateWorld();
+    // No row in this test file ever inserts into klaviyo_event_match_result,
+    // so every placed-order event in range is unmatched: event-a
+    // (seedMatchWorld), event-f and event-b (seedAggregateWorld), plus the
+    // extra stray event-x seeded below. Four total.
+    await seedEvent("event-x", "external-event-x");
+    const summary = await loadEmailAttribution({ scope, window });
+    expect(summary.gaps.unmatchedEvents).toBe(4);
   });
 });
