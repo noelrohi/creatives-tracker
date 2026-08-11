@@ -11,6 +11,7 @@ import {
   triggerOrRepairMatchInvocation,
 } from "@/lib/klaviyo/match-invocation";
 import { selectLatestMatchInputs } from "@/lib/klaviyo/match-service";
+import { loadEmailAttribution } from "@/lib/klaviyo/email-attribution";
 import {
   listEvidenceOrders,
   listUnmatchedEvents,
@@ -260,6 +261,17 @@ export const klaviyoRouter = router({
         timeZone: connection.storeTimezone,
       });
       return loadEvidenceCoverage({ scope: connection, window });
+    }),
+
+  emailAttribution: orgAdminProcedure
+    .input(z.object({ dateFrom: storeDaySchema, dateTo: storeDaySchema }))
+    .query(async ({ input, ctx }) => {
+      const connection = await requirePilotConnection(ctx.organizationId);
+      const window = inclusiveStoreDaysToHalfOpenUtc({
+        ...input,
+        timeZone: connection.storeTimezone,
+      });
+      return loadEmailAttribution({ scope: connection, window });
     }),
 
   orders: orgAdminProcedure
