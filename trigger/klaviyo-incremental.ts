@@ -32,6 +32,10 @@ const SUPERVISOR_QUEUE = {
 };
 const POLL_INTERVAL_SECONDS = 20;
 const POLL_DEADLINE_MS = 8 * 60 * 1000;
+// Real evidence passes re-observe the full trailing window and routinely
+// run ~25-40 minutes on live stores. Durable waits freeze the run between
+// polls, so a long deadline costs wall clock only, never compute.
+const EVIDENCE_POLL_DEADLINE_MS = 60 * 60 * 1000;
 
 type SupervisorPayload = { organizationId?: string };
 
@@ -42,8 +46,9 @@ async function flushStage(stage: string, extra: Record<string, unknown> = {}) {
 
 async function pollDatabase<T>(
   read: () => Promise<T | null>,
+  deadlineMs: number = POLL_DEADLINE_MS,
 ): Promise<T | null> {
-  const deadline = Date.now() + POLL_DEADLINE_MS;
+  const deadline = Date.now() + deadlineMs;
   for (;;) {
     const value = await read();
     if (value !== null) return value;
@@ -99,7 +104,7 @@ function buildChildren(): IncrementalChildren {
           .limit(1);
         if (!run || run.status === "running") return null;
         return run;
-      });
+      }, EVIDENCE_POLL_DEADLINE_MS);
       if (terminal === null) {
         return {
           ok: true,
