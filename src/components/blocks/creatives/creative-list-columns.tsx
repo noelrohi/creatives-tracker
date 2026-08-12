@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { ColumnDef } from "@tanstack/react-table";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,6 +11,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ArrowUpDown, Copy, ExternalLink, ImageIcon, MoreHorizontal, Sparkles, Video } from "@/components/icons";
 import { parseDateOnly } from "@/lib/date";
+import { useTRPC } from "@/lib/trpc/client";
 import { cn } from "@/lib/utils";
 import type { CreativeHealth } from "@/lib/creative-health";
 import type { Creative } from "./creative-list-types";
@@ -518,58 +520,68 @@ export const creativeColumns: ColumnDef<Creative>[] = [
   {
     id: "actions",
     header: "",
-    cell: ({ row }) => {
-      const metaAdId = row.original.metaAdId;
-      const metaCampaignId = row.original.metaCampaignId;
-      const metaAdSetId = row.original.metaAdSetId;
-
-      const copyToClipboard = (value: string, label: string) => {
-        navigator.clipboard.writeText(value);
-        toast.success(`${label} copied`);
-      };
-
-      return (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <MoreHorizontal className="size-3.5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-            <DropdownMenuItem asChild>
-              <Link href={`/studio?remix=${row.original.id}`}>
-                <Sparkles className="size-3.5" />
-                Remix in Studio
-              </Link>
-            </DropdownMenuItem>
-            {metaAdId && (
-              <DropdownMenuItem onClick={() => copyToClipboard(metaAdId, "Ad ID")}>
-                <Copy className="size-3.5" />
-                Copy Ad ID
-              </DropdownMenuItem>
-            )}
-            {metaAdSetId && (
-              <DropdownMenuItem onClick={() => copyToClipboard(metaAdSetId, "Ad Set ID")}>
-                <Copy className="size-3.5" />
-                Copy Ad Set ID
-              </DropdownMenuItem>
-            )}
-            {metaCampaignId && (
-              <DropdownMenuItem onClick={() => copyToClipboard(metaCampaignId, "Campaign ID")}>
-                <Copy className="size-3.5" />
-                Copy Campaign ID
-              </DropdownMenuItem>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      );
-    },
+    cell: ({ row }) => <CreativeActionsCell creative={row.original} />,
     enableSorting: false,
     enableHiding: false,
     size: 40,
   },
 ];
+
+function CreativeActionsCell({ creative }: { creative: Creative }) {
+  const trpc = useTRPC();
+  // Shares the sidebar's query, so this costs no extra request.
+  const { data: featureFlags } = useQuery(
+    trpc.orgSettings.getFeatureFlags.queryOptions(),
+  );
+  const imageStudioEnabled = featureFlags?.imageStudio ?? false;
+  const metaAdId = creative.metaAdId;
+  const metaCampaignId = creative.metaCampaignId;
+  const metaAdSetId = creative.metaAdSetId;
+
+  const copyToClipboard = (value: string, label: string) => {
+    navigator.clipboard.writeText(value);
+    toast.success(`${label} copied`);
+  };
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <MoreHorizontal className="size-3.5" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+        {imageStudioEnabled && (
+          <DropdownMenuItem asChild>
+            <Link href={`/studio?remix=${creative.id}`}>
+              <Sparkles className="size-3.5" />
+              Remix in Studio
+            </Link>
+          </DropdownMenuItem>
+        )}
+        {metaAdId && (
+          <DropdownMenuItem onClick={() => copyToClipboard(metaAdId, "Ad ID")}>
+            <Copy className="size-3.5" />
+            Copy Ad ID
+          </DropdownMenuItem>
+        )}
+        {metaAdSetId && (
+          <DropdownMenuItem onClick={() => copyToClipboard(metaAdSetId, "Ad Set ID")}>
+            <Copy className="size-3.5" />
+            Copy Ad Set ID
+          </DropdownMenuItem>
+        )}
+        {metaCampaignId && (
+          <DropdownMenuItem onClick={() => copyToClipboard(metaCampaignId, "Campaign ID")}>
+            <Copy className="size-3.5" />
+            Copy Campaign ID
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}

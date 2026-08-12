@@ -1,5 +1,7 @@
 import { PgDialect } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { orgSettings } from "@/schema/org-settings";
+import type { FeatureFlags } from "@/lib/feature-flags";
 
 const state = {
   selects: [] as Array<Record<string, unknown>[]>,
@@ -9,12 +11,18 @@ const state = {
   wheres: [] as unknown[],
   orderBys: [] as unknown[][],
   generation: 0,
+  // The studio procedures gate on this via getOrgFeatureFlags before any
+  // handler runs; it is answered off-queue so `selects`/`wheres` stay aligned
+  // with what each test queues for the handler itself.
+  featureFlags: {} as FeatureFlags,
 };
 
 function selectChain() {
   let consumed = false;
+  let flagLookup = false;
   let rows: Record<string, unknown>[] = [];
   const consume = () => {
+    if (flagLookup) return [{ featureFlags: state.featureFlags }];
     if (!consumed) {
       consumed = true;
       rows = state.selects.shift() ?? [];
@@ -22,11 +30,14 @@ function selectChain() {
     return rows;
   };
   const chain: Record<string, unknown> = {
-    from: vi.fn(() => chain),
+    from: vi.fn((table: unknown) => {
+      flagLookup = table === orgSettings;
+      return chain;
+    }),
     innerJoin: vi.fn(() => chain),
     leftJoin: vi.fn(() => chain),
     where: vi.fn((clause: unknown) => {
-      state.wheres.push(clause);
+      if (!flagLookup) state.wheres.push(clause);
       return chain;
     }),
     orderBy: vi.fn((...clauses: unknown[]) => {
@@ -191,6 +202,7 @@ describe("studio router — v2 lifecycle", () => {
     state.wheres = [];
     state.orderBys = [];
     state.generation = 0;
+    state.featureFlags = { imageStudio: true };
     vi.clearAllMocks();
   });
 

@@ -1,4 +1,4 @@
-export const STUDIO_ANGLE_SEEDS = [
+export const STUDIO_MESSAGE_SEEDS = [
   "vs. the expensive fix",
   "creams don't work",
   "week-by-week timeline",
@@ -8,7 +8,7 @@ export const STUDIO_ANGLE_SEEDS = [
   "offer/bundle",
 ] as const;
 
-export const STUDIO_STYLE_SEEDS = [
+export const STUDIO_CONCEPT_SEEDS = [
   "before/after",
   "us vs. them",
   "testimonial",

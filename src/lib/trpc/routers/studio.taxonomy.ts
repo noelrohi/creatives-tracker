@@ -33,7 +33,7 @@ export const studioTaxonomyProcedures = {
         "studio",
         "taxonomies",
         "List taxonomy values",
-        "List angle, visual_style, and hook_type values for the organization. Archived values remain available for historical records but are hidden from active pickers.",
+        "List message, concept, and hook_type values for the organization. Archived values remain available for historical records but are hidden from active pickers.",
       ),
     )
     .output(z.array(taxonomyValueOutputSchema))
@@ -52,7 +52,7 @@ export const studioTaxonomyProcedures = {
         "studio",
         "addTaxonomyValue",
         "Add a taxonomy value",
-        "Add or restore an angle, visual_style, or hook_type value for use in Studio pickers.",
+        "Add or restore a message, concept, or hook_type value for use in Studio pickers.",
       ),
     )
     .input(

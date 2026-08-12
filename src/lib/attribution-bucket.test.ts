@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   AI_SOURCES,
+  AMBIGUOUS_AD_NAME,
   assignBucket,
   BUCKET_RULE_VERSION,
   isPaidLookingMedium,
   isUntrackedSourceName,
   PAID_LOOKING_MEDIUM_REGEX_SOURCE,
   PAID_MEDIUMS,
+  resolveMetaAdIdentity,
   type BucketInput,
   type BucketLastVisit,
+  type MetaAdIndex,
 } from "@/lib/attribution-bucket";
 
 const SYNCED = new Set(["120210000000123", "120219999999888"]);
@@ -51,7 +54,7 @@ function visit(
 
 describe("assignBucket", () => {
   it("bumps the rule version whenever the tables below change", () => {
-    expect(BUCKET_RULE_VERSION).toBe(4);
+    expect(BUCKET_RULE_VERSION).toBe(5);
   });
 
   describe("rule 1 — untracked", () => {
@@ -552,6 +555,181 @@ describe("assignBucket", () => {
       expect(
         assignBucket(input({ lastVisit: visit({ medium: "cpc" }) })).bucket,
       ).toBe("unattributed");
+    });
+  });
+});
+
+// §4.2–§4.3: ad grain is stamped alongside the bucket, id form first, then the
+// ad's name scoped to the ad set `utm_term` names.
+describe("resolveMetaAdIdentity (§4.2)", () => {
+  const AD_SET = "23851234567890111";
+  const OTHER_AD_SET = "23859876543210222";
+  const INDEX: MetaAdIndex = {
+    adMetaIds: new Set(["120210000000456", "120210000000789"]),
+    adMetaIdsByAdSetAndName: new Map([
+      [
+        AD_SET,
+        new Map<string, string | typeof AMBIGUOUS_AD_NAME>([
+          ["ugc-testimonial-v3", "120210000000456"],
+          ["shared name", AMBIGUOUS_AD_NAME],
+        ]),
+      ],
+      [
+        OTHER_AD_SET,
+        new Map<string, string | typeof AMBIGUOUS_AD_NAME>([
+          ["shared name", "120210000000789"],
+        ]),
+      ],
+    ]),
+  };
+
+  function identity(utm: { term?: string | null; content?: string | null }) {
+    return resolveMetaAdIdentity(
+      { utmTerm: utm.term ?? null, utmContent: utm.content ?? null },
+      INDEX,
+    );
+  }
+
+  it("matches a numeric utm_content against synced ad ids", () => {
+    expect(identity({ term: AD_SET, content: "120210000000456" })).toEqual({
+      adSetId: AD_SET,
+      adId: "120210000000456",
+      matchMethod: "id",
+    });
+  });
+
+  // §4.3: never drop the raw value — the next re-stamp after that ad syncs
+  // upgrades this row to `id`.
+  it("keeps the raw value when the ad id is not synced yet", () => {
+    expect(identity({ term: AD_SET, content: "120210000000999" })).toEqual({
+      adSetId: AD_SET,
+      adId: "120210000000999",
+      matchMethod: "unmatched",
+    });
+  });
+
+  it("matches an ad name uniquely within its ad set", () => {
+    expect(identity({ term: AD_SET, content: "UGC-Testimonial-v3" })).toEqual({
+      adSetId: AD_SET,
+      adId: "120210000000456",
+      matchMethod: "name",
+    });
+  });
+
+  // A name shared by two ads of one ad set picks nothing rather than a coin flip.
+  it("leaves an ambiguous name unmatched", () => {
+    expect(identity({ term: AD_SET, content: "shared name" })).toEqual({
+      adSetId: AD_SET,
+      adId: "shared name",
+      matchMethod: "unmatched",
+    });
+  });
+
+  // The same name resolves in the ad set that owns exactly one ad by it.
+  it("scopes the name lookup to the ad set in utm_term", () => {
+    expect(identity({ term: OTHER_AD_SET, content: "shared name" })).toEqual({
+      adSetId: OTHER_AD_SET,
+      adId: "120210000000789",
+      matchMethod: "name",
+    });
+  });
+
+  // `{{ad.name}}` arrives percent-encoded, in both the `%20` and `+` spellings.
+  it("matches an encoded ad name in either spelling", () => {
+    expect(identity({ term: AD_SET, content: "UGC%2DTestimonial%2Dv3" })).toEqual(
+      { adSetId: AD_SET, adId: "120210000000456", matchMethod: "name" },
+    );
+    expect(identity({ term: OTHER_AD_SET, content: "shared%20name" })).toEqual({
+      adSetId: OTHER_AD_SET,
+      adId: "120210000000789",
+      matchMethod: "name",
+    });
+    expect(identity({ term: OTHER_AD_SET, content: "shared+name" })).toEqual({
+      adSetId: OTHER_AD_SET,
+      adId: "120210000000789",
+      matchMethod: "name",
+    });
+  });
+
+  // A malformed sequence is a name, not an error: it falls back to the raw form.
+  it("falls back to the raw value when decoding throws", () => {
+    expect(identity({ term: AD_SET, content: "100%-natural%zz" })).toEqual({
+      adSetId: AD_SET,
+      adId: "100%-natural%zz",
+      matchMethod: "unmatched",
+    });
+  });
+
+  // Decoding never rescues a name two ads in the ad set share.
+  it("leaves a decoded-ambiguous name unmatched", () => {
+    expect(identity({ term: AD_SET, content: "shared%20name" })).toEqual({
+      adSetId: AD_SET,
+      adId: "shared%20name",
+      matchMethod: "unmatched",
+    });
+  });
+
+  // An encoded digit string is still an id: decoding runs before the id test.
+  it("ids an encoded numeric utm_content", () => {
+    expect(identity({ term: AD_SET, content: "%3120210000000456" })).toEqual({
+      adSetId: AD_SET,
+      adId: "120210000000456",
+      matchMethod: "id",
+    });
+  });
+
+  it("leaves a name with no ad set to scope it unmatched", () => {
+    expect(identity({ content: "ugc-testimonial-v3" })).toEqual({
+      adSetId: null,
+      adId: "ugc-testimonial-v3",
+      matchMethod: "unmatched",
+    });
+  });
+
+  it("strips a click id glued onto either value", () => {
+    expect(
+      identity({
+        term: `${AD_SET}?fbclid=IwAR-abc123`,
+        content: "120210000000456?fbclid=IwAR-abc123",
+      }),
+    ).toEqual({
+      adSetId: AD_SET,
+      adId: "120210000000456",
+      matchMethod: "id",
+    });
+  });
+
+  it("stamps the ad set alone when nothing identifies the ad", () => {
+    expect(identity({ term: AD_SET })).toEqual({
+      adSetId: AD_SET,
+      adId: null,
+      matchMethod: null,
+    });
+  });
+
+  it("stamps nothing when the link carries neither term nor content", () => {
+    expect(identity({})).toEqual({
+      adSetId: null,
+      adId: null,
+      matchMethod: null,
+    });
+  });
+
+  // An ad set we have not synced is still the ad set the link named.
+  it("stamps an unsynced ad set term as-is", () => {
+    expect(identity({ term: "23850000000000999", content: "some-ad" })).toEqual({
+      adSetId: "23850000000000999",
+      adId: "some-ad",
+      matchMethod: "unmatched",
+    });
+  });
+
+  // Meta ids are 10–20 digits; anything shorter is a name, not an id.
+  it("treats a short numeric value as a name", () => {
+    expect(identity({ term: AD_SET, content: "12345" })).toEqual({
+      adSetId: AD_SET,
+      adId: "12345",
+      matchMethod: "unmatched",
     });
   });
 });

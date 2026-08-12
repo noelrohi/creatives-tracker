@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ANGLE_TYPES } from "@/lib/creative-taxonomy";
 
 const formatValues = ["static", "video", "ugc", "carousel"] as const;
 const awarenessValues = [
@@ -39,11 +40,34 @@ export const TONE_OPTIONS = [
   { label: "Humorous", value: "humorous" },
 ];
 
+export const ANGLE_OPTIONS = ANGLE_TYPES.map((value) => ({
+  value,
+  label: value
+    .split("_")
+    .map((word) => word[0].toUpperCase() + word.slice(1))
+    .join(" "),
+}));
+
+/**
+ * The edit schema. The enforced tags may be blank here and only here: a
+ * creative that predates the §6.1 gate is editable without being retagged in
+ * the same breath. What it may never do is clear one — `toCreativeMutationInput`
+ * simply omits a blank enforced tag, so an existing value stays put.
+ */
 export const creativeFormSchema = z.object({
   name: z.string().trim().min(1, "Name is required"),
   assetUrl: z.string().nullable(),
   format: z.enum(formatValues).nullable(),
-  angle: z.string(),
+  // Free-text angles predate the taxonomy, so blank is allowed, but anything
+  // written now must be a vocabulary value — the update mutation rejects the
+  // rest anyway.
+  angle: z
+    .string()
+    .refine(
+      (value) =>
+        value === "" || ANGLE_TYPES.includes(value as (typeof ANGLE_TYPES)[number]),
+      "Pick one of the seven angles",
+    ),
   persona: z.string(),
   awarenessLevel: z.enum(awarenessValues).nullable(),
   hook: z.string(),
@@ -55,7 +79,23 @@ export const creativeFormSchema = z.object({
   notes: z.string(),
 });
 
+/**
+ * The create schema (spec §6.1: "Studio and manual creatives require the four
+ * enforced tags at save"). The fourth tag — funnel stage — lives on the ad, and
+ * a manual creative has no ad yet, so the trio enforceable at creation is
+ * persona + angle + awareness. The server holds the same line in
+ * `adCreative.create`.
+ */
+export const creativeCreateFormSchema = creativeFormSchema.extend({
+  persona: z.string().trim().min(1, "Persona is required"),
+  angle: z.enum(ANGLE_TYPES, { message: "Angle is required" }),
+  awarenessLevel: z.enum(awarenessValues, {
+    message: "Awareness level is required",
+  }),
+});
+
 export type CreativeFormValues = z.infer<typeof creativeFormSchema>;
+export type CreativeCreateFormValues = z.infer<typeof creativeCreateFormSchema>;
 
 type CreativeFormSource = {
   name: string;
@@ -66,9 +106,11 @@ type CreativeFormSource = {
   awarenessLevel: string | null;
   ownership: string | null;
   teamId?: string | null;
-  hook: string | null;
+  attributes: {
+    hook?: string;
+    cta?: string;
+  };
   tone: string[] | null;
-  cta: string | null;
 
   notes: string | null;
 };
@@ -108,9 +150,9 @@ export function getCreativeFormValues(
     angle: creative?.angle ?? "",
     persona: creative?.persona ?? "",
     awarenessLevel: normalizeAwareness(creative?.awarenessLevel),
-    hook: creative?.hook ?? "",
+    hook: creative?.attributes.hook ?? "",
     tone: creative?.tone ?? [],
-    cta: creative?.cta ?? "",
+    cta: creative?.attributes.cta ?? "",
 
     ownership: normalizeOwnership(creative?.ownership),
     teamId: creative?.teamId ?? null,
@@ -124,16 +166,24 @@ function emptyToNull(value: string) {
 }
 
 export function toCreativeMutationInput(values: CreativeFormValues) {
+  const angle = emptyToNull(values.angle);
+  const persona = emptyToNull(values.persona);
   return {
     name: values.name.trim() || undefined,
     assetUrl: values.assetUrl,
     format: values.format,
-    angle: emptyToNull(values.angle),
-    persona: emptyToNull(values.persona),
-    awarenessLevel: values.awarenessLevel,
-    hook: emptyToNull(values.hook),
+    // Never sent as an explicit null: clearing an enforced tag is not an edit
+    // the app offers, and the server rejects it (§6.1).
+    ...(angle ? { angle: angle as (typeof ANGLE_TYPES)[number] } : {}),
+    ...(persona ? { persona } : {}),
+    ...(values.awarenessLevel
+      ? { awarenessLevel: values.awarenessLevel }
+      : {}),
+    attributes: {
+      hook: emptyToNull(values.hook),
+      cta: emptyToNull(values.cta),
+    },
     tone: values.tone.length > 0 ? values.tone : null,
-    cta: emptyToNull(values.cta),
 
     ownership: values.ownership,
     teamId: values.teamId,
@@ -150,9 +200,9 @@ export function hasCreativeExtraValues(
       values.angle ||
       values.persona ||
       values.awarenessLevel ||
-      values.hook ||
+      values.attributes.hook ||
       (values.tone && values.tone.length > 0) ||
-      values.cta ||
+      values.attributes.cta ||
 
       values.notes,
   );

@@ -152,8 +152,8 @@ function AddSwipeDialog({
     }
   }
 
-  const angles = taxonomy.filter((value) => value.kind === "angle" && !value.archivedAt);
-  const styles = taxonomy.filter((value) => value.kind === "visual_style" && !value.archivedAt);
+  const angles = taxonomy.filter((value) => value.kind === "message" && !value.archivedAt);
+  const styles = taxonomy.filter((value) => value.kind === "concept" && !value.archivedAt);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild><Button className="h-9"><ImagePlus /> Add swipe</Button></DialogTrigger>
@@ -173,8 +173,8 @@ function AddSwipeDialog({
             <Input value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="Source URL (optional)" />
             <Input value={brandName} onChange={(event) => setBrandName(event.target.value)} placeholder="Brand name (optional)" />
             <div className="grid grid-cols-2 gap-2">
-              <Select value={angleId} onValueChange={setAngleId}><SelectTrigger><SelectValue placeholder="Angle" /></SelectTrigger><SelectContent><SelectItem value="none">No angle</SelectItem>{angles.map((value) => <SelectItem key={value.id} value={value.id}>{value.name}</SelectItem>)}</SelectContent></Select>
-              <Select value={styleId} onValueChange={setStyleId}><SelectTrigger><SelectValue placeholder="Visual style" /></SelectTrigger><SelectContent><SelectItem value="none">No visual style</SelectItem>{styles.map((value) => <SelectItem key={value.id} value={value.id}>{value.name}</SelectItem>)}</SelectContent></Select>
+              <Select value={angleId} onValueChange={setAngleId}><SelectTrigger><SelectValue placeholder="Message" /></SelectTrigger><SelectContent><SelectItem value="none">No message</SelectItem>{angles.map((value) => <SelectItem key={value.id} value={value.id}>{value.name}</SelectItem>)}</SelectContent></Select>
+              <Select value={styleId} onValueChange={setStyleId}><SelectTrigger><SelectValue placeholder="Concept" /></SelectTrigger><SelectContent><SelectItem value="none">No concept</SelectItem>{styles.map((value) => <SelectItem key={value.id} value={value.id}>{value.name}</SelectItem>)}</SelectContent></Select>
             </div>
             <Textarea value={why} onChange={(event) => setWhy(event.target.value)} placeholder="Why it works (optional)" className="min-h-24" />
           </div>
@@ -192,7 +192,7 @@ function AddSwipeDialog({
 function TaxonomyManager({ values, onChanged }: { values: TaxonomyValue[]; onChanged: () => void }) {
   const trpc = useTRPC();
   const [open, setOpen] = useState(false);
-  const [kind, setKind] = useState<"angle" | "visual_style" | "hook_type">("angle");
+  const [kind, setKind] = useState<"message" | "concept" | "hook_type">("message");
   const [name, setName] = useState("");
   const add = useMutation(trpc.studio.addTaxonomyValue.mutationOptions({ onSuccess: () => { setName(""); onChanged(); }, onError: (error) => toast.error(error.message) }));
   const archive = useMutation(trpc.studio.archiveTaxonomyValue.mutationOptions({ onSuccess: onChanged, onError: (error) => toast.error(error.message) }));
@@ -201,9 +201,9 @@ function TaxonomyManager({ values, onChanged }: { values: TaxonomyValue[]; onCha
       <DialogTrigger asChild><Button size="sm" variant="outline"><Settings /> Manage tags</Button></DialogTrigger>
       <DialogContent>
         <DialogHeader><DialogTitle>Studio taxonomy tags</DialogTitle><DialogDescription>Add workspace vocabulary or archive values to hide them from pickers.</DialogDescription></DialogHeader>
-        <div className="flex gap-2"><Select value={kind} onValueChange={(value) => setKind(value as typeof kind)}><SelectTrigger className="w-36"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="angle">Angle</SelectItem><SelectItem value="visual_style">Visual style</SelectItem><SelectItem value="hook_type">Hook type</SelectItem></SelectContent></Select><Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Plain-language value" /><Button disabled={!name.trim() || add.isPending} onClick={() => add.mutate({ kind, name })}><Plus /> Add</Button></div>
+        <div className="flex gap-2"><Select value={kind} onValueChange={(value) => setKind(value as typeof kind)}><SelectTrigger className="w-36"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="message">Message</SelectItem><SelectItem value="concept">Concept</SelectItem><SelectItem value="hook_type">Hook type</SelectItem></SelectContent></Select><Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Plain-language value" /><Button disabled={!name.trim() || add.isPending} onClick={() => add.mutate({ kind, name })}><Plus /> Add</Button></div>
         <div className="max-h-72 space-y-1 overflow-y-auto rounded-lg border p-2">
-          {values.map((value) => <div key={value.id} className={cn("flex items-center gap-2 rounded-md px-2 py-1.5 text-sm", value.archivedAt && "opacity-50")}><Badge variant="outline" className="w-20 justify-center text-[10px]">{value.kind === "angle" ? "Angle" : value.kind === "hook_type" ? "Hook" : "Style"}</Badge><span className="flex-1">{value.name}</span><Button size="sm" variant="ghost" className="h-7" onClick={() => archive.mutate({ id: value.id, archived: !value.archivedAt })}>{value.archivedAt ? "Restore" : "Archive"}</Button></div>)}
+          {values.map((value) => <div key={value.id} className={cn("flex items-center gap-2 rounded-md px-2 py-1.5 text-sm", value.archivedAt && "opacity-50")}><Badge variant="outline" className="w-20 justify-center text-[10px]">{value.kind === "message" ? "Message" : value.kind === "hook_type" ? "Hook" : "Concept"}</Badge><span className="flex-1">{value.name}</span><Button size="sm" variant="ghost" className="h-7" onClick={() => archive.mutate({ id: value.id, archived: !value.archivedAt })}>{value.archivedAt ? "Restore" : "Archive"}</Button></div>)}
         </div>
       </DialogContent>
     </Dialog>
@@ -241,7 +241,7 @@ function CopyPackageManager({ taxonomy }: { taxonomy: TaxonomyValue[] }) {
     onSuccess: changed,
     onError: (error) => toast.error(error.message),
   }));
-  const angles = taxonomy.filter((value) => value.kind === "angle" && !value.archivedAt);
+  const angles = taxonomy.filter((value) => value.kind === "message" && !value.archivedAt);
   const save = () => {
     const values = {
       name,
@@ -261,7 +261,7 @@ function CopyPackageManager({ taxonomy }: { taxonomy: TaxonomyValue[] }) {
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
             <Input placeholder="Package name" value={name} onChange={(event) => setName(event.target.value)} />
-            <Select value={angleId} onValueChange={setAngleId}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">No angle</SelectItem>{angles.map((value) => <SelectItem key={value.id} value={value.id}>{value.name}</SelectItem>)}</SelectContent></Select>
+            <Select value={angleId} onValueChange={setAngleId}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">No message</SelectItem>{angles.map((value) => <SelectItem key={value.id} value={value.id}>{value.name}</SelectItem>)}</SelectContent></Select>
             <Textarea placeholder="Primary text" value={primaryText} onChange={(event) => setPrimaryText(event.target.value)} />
             <Input placeholder="Headline" value={headline} onChange={(event) => setHeadline(event.target.value)} />
             <Input placeholder="Description" value={description} onChange={(event) => setDescription(event.target.value)} />
@@ -305,7 +305,7 @@ function SwipeBoard({ swipes, pasted, angles, hooks, suggestedHooks, onUse, onAr
 }
 
 function SwipeTable({ swipes, onUse, onArchive, onDelete }: { swipes: Swipe[]; onUse: (swipe: Swipe) => void; onArchive: (id: string) => void; onDelete: (id: string) => void }) {
-  return <div className="overflow-x-auto rounded-xl border bg-card"><table className="w-full text-sm"><thead><tr className="border-b bg-muted/40 text-left text-xs text-muted-foreground"><th className="p-3 font-medium">Ad</th><th className="p-3 font-medium">Brand</th><th className="p-3 font-medium">Angle</th><th className="p-3 font-medium">Style</th><th className="p-3 font-medium">Why it works</th><th className="p-3" /></tr></thead><tbody>{swipes.map((swipe) => <tr key={swipe.id} className="border-b last:border-0"><td className="p-3"><img src={swipe.imageUrl} alt="" className="h-14 w-11 rounded object-cover" /></td><td className="p-3 font-medium">{swipe.brandName || "—"}</td><td className="p-3 text-xs">{swipe.angle?.name || "—"}</td><td className="p-3 text-xs">{swipe.visualStyle?.name || "—"}</td><td className="max-w-64 p-3 text-xs text-muted-foreground"><span className="line-clamp-2">{swipe.whyItWorks || "—"}</span></td><td className="p-3"><div className="flex justify-end gap-1"><Button size="sm" variant="outline" className="h-7" onClick={() => onUse(swipe)}>Use <ArrowRight /></Button><Button size="icon" variant="ghost" className="size-7" onClick={() => onArchive(swipe.id)} aria-label="Archive"><X /></Button><Button size="icon" variant="ghost" className="size-7" onClick={() => onDelete(swipe.id)} aria-label="Delete"><Trash2 /></Button></div></td></tr>)}</tbody></table></div>;
+  return <div className="overflow-x-auto rounded-xl border bg-card"><table className="w-full text-sm"><thead><tr className="border-b bg-muted/40 text-left text-xs text-muted-foreground"><th className="p-3 font-medium">Ad</th><th className="p-3 font-medium">Brand</th><th className="p-3 font-medium">Message</th><th className="p-3 font-medium">Concept</th><th className="p-3 font-medium">Why it works</th><th className="p-3" /></tr></thead><tbody>{swipes.map((swipe) => <tr key={swipe.id} className="border-b last:border-0"><td className="p-3"><img src={swipe.imageUrl} alt="" className="h-14 w-11 rounded object-cover" /></td><td className="p-3 font-medium">{swipe.brandName || "—"}</td><td className="p-3 text-xs">{swipe.angle?.name || "—"}</td><td className="p-3 text-xs">{swipe.visualStyle?.name || "—"}</td><td className="max-w-64 p-3 text-xs text-muted-foreground"><span className="line-clamp-2">{swipe.whyItWorks || "—"}</span></td><td className="p-3"><div className="flex justify-end gap-1"><Button size="sm" variant="outline" className="h-7" onClick={() => onUse(swipe)}>Use <ArrowRight /></Button><Button size="icon" variant="ghost" className="size-7" onClick={() => onArchive(swipe.id)} aria-label="Archive"><X /></Button><Button size="icon" variant="ghost" className="size-7" onClick={() => onDelete(swipe.id)} aria-label="Delete"><Trash2 /></Button></div></td></tr>)}</tbody></table></div>;
 }
 
 function SwipesContent() {
@@ -417,8 +417,8 @@ function SwipesContent() {
   }, [savePasted, setView]);
 
   const values = taxonomy.data ?? [];
-  const angles = values.filter((value) => value.kind === "angle");
-  const styles = values.filter((value) => value.kind === "visual_style");
+  const angles = values.filter((value) => value.kind === "message");
+  const styles = values.filter((value) => value.kind === "concept");
   const hooks = values.filter((value) => value.kind === "hook_type");
   const rows = swipes.data ?? [];
   const toggle = (selected: string[], id: string, setSelected: (value: string[] | null) => Promise<URLSearchParams>) => {

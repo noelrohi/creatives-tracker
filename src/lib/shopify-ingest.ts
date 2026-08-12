@@ -3,8 +3,9 @@
  * used by the Trigger.dev sync tasks.
  */
 
-import { and, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { ads } from "@/schema/ad";
 import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
 import {
@@ -14,9 +15,13 @@ import {
   shopifySyncRuns,
 } from "@/schema/shopify";
 import {
+  AMBIGUOUS_AD_NAME,
   assignBucket,
   BUCKET_RULE_VERSION,
+  resolveMetaAdIdentity,
   type AttributionBucket,
+  type MetaAdIndex,
+  type MetaAdMatchMethod,
 } from "@/lib/attribution-bucket";
 import { centsToAmount, toCents } from "@/lib/money";
 import {
@@ -568,6 +573,55 @@ export async function loadSyncedMetaAdSets(
   return byAdSet;
 }
 
+/**
+ * The synced ads, indexed the two ways `utm_content` names one: by Meta id, and
+ * by name within the ad set `utm_term` names.
+ */
+export async function loadSyncedMetaAds(
+  organizationId: string,
+): Promise<MetaAdIndex> {
+  const rows = await db
+    .select({
+      adMetaId: ads.metaId,
+      adName: ads.name,
+      adSetMetaId: adSets.metaId,
+    })
+    .from(ads)
+    .leftJoin(adSets, eq(ads.adSetId, adSets.id))
+    .where(eq(ads.organizationId, organizationId));
+
+  const adMetaIds = new Set<string>();
+  const adMetaIdsByAdSetAndName = new Map<
+    string,
+    Map<string, string | typeof AMBIGUOUS_AD_NAME>
+  >();
+
+  for (const row of rows) {
+    // An ad with no Meta id is an ad no link can name, by id or by name.
+    const adMetaId = normalizeLower(row.adMetaId);
+    if (!adMetaId) continue;
+    adMetaIds.add(adMetaId);
+
+    const adSetMetaId = normalizeLower(row.adSetMetaId);
+    const adName = normalizeLower(row.adName);
+    if (!adSetMetaId || !adName) continue;
+
+    let byName = adMetaIdsByAdSetAndName.get(adSetMetaId);
+    if (!byName) {
+      byName = new Map();
+      adMetaIdsByAdSetAndName.set(adSetMetaId, byName);
+    }
+    const existing = byName.get(adName);
+    if (existing === undefined) {
+      byName.set(adName, adMetaId);
+    } else if (existing !== adMetaId) {
+      byName.set(adName, AMBIGUOUS_AD_NAME);
+    }
+  }
+
+  return { adMetaIds, adMetaIdsByAdSetAndName };
+}
+
 async function upsertOrderRows(rows: ShopifyOrderRow[]) {
   const idByShopifyOrderId = new Map<string, string>();
 
@@ -737,11 +791,15 @@ type BucketCandidate = {
   customerJourney: Record<string, unknown> | null;
 };
 
-function candidateLastVisit(candidate: BucketCandidate) {
+/** The bucket rule's view of a stored order: columns plus the journey jsonb. */
+export function candidateLastVisit(candidate: BucketCandidate) {
   const journey = candidate.customerJourney as
     | {
         lastVisit?: (Record<string, unknown> & {
-          utmParameters?: { term?: string | null } | null;
+          utmParameters?: {
+            term?: string | null;
+            content?: string | null;
+          } | null;
         }) | null;
       }
     | null;
@@ -760,66 +818,59 @@ function candidateLastVisit(candidate: BucketCandidate) {
     utmSource: candidate.lastClickUtmSource,
     utmMedium: candidate.lastClickUtmMedium,
     utmCampaign: candidate.lastClickUtmCampaign,
-    // No column of its own: the term is read straight off the stored journey.
+    // No columns of their own: term and content are read straight off the
+    // stored journey.
     utmTerm: lastVisit?.utmParameters?.term ?? null,
+    utmContent: lastVisit?.utmParameters?.content ?? null,
     referrerUrl: (lastVisit?.referrerUrl as string | null) ?? null,
     source: (lastVisit?.source as string | null) ?? null,
   };
 }
 
-/**
- * Writes buckets for rows that need one.
- *  - "pending": freshly upserted rows (no bucket yet, or an older rule version)
- *  - "rebucket": every row on an older rule version or awaiting Meta verification
- */
-export async function stampBuckets(params: {
+/** One bounded page of bucket work. The cursor always advances across scanned
+ * rows, including journey-not-ready rows that deliberately remain unstamped. */
+export async function stampBucketBatch(params: {
   organizationId: string;
   storeId: string;
   scope?: "pending" | "rebucket";
+  afterId?: string | null;
+  limit?: number;
   syncedMetaCampaignIds?: ReadonlySet<string>;
   syncedMetaAdSets?: ReadonlyMap<string, string>;
-}): Promise<{ scanned: number; stamped: number }> {
+  syncedMetaAds?: MetaAdIndex;
+}): Promise<{ scanned: number; stamped: number; nextCursor: string | null }> {
   const scope = params.scope ?? "pending";
+  const limit = params.limit ?? 500;
   const syncedMetaCampaignIds =
     params.syncedMetaCampaignIds ??
     (await loadSyncedMetaCampaignIds(params.organizationId));
   const syncedMetaAdSets =
     params.syncedMetaAdSets ??
     (await loadSyncedMetaAdSets(params.organizationId));
+  const syncedMetaAds =
+    params.syncedMetaAds ?? (await loadSyncedMetaAds(params.organizationId));
 
   const staleVersion = or(
     isNull(shopifyOrders.bucketRuleVersion),
     lt(shopifyOrders.bucketRuleVersion, BUCKET_RULE_VERSION),
   );
-
-  // POS/draft/subscription orders never get a ready journey, but they are still
-  // bucketable (rule 1 → untracked), so they must not be gated on journeyReady.
-  // Mirrors `isUntrackedSourceName`; every other order waits for its journey.
   const untrackedSourceName = sql`(
     lower(${shopifyOrders.orderSourceName}) in ('pos', 'shopify_draft_order', 'draft_order', 'subscription_contract')
     or lower(${shopifyOrders.orderSourceName}) like '%draft%'
     or lower(${shopifyOrders.orderSourceName}) like '%subscription%'
   )`;
-
   const needsFirstStamp = and(
     isNull(shopifyOrders.bucket),
     or(eq(shopifyOrders.journeyReady, true), untrackedSourceName),
   );
-
-  const where =
+  const eligible =
     scope === "rebucket"
-      ? and(
-          eq(shopifyOrders.storeId, params.storeId),
-          or(
-            staleVersion,
-            eq(shopifyOrders.verificationPending, true),
-            needsFirstStamp,
-          ),
+      ? or(
+          staleVersion,
+          eq(shopifyOrders.verificationPending, true),
+          needsFirstStamp,
         )
-      : and(
-          eq(shopifyOrders.storeId, params.storeId),
-          or(needsFirstStamp, staleVersion),
-        );
+      : or(needsFirstStamp, staleVersion);
 
   const candidates: BucketCandidate[] = await db
     .select({
@@ -832,41 +883,60 @@ export async function stampBuckets(params: {
       customerJourney: shopifyOrders.customerJourney,
     })
     .from(shopifyOrders)
-    .where(where);
+    .where(
+      and(
+        eq(shopifyOrders.storeId, params.storeId),
+        eligible,
+        params.afterId ? gt(shopifyOrders.id, params.afterId) : undefined,
+      ),
+    )
+    .orderBy(asc(shopifyOrders.id))
+    .limit(limit);
 
   type Group = {
     bucket: AttributionBucket;
     metaVerified: boolean;
     metaCampaignId: string | null;
     verificationPending: boolean;
+    metaAdSetId: string | null;
+    metaAdId: string | null;
+    metaAdMatchMethod: MetaAdMatchMethod | null;
     ids: string[];
   };
   const groups = new Map<string, Group>();
 
   for (const candidate of candidates) {
+    const lastVisit = candidateLastVisit(candidate);
     const result = assignBucket({
       orderSourceName: candidate.orderSourceName,
       journeyReady: candidate.journeyReady,
-      lastVisit: candidateLastVisit(candidate),
+      lastVisit,
       syncedMetaCampaignIds,
       syncedMetaAdSets,
     });
-
-    // Still pending: leave the row unbucketed for the next run.
     if (!result.bucket) continue;
 
+    const adIdentity = resolveMetaAdIdentity(
+      { utmTerm: lastVisit?.utmTerm, utmContent: lastVisit?.utmContent },
+      syncedMetaAds,
+    );
     const key = [
       result.bucket,
       result.metaVerified,
       result.metaCampaignId ?? "",
       result.verificationPending,
+      adIdentity.adSetId ?? "",
+      adIdentity.adId ?? "",
+      adIdentity.matchMethod ?? "",
     ].join("|");
-
     const group = groups.get(key) ?? {
       bucket: result.bucket,
       metaVerified: result.metaVerified,
       metaCampaignId: result.metaCampaignId,
       verificationPending: result.verificationPending,
+      metaAdSetId: adIdentity.adSetId,
+      metaAdId: adIdentity.adId,
+      metaAdMatchMethod: adIdentity.matchMethod,
       ids: [],
     };
     group.ids.push(candidate.id);
@@ -874,7 +944,6 @@ export async function stampBuckets(params: {
   }
 
   let stamped = 0;
-
   for (const group of groups.values()) {
     for (let index = 0; index < group.ids.length; index += UPSERT_BATCH_SIZE) {
       const ids = group.ids.slice(index, index + UPSERT_BATCH_SIZE);
@@ -886,6 +955,9 @@ export async function stampBuckets(params: {
           metaVerified: group.metaVerified,
           metaCampaignId: group.metaCampaignId,
           verificationPending: group.verificationPending,
+          metaAdSetId: group.metaAdSetId,
+          metaAdId: group.metaAdId,
+          metaAdMatchMethod: group.metaAdMatchMethod,
           updatedAt: new Date(),
         })
         .where(inArray(shopifyOrders.id, ids));
@@ -893,5 +965,33 @@ export async function stampBuckets(params: {
     }
   }
 
-  return { scanned: candidates.length, stamped };
+  return {
+    scanned: candidates.length,
+    stamped,
+    nextCursor: candidates.at(-1)?.id ?? null,
+  };
+}
+
+/** Writes every currently eligible bucket row through bounded database pages. */
+export async function stampBuckets(params: {
+  organizationId: string;
+  storeId: string;
+  scope?: "pending" | "rebucket";
+  syncedMetaCampaignIds?: ReadonlySet<string>;
+  syncedMetaAdSets?: ReadonlyMap<string, string>;
+  syncedMetaAds?: MetaAdIndex;
+}): Promise<{ scanned: number; stamped: number }> {
+  let afterId: string | null = null;
+  let scanned = 0;
+  let stamped = 0;
+
+  while (true) {
+    const page = await stampBucketBatch({ ...params, afterId });
+    scanned += page.scanned;
+    stamped += page.stamped;
+    if (!page.nextCursor) break;
+    afterId = page.nextCursor;
+  }
+
+  return { scanned, stamped };
 }
