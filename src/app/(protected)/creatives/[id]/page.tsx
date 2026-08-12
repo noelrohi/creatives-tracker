@@ -6,6 +6,8 @@ import { useQueryState, parseAsString } from "nuqs";
 import { subDays } from "date-fns";
 import Link from "next/link";
 import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
+import { clampBreakdownRange } from "@/lib/retention/policy";
+import { BreakdownWindowCaption } from "@/components/blocks/dashboard/breakdown-window-caption";
 import { useForm, Controller, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
@@ -126,14 +128,22 @@ export default function CreativeDetailPage() {
   );
 
   const [demoDimension, setDemoDimension] = useState<"age" | "gender" | "country" | "device">("gender");
-  const creativeDemographic = useQuery(
-    trpc.performanceLog.creativeDemographicBreakdown.queryOptions({
+  // Breakdown rows are only retained for 14 days; the page default is 30, so
+  // this clamp (and its caption) is the normal case, not an edge case.
+  const demoWindow = clampBreakdownRange({
+    from: fromValue,
+    to: toValue,
+    today: formatDateOnly(new Date()),
+  });
+  const creativeDemographic = useQuery({
+    ...trpc.performanceLog.creativeDemographicBreakdown.queryOptions({
       creativeId: id,
       dimension: demoDimension,
-      from: fromValue,
+      from: demoWindow.from,
       to: toValue,
     }),
-  );
+    enabled: demoWindow.hasWindow,
+  });
 
   // Fetch ad preview iframe URL from Meta on demand (user clicks play)
   const adPreviewQuery = useQuery({
@@ -697,13 +707,22 @@ export default function CreativeDetailPage() {
         </TabsContent>
 
         {/* Demographics tab */}
-        <TabsContent value="demographics" className="pt-4">
-          <DemographicBreakdownChart
-            data={creativeDemographic.data}
-            dimension={demoDimension}
-            onDimensionChange={setDemoDimension}
-            isLoading={creativeDemographic.isLoading}
-          />
+        <TabsContent value="demographics" className="space-y-2 pt-4">
+          {demoWindow.isClamped || !demoWindow.hasWindow ? (
+            <BreakdownWindowCaption
+              from={demoWindow.from}
+              to={toValue}
+              hasWindow={demoWindow.hasWindow}
+            />
+          ) : null}
+          {demoWindow.hasWindow ? (
+            <DemographicBreakdownChart
+              data={creativeDemographic.data}
+              dimension={demoDimension}
+              onDimensionChange={setDemoDimension}
+              isLoading={creativeDemographic.isLoading}
+            />
+          ) : null}
         </TabsContent>
       </Tabs>
 

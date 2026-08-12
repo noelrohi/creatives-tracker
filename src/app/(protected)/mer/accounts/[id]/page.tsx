@@ -33,6 +33,7 @@ import { LeaderboardTable } from "@/components/blocks/dashboard/leaderboard-tabl
 import { PerformanceChart } from "@/components/blocks/insights/performance-chart";
 import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
 import { fmtMoney, fmtRoas } from "@/lib/fmt";
+import { BASE_RETENTION_DAYS, BREAKDOWN_RETENTION_DAYS } from "@/lib/retention/policy";
 
 export default function AccountDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -378,10 +379,11 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
                 </div>
               </div>
               <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-                <strong className="text-foreground">Retention guidance:</strong> most Postgres providers start charging
-                extra above ~10 GB. With ~{Math.round(dataHealth.data.totalRows / 1000)}k rows and size{" "}
-                {dataHealth.data.tableSize.pretty}, pruning is only worth doing if storage is the bottleneck. Trends/year-over-year
-                need 13+ months; keep at least that. A monthly job pruning beyond 24 months is safe for most analytics needs.
+                <strong className="text-foreground">Retention policy:</strong> daily base rows are kept for{" "}
+                {BASE_RETENTION_DAYS} days, breakdown rows (country, platform, placement, device, age, gender) for{" "}
+                {BREAKDOWN_RETENTION_DAYS} days, and monthly overall summaries permanently. With ~
+                {Math.round(dataHealth.data.totalRows / 1000)}k rows at {dataHealth.data.tableSize.pretty}, anything older
+                is served from the monthly summaries — Meta stays the source of truth if you need to backfill.
               </div>
             </div>
           ) : dataHealth.error ? (

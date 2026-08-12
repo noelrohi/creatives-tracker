@@ -6,17 +6,24 @@
  * repeat the same spend, so summing without this filter multiplies it.
  */
 
-import { and, isNull } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { performanceLogs } from "@/schema/performance-log";
 
-/** Base Meta rows only; breakdown rows repeat the same spend. */
+/**
+ * Base Meta rows only; breakdown rows repeat the same spend.
+ *
+ * A dimension counts as unset when it is NULL or '' — the same contract as
+ * `basePerformanceLogFilter` (raw SQL) and the retention grain rules. Some
+ * legacy imports wrote '' instead of NULL, and every reader must classify
+ * those rows the same way.
+ */
 export function basePerformanceRowsOnly() {
-  return and(
-    isNull(performanceLogs.country),
-    isNull(performanceLogs.platform),
-    isNull(performanceLogs.placement),
-    isNull(performanceLogs.device),
-    isNull(performanceLogs.age),
-    isNull(performanceLogs.gender),
-  );
+  return sql`(
+    coalesce(${performanceLogs.country}, '') = ''
+    and coalesce(${performanceLogs.platform}, '') = ''
+    and coalesce(${performanceLogs.placement}, '') = ''
+    and coalesce(${performanceLogs.device}, '') = ''
+    and coalesce(${performanceLogs.age}, '') = ''
+    and coalesce(${performanceLogs.gender}, '') = ''
+  )`;
 }

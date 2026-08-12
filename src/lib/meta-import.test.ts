@@ -3,6 +3,7 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import type { SQL } from "drizzle-orm";
 import {
   buildPerformanceLogRows,
+  filterRetainedPerformanceLogRows,
   matchExistingAdsForImport,
   resolveAdsForRows,
   toStagingPerfRow,
@@ -41,6 +42,48 @@ const baseRow = {
   dateEnd: "2026-07-01",
   spend: "12.34",
 };
+
+describe("filterRetainedPerformanceLogRows", () => {
+  const today = "2026-08-12";
+
+  it("keeps base rows inside the 180-day window", () => {
+    const result = filterRetainedPerformanceLogRows(
+      [{ dateEnd: "2026-02-14" }],
+      today,
+    );
+
+    expect(result.retainedRows).toHaveLength(1);
+    expect(result.droppedExpiredRows).toBe(0);
+  });
+
+  it("drops base rows older than 180 days and returns the count", () => {
+    const result = filterRetainedPerformanceLogRows(
+      [{ dateEnd: "2026-02-12" }],
+      today,
+    );
+
+    expect(result.retainedRows).toEqual([]);
+    expect(result.droppedExpiredRows).toBe(1);
+  });
+
+  it("drops breakdown rows older than 14 days and returns the count", () => {
+    const result = filterRetainedPerformanceLogRows(
+      [{ dateEnd: "2026-07-28", country: "US" }],
+      today,
+    );
+
+    expect(result.retainedRows).toEqual([]);
+    expect(result.droppedExpiredRows).toBe(1);
+  });
+
+  it("keeps breakdown rows from 10 days ago", () => {
+    const row = { dateEnd: "2026-08-02", gender: "female" };
+    const result = filterRetainedPerformanceLogRows([row], today);
+
+    expect(result.retainedRows).toEqual([row]);
+    expect(result.droppedExpiredRows).toBe(0);
+  });
+});
 
 describe("buildPerformanceLogRows", () => {
   it("never name-matches a row that carries a Meta ad id", () => {

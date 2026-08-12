@@ -34,6 +34,9 @@ import { DemographicBreakdownChart } from "@/components/blocks/dashboard/demogra
 import { LeaderboardTable } from "@/components/blocks/dashboard/leaderboard-table";
 import { fmtMoney, fmtNum, fmtPct, fmtRoas } from "@/lib/fmt";
 import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
+import { BREAKDOWN_RETENTION_DAYS, clampBreakdownRange } from "@/lib/retention/policy";
+import { BreakdownWindowCaption } from "@/components/blocks/dashboard/breakdown-window-caption";
+import { getUserFacingErrorMessage } from "@/lib/errors";
 import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -138,16 +141,24 @@ export default function DashboardPage() {
     enabled: tab === "charts",
   });
 
+  // Breakdown rows are only retained for 14 days, so the demographics query is
+  // clamped to that window and the tab says so when the range is wider.
+  const demoWindow = clampBreakdownRange({
+    from: fromValue,
+    to: toValue,
+    today: formatDateOnly(new Date()),
+  });
+
   const demographic = useQuery({
     ...trpc.performanceLog.demographicBreakdown.queryOptions({
       dimension: dimension as "age" | "gender" | "country" | "device",
-      from: fromValue,
+      from: demoWindow.from,
       to: toValue,
       accountId: selectedAccountId,
       teamId: selectedTeamId,
       format: selectedFormat,
     }),
-    enabled: tab === "demographics",
+    enabled: tab === "demographics" && demoWindow.hasWindow,
   });
 
   const portfolio = stats.data?.portfolio;
@@ -258,6 +269,9 @@ export default function DashboardPage() {
                           accountId: selectedAccountId,
                           teamId: selectedTeamId,
                           format: selectedFormat,
+                          // Breakdown rows only exist for the last 14 days;
+                          // wider ranges export base rows instead of failing.
+                          scope: demoWindow.isClamped ? "base" : "all",
                         }),
                       );
                       if (!rows.length) {
@@ -265,10 +279,14 @@ export default function DashboardPage() {
                         return;
                       }
                       downloadCsv(rows, `dashboard_${fromValue}_${toValue}.csv`);
-                      toast.success(`Exported ${rows.length} rows`);
+                      toast.success(
+                        demoWindow.isClamped
+                          ? `Exported ${rows.length} base rows — breakdowns only go back ${BREAKDOWN_RETENTION_DAYS} days`
+                          : `Exported ${rows.length} rows`,
+                      );
                     } catch (err) {
                       console.error("Export failed:", err);
-                      toast.error("Export failed — check the console for details");
+                      toast.error(getUserFacingErrorMessage(err, "Export failed — check the console for details"));
                     }
                   });
                 }}
@@ -372,13 +390,22 @@ export default function DashboardPage() {
           )}
         </TabsContent>
 
-        <TabsContent value="demographics" className="pt-4">
-          <DemographicBreakdownChart
-            data={demographic.data}
-            dimension={dimension as "age" | "gender" | "country" | "device"}
-            onDimensionChange={setDimension}
-            isLoading={demographic.isLoading}
-          />
+        <TabsContent value="demographics" className="space-y-2 pt-4">
+          {demoWindow.isClamped || !demoWindow.hasWindow ? (
+            <BreakdownWindowCaption
+              from={demoWindow.from}
+              to={toValue}
+              hasWindow={demoWindow.hasWindow}
+            />
+          ) : null}
+          {demoWindow.hasWindow ? (
+            <DemographicBreakdownChart
+              data={demographic.data}
+              dimension={dimension as "age" | "gender" | "country" | "device"}
+              onDimensionChange={setDimension}
+              isLoading={demographic.isLoading}
+            />
+          ) : null}
         </TabsContent>
       </Tabs>
 

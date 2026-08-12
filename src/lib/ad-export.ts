@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { computeHealth, rollupCreativeHealth, type CreativeHealth } from "./creative-health";
 import { effectiveAdStatusSql } from "./effective-ad-status";
 import { basePerformanceLogFilter } from "./performance-log-sql";
+import { clampToBreakdownWindow } from "./retention/window-guard";
 
 type RawAdRow = {
   ad_id: string;
@@ -124,6 +125,10 @@ export type AdExportRow = {
   windowImpressions: number | null;
   windowClicks: number | null;
   windowHookRate: number | null;
+  // Effective window the demographic breakdowns cover — clamped to the retained
+  // 14-day breakdown window, so it can be narrower than windowFrom/windowTo.
+  demoWindowFrom: string;
+  demoWindowTo: string;
   genderBreakdown: string | null;
   ageBreakdown: string | null;
   countryBreakdown: string | null;
@@ -260,22 +265,43 @@ function formatDemographicSummary(
   return parts.join(" | ");
 }
 
+type DemographicSummaries = {
+  /** Effective window the summaries were computed over. */
+  windowFrom: string;
+  windowTo: string;
+  /** True when the export range was wider than the retained breakdown window. */
+  clamped: boolean;
+  byDimension: Record<DemographicDimension, Map<string, string>>;
+};
+
 async function fetchAdDemographicSummaries(opts: {
   organizationId: string;
   from: string;
   to: string;
   adIds: string[];
-}): Promise<Record<DemographicDimension, Map<string, string>>> {
-  const { organizationId, from, to, adIds } = opts;
+}): Promise<DemographicSummaries> {
+  const { organizationId, to, adIds } = opts;
 
-  const summaries: Record<DemographicDimension, Map<string, string>> = {
-    gender: new Map(),
-    age: new Map(),
-    country: new Map(),
-    device: new Map(),
+  // Breakdown rows only exist for the last 14 days, so the demographic section
+  // is computed over the intersection of the export range and that window.
+  // The window is carried out with the result so the CSV can label it — a
+  // silently narrower section would read as "these ads had no other audiences".
+  const from = clampToBreakdownWindow(opts.from);
+  const clamped = from !== opts.from;
+
+  const summaries: DemographicSummaries = {
+    windowFrom: from,
+    windowTo: to,
+    clamped,
+    byDimension: {
+      gender: new Map(),
+      age: new Map(),
+      country: new Map(),
+      device: new Map(),
+    },
   };
 
-  if (adIds.length === 0) return summaries;
+  if (adIds.length === 0 || from > to) return summaries;
 
   const adIdList = sql.join(adIds.map((id) => sql`${id}`), sql`, `);
   const dimensionColumns: Record<DemographicDimension, string> = {
@@ -326,9 +352,10 @@ async function fetchAdDemographicSummaries(opts: {
 
     for (const [adId, adRows] of rowsByAd) {
       const totalSpend = adRows.reduce((acc, current) => acc + (n(current.spend) ?? 0), 0);
-      summaries[dimension].set(
+      const summary = formatDemographicSummary(adRows, totalSpend) ?? "";
+      summaries.byDimension[dimension].set(
         adId,
-        formatDemographicSummary(adRows, totalSpend) ?? "",
+        summary && clamped ? `[${from} to ${to}] ${summary}` : summary,
       );
     }
   }
@@ -685,10 +712,12 @@ export async function fetchAgentExportRows(opts: {
       windowImpressions: n(r.window_impressions),
       windowClicks: n(r.window_clicks),
       windowHookRate: r.format === "video" || r.format === "ugc" ? windowHookRate : null,
-      genderBreakdown: demographicSummaries.gender.get(r.ad_id) ?? null,
-      ageBreakdown: demographicSummaries.age.get(r.ad_id) ?? null,
-      countryBreakdown: demographicSummaries.country.get(r.ad_id) ?? null,
-      deviceBreakdown: demographicSummaries.device.get(r.ad_id) ?? null,
+      demoWindowFrom: demographicSummaries.windowFrom,
+      demoWindowTo: demographicSummaries.windowTo,
+      genderBreakdown: demographicSummaries.byDimension.gender.get(r.ad_id) ?? null,
+      ageBreakdown: demographicSummaries.byDimension.age.get(r.ad_id) ?? null,
+      countryBreakdown: demographicSummaries.byDimension.country.get(r.ad_id) ?? null,
+      deviceBreakdown: demographicSummaries.byDimension.device.get(r.ad_id) ?? null,
       lifetimeSpend: n(r.lifetime_spend),
       lifetimeConversions: n(r.lifetime_conversions),
       lifetimeRoas: n(r.lifetime_roas),

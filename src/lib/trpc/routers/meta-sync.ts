@@ -7,6 +7,10 @@ import { adCreatives } from "@/schema/ad-creative";
 import { ads } from "@/schema/ad";
 import { accountSyncRuns } from "@/schema/sync-run";
 import { formatDateOnly } from "@/lib/date";
+import {
+  baseWindowStart,
+  breakdownWindowStart,
+} from "@/lib/retention/policy";
 import { mapRowsForImport } from "@/lib/import-utils";
 import { mapMetaInsightsToRows } from "@/lib/meta-api-mapper";
 import {
@@ -104,6 +108,31 @@ function subDaysYmd(ymd: string, days: number) {
   const date = new Date(`${ymd}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() - days);
   return formatDateOnly(date);
+}
+
+export function retainedMetaReportRange(input: {
+  dateFrom: string;
+  dateTo: string;
+  breakdown?: Breakdown | null;
+  today: string;
+}) {
+  const breakdown = input.breakdown ?? null;
+  const windowStart = breakdown
+    ? breakdownWindowStart(input.today)
+    : baseWindowStart(input.today);
+  const label = breakdown === "device_platform" ? "device" : breakdown ?? "base";
+
+  if (input.dateTo < windowStart) {
+    return { kind: "expired" as const, label, windowStart };
+  }
+
+  return {
+    kind: "retained" as const,
+    dateFrom: input.dateFrom < windowStart ? windowStart : input.dateFrom,
+    dateTo: input.dateTo,
+    label,
+    windowStart,
+  };
 }
 
 export const metaSyncRouter = router({
@@ -226,18 +255,30 @@ export const metaSyncRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      const breakdown = input.breakdown ?? null;
+      const retainedRange = retainedMetaReportRange({
+        dateFrom: input.dateFrom,
+        dateTo: input.dateTo,
+        breakdown,
+        today: formatDateOnly(new Date()),
+      });
+      if (retainedRange.kind === "expired") {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `RETENTION_WINDOW_EXPIRED: ${retainedRange.label} data before ${retainedRange.windowStart} is no longer stored`,
+        });
+      }
+
       const account = await getMetaAccountWithToken({
         accountId: input.accountId,
         organizationId: ctx.organizationId,
       });
 
-      const breakdown = input.breakdown ?? null;
-
       const { reportRunId } = await requestMetaInsightsReport({
         organizationId: ctx.organizationId,
         accountId: input.accountId,
-        dateFrom: input.dateFrom,
-        dateTo: input.dateTo,
+        dateFrom: retainedRange.dateFrom,
+        dateTo: retainedRange.dateTo,
         level: "ad",
         breakdowns: breakdown ? [breakdown] : undefined,
       });
@@ -246,8 +287,8 @@ export const metaSyncRouter = router({
         organizationId: ctx.organizationId,
         accountId: input.accountId,
         triggerType: input.triggerType,
-        dateFrom: input.dateFrom,
-        dateTo: input.dateTo,
+        dateFrom: retainedRange.dateFrom,
+        dateTo: retainedRange.dateTo,
         breakdownsRequested: breakdown ? [breakdown] : [],
         meta: {
           reportRunId,

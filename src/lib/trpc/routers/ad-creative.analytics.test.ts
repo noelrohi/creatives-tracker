@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
+import { formatDateOnly } from "@/lib/date";
+import { breakdownWindowStart } from "@/lib/retention/policy";
 
 const mockState = {
   executeRows: [] as Array<Record<string, unknown>[]>,
@@ -31,6 +33,13 @@ vi.mock("@/lib/creative-health-rollup", () => ({
 vi.mock("server-only", () => ({}));
 
 const { createMockCaller } = await import("../test-helpers");
+
+const TODAY = formatDateOnly(new Date());
+const BREAKDOWN_WINDOW_START = breakdownWindowStart(TODAY);
+/** One day older than the retained breakdown window. */
+const BEFORE_BREAKDOWN_WINDOW = formatDateOnly(
+  new Date(new Date(`${BREAKDOWN_WINDOW_START}T00:00:00Z`).getTime() - 86_400_000),
+);
 
 function queueExecuteRows(...rowSets: Array<Record<string, unknown>[]>) {
   mockState.executeRows.push(...rowSets);
@@ -347,8 +356,8 @@ describe("adCreative analytics procedures", () => {
 
       const caller = createMockCaller({ role: "admin", organizationId: "org_1" });
       await caller.adCreative.dashboardExport({
-        from: "2026-06-01",
-        to: "2026-06-07",
+        from: BREAKDOWN_WINDOW_START,
+        to: TODAY,
         format: "static",
       });
 
@@ -596,6 +605,49 @@ describe("adCreative analytics procedures", () => {
       expect(query).toContain("coalesce(ast.status::text, 'active') != 'active'");
       // Once for filtered_creatives' EXISTS, once for ad_rollup, once for latest_ad.
       expect(query.match(/END IN \(/g)).toHaveLength(3);
+    });
+  });
+
+  describe("dashboardExport scope", () => {
+    it("rejects scope 'all' beyond the breakdown window", async () => {
+      const caller = createMockCaller({ role: "admin", organizationId: "org_1" });
+      await expect(
+        caller.adCreative.dashboardExport({
+          from: BEFORE_BREAKDOWN_WINDOW,
+          to: TODAY,
+        }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect(mockDb.execute).not.toHaveBeenCalled();
+    });
+
+    it("scope 'base' drops breakdown rows and allows any range", async () => {
+      queueExecuteRows([]);
+
+      const caller = createMockCaller({ role: "admin", organizationId: "org_1" });
+      await caller.adCreative.dashboardExport({
+        from: BEFORE_BREAKDOWN_WINDOW,
+        to: TODAY,
+        scope: "base",
+      });
+
+      const query = compileSql(mockState.executedSql[0]);
+      // The shared canonical-daily contract: empty-or-null dims, single-day.
+      expect(query).toContain("coalesce(pl.country, '') = ''");
+      expect(query).toContain("coalesce(pl.gender, '') = ''");
+      expect(query).toContain("pl.date_start = pl.date_end");
+    });
+
+    it("scope 'all' inside the window keeps breakdown rows", async () => {
+      queueExecuteRows([]);
+
+      const caller = createMockCaller({ role: "admin", organizationId: "org_1" });
+      await caller.adCreative.dashboardExport({
+        from: BREAKDOWN_WINDOW_START,
+        to: TODAY,
+      });
+
+      const query = compileSql(mockState.executedSql[0]);
+      expect(query).not.toContain("coalesce(pl.country, '') = ''");
     });
   });
 });
