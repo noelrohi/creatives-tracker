@@ -100,10 +100,10 @@ export const MATCH_FIXTURE_DDL = [
 export async function applyMatchFixture(pool: Pool): Promise<void> {
   for (const statement of MATCH_FIXTURE_DDL) await pool.query(statement);
   for (const migration of [
-    "0053_klaviyo_shopify_evidence.sql",
-    "0054_klaviyo_source_core.sql",
-    "0055_klaviyo_advisory_matching.sql",
-      "0056_klaviyo_claims_reporting.sql",
+    "0055_klaviyo_shopify_evidence.sql",
+    "0056_klaviyo_source_core.sql",
+    "0057_klaviyo_advisory_matching.sql",
+    "0058_klaviyo_claims_reporting.sql",
   ]) {
     for (const statement of migrationStatements(migration)) {
       await pool.query(statement);

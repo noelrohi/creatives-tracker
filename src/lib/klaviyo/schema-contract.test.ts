@@ -38,7 +38,7 @@ function readMigrationStatements(fileName: string): string[] {
     .filter(Boolean);
 }
 
-const PRE_0053_FIXTURE_DDL = [
+const PRE_0055_FIXTURE_DDL = [
   `CREATE TABLE organization (
      id text PRIMARY KEY, name text NOT NULL, slug text NOT NULL UNIQUE,
      logo text, created_at timestamp NOT NULL, metadata text
@@ -120,7 +120,7 @@ describe("Klaviyo source schema", () => {
 
   it("pins the generated source-core migration contract", () => {
     const sql = readFileSync(
-      path.resolve(process.cwd(), "drizzle/0054_klaviyo_source_core.sql"),
+      path.resolve(process.cwd(), "drizzle/0056_klaviyo_source_core.sql"),
       "utf8",
     );
     const expectedTables = [
@@ -215,13 +215,13 @@ describeIfDb("Klaviyo source migration on PostgreSQL", () => {
       connectionString: withDatabase(baseConnectionString!, testDatabase),
     });
 
-    for (const statement of PRE_0053_FIXTURE_DDL) {
+    for (const statement of PRE_0055_FIXTURE_DDL) {
       await testPool.query(statement);
     }
     for (const migration of [
-      "0053_klaviyo_shopify_evidence.sql",
-      "0054_klaviyo_source_core.sql",
-      "0055_klaviyo_advisory_matching.sql",
+      "0055_klaviyo_shopify_evidence.sql",
+      "0056_klaviyo_source_core.sql",
+      "0057_klaviyo_advisory_matching.sql",
     ]) {
       for (const statement of readMigrationStatements(migration)) {
         await testPool.query(statement);

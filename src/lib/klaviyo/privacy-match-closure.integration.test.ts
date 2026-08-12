@@ -254,10 +254,10 @@ describeIfDb("Klaviyo privacy match closure on PostgreSQL", () => {
     await adminPool.query(`CREATE DATABASE ${TEST_DATABASE}`);
     for (const statement of FIXTURE_DDL) await testPool!.query(statement);
     for (const migration of [
-      "0053_klaviyo_shopify_evidence.sql",
-      "0054_klaviyo_source_core.sql",
-      "0055_klaviyo_advisory_matching.sql",
-      "0056_klaviyo_claims_reporting.sql",
+      "0055_klaviyo_shopify_evidence.sql",
+      "0056_klaviyo_source_core.sql",
+      "0057_klaviyo_advisory_matching.sql",
+      "0058_klaviyo_claims_reporting.sql",
     ]) {
       for (const statement of migrationStatements(migration)) {
         await testPool!.query(statement);
