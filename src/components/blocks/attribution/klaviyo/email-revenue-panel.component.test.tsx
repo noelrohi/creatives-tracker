@@ -94,12 +94,16 @@ function summary(
 }
 
 describe("EmailRevenueHeadline", () => {
+  // The fixture's report window is Jun 1 – Aug 1; this page range covers it.
+  const coveringRange = { dateFrom: "2026-06-01", dateTo: "2026-08-01" };
+
   it("shows the KPI trio with share percent and the unconfirmed delta", () => {
     render(
       <EmailRevenueHeadline
         summary={summary()}
         shopifyTotal="10000.00"
         currency="USD"
+        {...coveringRange}
       />,
     );
     expect(screen.getByTestId("email-linked-revenue")).toHaveTextContent(
@@ -110,9 +114,29 @@ describe("EmailRevenueHeadline", () => {
       "62 orders",
     );
     expect(screen.getByTestId("klaviyo-says")).toHaveTextContent("$1,450.00");
+    expect(screen.getByTestId("klaviyo-says-window")).toHaveTextContent(
+      "report",
+    );
     expect(screen.getByTestId("klaviyo-says-delta")).toHaveTextContent(
       "unconfirmed",
     );
+  });
+
+  it("omits the delta when the page range is shorter than the report window", () => {
+    // Klaviyo's figure spans their ~2-month report; comparing it against a
+    // single day would manufacture a phantom "unconfirmed" gap.
+    render(
+      <EmailRevenueHeadline
+        summary={summary()}
+        shopifyTotal="10000.00"
+        currency="USD"
+        dateFrom="2026-08-11"
+        dateTo="2026-08-11"
+      />,
+    );
+    expect(screen.getByTestId("klaviyo-says")).toHaveTextContent("$1,450.00");
+    expect(screen.getByTestId("klaviyo-says-window")).toBeInTheDocument();
+    expect(screen.queryByTestId("klaviyo-says-delta")).toBeNull();
   });
 
   it("omits the delta when Klaviyo says no more than we confirmed", () => {
@@ -128,6 +152,7 @@ describe("EmailRevenueHeadline", () => {
         })}
         shopifyTotal="10000.00"
         currency="USD"
+        {...coveringRange}
       />,
     );
     expect(screen.getByTestId("klaviyo-says")).toHaveTextContent("$900.00");
@@ -140,6 +165,7 @@ describe("EmailRevenueHeadline", () => {
         summary={summary({ klaviyoSays: null })}
         shopifyTotal="10000.00"
         currency="USD"
+        {...coveringRange}
       />,
     );
     expect(screen.queryByTestId("klaviyo-says-delta")).toBeNull();

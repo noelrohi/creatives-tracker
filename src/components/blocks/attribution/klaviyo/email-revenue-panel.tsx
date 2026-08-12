@@ -3,7 +3,11 @@
 import { formatDistanceToNow } from "date-fns";
 import { useQuery } from "@tanstack/react-query";
 import type { EmailAttributionSummary } from "@/lib/klaviyo/email-attribution";
-import { formatMoneyExact } from "@/components/blocks/attribution/format";
+import {
+  formatDayRange,
+  formatMoneyExact,
+} from "@/components/blocks/attribution/format";
+import { dayCount } from "@/components/blocks/attribution/days";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { isPrivilegedOrgRole } from "@/lib/organization-access";
@@ -30,16 +34,39 @@ export function EmailRevenueHeadline({
   summary,
   shopifyTotal,
   currency,
+  dateFrom,
+  dateTo,
 }: {
   summary: EmailAttributionSummary;
   shopifyTotal: string;
   currency: string;
+  dateFrom: string;
+  dateTo: string;
 }) {
   const { email, klaviyoSays } = summary;
   const deltaCents =
     klaviyoSays === null
       ? null
       : centsOf(klaviyoSays.conversionValue) - centsOf(email.revenue);
+  // "Klaviyo says" is their report over its own window, never re-sliced to
+  // the page range. Comparing it against a shorter page range manufactures
+  // a phantom "unconfirmed" gap, so the delta only renders when the page
+  // range spans at least the report window.
+  const saysWindowDays = klaviyoSays
+    ? Math.max(
+        1,
+        Math.round(
+          (klaviyoSays.requestedTo.getTime() -
+            klaviyoSays.requestedFrom.getTime()) /
+            86_400_000,
+        ),
+      )
+    : null;
+  const showDelta =
+    deltaCents !== null &&
+    deltaCents > 0 &&
+    saysWindowDays !== null &&
+    dayCount(dateFrom, dateTo) >= saysWindowDays;
   const campaignsWidth = widthPercent(email.campaignsRevenue, shopifyTotal);
   const flowsWidth = widthPercent(email.flowsRevenue, shopifyTotal);
   const restRevenueCents = Math.max(
@@ -84,7 +111,16 @@ export function EmailRevenueHeadline({
             </p>
             <p className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
               {copy.says}
-              {deltaCents !== null && deltaCents > 0 ? (
+              <span className="ml-1" data-testid="klaviyo-says-window">
+                ·{" "}
+                {copy.saysWindow(
+                  formatDayRange(
+                    klaviyoSays.requestedFrom.toISOString().slice(0, 10),
+                    klaviyoSays.requestedTo.toISOString().slice(0, 10),
+                  ),
+                )}
+              </span>
+              {showDelta ? (
                 <span
                   className="ml-1 text-amber-600"
                   data-testid="klaviyo-says-delta"
@@ -215,6 +251,8 @@ export function EmailRevenuePanel({
             summary={attribution.data}
             shopifyTotal={shopifyTotal}
             currency={currency}
+            dateFrom={dateFrom}
+            dateTo={dateTo}
           />
           <EmailRevenueTables summary={attribution.data} currency={currency} />
           <EmailRevenueGaps

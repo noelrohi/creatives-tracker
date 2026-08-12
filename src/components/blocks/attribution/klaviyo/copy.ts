@@ -74,6 +74,7 @@ export const emailRevenue = {
     `Tied to email · ${percent} · ${orders} order${orders === 1 ? "" : "s"}`,
   says: "Klaviyo says",
   saysUnconfirmed: (amount: string) => `+${amount} unconfirmed`,
+  saysWindow: (range: string) => `their ${range} report`,
   saysWindowNote:
     "“Klaviyo says” is their report over each campaign’s own window, not this date range",
   segCampaigns: (amount: string) => `Campaigns ${amount}`,
