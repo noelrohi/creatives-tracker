@@ -35,10 +35,17 @@ describe("organization router RBAC", () => {
     });
 
     it("owner passes middleware", async () => {
-      // Will fail at DB layer, not at middleware
-      await expect(
-        ownerCaller.organization.delete({ organizationId: orgId }),
-      ).rejects.not.toMatchObject({ code: "FORBIDDEN" });
+      // Rejects at the DB/auth layer (org does not exist), never FORBIDDEN —
+      // settle manually so a reachable database cannot break the assertion.
+      const rejection = await ownerCaller.organization
+        .delete({ organizationId: orgId })
+        .then(
+          () => null,
+          (error: unknown) => error,
+        );
+      if (rejection !== null) {
+        expect(rejection).not.toMatchObject({ code: "FORBIDDEN" });
+      }
     });
 
     it("owner cannot delete a different organization", async () => {

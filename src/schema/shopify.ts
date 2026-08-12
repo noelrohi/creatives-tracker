@@ -1,4 +1,5 @@
 import { relations } from "drizzle-orm";
+import { organization } from "@/schema/auth";
 import {
   pgTable,
   pgEnum,
@@ -8,6 +9,7 @@ import {
   integer,
   boolean,
   date,
+  foreignKey,
   index,
   unique,
   jsonb,
@@ -32,7 +34,9 @@ export const shopifyStores = pgTable(
     id: text("id")
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
-    organizationId: text("organization_id").notNull(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
     shopDomain: text("shop_domain").notNull().unique(),
     // Nullable: v1 reads the Admin API token from env, not the DB.
     accessToken: text("access_token"),
@@ -45,7 +49,10 @@ export const shopifyStores = pgTable(
       .$onUpdate(() => new Date())
       .notNull(),
   },
-  (table) => [index("shopify_store_organization_id_idx").on(table.organizationId)],
+  (table) => [
+    unique("shopify_store_org_id_uniq").on(table.organizationId, table.id),
+    index("shopify_store_organization_id_idx").on(table.organizationId),
+  ],
 );
 
 export const shopifyOrders = pgTable(
@@ -55,10 +62,9 @@ export const shopifyOrders = pgTable(
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
     organizationId: text("organization_id").notNull(),
-    storeId: text("store_id")
-      .notNull()
-      .references(() => shopifyStores.id, { onDelete: "cascade" }),
+    storeId: text("store_id").notNull(),
     shopifyOrderId: text("shopify_order_id").notNull(),
+    shopifyCustomerId: text("shopify_customer_id"),
     orderName: text("order_name"),
     // Shopify createdAt, UTC
     orderCreatedAt: timestamp("order_created_at").notNull(),
@@ -101,11 +107,25 @@ export const shopifyOrders = pgTable(
       .notNull(),
   },
   (table) => [
+    foreignKey({
+      name: "shopify_order_org_store_fk",
+      columns: [table.organizationId, table.storeId],
+      foreignColumns: [shopifyStores.organizationId, shopifyStores.id],
+    }).onDelete("cascade"),
     unique("shopify_order_store_order_uniq").on(
       table.storeId,
       table.shopifyOrderId,
     ),
+    unique("shopify_order_org_store_id_uniq").on(
+      table.organizationId,
+      table.storeId,
+      table.id,
+    ),
     index("shopify_order_organization_id_idx").on(table.organizationId),
+    index("shopify_order_store_customer_idx").on(
+      table.storeId,
+      table.shopifyCustomerId,
+    ),
     index("shopify_order_org_store_day_idx").on(
       table.organizationId,
       table.storeId,
@@ -131,12 +151,8 @@ export const shopifyRefunds = pgTable(
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
     organizationId: text("organization_id").notNull(),
-    storeId: text("store_id")
-      .notNull()
-      .references(() => shopifyStores.id, { onDelete: "cascade" }),
-    orderId: text("order_id")
-      .notNull()
-      .references(() => shopifyOrders.id, { onDelete: "cascade" }),
+    storeId: text("store_id").notNull(),
+    orderId: text("order_id").notNull(),
     shopifyRefundId: text("shopify_refund_id").notNull(),
     // Store-timezone day
     refundDay: date("refund_day").notNull(),
@@ -152,6 +168,15 @@ export const shopifyRefunds = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
+    foreignKey({
+      name: "shopify_refund_org_store_order_fk",
+      columns: [table.organizationId, table.storeId, table.orderId],
+      foreignColumns: [
+        shopifyOrders.organizationId,
+        shopifyOrders.storeId,
+        shopifyOrders.id,
+      ],
+    }).onDelete("cascade"),
     unique("shopify_refund_store_refund_uniq").on(
       table.storeId,
       table.shopifyRefundId,
@@ -172,9 +197,7 @@ export const shopifySyncRuns = pgTable(
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
     organizationId: text("organization_id").notNull(),
-    storeId: text("store_id")
-      .notNull()
-      .references(() => shopifyStores.id, { onDelete: "cascade" }),
+    storeId: text("store_id").notNull(),
     triggerType: text("trigger_type").notNull(),
     // "backfill" | "incremental" | "rebucket"
     phase: text("phase").notNull(),
@@ -188,6 +211,11 @@ export const shopifySyncRuns = pgTable(
     meta: jsonb("meta").$type<Record<string, unknown> | null>(),
   },
   (table) => [
+    foreignKey({
+      name: "shopify_sync_run_org_store_fk",
+      columns: [table.organizationId, table.storeId],
+      foreignColumns: [shopifyStores.organizationId, shopifyStores.id],
+    }).onDelete("cascade"),
     index("shopify_sync_run_organization_id_idx").on(table.organizationId),
     index("shopify_sync_run_org_store_requested_at_idx").on(
       table.organizationId,
@@ -207,8 +235,8 @@ export const shopifyOrderRelations = relations(
   shopifyOrders,
   ({ one, many }) => ({
     store: one(shopifyStores, {
-      fields: [shopifyOrders.storeId],
-      references: [shopifyStores.id],
+      fields: [shopifyOrders.organizationId, shopifyOrders.storeId],
+      references: [shopifyStores.organizationId, shopifyStores.id],
     }),
     refunds: many(shopifyRefunds),
   }),
@@ -216,18 +244,26 @@ export const shopifyOrderRelations = relations(
 
 export const shopifyRefundRelations = relations(shopifyRefunds, ({ one }) => ({
   order: one(shopifyOrders, {
-    fields: [shopifyRefunds.orderId],
-    references: [shopifyOrders.id],
+    fields: [
+      shopifyRefunds.organizationId,
+      shopifyRefunds.storeId,
+      shopifyRefunds.orderId,
+    ],
+    references: [
+      shopifyOrders.organizationId,
+      shopifyOrders.storeId,
+      shopifyOrders.id,
+    ],
   }),
   store: one(shopifyStores, {
-    fields: [shopifyRefunds.storeId],
-    references: [shopifyStores.id],
+    fields: [shopifyRefunds.organizationId, shopifyRefunds.storeId],
+    references: [shopifyStores.organizationId, shopifyStores.id],
   }),
 }));
 
 export const shopifySyncRunRelations = relations(shopifySyncRuns, ({ one }) => ({
   store: one(shopifyStores, {
-    fields: [shopifySyncRuns.storeId],
-    references: [shopifyStores.id],
+    fields: [shopifySyncRuns.organizationId, shopifySyncRuns.storeId],
+    references: [shopifyStores.organizationId, shopifyStores.id],
   }),
 }));

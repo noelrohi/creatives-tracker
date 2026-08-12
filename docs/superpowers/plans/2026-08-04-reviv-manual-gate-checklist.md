@@ -1,0 +1,251 @@
+# Reviv Manual Gate — Plan 2 Stop/Go Checklist
+
+> Task 13 Step 4 of `2026-07-31-klaviyo-02-source-ingestion.md`. A human runs
+> this against the live Reviv Klaviyo account and decides stop/go. Plan 3 may
+> begin only after every box is checked.
+
+## A. Prerequisites
+
+### Credential staging (2026-08-07 status)
+
+Real Reviv credentials are staged in `.env` under a `_PROD` suffix
+(`KLAVIYO_PRIVATE_API_KEY_PROD`, `KLAVIYO_REVIV_ACCOUNT_ID_PROD`,
+`KLAVIYO_REVIV_SHOP_DOMAIN_PROD`, `KLAVIYO_REVIV_ALLOWED_URL_HOSTS_PROD`).
+The app reads only the unsuffixed names, so the sandbox stays active until
+the suffixes are swapped. Verified 2026-08-07 (status codes only, no
+values logged): key authenticates against the real, non-test Reviv
+account; the returned account ID matches `_PROD`; account timezone
+Asia/Bangkok; `Profiles: Read`, `Events`, `Metrics`, `Campaigns` all
+readable; 69 metrics visible including native Shopify `Placed Order` and
+`Ordered Product`.
+
+Fix before swapping:
+
+- [x] `KLAVIYO_REVIV_ALLOWED_URL_HOSTS_PROD` second entry is an email
+      address — remove it; entries must be bare hostnames or credential
+      resolution throws at startup
+- [x] `KLAVIYO_REVIV_SHOP_DOMAIN_PROD` currently holds the custom
+      storefront domain. It must be Reviv's `*.myshopify.com` **admin**
+      domain — the same value the Shopify store row is ingested under —
+      or the connection binding will not match the store. Keep the custom
+      storefront domain as an `ALLOWED_URL_HOSTS` entry instead.
+
+To run the gate: rename the four `_PROD` vars to the unsuffixed names
+(stash the sandbox values under `_SANDBOX`), restart **both** `bun dev`
+and `npm run trigger:dev`, then proceed below.
+
+- [x] Klaviyo credentials received — read-only scopes: `Accounts: Read`,
+      `Metrics: Read`, `Events: Read`, `Profiles: Read` (probe email
+      fieldset 403s without it), plus `Campaigns: Read` / `Flows: Read`
+      for Plan 4 dimensions
+- [x] Env vars set wherever the app **and** the Trigger worker run:
+  - [x] `KLAVIYO_PRIVATE_API_KEY`
+  - [x] `KLAVIYO_REVIV_ACCOUNT_ID`
+  - [x] `KLAVIYO_REVIV_SHOP_DOMAIN`
+  - [x] `KLAVIYO_REVIV_ALLOWED_URL_HOSTS` (comma-separated bare hostnames —
+        no schemes, paths, ports, or wildcards)
+  - [x] Existing `IDENTITY_HMAC_*` and `IDENTITY_ERASURE_HMAC_*` secrets present
+- [x] Migrations applied: `npm run db:migrate` (0053 + 0054 in `_journal`)
+- [x] **Plan 1 Shopify evidence backfill completed** for the Reviv store
+      (`shopify-evidence-start` mode `initial_90d`, run status success).
+      The probe samples only evidence-complete orders; without
+      `shopify_order_line` rows it fails with
+      "requires at least 20 evidence-complete Shopify orders".
+- [x] Trigger.dev worker running: `npm run trigger:dev` (or deployed) and the
+      three tasks registered: `klaviyo-discovery`, `klaviyo-probe`,
+      `klaviyo-order-core-batch`
+- [x] Signed in to the app as an **owner or admin** of the org that owns the
+      Reviv store (no UI until Plan 5 — calls go through browser devtools)
+
+### Console helpers (paste in devtools on the app origin)
+
+```js
+const trpc = async (proc, input) => {
+  const r = await fetch(`/api/trpc/${proc}?batch=1`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ 0: { json: input ?? null } }),
+  });
+  return (await r.json())[0];
+};
+const trpcGet = async (proc, input) => {
+  const q = input
+    ? `&input=${encodeURIComponent(JSON.stringify({ 0: { json: input } }))}`
+    : "";
+  const r = await fetch(`/api/trpc/${proc}?batch=1${q}`);
+  return (await r.json())[0];
+};
+```
+
+> **Sandbox note (dev-store dry-runs only):** Shopify blocks PII (customer
+> emails/names/phones) via API on development stores and Basic plans, so
+> `source_identity_hmac` stays empty and the evidence run reports
+> `identity_capability: unavailable`. This is expected degradation, not a
+> failure: the probe's deterministic OrderId overlap still works and drives
+> `bindingOverlapCount`. Email-diagnostic overlap can only be exercised on
+> the real store (Shopify plan or higher).
+
+## B. Discovery
+
+- [x] `await trpc("klaviyo.startDiscovery")` returns `{ runId, syncRunId }`
+- [x] Trigger run completes without retries exhausting
+- [x] `await trpcGet("klaviyo.health")` shows `connection.status: "pending"`
+      with `accountName` populated
+- [x] `klaviyo.syncRuns` shows the discovery run `success`
+- [x] Sanity: the persisted account equals `KLAVIYO_REVIV_ACCOUNT_ID`
+      (a mismatch fails the run with **no** rows written — if discovery
+      failed, check the env binding before anything else)
+- [x] Exactly one enabled metric per kind:
+
+```sql
+SELECT canonical_kind, external_metric_id FROM klaviyo_metric
+ WHERE ingestion_enabled = 1 ORDER BY canonical_kind;
+-- expect exactly: ordered_product, placed_order (one row each)
+```
+
+## C. Probe
+
+- [x] `await trpc("klaviyo.runProbe", { sampleSize: 30 })` (any 20–50);
+      Trigger run completes
+- [x] Task payload contained only `syncRunId` (visible in the Trigger.dev run)
+- [x] `await trpcGet("klaviyo.probe")` returns the pending report
+
+### Report review (human judgment — the actual gate)
+
+- [x] `sampledShopifyOrders` between 20 and 50
+- [x] `bindingOverlapCount > 0` (real Reviv order overlap)
+- [x] `redactionVerified: true`
+- [x] Candidate alias set unambiguous, every `observedMalformed = 0`
+- [x] `collisionSummary` inspected; note which properties have collisions
+- [x] No leakage in persisted evidence:
+
+```sql
+-- must return 0
+SELECT count(*) FROM klaviyo_probe_report
+ WHERE (key_type_shapes::text || identifier_coverage::text ||
+        collision_summary::text || unmatched_examples::text)
+       ~* '[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}';
+```
+
+- [x] Eyeball `unmatched_examples`: no URL queries/fragments, no
+      `/profiles/<id>` or `/customer/<id>` path IDs; benign product paths
+      (e.g. `/products/summer-dress`) remain readable
+
+## D. Review decisions
+
+- [x] If all of section C holds:
+      `await trpc("klaviyo.approveProbe", { reportId, reviewNote: "..." })`
+      — else `rejectProbe` and stop here (record why)
+- [x] After approval: `klaviyo.health` shows `status: "ready"`; the report's
+      aliases are `approved`:
+
+```sql
+SELECT canonical_field, source_property, state FROM klaviyo_event_alias
+ WHERE state = 'approved' ORDER BY canonical_field;
+```
+
+- [x] For each candidate join rule with `observedCollisions = 0` and
+      populated observations:
+      `await trpc("klaviyo.approveJoinRule", { ruleId, reviewNote: "..." })`
+- [x] `rejectJoinRule` for everything else (roadmap gate: **zero collisions
+      on any approved rule** — the server enforces this too)
+
+## E. Order-core source backfill
+
+- [x] `await trpc("klaviyo.startOrderCoreSync", { dateFrom, dateTo })` with
+      the inclusive 90-store-day range (`dateFrom` = today − 89 in the
+      store's IANA timezone, `dateTo` = today)
+- [x] Batches self-chain (5 pages each); poll `klaviyo.syncRuns` until the
+      events run is `success`
+- [x] `klaviyo.health` shows `lastEventSyncedAt` set
+- [x] Request parameters and checkpoint carried the direct order-core
+      contract (`sourceMode: "order_core"`,
+      `metricKinds: ["placed_order","ordered_product"]`)
+
+## F. Negative and replay checks
+
+- [x] A `dateFrom` older than 90 store-days is rejected **before** any task
+      fires (error mentions the 90-store-day boundary / approved floor)
+- [x] Re-running the same window returns `resumed: true` and creates no
+      duplicate provider rows:
+
+```sql
+-- must return 0 rows
+SELECT external_event_id, count(*) FROM klaviyo_event
+ GROUP BY 1 HAVING count(*) > 1;
+```
+
+- [x] Events persisted with internal metric row IDs only:
+
+```sql
+-- must return 0
+SELECT count(*) FROM klaviyo_event e
+ LEFT JOIN klaviyo_metric m ON m.id = e.metric_id
+ WHERE m.id IS NULL;
+```
+
+- [x] No plaintext email in stored events:
+
+```sql
+-- must return 0
+SELECT count(*) FROM klaviyo_event
+ WHERE redacted_properties::text ~* '[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}';
+```
+
+## G. Verdict
+
+- [x] All sections pass → **GO**: record the measured overlap/coverage rates
+      below and start Plan 3 (`2026-07-31-klaviyo-03-advisory-matching.md`)
+- [ ] Any section fails → **STOP**: record what failed and why; fix or amend
+      the design before proceeding
+
+| Measured | Sandbox dry-run (framesignal) | Reviv |
+| --- | --- | --- |
+| Sampled Shopify orders | 30 | 30 (67 events sampled) |
+| Binding overlap count | 25 (25/25 events matched) | 94 |
+| Identifier coverage (top property) | `$event_id`: 25 | `$event_id` (report `8a957b10`, passed) |
+| Collisions on approved rules | 0 | 0 (`placed_order/$event_id` only; `ordered_product/$event_id` rejected — per-line-item ID) |
+| Events ingested (90d) | 135 placed_order; 0 ordered_product (Klaviyo emitted none) | 15,070 placed_order (see H2) |
+| Replay idempotency | 135 read / 0 inserted / 0 updated | re-runs resumed; 0 duplicate provider rows (SQL re-verified 2026-08-11) |
+| Decision / date / reviewer | sandbox PASS / 2026-08-05 / owner dry-run | **PASS** / 2026-08-11 / owner (verdict H2) |
+
+> Boxes above ticked 2026-08-11 after live execution on the Reviv account;
+> the §B/§C/§F database assertions were re-run against the ingested data the
+> same day (all clean: 0 duplicates, 0 orphan metric refs, 0 email-shaped
+> strings in events or probe reports, one enabled metric per kind on the
+> ready connection).
+
+Sandbox limitations (retest on Reviv): email-diagnostic overlap (dev-store
+PII block), Ordered Product product evidence (no OP events emitted).
+
+## H2. Corrected verdict — 2026-08-11, full 90-day event window: **PASS**
+
+The H1 verdict below was computed against a ~30-day event window (the UI
+range filter drove every sync); its "37.5% Klaviyo coverage" line is an
+artifact of that window, not a provider fact. Corrected from published run
+over event window 2026-05-14 → 2026-08-11 (store days, Asia/Bangkok):
+
+| Criterion | Result |
+| --- | --- |
+| Orders | **14,172 confirmed** · **1 no_klaviyo_event** · 12 duplicate_conversion_events · 120 not_evaluated (orders newer than the evidence window) |
+| Events | **14,196 confirmed** · 141 unmatched · 0 ambiguous |
+| Klaviyo coverage | ~**99.99%** of evaluated orders have a deterministic Klaviyo event edge (15,070 Placed Order events stored vs 14,398 orders) |
+| Reports | campaign generation `current`, 29 facts / 23 campaigns over the window; statistic wire names fixed in `fcf9d29` |
+
+## H1. Initial verdict — 2026-08-11 (30-day event window): superseded by H2
+
+Recorded from published match run `be8241bb` (fingerprint `4L9n17Mc…`),
+computed over evidence run success/complete 14,398 orders (identity
+available on all) and 34,430 stored events (2026-05-09 → 2026-08-10).
+
+| Criterion | Result |
+| --- | --- |
+| Probe | 30 orders / 67 events sampled, 94 overlap, 0 join collisions, redaction verified (report `8a957b10`, passed) |
+| Approved rules | `placed_order/$event_id` only; `ordered_product/$event_id` rejected (per-line-item ID, 0/37 order matches) |
+| Order results | 5,400 confirmed · 8,993 no_klaviyo_event · 5 duplicate_conversion_events (flagged, no canonical pick) |
+| Event results | 5,410 / 5,410 placed_order events confirmed — zero unmatched, zero ambiguous |
+| Candidates | 5,410 deterministic (approved rule) + 110 diagnostic (advisory only, none selected) |
+| Product status | `unavailable` across confirmed orders — expected until a product join key is proven |
+| PII sweep | 0 email-shaped strings in 34,430 redacted event property blobs; digests only (34,475, single key v1); no email/phone columns |
+| Klaviyo coverage note | Klaviyo recorded Placed Order for ~37.5% of Shopify orders in-window — a provider-side coverage fact, visible as `no_klaviyo_event`, never guessed around |
+| Operational note | Long evidence backfills must not overlap Shopify ingest (`shopify-incremental-scheduled`, daily 09:00 UTC) or dev-worker restarts; membership guard correctly stales overlapped runs |

@@ -5,6 +5,7 @@ import {
   text,
   timestamp,
   date,
+  foreignKey,
   index,
   unique,
   jsonb,
@@ -35,9 +36,7 @@ export const findings = pgTable(
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
     organizationId: text("organization_id").notNull(),
-    storeId: text("store_id").references(() => shopifyStores.id, {
-      onDelete: "cascade",
-    }),
+    storeId: text("store_id"),
     type: findingTypeEnum("type").notNull(),
     firedAt: timestamp("fired_at").defaultNow().notNull(),
     periodStart: date("period_start"),
@@ -50,6 +49,11 @@ export const findings = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
+    foreignKey({
+      name: "finding_org_store_fk",
+      columns: [table.organizationId, table.storeId],
+      foreignColumns: [shopifyStores.organizationId, shopifyStores.id],
+    }).onDelete("cascade"),
     index("finding_organization_id_idx").on(table.organizationId),
     index("finding_org_store_fired_at_idx").on(
       table.organizationId,
@@ -77,7 +81,7 @@ export const findingMutes = pgTable(
 
 export const findingRelations = relations(findings, ({ one }) => ({
   store: one(shopifyStores, {
-    fields: [findings.storeId],
-    references: [shopifyStores.id],
+    fields: [findings.organizationId, findings.storeId],
+    references: [shopifyStores.organizationId, shopifyStores.id],
   }),
 }));

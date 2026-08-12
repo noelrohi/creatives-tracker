@@ -6,6 +6,7 @@
 - **Build:** `bun run build`
 - **Lint:** `bun run lint` (ESLint)
 - **Test:** `bun run test` (Vitest; `bun run test:watch` for watch mode). Not `bun test` — that invokes Bun's own runner and ignores `vitest.config.ts`
+- **Component tests:** `bun run test:components` (Vitest with `vitest.components.config.ts`)
 - **DB generate:** `bun run db:generate`
 - **DB migrate:** `bun run db:migrate`
 - **DB push:** disabled by design. Generate a migration with `bun run db:generate`, then apply it with `bun run db:migrate`
@@ -22,7 +23,7 @@ Next.js 16 app using the App Router with React 19, React Compiler enabled, and T
 
 Main routes live under `src/app/(protected)/`:
 - The `(dashboard)` route group holds the dashboard home (`page.tsx`)
-- Feature areas for `creatives`, `campaigns` (manager view: campaign → ad set → ad ledger), `import`, `mer`, `accounts`, `teams`, and `settings` (API keys, members, org)
+- Feature areas for `creatives`, `campaigns` (manager view: campaign → ad set → ad ledger), `import`, `mer`, `accounts`, `attribution` (including the Klaviyo Lab pilot UI), `teams`, and `settings` (API keys, members, org)
 - `studio` for Image Studio: a brief-driven composer that queues image generation via a Trigger.dev job and streams realtime status
 - Shared dashboard shell (sidebar, breadcrumbs, org guard) in `src/app/(protected)/layout.tsx`
 
@@ -34,7 +35,7 @@ Main routes live under `src/app/(protected)/`:
 - Domain routers in `src/lib/trpc/routers/`, one file per domain, composed in `_app.ts` (Image Studio is split across `studio.*.ts`)
 - OpenAPI reference: `src/app/api/openapi/`
 - File upload endpoint: `src/app/api/upload/route.ts`
-- Background jobs live in `trigger/` (Trigger.dev): `meta-sync.ts`, `generate-static-ads.ts`, `generate-studio-suggestions.ts`
+- Background jobs live in `trigger/` (Trigger.dev): Meta/Shopify sync (`meta-sync.ts`, `shopify-sync.ts`, `shopify-evidence-sync.ts`), Studio image generation (`generate-static-ads.ts`, `generate-studio-suggestions.ts`), landing-page enrichment (`harvest-landing-pages.ts`, `classify-landing-pages.ts`, `enrich-creative-tags.ts`), attribution checks (`attribution-checks.ts`), and the Klaviyo pilot chain (`klaviyo-*.ts`)
 
 ### Auth
 

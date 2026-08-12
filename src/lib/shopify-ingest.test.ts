@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { ShopifyOrderNode, ShopifyRefund } from "@/lib/shopify-admin";
+import {
+  ORDER_FIELDS,
+  type ShopifyOrderNode,
+  type ShopifyRefund,
+} from "@/lib/shopify-admin";
 import { centsToAmount, toCents } from "@/lib/money";
 import {
   cancellationGiveBackCents,
@@ -61,6 +65,21 @@ function order(overrides: Partial<ShopifyOrderNode> = {}): ShopifyOrderNode {
     ...overrides,
   };
 }
+
+describe("Shopify monetary sync boundary", () => {
+  it("does not request evidence-only line or identity fields", () => {
+    expect(ORDER_FIELDS).not.toMatch(/\blineItems\b/);
+    expect(ORDER_FIELDS).not.toMatch(/\bcustomer\s*\{/);
+    expect(ORDER_FIELDS).not.toMatch(/\bemail\b/);
+  });
+
+  it("does not map protected identity onto a monetary order row", () => {
+    const row = mapOrderToRow(order(), CONTEXT);
+    expect(Object.keys(row)).not.toContain("shopifyCustomerId");
+    expect(Object.keys(row)).not.toContain("email");
+    expect(Object.keys(row)).not.toContain("lineItems");
+  });
+});
 
 describe("deriveDayInTimezone", () => {
   it("rolls an instant forward across the Bangkok day boundary", () => {

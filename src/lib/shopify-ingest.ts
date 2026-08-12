@@ -346,6 +346,17 @@ export type ShopifyStoreRecord = {
   currency: string | null;
 };
 
+export class ShopifyStoreOwnershipConflictError extends Error {
+  constructor(
+    readonly shopDomain: string,
+    readonly existingOrganizationId: string,
+    readonly requestedOrganizationId: string,
+  ) {
+    super("Shopify store domain is already owned by another organization");
+    this.name = "ShopifyStoreOwnershipConflictError";
+  }
+}
+
 export async function upsertShopifyStore(params: {
   organizationId: string;
   shopDomain: string;
@@ -363,11 +374,11 @@ export async function upsertShopifyStore(params: {
     .onConflictDoUpdate({
       target: shopifyStores.shopDomain,
       set: {
-        organizationId: params.organizationId,
         ianaTimezone: params.ianaTimezone,
         currency: params.currency,
         updatedAt: new Date(),
       },
+      setWhere: eq(shopifyStores.organizationId, params.organizationId),
     })
     .returning({
       id: shopifyStores.id,
@@ -377,7 +388,18 @@ export async function upsertShopifyStore(params: {
       currency: shopifyStores.currency,
     });
 
-  return store;
+  if (store) return store;
+
+  const existing = await getShopifyStoreByDomain(params.shopDomain);
+  if (!existing) {
+    throw new Error("Shopify store conflict produced no persisted owner");
+  }
+
+  throw new ShopifyStoreOwnershipConflictError(
+    params.shopDomain,
+    existing.organizationId,
+    params.organizationId,
+  );
 }
 
 export async function getShopifyStoreByDomain(

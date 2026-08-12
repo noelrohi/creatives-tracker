@@ -44,6 +44,7 @@ import {
   dayCount,
 } from "@/components/blocks/attribution/days";
 import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role";
+import { KlaviyoLabLink } from "@/components/blocks/attribution/klaviyo/lab-link";
 import type { AttributionBucket } from "@/lib/attribution-bucket";
 import { formatDateOnly } from "@/lib/date";
 import { useTRPC } from "@/lib/trpc/client";
@@ -309,12 +310,15 @@ export default function AttributionPage() {
         <h1 className="text-[15px] font-semibold tracking-tight">
           {copy.title}
         </h1>
-        <FreshnessCaption
-          shopify={health?.shopify}
-          meta={health?.meta}
-          timeZone={timeZone}
-          loading={store.isPending}
-        />
+        <div className="flex items-center gap-2">
+          <KlaviyoLabLink role={role} />
+          <FreshnessCaption
+            shopify={health?.shopify}
+            meta={health?.meta}
+            timeZone={timeZone}
+            loading={store.isPending}
+          />
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
