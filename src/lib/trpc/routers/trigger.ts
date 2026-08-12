@@ -3,6 +3,8 @@ import { TRPCError } from "@trpc/server";
 import { auth as triggerAuth, tasks } from "@trigger.dev/sdk";
 import { router, orgProcedure, orgWriteProcedure } from "../init";
 import type { metaSyncTask } from "../../../../trigger/meta-sync";
+import { formatDateOnly } from "@/lib/date";
+import { baseWindowStart } from "@/lib/retention/policy";
 
 function metaSyncOrgTag(organizationId: string) {
   return `meta-sync:org:${organizationId}`;
@@ -15,6 +17,14 @@ function enabledMetaSyncOrganizationIds() {
       .map((id) => id.trim())
       .filter(Boolean),
   );
+}
+
+export function clampMetaSyncDateFrom(dateFrom: string | undefined, today: string) {
+  if (!dateFrom) return { dateFrom, clampedFrom: undefined };
+
+  const windowStart = baseWindowStart(today);
+  if (dateFrom >= windowStart) return { dateFrom, clampedFrom: undefined };
+  return { dateFrom: windowStart, clampedFrom: windowStart };
 }
 
 function assertMetaSyncOrganizationEnabled(organizationId: string) {
@@ -56,15 +66,22 @@ export const triggerRouter = router({
     .mutation(async ({ input, ctx }) => {
       assertMetaSyncOrganizationEnabled(ctx.organizationId);
 
+      const { dateFrom, clampedFrom } = clampMetaSyncDateFrom(
+        input.dateFrom,
+        formatDateOnly(new Date()),
+      );
       const handle = await tasks.trigger<typeof metaSyncTask>("meta-sync", {
         organizationId: ctx.organizationId,
         accountId: input.accountId,
-        dateFrom: input.dateFrom,
+        dateFrom,
         dateTo: input.dateTo,
         force: input.force ?? false,
         triggerType: input.triggerType,
       });
 
-      return { runId: handle.id };
+      return {
+        runId: handle.id,
+        ...(clampedFrom ? { clampedFrom } : {}),
+      };
     }),
 });

@@ -23,6 +23,11 @@ import { ads } from "@/schema/ad";
 import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
 import { performanceLogs } from "@/schema/performance-log";
+import { formatDateOnly } from "@/lib/date";
+import {
+  performanceRowGrain,
+  retentionWindowStart,
+} from "@/lib/retention/policy";
 
 export type ImportMetaRow =
   Partial<BulkImportRow>
@@ -115,9 +120,28 @@ export function toStagingPerfRow(row: PerformanceLogImportRow) {
   };
 }
 
+export function filterRetainedPerformanceLogRows<
+  T extends Pick<PerformanceLogImportRow, "dateEnd"> &
+    Partial<Pick<PerformanceLogImportRow, "country" | "platform" | "placement" | "device" | "age" | "gender">>,
+>(rows: T[], today: string) {
+  const retainedRows = rows.filter(
+    (row) =>
+      row.dateEnd >= retentionWindowStart(performanceRowGrain(row), today),
+  );
+
+  return {
+    retainedRows,
+    droppedExpiredRows: rows.length - retainedRows.length,
+  };
+}
+
 async function replacePerformanceLogRowsViaStaging(rows: PerformanceLogImportRow[]) {
-  if (rows.length === 0) {
-    return;
+  const { retainedRows, droppedExpiredRows } = filterRetainedPerformanceLogRows(
+    rows,
+    formatDateOnly(new Date()),
+  );
+  if (retainedRows.length === 0) {
+    return droppedExpiredRows;
   }
 
   await db.transaction(async (tx) => {
@@ -166,7 +190,7 @@ async function replacePerformanceLogRowsViaStaging(rows: PerformanceLogImportRow
       ) on commit drop
     `);
 
-    for (const batch of chunk(rows, PERF_IMPORT_BATCH_SIZE)) {
+    for (const batch of chunk(retainedRows, PERF_IMPORT_BATCH_SIZE)) {
       await tx.execute(sql`truncate temp_meta_perf_import`);
 
       const payload = JSON.stringify(batch.map(toStagingPerfRow));
@@ -416,6 +440,8 @@ async function replacePerformanceLogRowsViaStaging(rows: PerformanceLogImportRow
       `);
     }
   });
+
+  return droppedExpiredRows;
 }
 
 export function buildPerformanceLogRows(input: {
@@ -880,7 +906,7 @@ export async function importMetaBreakdownRows(input: {
     organizationId: input.organizationId,
   });
 
-  await replacePerformanceLogRowsViaStaging(perfRows);
+  const droppedExpiredRows = await replacePerformanceLogRowsViaStaging(perfRows);
   await updateAccountFreshness({
     organizationId: input.organizationId,
     accountId: input.accountId,
@@ -890,7 +916,8 @@ export async function importMetaBreakdownRows(input: {
 
   return {
     totalRows: input.rows.length,
-    perfLogs: perfRows.length,
+    perfLogs: perfRows.length - droppedExpiredRows,
+    droppedExpiredRows,
   };
 }
 
@@ -1421,7 +1448,7 @@ export async function importMetaRows(input: {
     organizationId: input.organizationId,
   });
 
-  await replacePerformanceLogRowsViaStaging(perfRows);
+  const droppedExpiredRows = await replacePerformanceLogRowsViaStaging(perfRows);
 
   const results = newKeys.map((key) => {
     const info = adInfoMap.get(key)!;
@@ -1440,7 +1467,8 @@ export async function importMetaRows(input: {
     created: results,
     totalRows: rows.length,
     uniqueAds: adInfoMap.size,
-    perfLogs: perfRows.length,
+    perfLogs: perfRows.length - droppedExpiredRows,
+    droppedExpiredRows,
     createdCreatives,
     previewAdMetaIds: [...new Set(rows.map((row) => row.adId).filter(Boolean) as string[])],
   };

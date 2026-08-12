@@ -13,6 +13,8 @@ import { performanceLogs } from "@/schema/performance-log";
 import { effectiveAdStatusSql } from "@/lib/effective-ad-status";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 import { handleMetaApiError, META_GRAPH_API_BASE } from "@/lib/meta-insights-sync";
+import { formatDateOnly } from "@/lib/date";
+import { baseWindowStart } from "@/lib/retention/policy";
 
 const pgAggregateStringSchema = z.preprocess((value) => value, z.string());
 
@@ -109,6 +111,11 @@ const renameMetaAdResultSchema = z.object({
 const adImportResultSchema = z.object({
   adId: z.string(),
   name: z.string(),
+});
+
+const adBulkImportResultSchema = z.object({
+  ads: z.array(adImportResultSchema),
+  skippedExpiredPerformanceRows: z.number().int(),
 });
 
 type MetaApiErrorBody = {
@@ -758,9 +765,11 @@ export const adRouter = router({
         ),
       }),
     )
-    .output(z.array(adImportResultSchema))
+    .output(adBulkImportResultSchema)
     .mutation(async ({ input, ctx }) => {
-      if (input.rows.length === 0) return [];
+      if (input.rows.length === 0) {
+        return { ads: [], skippedExpiredPerformanceRows: 0 };
+      }
       await assertAdSetBelongsToOrg(input.adSetId, ctx.organizationId);
 
       const insertedAds = await db
@@ -772,10 +781,16 @@ export const adRouter = router({
         })))
         .returning({ id: ads.id, name: ads.name });
 
+      const windowStart = baseWindowStart(formatDateOnly(new Date()));
+      let skippedExpiredPerformanceRows = 0;
       const performanceRows = input.rows.flatMap((row, index) => {
         const ad = insertedAds[index];
         const hasPerf = row.spend || row.roas || row.conversions;
         if (!ad || !hasPerf || !row.dateStart || !row.dateEnd) return [];
+        if (row.dateEnd < windowStart) {
+          skippedExpiredPerformanceRows += 1;
+          return [];
+        }
 
         return [{
           adId: ad.id,
@@ -817,7 +832,10 @@ export const adRouter = router({
           });
       }
 
-      return insertedAds.map((ad) => ({ adId: ad.id, name: ad.name }));
+      return {
+        ads: insertedAds.map((ad) => ({ adId: ad.id, name: ad.name })),
+        skippedExpiredPerformanceRows,
+      };
     }),
 
   delete: orgWriteProcedure

@@ -512,16 +512,27 @@ export const metaSyncTask = task({
             accountRowsSynced: accountResult.rowsSynced,
           });
         } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          if (errorMessage.includes("RETENTION_WINDOW_EXPIRED")) {
+            accountResult.skippedBreakdowns.push(label);
+            logger.info("Skipped expired retention window", {
+              accountName: account.name,
+              accountId: account.accountId,
+              breakdown: label,
+              dateFrom,
+              dateTo,
+            });
+            continue;
+          }
+
           logger.error("Breakdown sync failed", {
             accountName: account.name,
             accountId: account.accountId,
             breakdown: label,
-            error: error instanceof Error ? error.message : String(error),
+            error: errorMessage,
           });
 
-          accountResult.failures.push(
-            `${label}: ${error instanceof Error ? error.message : String(error)}`,
-          );
+          accountResult.failures.push(`${label}: ${errorMessage}`);
         }
       }
 
