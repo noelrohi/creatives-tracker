@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => {
     taskTrigger: vi.fn(),
     runsRetrieve: vi.fn(),
     loadEvidenceCoverage: vi.fn(),
+    loadEmailAttribution: vi.fn(),
     listEvidenceOrders: vi.fn(),
     loadOrderExplanation: vi.fn(),
     loadOrderProducts: vi.fn(),
@@ -63,6 +64,9 @@ vi.mock("@/lib/klaviyo/queries", () => ({
   loadOrderClaims: mocks.loadOrderClaims,
   loadOrderInspector: mocks.loadOrderInspector,
   loadOrderJourney: mocks.loadOrderJourney,
+}));
+vi.mock("@/lib/klaviyo/email-attribution", () => ({
+  loadEmailAttribution: mocks.loadEmailAttribution,
 }));
 vi.mock("@/lib/klaviyo/report-repository", () => ({
   failReportSync: mocks.failReportSync,
@@ -197,6 +201,24 @@ beforeEach(() => {
     events: {},
     boundaryWarnings: 0,
   });
+  mocks.loadEmailAttribution.mockResolvedValue({
+    email: {
+      revenue: "0.00",
+      orderCount: 0,
+      campaignsRevenue: "0.00",
+      flowsRevenue: "0.00",
+    },
+    klaviyoSays: null,
+    sources: [],
+    products: [],
+    gaps: {
+      noEmailLink: { orders: 0, revenue: "0.00" },
+      notEvaluated: { orders: 0, revenue: "0.00" },
+      noKlaviyoEvent: { orders: 0, revenue: "0.00" },
+      duplicateFlagged: { orders: 0, revenue: "0.00" },
+      unmatchedEvents: 0,
+    },
+  });
   mocks.listEvidenceOrders.mockResolvedValue({ items: [], nextCursor: null });
   mocks.loadOrderExplanation.mockResolvedValue({
     orderId: "order-1",
@@ -273,6 +295,11 @@ const PROCEDURE_CALLS: Array<[string, (caller: ReturnType<typeof sessionCaller>)
   [
     "coverage",
     (caller) => caller.coverage({ dateFrom: "2026-07-01", dateTo: "2026-07-30" }),
+  ],
+  [
+    "emailAttribution",
+    (caller) =>
+      caller.emailAttribution({ dateFrom: "2026-08-01", dateTo: "2026-08-04" }),
   ],
   [
     "orders",
