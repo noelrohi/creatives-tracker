@@ -25,7 +25,7 @@ import {
 import { landingPages } from "@/schema/landing-page";
 import { ATTRIBUTION_TASK_RETRY } from "./retry";
 
-const CLASSIFY_MODEL = "gpt-5.6-terra";
+const CLASSIFY_MODEL = "gpt-5.6-luna";
 const PAGE_BATCH_SIZE = 40;
 /** Re-fetch cadence: a page classified within the week is not due again. */
 const RECLASSIFY_AFTER_DAYS = 7;

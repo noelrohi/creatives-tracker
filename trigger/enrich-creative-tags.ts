@@ -37,7 +37,7 @@ import { adSets } from "@/schema/ad-set";
 import { ads } from "@/schema/ad";
 import { campaigns } from "@/schema/campaign";
 
-const TAG_MODEL = "gpt-5.6-terra";
+const TAG_MODEL = "gpt-5.6-luna";
 const CREATIVE_BATCH_SIZE = 25;
 const AD_SET_BATCH_SIZE = 25;
 const AD_SETS_PER_MODEL_CALL = 25;
