@@ -197,27 +197,39 @@ export function buildCreativeTagUpdate(params: {
   };
 
   // --- Enforced trio (typed columns, provenance in the same meta map) ---
+  // A valid null still records that AI inspected the field. Without that marker,
+  // null verdicts stay eligible forever and consume another paid call next run.
+  const markAttempted = (field: EnforcedCreativeField, confidence: number | null) => {
+    const next = provenance(confidence);
+    update.changed =
+      update.changed || JSON.stringify(attributesMeta[field]) !== JSON.stringify(next);
+    attributesMeta[field] = next;
+  };
+
   const persona = cleanText(output.persona);
   if (isHumanOwned(attributesMeta, "persona")) {
     skippedHuman.push("persona");
-  } else if (persona) {
-    const confidence = clampConfidence(confidences.persona);
-    update.persona = persona;
-    attributesMeta.persona = provenance(confidence);
-    update.changed = update.changed || persona !== existing.persona;
+  } else {
+    markAttempted("persona", clampConfidence(confidences.persona));
+    if (persona) {
+      update.persona = persona;
+      update.changed = update.changed || persona !== existing.persona;
+    }
   }
 
   const rawAngle = cleanText(output.angle);
   if (isHumanOwned(attributesMeta, "angle")) {
     skippedHuman.push("angle");
-  } else if (rawAngle) {
+  } else if (!rawAngle) {
+    markAttempted("angle", clampConfidence(confidences.angle));
+  } else {
     const angle = normalizeAngle(rawAngle);
     const confidence = clampConfidence(confidences.angle);
     if (angle === null) {
       rejected.push({ field: "angle", value: rawAngle, confidence });
     } else {
+      markAttempted("angle", confidence);
       update.angle = angle;
-      attributesMeta.angle = provenance(confidence);
       update.changed = update.changed || angle !== existing.angle;
     }
   }
@@ -225,14 +237,19 @@ export function buildCreativeTagUpdate(params: {
   const rawAwareness = cleanText(output.awarenessLevel);
   if (isHumanOwned(attributesMeta, "awarenessLevel")) {
     skippedHuman.push("awarenessLevel");
-  } else if (rawAwareness) {
+  } else if (!rawAwareness) {
+    markAttempted(
+      "awarenessLevel",
+      clampConfidence(confidences.awarenessLevel),
+    );
+  } else {
     const awarenessLevel = normalizeAwarenessLevel(rawAwareness);
     const confidence = clampConfidence(confidences.awarenessLevel);
     if (awarenessLevel === null) {
       rejected.push({ field: "awarenessLevel", value: rawAwareness, confidence });
     } else {
+      markAttempted("awarenessLevel", confidence);
       update.awarenessLevel = awarenessLevel;
-      attributesMeta.awarenessLevel = provenance(confidence);
       update.changed =
         update.changed || awarenessLevel !== existing.awarenessLevel;
     }
@@ -293,14 +310,13 @@ export function buildCreativeTagUpdate(params: {
 
 export type FunnelStageVerdict = {
   adSetId: string;
-  funnelStage: FunnelStage;
+  funnelStage: FunnelStage | null;
   confidence: number | null;
 };
 
 /**
- * Keep only verdicts naming a known ad set and a real funnel stage. A null or
- * unknown stage is dropped on purpose: untagged is an explicit state, and a
- * guess written as fact is worse than no tag at all.
+ * Keep verdicts naming a known ad set. A null stage is a valid attempted
+ * classification; an unknown vocabulary value is rejected rather than stored.
  */
 export function resolveFunnelStageVerdicts(params: {
   knownAdSetIds: readonly string[];
@@ -319,9 +335,13 @@ export function resolveFunnelStageVerdicts(params: {
     const adSetId = cleanText(verdict.adSetId);
     if (!adSetId || !known.has(adSetId) || seen.has(adSetId)) continue;
     const rawStage = cleanText(verdict.funnelStage);
-    if (!rawStage) continue;
-    const funnelStage = normalizeFunnelStage(rawStage);
     const confidence = clampConfidence(verdict.confidence);
+    if (!rawStage) {
+      seen.add(adSetId);
+      accepted.push({ adSetId, funnelStage: null, confidence });
+      continue;
+    }
+    const funnelStage = normalizeFunnelStage(rawStage);
     if (funnelStage === null) {
       rejected.push({ field: `funnelStage:${adSetId}`, value: rawStage, confidence });
       continue;
