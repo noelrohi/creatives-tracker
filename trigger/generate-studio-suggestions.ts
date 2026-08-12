@@ -3,6 +3,7 @@ import { z } from "zod";
 import { logger, schedules, task } from "@trigger.dev/sdk";
 import {
   and,
+  count,
   desc,
   eq,
   gte,
@@ -10,6 +11,7 @@ import {
   isNull,
   lt,
   notInArray,
+  sql,
 } from "drizzle-orm";
 import { db } from "@/db";
 import { openai } from "@/lib/ai";
@@ -45,6 +47,7 @@ import {
   studioSuggestionCardSchema,
 } from "@/lib/studio-suggestions";
 import { organization } from "@/schema/auth";
+import { orgSettings } from "@/schema/org-settings";
 import { performanceLogs } from "@/schema/performance-log";
 import {
   studioCopyPackages,
@@ -931,13 +934,27 @@ export const studioWeeklySuggestionsScheduled = schedules.task({
   id: "studio-weekly-suggestions",
   cron: "0 8 * * 1",
   run: async () => {
-    const organizations = await db.select({ id: organization.id }).from(organization);
-    for (const row of organizations) {
+    // Image Studio is per-org opt-in, so only orgs with the flag on get a queue.
+    const [totals] = await db
+      .select({ total: count() })
+      .from(organization);
+    const enabled = await db
+      .select({ id: organization.id })
+      .from(organization)
+      .innerJoin(orgSettings, eq(orgSettings.organizationId, organization.id))
+      .where(sql`${orgSettings.featureFlags} ->> 'imageStudio' = 'true'`);
+
+    for (const row of enabled) {
       await generateStudioSuggestionsTask.trigger({
         organizationId: row.id,
         force: true,
       });
     }
-    return { organizations: organizations.length };
+
+    logger.info("Queued Studio weekly suggestions", {
+      total: totals?.total ?? 0,
+      triggered: enabled.length,
+    });
+    return { total: totals?.total ?? 0, triggered: enabled.length };
   },
 });

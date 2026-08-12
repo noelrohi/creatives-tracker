@@ -17,8 +17,6 @@ export async function getOrgFeatureFlags(
 }
 
 export async function isImageStudioEnabled(organizationId: string) {
-  // Tests exercise the studio routers without a settings row.
-  if (process.env.NODE_ENV === "test") return true;
   const flags = await getOrgFeatureFlags(organizationId);
   return flags.imageStudio === true;
 }
