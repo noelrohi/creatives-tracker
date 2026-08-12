@@ -30,6 +30,7 @@ import {
 } from "@/components/icons";
 import { toast } from "sonner";
 import { formatDateOnly, parseDateOnly } from "@/lib/date";
+import { BREAKDOWN_RETENTION_DAYS, breakdownWindowStart } from "@/lib/retention/policy";
 import { cn } from "@/lib/utils";
 
 interface MetaApiTabProps {
@@ -91,6 +92,13 @@ export function MetaApiTab({
 
   const [exporting, setExporting] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [exportScope, setExportScope] = useState<"all" | "base">("all");
+
+  // Breakdown rows are only retained for 14 days, so "all" can't serve a wider
+  // range. Rather than failing the export, the picker says so and blocks it.
+  const breakdownStart = breakdownWindowStart(formatDateOnly(new Date()));
+  const isBeyondBreakdownWindow = dateFrom < breakdownStart;
+  const isScopeInvalid = exportScope === "all" && isBeyondBreakdownWindow;
 
   const syncableAccounts = useQuery({
     ...trpc.metaSync.listSyncableAccounts.queryOptions(),
@@ -147,12 +155,20 @@ export function MetaApiTab({
       return;
     }
 
+    if (isScopeInvalid) {
+      toast.error(
+        `Breakdowns only go back ${BREAKDOWN_RETENTION_DAYS} days. Pick a later start date or export base rows.`,
+      );
+      return;
+    }
+
     setExporting(true);
     try {
       const rows = await trpcClient.performanceLog.exportByAccount.query({
         accountId,
         dateFrom,
         dateTo,
+        scope: exportScope,
       });
 
       if (rows.length === 0) {
@@ -266,6 +282,29 @@ export function MetaApiTab({
               />
             </div>
 
+            <div className="flex min-w-[220px] flex-1 flex-col gap-1">
+              <label className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+                Export scope
+              </label>
+              <Select
+                value={exportScope}
+                onValueChange={(value) => setExportScope(value as "all" | "base")}
+                disabled={isSyncing || exporting}
+              >
+                <SelectTrigger className="h-7 text-[13px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">
+                    <span className="text-[13px]">Last {BREAKDOWN_RETENTION_DAYS} days with breakdowns</span>
+                  </SelectItem>
+                  <SelectItem value="base">
+                    <span className="text-[13px]">Any range, base rows only</span>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
             <div className="flex items-end gap-1.5">
               <Button
                 size="sm"
@@ -291,7 +330,7 @@ export function MetaApiTab({
                 variant="outline"
                 className="h-7 gap-1.5 text-[13px]"
                 onClick={handleExport}
-                disabled={isSyncing || exporting || !accountId}
+                disabled={isSyncing || exporting || !accountId || isScopeInvalid}
               >
                 {exporting ? (
                   <Loader2 className="size-3.5 animate-spin" />
@@ -301,6 +340,13 @@ export function MetaApiTab({
                 {exporting ? "Exporting" : "Export CSV"}
               </Button>
             </div>
+
+            {isScopeInvalid ? (
+              <p className="w-full text-[11px] text-muted-foreground">
+                Breakdowns are kept for {BREAKDOWN_RETENTION_DAYS} days (since {breakdownStart}). Start on or after
+                that date, or switch to base rows only.
+              </p>
+            ) : null}
           </div>
         </CollapsibleContent>
       </Collapsible>

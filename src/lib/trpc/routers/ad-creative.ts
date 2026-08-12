@@ -12,6 +12,7 @@ import { adSets } from "@/schema/ad-set";
 import { fetchMetaCreativePreview, fetchMetaAdPreviewUrl } from "@/lib/meta-creative-assets";
 import { importMetaRows } from "@/lib/meta-import";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
+import { assertBreakdownRange } from "@/lib/retention/window-guard";
 import { computeCreativeHealthByCreativeId, type CreativeRollup } from "@/lib/creative-health-rollup";
 import { fetchAgentExportRows } from "@/lib/ad-export";
 import { effectiveAdActiveSql, effectiveAdStatusSql } from "@/lib/effective-ad-status";
@@ -229,6 +230,8 @@ const adExportRowSchema = z.object({
   windowImpressions: z.number().nullable(),
   windowClicks: z.number().nullable(),
   windowHookRate: z.number().nullable(),
+  demoWindowFrom: z.string(),
+  demoWindowTo: z.string(),
   genderBreakdown: z.string().nullable(),
   ageBreakdown: z.string().nullable(),
   countryBreakdown: z.string().nullable(),
@@ -488,6 +491,9 @@ const bulkImportOutputSchema = z.object({
   totalRows: z.number(),
   uniqueAds: z.number(),
   perfLogs: z.number(),
+  // Rows the staging guard refused because they fall outside their retention
+  // window. Reported so the import UI can say what didn't land.
+  droppedExpiredRows: z.number(),
 });
 
 const creativePerformanceOutputSchema = z.object({
@@ -1494,9 +1500,18 @@ export const adCreativeRouter = router({
         ownership: z.enum(["ours", "theirs"]).optional(),
         teamId: z.string().optional(),
         format: creativeFormatSchema.optional(),
+        // "all" includes breakdown rows and is therefore capped at the
+        // breakdown window; "base" drops them and works over any range.
+        scope: z.enum(["all", "base"]).default("all"),
       }),
     )
     .query(async ({ input, ctx }) => {
+      if (input.scope === "all") assertBreakdownRange(input.from);
+
+      const scopeFilter = input.scope === "base"
+        ? sql`AND pl.country IS NULL AND pl.platform IS NULL AND pl.placement IS NULL
+              AND pl.device IS NULL AND pl.age IS NULL AND pl.gender IS NULL`
+        : sql``;
       const accountFilter = input.accountId
         ? sql`AND ad.account_id = ${input.accountId}`
         : sql``;
@@ -1567,7 +1582,7 @@ export const adCreativeRouter = router({
         WHERE pl.date_start <= ${input.to}::date
           AND pl.date_end >= ${input.from}::date
           AND pl.organization_id = ${ctx.organizationId}
-          ${accountFilter} ${ownershipFilter} ${teamFilter} ${formatFilter}
+          ${scopeFilter} ${accountFilter} ${ownershipFilter} ${teamFilter} ${formatFilter}
         ORDER BY pl.date_start DESC, ad.name
       `);
 
@@ -2217,6 +2232,7 @@ export const adCreativeRouter = router({
         totalRows: result.totalRows,
         uniqueAds: result.uniqueAds,
         perfLogs: result.perfLogs,
+        droppedExpiredRows: result.droppedExpiredRows,
       };
     }),
 

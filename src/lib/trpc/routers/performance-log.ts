@@ -7,6 +7,11 @@ import { performanceLogs } from "@/schema/performance-log";
 import { ads } from "@/schema/ad";
 import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
+import { basePerformanceRowsOnly } from "@/lib/performance-rows";
+import {
+  assertBaseDate,
+  assertBreakdownRange,
+} from "@/lib/retention/window-guard";
 
 const performanceLogSchema = z.object({
   id: z.string(),
@@ -216,6 +221,8 @@ export const performanceLogRouter = router({
     )
     .output(performanceLogSchema)
     .mutation(async ({ input, ctx }) => {
+      // Generic writes only ever produce base rows, so the base window applies.
+      assertBaseDate(input.dateEnd);
       const [log] = await db
         .insert(performanceLogs)
         .values({ ...input, organizationId: ctx.organizationId })
@@ -244,6 +251,9 @@ export const performanceLogRouter = router({
     .output(z.array(performanceLogSchema))
     .mutation(async ({ input, ctx }) => {
       if (input.rows.length === 0) return [];
+      for (const row of input.rows) {
+        assertBaseDate(row.dateEnd);
+      }
       const values = input.rows.map((row) => ({
         ...row,
         adId: input.adId,
@@ -272,6 +282,9 @@ export const performanceLogRouter = router({
     .output(performanceLogSchema)
     .mutation(async ({ input, ctx }) => {
       const { id, ...data } = input;
+      // Moving a row before the base window would re-create expired data.
+      if (data.dateEnd) assertBaseDate(data.dateEnd);
+      if (data.dateStart) assertBaseDate(data.dateStart);
       const [log] = await db
         .update(performanceLogs)
         .set(data)
@@ -304,6 +317,7 @@ export const performanceLogRouter = router({
     )
     .output(z.array(demographicBreakdownSchema))
     .query(async ({ input, ctx }) => {
+      assertBreakdownRange(input.from);
       const dim = dimensionColumn(input.dimension);
       const accountFilter = input.accountId
         ? sql`AND ad.account_id = ${input.accountId}`
@@ -358,16 +372,15 @@ export const performanceLogRouter = router({
       z.object({
         creativeId: z.string(),
         dimension: z.enum(["age", "gender", "country", "device"]),
-        from: z.string().optional(),
-        to: z.string().optional(),
+        from: z.string(),
+        to: z.string(),
       }),
     )
     .output(z.array(demographicBreakdownSchema))
     .query(async ({ input, ctx }) => {
+      assertBreakdownRange(input.from);
       const dim = dimensionColumn(input.dimension);
-      const dateFilter = input.from && input.to
-        ? sql`AND pl.date_start <= ${input.to}::date AND pl.date_end >= ${input.from}::date`
-        : sql``;
+      const dateFilter = sql`AND pl.date_start <= ${input.to}::date AND pl.date_end >= ${input.from}::date`;
 
       type Row = {
         label: string;
@@ -406,10 +419,15 @@ export const performanceLogRouter = router({
         accountId: z.string(),
         dateFrom: z.string(),
         dateTo: z.string(),
+        // "all" includes breakdown rows and is therefore capped at the
+        // breakdown window; "base" drops them and works over any range.
+        scope: z.enum(["all", "base"]).default("all"),
       }),
     )
     .output(z.array(accountExportRowSchema))
     .query(async ({ input, ctx }) => {
+      if (input.scope === "all") assertBreakdownRange(input.dateFrom);
+
       const rows = await db
         .select({
           dateStart: performanceLogs.dateStart,
@@ -458,6 +476,7 @@ export const performanceLogRouter = router({
             eq(performanceLogs.organizationId, ctx.organizationId),
             gte(performanceLogs.dateStart, input.dateFrom),
             lte(performanceLogs.dateEnd, input.dateTo),
+            input.scope === "base" ? basePerformanceRowsOnly() : undefined,
           ),
         )
         .orderBy(desc(performanceLogs.dateStart));

@@ -6,6 +6,7 @@ import { useQueryState, parseAsString } from "nuqs";
 import { subDays } from "date-fns";
 import Link from "next/link";
 import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
+import { BREAKDOWN_RETENTION_DAYS, breakdownWindowStart } from "@/lib/retention/policy";
 import { useForm, Controller, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
@@ -126,14 +127,21 @@ export default function CreativeDetailPage() {
   );
 
   const [demoDimension, setDemoDimension] = useState<"age" | "gender" | "country" | "device">("gender");
-  const creativeDemographic = useQuery(
-    trpc.performanceLog.creativeDemographicBreakdown.queryOptions({
+  // Breakdown rows are only retained for 14 days; the page default is 30, so
+  // this clamp (and its caption) is the normal case, not an edge case.
+  const breakdownStart = breakdownWindowStart(formatDateOnly(new Date()));
+  const demoFromValue = fromValue < breakdownStart ? breakdownStart : fromValue;
+  const isDemoClamped = demoFromValue !== fromValue;
+  const hasDemoWindow = demoFromValue <= toValue;
+  const creativeDemographic = useQuery({
+    ...trpc.performanceLog.creativeDemographicBreakdown.queryOptions({
       creativeId: id,
       dimension: demoDimension,
-      from: fromValue,
+      from: demoFromValue,
       to: toValue,
     }),
-  );
+    enabled: hasDemoWindow,
+  });
 
   // Fetch ad preview iframe URL from Meta on demand (user clicks play)
   const adPreviewQuery = useQuery({
@@ -697,13 +705,24 @@ export default function CreativeDetailPage() {
         </TabsContent>
 
         {/* Demographics tab */}
-        <TabsContent value="demographics" className="pt-4">
-          <DemographicBreakdownChart
-            data={creativeDemographic.data}
-            dimension={demoDimension}
-            onDimensionChange={setDemoDimension}
-            isLoading={creativeDemographic.isLoading}
-          />
+        <TabsContent value="demographics" className="space-y-2 pt-4">
+          {!hasDemoWindow ? (
+            <p className="text-[11px] text-muted-foreground/70">
+              No demographic detail for this range. Breakdown data is kept for {BREAKDOWN_RETENTION_DAYS} days.
+            </p>
+          ) : isDemoClamped ? (
+            <p className="text-[11px] text-muted-foreground/70">
+              Demographic detail covers {demoFromValue}–{toValue}. Breakdown data is kept for {BREAKDOWN_RETENTION_DAYS} days.
+            </p>
+          ) : null}
+          {hasDemoWindow ? (
+            <DemographicBreakdownChart
+              data={creativeDemographic.data}
+              dimension={demoDimension}
+              onDimensionChange={setDemoDimension}
+              isLoading={creativeDemographic.isLoading}
+            />
+          ) : null}
         </TabsContent>
       </Tabs>
 
