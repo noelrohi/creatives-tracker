@@ -11,6 +11,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ArrowUpDown, Copy, ExternalLink, ImageIcon, MoreHorizontal, Sparkles, Video } from "@/components/icons";
 import { parseDateOnly } from "@/lib/date";
+import { getQueryParamKeys } from "@/lib/query-param-keys";
 import { useTRPC } from "@/lib/trpc/client";
 import { cn } from "@/lib/utils";
 import type { CreativeHealth } from "@/lib/creative-health";
@@ -295,6 +296,15 @@ export const creativeColumns: ColumnDef<Creative>[] = [
         </Tooltip>
       );
     },
+  },
+  {
+    id: "queryParamKeys",
+    accessorFn: (row) => getQueryParamKeys(row.destinationUrl),
+    header: "Query Param Keys",
+    cell: ({ row }) => (
+      <UtmCell value={getQueryParamKeys(row.original.destinationUrl)} />
+    ),
+    enableSorting: false,
   },
   ...UTM_COLUMNS.map<ColumnDef<Creative>>(({ key, label }) => ({
     id: key,
