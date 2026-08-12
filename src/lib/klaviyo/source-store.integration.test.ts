@@ -2032,7 +2032,7 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
           AND target_namespace = 'shopify_order_gid' AND state = 'approved'`,
     );
     expect(approvedRules.rows).toEqual([
-      { probe_report_id: reportId, matcher_version: "klaviyo-v1" },
+      { probe_report_id: reportId, matcher_version: "klaviyo-v2" },
     ]);
 
     const runtime = await store.loadEnabledOrderCoreMetrics(scope);

@@ -2,10 +2,11 @@ import "server-only";
 
 import { and, asc, desc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
-import type {
-  EventEvidenceStatus,
-  OrderEvidenceStatus,
-  ProductMatchStatus,
+import {
+  MATCHER_VERSION,
+  type EventEvidenceStatus,
+  type OrderEvidenceStatus,
+  type ProductMatchStatus,
 } from "@/lib/klaviyo/match-types";
 import type { KlaviyoConnectionScope } from "@/lib/klaviyo/types";
 import { klaviyoEvents, klaviyoMetrics } from "@/schema/klaviyo";
@@ -434,6 +435,7 @@ export async function loadOrderProducts(input: {
       runId: klaviyoOrderMatchResults.runId,
       status: klaviyoOrderMatchResults.status,
       productStatus: klaviyoOrderMatchResults.productStatus,
+      matcherVersion: klaviyoOrderMatchResults.matcherVersion,
     })
     .from(klaviyoOrderMatchResults)
     .where(
@@ -491,7 +493,7 @@ export async function loadOrderProducts(input: {
     // never recomputed, never carrying a published ProductMatchStatus.
     return {
       kind: "diagnostic",
-      matcherVersion: "klaviyo-v1",
+      matcherVersion: result.matcherVersion ?? MATCHER_VERSION,
       comparison,
     };
   }

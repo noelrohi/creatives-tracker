@@ -178,10 +178,58 @@ describe("computeAdvisoryMatches policy", () => {
     const candidate = computation.candidates[0];
     expect(candidate.score).toBe(7);
     expect(candidate.confidence).toBeCloseTo(7 / 11, 10);
+    expect(candidate.weights).toMatchObject({
+      identityEqual: 4,
+      timeImmediate: 3,
+      timeClose: 2,
+      timeFar: 1,
+    });
+    expect(candidate.tolerances).toMatchObject({
+      timeImmediateMs: 5 * 60 * 1000,
+      timeCloseMs: 60 * 60 * 1000,
+    });
+    expect(candidate.reasonCodes).toContain("time_immediate");
     expect(computation.eventResults[0]).toMatchObject({
       status: "candidate",
       selectedClass: "diagnostic",
     });
+  });
+
+  it("scores HMAC across all three time tiers", () => {
+    const computation = computeAdvisoryMatches(
+      baseInput({
+        events: [event("event-1")],
+        orders: [
+          order("order-immediate", "2001", 5),
+          order("order-close", "2002", 30),
+          order("order-far", "2003", 23 * 60),
+        ],
+        identityEqualPairs: [
+          { eventId: "event-1", orderId: "order-immediate" },
+          { eventId: "event-1", orderId: "order-close" },
+          { eventId: "event-1", orderId: "order-far" },
+        ],
+      }),
+    );
+    expect(
+      computation.candidates.map((candidate) => ({
+        orderId: candidate.orderId,
+        score: candidate.score,
+        timeReason: candidate.reasonCodes.at(-1),
+      })),
+    ).toEqual([
+      {
+        orderId: "order-immediate",
+        score: 7,
+        timeReason: "time_immediate",
+      },
+      { orderId: "order-close", score: 6, timeReason: "time_close" },
+      {
+        orderId: "order-far",
+        score: 5,
+        timeReason: "time_within_tolerance",
+      },
+    ]);
   });
 
   it("scores exact variant multiset plus 30-minute distance as candidate 6/11", () => {
@@ -414,6 +462,6 @@ describe("computeAdvisoryMatches policy", () => {
     expect(first.shopifyEvidenceChecksum).toBe("shopify-checksum");
     expect(first.ruleChecksum).toBe(second.ruleChecksum);
     expect(first.configChecksum).toBe(second.configChecksum);
-    expect(first.matcherVersion).toBe("klaviyo-v1");
+    expect(first.matcherVersion).toBe("klaviyo-v2");
   });
 });
