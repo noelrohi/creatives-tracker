@@ -473,8 +473,8 @@ export default function CreativeDetailPage() {
                 />
                 <ReadOnlyField label="Angle" value={creative.data.angle} />
                 <ReadOnlyField label="Persona" value={creative.data.persona} />
-                <ReadOnlyField label="Hook" value={creative.data.hook} />
-                <ReadOnlyField label="CTA" value={creative.data.cta} />
+                <ReadOnlyField label="Hook" value={creative.data.attributes.hook ?? null} />
+                <ReadOnlyField label="CTA" value={creative.data.attributes.cta ?? null} />
               </div>
 
               <ReadOnlyField

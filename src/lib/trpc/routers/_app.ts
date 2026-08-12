@@ -18,6 +18,9 @@ import { studioRouter } from "./studio";
 import { attributionRouter } from "./attribution";
 import { findingsRouter } from "./findings";
 import { klaviyoRouter } from "./klaviyo";
+import { landingPageRouter } from "./landing-page";
+import { creativeInsightsRouter } from "./creative-insights";
+import { orgSettingsRouter } from "./org-settings";
 
 export const appRouter = router({
   adCreative: adCreativeRouter,
@@ -39,6 +42,9 @@ export const appRouter = router({
   attribution: attributionRouter,
   findings: findingsRouter,
   klaviyo: klaviyoRouter,
+  landingPage: landingPageRouter,
+  creativeInsights: creativeInsightsRouter,
+  orgSettings: orgSettingsRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -10,9 +10,11 @@ export interface Creative {
   angle: string | null;
   persona: string | null;
   awarenessLevel: string | null;
-  hook: string | null;
+  attributes: {
+    hook?: string;
+    cta?: string;
+  };
   tone: string[] | null;
-  cta: string | null;
   notes: string | null;
   createdAt: string;
   updatedAt: string;

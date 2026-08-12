@@ -2,8 +2,8 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { parseAsString, parseAsStringLiteral, useQueryState } from "nuqs";
-import { useState } from "react";
 import { useBreadcrumbs } from "@/components/breadcrumbs";
+import { BUCKET_ORDER } from "@/components/blocks/attribution/buckets";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BucketOrdersPanel } from "@/components/blocks/attribution/bucket-orders-panel";
 import { ChannelLedger } from "@/components/blocks/attribution/channel-ledger";
@@ -86,7 +86,17 @@ export default function AttributionPage() {
     "to",
     parseAsString.withDefault(""),
   );
-  const [openBucket, setOpenBucket] = useState<AttributionBucket | null>(null);
+  /**
+   * The open order panel lives in the URL, so a finding elsewhere can link
+   * straight at the orders behind one channel on one day (§8).
+   */
+  const [openBucket, setOpenBucketState] = useQueryState(
+    "bucket",
+    parseAsStringLiteral(BUCKET_ORDER),
+  );
+  const setOpenBucket = (bucket: AttributionBucket | null) => {
+    void setOpenBucketState(bucket);
+  };
 
   /**
    * One cheap read to learn the store: its timezone, its currency and — the part

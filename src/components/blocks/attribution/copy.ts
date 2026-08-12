@@ -13,6 +13,12 @@
  * except the value.
  */
 
+import {
+  funnelStageName,
+  funnelStageWords,
+  funnelStageWordsFor,
+  isFunnelStage,
+} from "@/components/blocks/funnel-stage-copy";
 import type { AttributionBucket } from "@/lib/attribution-bucket";
 import type { CheckStatus, FindingType } from "@/lib/findings";
 import {
@@ -23,6 +29,7 @@ import {
   formatMoneyExact,
   formatPercent,
 } from "./format";
+import { bucketOrdersUrl } from "./shopify-links";
 
 export type VoiceContext = { currency: string; timeZone: string };
 
@@ -257,7 +264,7 @@ export const metaCheck = {
       orderCount === 1 ? "order is" : "orders are"
     } still too new to place, so this can still move.`,
   footnote:
-    "Meta counts a sale when someone buys within 7 days of clicking or 1 day of seeing one of its ads, so \"Meta says\" always reads higher than what we can match to a real order. A steady gap is normal — the daily checks watch for it widening.",
+    'Meta counts a sale when someone buys within 7 days of clicking or 1 day of seeing one of its ads, so "Meta says" always reads higher than what we can match to a real order. A steady gap is normal — the daily checks watch for it widening.',
 };
 
 /* ------------------------------------------------------------------ */
@@ -310,7 +317,7 @@ export const campaigns = {
       orderCount === 1 ? "it" : "them"
     } behind one. ${orderCount === 1 ? "It is" : "They are"} still counted in your Meta total.`,
   footnote:
-    "\"We confirm\" is the real Shopify orders behind each campaign, so it always reads lower than \"Meta says\" — the two count different things, and a steady gap is normal. Every row plus the last one adds up to your Meta ads total above.",
+    '"We confirm" is the real Shopify orders behind each campaign, so it always reads lower than "Meta says" — the two count different things, and a steady gap is normal. Every row plus the last one adds up to your Meta ads total above.',
 };
 
 /* ------------------------------------------------------------------ */
@@ -324,10 +331,11 @@ export const campaigns = {
  */
 const glossary = {
   netSales:
-    "Sales after discounts and refunds, before shipping and tax — the same as the Net sales row in Shopify's Finances summary. Two things move that row: Shopify's own \"Total sales\" line adds shipping and tax on top, so it reads higher, and the report remembers the last sales channel you looked at. We count every channel, so set it to \"All channels\" to compare.",
+    'Sales after discounts and refunds, before shipping and tax — the same as the Net sales row in Shopify\'s Finances summary. Two things move that row: Shopify\'s own "Total sales" line adds shipping and tax on top, so it reads higher, and the report remembers the last sales channel you looked at. We count every channel, so set it to "All channels" to compare.',
   unattributed:
     "The order had tracking info, but it didn't match any ad or email we know.",
-  untracked: "The order arrived with nothing we could read — no link tags at all.",
+  untracked:
+    "The order arrived with nothing we could read — no link tags at all.",
   organicDirect:
     "Nothing paid in the shopper's last visit. They came to you by themselves.",
   meta: "An order files under Meta ads when the shopper's last visit before checkout came from a Meta ad. We then look for that exact ad on the order to call it confirmed.",
@@ -398,7 +406,11 @@ export const folds = {
   attentionFrozen: "paused while numbers are frozen",
   attentionFirstLoad: "checks start after the first load",
   meta: metaCheck.title,
-  metaSummary: (metaSays: string | null, confirm: string, back: string | null) =>
+  metaSummary: (
+    metaSays: string | null,
+    confirm: string,
+    back: string | null,
+  ) =>
     [
       metaSays ? `Meta says ${metaSays}` : null,
       `we confirm ${confirm}`,
@@ -461,6 +473,9 @@ export const checks = {
     unattributed_spike: "Share of unknown sources",
     roas_below_target: "Ad payback vs your goal",
     sync_failure: "Data connections",
+    ad_lp_funnel_mismatch: "Ad and landing-page fit",
+    untagged_spend: "Creative tagging coverage",
+    utm_template_drift: "New-ad link tags",
   } satisfies Record<FindingType, string>,
   status: {
     ok: "OK",
@@ -487,15 +502,24 @@ export const severityByType: Record<FindingType, Severity> = {
   unattributed_spike: "warning",
   broken_utm_template: "warning",
   roas_below_target: "warning",
+  ad_lp_funnel_mismatch: "warning",
+  untagged_spend: "warning",
+  utm_template_drift: "warning",
 };
 
 /** Payloads are frozen at fire time and read defensively — never re-derived. */
-function num(payload: Record<string, unknown> | null, key: string): number | null {
+function num(
+  payload: Record<string, unknown> | null,
+  key: string,
+): number | null {
   const value = payload?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function str(payload: Record<string, unknown> | null, key: string): string | null {
+function str(
+  payload: Record<string, unknown> | null,
+  key: string,
+): string | null {
   const value = payload?.[key];
   return typeof value === "string" && value.length > 0 ? value : null;
 }
@@ -530,6 +554,30 @@ function sumCells(
     .filter((value): value is number => value !== null);
   if (values.length === 0) return null;
   return values.reduce((total, value) => total + value, 0);
+}
+
+/**
+ * Who the drifting link tags belong to. The rule fires on two different kinds
+ * of offender and the sentence has to be true for whichever it caught: an ad we
+ * could match by name is genuinely new, but an unmatched one may be deleted or
+ * never synced — we cannot know when it was made, so we don't claim it is new.
+ */
+function driftOffenderPhrase(payload: Record<string, unknown> | null): string {
+  const methods = new Set(
+    rows(payload, "offenders")
+      .map((offender) => offender.matchMethod)
+      .filter((method): method is string => typeof method === "string"),
+  );
+  const named = methods.has("name");
+  const unnamed = methods.has("unmatched");
+
+  if (named && unnamed) {
+    return "a new ad and an ad we can't identify, both using non-standard link tags";
+  }
+  if (named) return "a new ad using non-standard link tags";
+  if (unnamed) return "an ad we can't identify, using non-standard link tags";
+  // Fired before the offenders carried a match method: say only what holds.
+  return "an ad using non-standard link tags";
 }
 
 export function findingHeadline(item: FindingItem, ctx: VoiceContext): string {
@@ -585,6 +633,22 @@ export function findingHeadline(item: FindingItem, ctx: VoiceContext): string {
         ? "Your Meta ads paid back less than your goal all week"
         : `Your Meta ads paid back less than your goal ${formatCount(days)} days running`;
     }
+
+    case "ad_lp_funnel_mismatch":
+      return (
+        str(payload, "headline") ??
+        "An ad is sending colder traffic to a hotter landing page"
+      );
+
+    case "untagged_spend":
+      return (
+        str(payload, "headline") ?? "Active ad spend is missing creative tags"
+      );
+
+    case "utm_template_drift":
+      return (
+        str(payload, "headline") ?? "A new ad is sending non-standard UTMs"
+      );
   }
 }
 
@@ -645,7 +709,9 @@ export function findingBody(item: FindingItem, ctx: VoiceContext): string[] {
       const exampleTag =
         example && typeof example.utmSource === "string"
           ? `${example.utmSource}${
-              typeof example.utmMedium === "string" ? ` / ${example.utmMedium}` : ""
+              typeof example.utmMedium === "string"
+                ? ` / ${example.utmMedium}`
+                : ""
             }`
           : null;
 
@@ -697,8 +763,101 @@ export function findingBody(item: FindingItem, ctx: VoiceContext): string[] {
         "It has been under your goal every day this week, so it isn't a one-day dip.",
       ];
     }
+
+    case "ad_lp_funnel_mismatch": {
+      const count = num(payload, "totalCount");
+      return [
+        `${count === null ? "At least one ad" : `${formatCount(count)} ${count === 1 ? "ad" : "ads"}`} sent colder traffic to a landing page written for people closer to buying.`,
+        "Warmer ads pointing to colder pages are legitimate retargeting and are not included.",
+      ];
+    }
+
+    case "untagged_spend": {
+      const share = formatPercent(num(payload, "share")) ?? page.noDataYet;
+      const count = num(payload, "untaggedAdCount");
+      return [
+        `${count === null ? "Some active ads" : `${formatCount(count)} active ads`} are missing funnel stage, persona, angle, or awareness tags and carry ${share} of active Meta spend.`,
+        "Slice-level alerts stay paused until at least 80% of active spend is fully tagged.",
+      ];
+    }
+
+    case "utm_template_drift": {
+      const orderCount = num(payload, "orderCount");
+      return [
+        `${orderCount === null ? "Several orders" : `${formatCount(orderCount)} ${orderCount === 1 ? "order" : "orders"}`} yesterday came through ${driftOffenderPhrase(payload)}.`,
+        "New ads should send their numeric ad ID in utm_content so orders resolve without a name fallback.",
+      ];
+    }
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Drawers — the three creative-insights findings                      */
+/* ------------------------------------------------------------------ */
+
+export const drawers = {
+  stageName: (stage: string | null) => funnelStageName(stage),
+  stageWords: (stage: string | null) => funnelStageWordsFor(stage),
+
+  mismatch: {
+    adTitle: "The ad",
+    pageTitle: "The page it links",
+    adTags: (stage: string) => `Tagged ${stage}`,
+    /** An ai-stamped funnel stage says so; a human-set one is simply the truth. */
+    adGuessPill: "our guess",
+    adSpend: (spend: string) => `${spend} spent in the last 7 days`,
+    /** What the week's spend brought back, and how far it got people. */
+    adBack: (money: string) => `${money} came back`,
+    adLand: (views: number) =>
+      `${formatCount(views)} ${views === 1 ? "person" : "people"} reached the page`,
+    seeAd: "See the ad →",
+    guessPill: "our guess",
+    unconfirmedPill: "AI-classified, unconfirmed",
+    confirmedPill: "confirmed by your team",
+    pageReads: (stage: string) => `Reads as ${stage}`,
+    pageFor: (stage: string | null) =>
+      `Written for ${
+        isFunnelStage(stage) ? funnelStageWords[stage] : "an audience we can't place"
+      }.`,
+    question: (path: string, stage: string | null) =>
+      `Is ${path} written for ${
+        isFunnelStage(stage) ? funnelStageWords[stage] : "the audience we guessed"
+      }?`,
+    yes: "Yes — keep the alert",
+    no: "No — it's colder",
+    visit: "Show me the page",
+    pick: "Which is it written for?",
+    cancel: "Cancel",
+    sticks:
+      "Your answer sticks: the page's stage stops being a guess, here and in every future alert.",
+    saved: (stage: string) =>
+      `Saved — the page is now confirmed as ${stage.toLowerCase()}.`,
+    others: (count: number) =>
+      `${formatCount(count)} more ${count === 1 ? "ad does" : "ads do"} the same thing:`,
+    othersSpend: (spend: string) => `${spend} this week`,
+  },
+
+  untagged: {
+    figures: (taggedShare: string, minShare: string) =>
+      `${taggedShare} of active Meta spend is fully tagged · the line is ${minShare}.`,
+    spend: (untagged: string, total: string) =>
+      `${untagged} of ${total} ran on ads we can't place.`,
+  },
+
+  drift: {
+    offenders: "Where it is coming from:",
+    offenderName: (name: string | null, raw: string | null) =>
+      name ?? (raw ? `link tag "${raw}"` : "an ad we can't name"),
+    offenderOrders: (orderCount: number) =>
+      `${formatCount(orderCount)} ${orderCount === 1 ? "order" : "orders"}`,
+    methodName: "matched by name",
+    methodUnmatched: "matched nothing",
+    samples: "The tags we received:",
+    sample: (value: string, count: number) =>
+      `${value} · ${formatCount(count)}×`,
+    fix: "The template should read utm_content={{ad.id}} — check the campaign's URL parameters in Ads Manager.",
+  },
+};
 
 export type Evidence =
   | { kind: "link"; label: string; href: string }
@@ -742,6 +901,43 @@ export function findingEvidence(
         label: "Connection details →",
         href: links.connections,
       };
+
+    // Both land on the screens built for them: the funnel-stage slice, where
+    // the mismatch is visible against every other stage, and the queue that
+    // ranks the untagged ads by the money riding on them.
+    case "ad_lp_funnel_mismatch":
+      return {
+        kind: "link",
+        label: "See it against every stage →",
+        href: "/insights?slice=funnelStage",
+      };
+
+    case "untagged_spend":
+      return {
+        kind: "link",
+        label: "Open the tagging queue →",
+        href: "/insights/tagging-queue",
+      };
+
+    /**
+     * §8 wants the orders themselves, not a summary: the drifting tags are
+     * only legible order by order. The payload's day drives the range, so the
+     * link lands on exactly the orders the rule counted.
+     */
+    case "utm_template_drift": {
+      const orderCount = num(item.payload, "orderCount");
+      const day = str(item.payload, "day");
+      return {
+        kind: "link",
+        label:
+          orderCount === null
+            ? "See those orders →"
+            : `See the ${formatCount(orderCount)} orders →`,
+        href: day
+          ? bucketOrdersUrl({ bucket: "meta", dateFrom: day })
+          : links.metaVsShopify,
+      };
+    }
   }
 }
 

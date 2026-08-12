@@ -1,5 +1,5 @@
 {
-  "id": "e42ec446-e17c-47f1-875b-a1b41cf55411",
+  "id": "3024cfbf-ac70-4380-b631-c361ddb84ee1",
   "prevId": "ca4ebe23-e359-4c8a-a97b-a2580110172c",
   "version": "7",
   "dialect": "postgresql",
@@ -397,21 +397,23 @@
           "primaryKey": false,
           "notNull": false
         },
-        "hook": {
-          "name": "hook",
-          "type": "text",
+        "attributes": {
+          "name": "attributes",
+          "type": "jsonb",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "attributes_meta": {
+          "name": "attributes_meta",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
         },
         "tone": {
           "name": "tone",
           "type": "text[]",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "cta": {
-          "name": "cta",
-          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -798,6 +800,31 @@
           "primaryKey": false,
           "notNull": false
         },
+        "funnel_stage": {
+          "name": "funnel_stage",
+          "type": "funnel_stage",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "funnel_stage_source": {
+          "name": "funnel_stage_source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "funnel_stage_confidence": {
+          "name": "funnel_stage_confidence",
+          "type": "numeric",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "landing_page_id": {
+          "name": "landing_page_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "meta_id": {
           "name": "meta_id",
           "type": "text",
@@ -920,6 +947,36 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "ad_funnel_stage_idx": {
+          "name": "ad_funnel_stage_idx",
+          "columns": [
+            {
+              "expression": "funnel_stage",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ad_landing_page_id_idx": {
+          "name": "ad_landing_page_id_idx",
+          "columns": [
+            {
+              "expression": "landing_page_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -955,6 +1012,19 @@
           "tableTo": "ad_account",
           "columnsFrom": [
             "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "ad_landing_page_id_landing_page_id_fk": {
+          "name": "ad_landing_page_id_landing_page_id_fk",
+          "tableFrom": "ad",
+          "tableTo": "landing_page",
+          "columnsFrom": [
+            "landing_page_id"
           ],
           "columnsTo": [
             "id"
@@ -2093,16 +2163,14 @@
         }
       },
       "foreignKeys": {
-        "finding_org_store_fk": {
-          "name": "finding_org_store_fk",
+        "finding_store_id_shopify_store_id_fk": {
+          "name": "finding_store_id_shopify_store_id_fk",
           "tableFrom": "finding",
           "tableTo": "shopify_store",
           "columnsFrom": [
-            "organization_id",
             "store_id"
           ],
           "columnsTo": [
-            "organization_id",
             "id"
           ],
           "onDelete": "cascade",
@@ -2111,6 +2179,158 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.landing_page": {
+      "name": "landing_page",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "normalized_url": {
+          "name": "normalized_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "family": {
+          "name": "family",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "first_seen_in_ads_at": {
+          "name": "first_seen_in_ads_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "first_seen_in_journeys_at": {
+          "name": "first_seen_in_journeys_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "page_type": {
+          "name": "page_type",
+          "type": "page_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "funnel_stage": {
+          "name": "funnel_stage",
+          "type": "funnel_stage",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "awareness_fit": {
+          "name": "awareness_fit",
+          "type": "awareness_level",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "classification_status": {
+          "name": "classification_status",
+          "type": "lp_classification_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "classification_source": {
+          "name": "classification_source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "classification_confidence": {
+          "name": "classification_confidence",
+          "type": "numeric",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "content_hash": {
+          "name": "content_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "classified_at": {
+          "name": "classified_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "confirmed_at": {
+          "name": "confirmed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "landing_page_org_family_idx": {
+          "name": "landing_page_org_family_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "family",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "landing_page_org_normalized_url_uniq": {
+          "name": "landing_page_org_normalized_url_uniq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "organization_id",
+            "normalized_url"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -2544,1291 +2764,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.identity_crypto_policy": {
-      "name": "identity_crypto_policy",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "organization_id": {
-          "name": "organization_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "store_id": {
-          "name": "store_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "matching_current_version": {
-          "name": "matching_current_version",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "matching_current_key_check": {
-          "name": "matching_current_key_check",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "matching_previous_version": {
-          "name": "matching_previous_version",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "matching_previous_key_check": {
-          "name": "matching_previous_key_check",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "suppression_version": {
-          "name": "suppression_version",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "suppression_key_check": {
-          "name": "suppression_key_check",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "identity_crypto_policy_org_store_fk": {
-          "name": "identity_crypto_policy_org_store_fk",
-          "tableFrom": "identity_crypto_policy",
-          "tableTo": "shopify_store",
-          "columnsFrom": [
-            "organization_id",
-            "store_id"
-          ],
-          "columnsTo": [
-            "organization_id",
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "identity_crypto_policy_current_binding_fk": {
-          "name": "identity_crypto_policy_current_binding_fk",
-          "tableFrom": "identity_crypto_policy",
-          "tableTo": "identity_matching_key_binding",
-          "columnsFrom": [
-            "organization_id",
-            "store_id",
-            "matching_current_version",
-            "matching_current_key_check"
-          ],
-          "columnsTo": [
-            "organization_id",
-            "store_id",
-            "key_version",
-            "key_check"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "identity_crypto_policy_previous_binding_fk": {
-          "name": "identity_crypto_policy_previous_binding_fk",
-          "tableFrom": "identity_crypto_policy",
-          "tableTo": "identity_matching_key_binding",
-          "columnsFrom": [
-            "organization_id",
-            "store_id",
-            "matching_previous_version",
-            "matching_previous_key_check"
-          ],
-          "columnsTo": [
-            "organization_id",
-            "store_id",
-            "key_version",
-            "key_check"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "identity_crypto_policy_org_store_uniq": {
-          "name": "identity_crypto_policy_org_store_uniq",
-          "nullsNotDistinct": false,
-          "columns": [
-            "organization_id",
-            "store_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "identity_crypto_policy_previous_pair": {
-          "name": "identity_crypto_policy_previous_pair",
-          "value": "(\"identity_crypto_policy\".\"matching_previous_version\" IS NULL AND \"identity_crypto_policy\".\"matching_previous_key_check\" IS NULL) OR (\"identity_crypto_policy\".\"matching_previous_version\" IS NOT NULL AND \"identity_crypto_policy\".\"matching_previous_key_check\" IS NOT NULL)"
-        },
-        "identity_crypto_policy_versions_distinct": {
-          "name": "identity_crypto_policy_versions_distinct",
-          "value": "\"identity_crypto_policy\".\"matching_previous_version\" IS NULL OR \"identity_crypto_policy\".\"matching_previous_version\" <> \"identity_crypto_policy\".\"matching_current_version\""
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.identity_erasure_suppression": {
-      "name": "identity_erasure_suppression",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "organization_id": {
-          "name": "organization_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "store_id": {
-          "name": "store_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kind": {
-          "name": "kind",
-          "type": "identity_erasure_suppression_kind",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "key_version": {
-          "name": "key_version",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "digest": {
-          "name": "digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "identity_erasure_suppression_lookup_idx": {
-          "name": "identity_erasure_suppression_lookup_idx",
-          "columns": [
-            {
-              "expression": "organization_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "store_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "key_version",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "kind",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "digest",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "identity_erasure_suppression_org_store_fk": {
-          "name": "identity_erasure_suppression_org_store_fk",
-          "tableFrom": "identity_erasure_suppression",
-          "tableTo": "shopify_store",
-          "columnsFrom": [
-            "organization_id",
-            "store_id"
-          ],
-          "columnsTo": [
-            "organization_id",
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "identity_erasure_suppression_scope_digest_uniq": {
-          "name": "identity_erasure_suppression_scope_digest_uniq",
-          "nullsNotDistinct": false,
-          "columns": [
-            "organization_id",
-            "store_id",
-            "kind",
-            "key_version",
-            "digest"
-          ]
-        },
-        "identity_erasure_suppression_scope_id_uniq": {
-          "name": "identity_erasure_suppression_scope_id_uniq",
-          "nullsNotDistinct": false,
-          "columns": [
-            "organization_id",
-            "store_id",
-            "id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.identity_matching_key_binding": {
-      "name": "identity_matching_key_binding",
-      "schema": "",
-      "columns": {
-        "organization_id": {
-          "name": "organization_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "store_id": {
-          "name": "store_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "key_version": {
-          "name": "key_version",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "key_check": {
-          "name": "key_check",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "identity_matching_key_binding_org_store_fk": {
-          "name": "identity_matching_key_binding_org_store_fk",
-          "tableFrom": "identity_matching_key_binding",
-          "tableTo": "shopify_store",
-          "columnsFrom": [
-            "organization_id",
-            "store_id"
-          ],
-          "columnsTo": [
-            "organization_id",
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "identity_matching_key_binding_scope_version_uniq": {
-          "name": "identity_matching_key_binding_scope_version_uniq",
-          "nullsNotDistinct": false,
-          "columns": [
-            "organization_id",
-            "store_id",
-            "key_version"
-          ]
-        },
-        "identity_matching_key_binding_scope_version_check_uniq": {
-          "name": "identity_matching_key_binding_scope_version_check_uniq",
-          "nullsNotDistinct": false,
-          "columns": [
-            "organization_id",
-            "store_id",
-            "key_version",
-            "key_check"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.shopify_evidence_run_identity_observation": {
-      "name": "shopify_evidence_run_identity_observation",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "organization_id": {
-          "name": "organization_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "store_id": {
-          "name": "store_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "evidence_run_id": {
-          "name": "evidence_run_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "order_id": {
-          "name": "order_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "identity_hmac_id": {
-          "name": "identity_hmac_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "observed_at": {
-          "name": "observed_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "shopify_evidence_identity_observation_run_idx": {
-          "name": "shopify_evidence_identity_observation_run_idx",
-          "columns": [
-            {
-              "expression": "organization_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "store_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "evidence_run_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "shopify_evidence_identity_observation_content_fk": {
-          "name": "shopify_evidence_identity_observation_content_fk",
-          "tableFrom": "shopify_evidence_run_identity_observation",
-          "tableTo": "shopify_evidence_run_observation",
-          "columnsFrom": [
-            "organization_id",
-            "store_id",
-            "evidence_run_id",
-            "order_id"
-          ],
-          "columnsTo": [
-            "organization_id",
-            "store_id",
-            "evidence_run_id",
-            "order_id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "shopify_evidence_identity_observation_hmac_fk": {
-          "name": "shopify_evidence_identity_observation_hmac_fk",
-          "tableFrom": "shopify_evidence_run_identity_observation",
-          "tableTo": "source_identity_hmac",
-          "columnsFrom": [
-            "organization_id",
-            "store_id",
-            "order_id",
-            "identity_hmac_id"
-          ],
-          "columnsTo": [
-            "organization_id",
-            "store_id",
-            "shopify_order_id",
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "shopify_evidence_identity_observation_run_order_uniq": {
-          "name": "shopify_evidence_identity_observation_run_order_uniq",
-          "nullsNotDistinct": false,
-          "columns": [
-            "store_id",
-            "evidence_run_id",
-            "order_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.shopify_evidence_run_observation": {
-      "name": "shopify_evidence_run_observation",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "organization_id": {
-          "name": "organization_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "store_id": {
-          "name": "store_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "evidence_run_id": {
-          "name": "evidence_run_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "order_id": {
-          "name": "order_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "line_disposition": {
-          "name": "line_disposition",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "identity_disposition": {
-          "name": "identity_disposition",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "observed_content_checksum": {
-          "name": "observed_content_checksum",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "observed_at": {
-          "name": "observed_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "shopify_evidence_observation_run_order_idx": {
-          "name": "shopify_evidence_observation_run_order_idx",
-          "columns": [
-            {
-              "expression": "organization_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "store_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "evidence_run_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "order_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "shopify_evidence_observation_run_fk": {
-          "name": "shopify_evidence_observation_run_fk",
-          "tableFrom": "shopify_evidence_run_observation",
-          "tableTo": "shopify_evidence_sync_run",
-          "columnsFrom": [
-            "organization_id",
-            "store_id",
-            "evidence_run_id"
-          ],
-          "columnsTo": [
-            "organization_id",
-            "store_id",
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "shopify_evidence_observation_order_fk": {
-          "name": "shopify_evidence_observation_order_fk",
-          "tableFrom": "shopify_evidence_run_observation",
-          "tableTo": "shopify_order",
-          "columnsFrom": [
-            "organization_id",
-            "store_id",
-            "order_id"
-          ],
-          "columnsTo": [
-            "organization_id",
-            "store_id",
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "shopify_evidence_observation_scope_run_order_uniq": {
-          "name": "shopify_evidence_observation_scope_run_order_uniq",
-          "nullsNotDistinct": false,
-          "columns": [
-            "organization_id",
-            "store_id",
-            "evidence_run_id",
-            "order_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "shopify_evidence_observation_line_disposition_check": {
-          "name": "shopify_evidence_observation_line_disposition_check",
-          "value": "\"shopify_evidence_run_observation\".\"line_disposition\" IN ('complete', 'preserved_partial')"
-        },
-        "shopify_evidence_observation_identity_disposition_check": {
-          "name": "shopify_evidence_observation_identity_disposition_check",
-          "value": "\"shopify_evidence_run_observation\".\"identity_disposition\" IN ('available', 'unavailable', 'not_refreshed', 'suppressed')"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.shopify_evidence_sync_run": {
-      "name": "shopify_evidence_sync_run",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "start_trigger_run_id": {
-          "name": "start_trigger_run_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "first_batch_trigger_run_id": {
-          "name": "first_batch_trigger_run_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "organization_id": {
-          "name": "organization_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "store_id": {
-          "name": "store_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "mode": {
-          "name": "mode",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "store_timezone": {
-          "name": "store_timezone",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "anchor_store_day": {
-          "name": "anchor_store_day",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "requested_from": {
-          "name": "requested_from",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "requested_to": {
-          "name": "requested_to",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "cursor": {
-          "name": "cursor",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "shopify_evidence_run_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'running'"
-        },
-        "identity_capability": {
-          "name": "identity_capability",
-          "type": "shopify_evidence_capability",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'unknown'"
-        },
-        "line_completeness": {
-          "name": "line_completeness",
-          "type": "shopify_evidence_completeness",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'unknown'"
-        },
-        "orders_read": {
-          "name": "orders_read",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "orders_enriched": {
-          "name": "orders_enriched",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "orders_partial": {
-          "name": "orders_partial",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "orders_unavailable": {
-          "name": "orders_unavailable",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "warnings": {
-          "name": "warnings",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "failures": {
-          "name": "failures",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "error": {
-          "name": "error",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "heartbeat_at": {
-          "name": "heartbeat_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "started_at": {
-          "name": "started_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "finished_at": {
-          "name": "finished_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "shopify_evidence_sync_run_one_running_store_uidx": {
-          "name": "shopify_evidence_sync_run_one_running_store_uidx",
-          "columns": [
-            {
-              "expression": "store_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"shopify_evidence_sync_run\".\"status\" = 'running'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "shopify_evidence_sync_run_scope_started_idx": {
-          "name": "shopify_evidence_sync_run_scope_started_idx",
-          "columns": [
-            {
-              "expression": "organization_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "store_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "started_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "shopify_evidence_sync_run_org_store_fk": {
-          "name": "shopify_evidence_sync_run_org_store_fk",
-          "tableFrom": "shopify_evidence_sync_run",
-          "tableTo": "shopify_store",
-          "columnsFrom": [
-            "organization_id",
-            "store_id"
-          ],
-          "columnsTo": [
-            "organization_id",
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "shopify_evidence_sync_run_start_trigger_uniq": {
-          "name": "shopify_evidence_sync_run_start_trigger_uniq",
-          "nullsNotDistinct": false,
-          "columns": [
-            "start_trigger_run_id"
-          ]
-        },
-        "shopify_evidence_sync_run_scope_id_uniq": {
-          "name": "shopify_evidence_sync_run_scope_id_uniq",
-          "nullsNotDistinct": false,
-          "columns": [
-            "organization_id",
-            "store_id",
-            "id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "shopify_evidence_sync_run_window_valid": {
-          "name": "shopify_evidence_sync_run_window_valid",
-          "value": "\"shopify_evidence_sync_run\".\"requested_from\" < \"shopify_evidence_sync_run\".\"requested_to\""
-        },
-        "shopify_evidence_sync_run_mode_check": {
-          "name": "shopify_evidence_sync_run_mode_check",
-          "value": "\"shopify_evidence_sync_run\".\"mode\" IN ('initial_90d', 'incremental_7d')"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.shopify_order_line": {
-      "name": "shopify_order_line",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "organization_id": {
-          "name": "organization_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "store_id": {
-          "name": "store_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "order_id": {
-          "name": "order_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "shopify_line_item_id": {
-          "name": "shopify_line_item_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "shopify_product_id": {
-          "name": "shopify_product_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "shopify_variant_id": {
-          "name": "shopify_variant_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sku": {
-          "name": "sku",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "product_title": {
-          "name": "product_title",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "variant_title": {
-          "name": "variant_title",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "quantity": {
-          "name": "quantity",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "source_position": {
-          "name": "source_position",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "parent_order_updated_at": {
-          "name": "parent_order_updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "shopify_order_line_order_idx": {
-          "name": "shopify_order_line_order_idx",
-          "columns": [
-            {
-              "expression": "order_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "shopify_order_line_store_product_idx": {
-          "name": "shopify_order_line_store_product_idx",
-          "columns": [
-            {
-              "expression": "store_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "shopify_product_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "shopify_order_line_store_variant_idx": {
-          "name": "shopify_order_line_store_variant_idx",
-          "columns": [
-            {
-              "expression": "store_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "shopify_variant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "shopify_order_line_store_sku_idx": {
-          "name": "shopify_order_line_store_sku_idx",
-          "columns": [
-            {
-              "expression": "store_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "sku",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "shopify_order_line_org_store_order_fk": {
-          "name": "shopify_order_line_org_store_order_fk",
-          "tableFrom": "shopify_order_line",
-          "tableTo": "shopify_order",
-          "columnsFrom": [
-            "organization_id",
-            "store_id",
-            "order_id"
-          ],
-          "columnsTo": [
-            "organization_id",
-            "store_id",
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "shopify_order_line_store_external_uniq": {
-          "name": "shopify_order_line_store_external_uniq",
-          "nullsNotDistinct": false,
-          "columns": [
-            "store_id",
-            "shopify_line_item_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "shopify_order_line_quantity_positive": {
-          "name": "shopify_order_line_quantity_positive",
-          "value": "\"shopify_order_line\".\"quantity\" > 0"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.source_identity_hmac": {
-      "name": "source_identity_hmac",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "organization_id": {
-          "name": "organization_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "store_id": {
-          "name": "store_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "source_kind": {
-          "name": "source_kind",
-          "type": "source_identity_kind",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "shopify_order_id": {
-          "name": "shopify_order_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "key_version": {
-          "name": "key_version",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "digest": {
-          "name": "digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "rotation_state": {
-          "name": "rotation_state",
-          "type": "identity_hmac_rotation_state",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "source_identity_hmac_scope_digest_idx": {
-          "name": "source_identity_hmac_scope_digest_idx",
-          "columns": [
-            {
-              "expression": "organization_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "store_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "key_version",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "digest",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "source_identity_hmac_shopify_order_fk": {
-          "name": "source_identity_hmac_shopify_order_fk",
-          "tableFrom": "source_identity_hmac",
-          "tableTo": "shopify_order",
-          "columnsFrom": [
-            "organization_id",
-            "store_id",
-            "shopify_order_id"
-          ],
-          "columnsTo": [
-            "organization_id",
-            "store_id",
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "source_identity_hmac_shopify_version_uniq": {
-          "name": "source_identity_hmac_shopify_version_uniq",
-          "nullsNotDistinct": false,
-          "columns": [
-            "shopify_order_id",
-            "key_version"
-          ]
-        },
-        "source_identity_hmac_scope_id_uniq": {
-          "name": "source_identity_hmac_scope_id_uniq",
-          "nullsNotDistinct": false,
-          "columns": [
-            "organization_id",
-            "store_id",
-            "id"
-          ]
-        },
-        "source_identity_hmac_scope_order_id_uniq": {
-          "name": "source_identity_hmac_scope_order_id_uniq",
-          "nullsNotDistinct": false,
-          "columns": [
-            "organization_id",
-            "store_id",
-            "shopify_order_id",
-            "id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "source_identity_hmac_shopify_only": {
-          "name": "source_identity_hmac_shopify_only",
-          "value": "\"source_identity_hmac\".\"source_kind\" = 'shopify_order' AND \"source_identity_hmac\".\"shopify_order_id\" IS NOT NULL"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.shopify_order": {
       "name": "shopify_order",
       "schema": "",
@@ -3856,12 +2791,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
-        },
-        "shopify_customer_id": {
-          "name": "shopify_customer_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         },
         "order_name": {
           "name": "order_name",
@@ -3962,6 +2891,31 @@
           "primaryKey": false,
           "notNull": false
         },
+        "meta_ad_set_id": {
+          "name": "meta_ad_set_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "meta_ad_id": {
+          "name": "meta_ad_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "meta_ad_match_method": {
+          "name": "meta_ad_match_method",
+          "type": "meta_ad_match_method",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "landing_page_id": {
+          "name": "landing_page_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "verification_pending": {
           "name": "verification_pending",
           "type": "boolean",
@@ -4008,27 +2962,6 @@
           "columns": [
             {
               "expression": "organization_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "shopify_order_store_customer_idx": {
-          "name": "shopify_order_store_customer_idx",
-          "columns": [
-            {
-              "expression": "store_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "shopify_customer_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -4092,22 +3025,60 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "shopify_order_org_store_meta_ad_id_idx": {
+          "name": "shopify_order_org_store_meta_ad_id_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "store_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "meta_ad_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
-        "shopify_order_org_store_fk": {
-          "name": "shopify_order_org_store_fk",
+        "shopify_order_store_id_shopify_store_id_fk": {
+          "name": "shopify_order_store_id_shopify_store_id_fk",
           "tableFrom": "shopify_order",
           "tableTo": "shopify_store",
           "columnsFrom": [
-            "organization_id",
             "store_id"
           ],
           "columnsTo": [
-            "organization_id",
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "shopify_order_landing_page_id_landing_page_id_fk": {
+          "name": "shopify_order_landing_page_id_landing_page_id_fk",
+          "tableFrom": "shopify_order",
+          "tableTo": "landing_page",
+          "columnsFrom": [
+            "landing_page_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -4119,15 +3090,6 @@
           "columns": [
             "store_id",
             "shopify_order_id"
-          ]
-        },
-        "shopify_order_org_store_id_uniq": {
-          "name": "shopify_order_org_store_id_uniq",
-          "nullsNotDistinct": false,
-          "columns": [
-            "organization_id",
-            "store_id",
-            "id"
           ]
         }
       },
@@ -4247,18 +3209,27 @@
         }
       },
       "foreignKeys": {
-        "shopify_refund_org_store_order_fk": {
-          "name": "shopify_refund_org_store_order_fk",
+        "shopify_refund_store_id_shopify_store_id_fk": {
+          "name": "shopify_refund_store_id_shopify_store_id_fk",
+          "tableFrom": "shopify_refund",
+          "tableTo": "shopify_store",
+          "columnsFrom": [
+            "store_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "shopify_refund_order_id_shopify_order_id_fk": {
+          "name": "shopify_refund_order_id_shopify_order_id_fk",
           "tableFrom": "shopify_refund",
           "tableTo": "shopify_order",
           "columnsFrom": [
-            "organization_id",
-            "store_id",
             "order_id"
           ],
           "columnsTo": [
-            "organization_id",
-            "store_id",
             "id"
           ],
           "onDelete": "cascade",
@@ -4358,21 +3329,7 @@
           "with": {}
         }
       },
-      "foreignKeys": {
-        "shopify_store_organization_id_organization_id_fk": {
-          "name": "shopify_store_organization_id_organization_id_fk",
-          "tableFrom": "shopify_store",
-          "tableTo": "organization",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "shopify_store_shop_domain_unique": {
@@ -4380,14 +3337,6 @@
           "nullsNotDistinct": false,
           "columns": [
             "shop_domain"
-          ]
-        },
-        "shopify_store_org_id_uniq": {
-          "name": "shopify_store_org_id_uniq",
-          "nullsNotDistinct": false,
-          "columns": [
-            "organization_id",
-            "id"
           ]
         }
       },
@@ -4524,16 +3473,14 @@
         }
       },
       "foreignKeys": {
-        "shopify_sync_run_org_store_fk": {
-          "name": "shopify_sync_run_org_store_fk",
+        "shopify_sync_run_store_id_shopify_store_id_fk": {
+          "name": "shopify_sync_run_store_id_shopify_store_id_fk",
           "tableFrom": "shopify_sync_run",
           "tableTo": "shopify_store",
           "columnsFrom": [
-            "organization_id",
             "store_id"
           ],
           "columnsTo": [
-            "organization_id",
             "id"
           ],
           "onDelete": "cascade",
@@ -6760,13 +5707,31 @@
         "carousel"
       ]
     },
-    "public.funnel_position": {
-      "name": "funnel_position",
+    "public.funnel_stage": {
+      "name": "funnel_stage",
       "schema": "public",
       "values": [
-        "cold_traffic_entry",
-        "retarget",
-        "upsell"
+        "tof",
+        "mof",
+        "bof"
+      ]
+    },
+    "public.lp_classification_status": {
+      "name": "lp_classification_status",
+      "schema": "public",
+      "values": [
+        "suggested",
+        "confirmed",
+        "stale"
+      ]
+    },
+    "public.meta_ad_match_method": {
+      "name": "meta_ad_match_method",
+      "schema": "public",
+      "values": [
+        "id",
+        "name",
+        "unmatched"
       ]
     },
     "public.objective": {
@@ -6825,59 +5790,10 @@
         "unattributed_spike",
         "broken_utm_template",
         "sync_failure",
-        "roas_below_target"
-      ]
-    },
-    "public.identity_erasure_suppression_kind": {
-      "name": "identity_erasure_suppression_kind",
-      "schema": "public",
-      "values": [
-        "email",
-        "shopify_customer_id"
-      ]
-    },
-    "public.identity_hmac_rotation_state": {
-      "name": "identity_hmac_rotation_state",
-      "schema": "public",
-      "values": [
-        "active",
-        "rotation_previous"
-      ]
-    },
-    "public.shopify_evidence_capability": {
-      "name": "shopify_evidence_capability",
-      "schema": "public",
-      "values": [
-        "unknown",
-        "available",
-        "unavailable"
-      ]
-    },
-    "public.shopify_evidence_completeness": {
-      "name": "shopify_evidence_completeness",
-      "schema": "public",
-      "values": [
-        "unknown",
-        "complete",
-        "partial",
-        "unavailable"
-      ]
-    },
-    "public.shopify_evidence_run_status": {
-      "name": "shopify_evidence_run_status",
-      "schema": "public",
-      "values": [
-        "running",
-        "success",
-        "partial",
-        "failed"
-      ]
-    },
-    "public.source_identity_kind": {
-      "name": "source_identity_kind",
-      "schema": "public",
-      "values": [
-        "shopify_order"
+        "roas_below_target",
+        "ad_lp_funnel_mismatch",
+        "untagged_spend",
+        "utm_template_drift"
       ]
     },
     "public.attribution_bucket": {

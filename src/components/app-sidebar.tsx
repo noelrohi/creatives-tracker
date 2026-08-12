@@ -43,7 +43,8 @@ import { Label } from "@/components/ui/label";
 import { DeleteOrganizationDialog } from "@/components/delete-organization-dialog";
 import { AdsoluteMark } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { isImageStudioEnabled } from "@/lib/image-studio-enabled";
+import { useTRPC } from "@/lib/trpc/client";
+import { featureFlagDefs } from "@/lib/feature-flags";
 
 const dashboardSubItems: Array<{
   label: string;
@@ -53,12 +54,6 @@ const dashboardSubItems: Array<{
 }> = [
   { label: "Dashboard", href: "/", icon: "solar:widget-5-linear" },
   { label: "MER", href: "/mer", icon: "solar:graph-up-linear" },
-  {
-    label: "Attribution",
-    href: "/attribution",
-    icon: "solar:pie-chart-2-linear",
-    badge: "Beta",
-  },
 ];
 
 const navItems: Array<{
@@ -90,6 +85,17 @@ export function AppSidebar() {
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const orgId = activeOrg?.id;
+  const trpc = useTRPC();
+
+  /** Where the money is read rather than managed: gated behind org feature flags. */
+  const { data: featureFlags } = useQuery(
+    trpc.orgSettings.getFeatureFlags.queryOptions(),
+  );
+  const enabledFlagDefs = featureFlagDefs.filter(
+    (def) => featureFlags?.[def.key] ?? false,
+  );
+  const analyzeItems = enabledFlagDefs.filter((def) => def.group === "analyze");
+  const toolsItems = enabledFlagDefs.filter((def) => def.group === "tools");
 
   const { data: fullOrg } = useQuery({
     queryKey: ["org-full", orgId],
@@ -305,6 +311,38 @@ export function AppSidebar() {
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
+          {analyzeItems.length > 0 ? (
+            <SidebarGroup>
+              <SidebarGroupLabel>Analyze</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {analyzeItems.map((item) => (
+                    <SidebarMenuItem key={item.href}>
+                      <SidebarMenuButton
+                        asChild
+                        tooltip={item.label}
+                        isActive={
+                          pathname === item.href ||
+                          pathname.startsWith(`${item.href}/`)
+                        }
+                        className={item.badge ? "pr-14" : undefined}
+                      >
+                        <Link href={item.href}>
+                          <Icon icon={item.icon} className="size-4" />
+                          <span>{item.label}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                      {item.badge ? (
+                        <SidebarMenuBadge className="rounded-full border border-sidebar-border bg-sidebar-accent/80 px-2 text-[10px] font-semibold uppercase tracking-wide text-sidebar-accent-foreground">
+                          {item.badge}
+                        </SidebarMenuBadge>
+                      ) : null}
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          ) : null}
           <SidebarGroup>
             <SidebarGroupLabel>Manage</SidebarGroupLabel>
             <SidebarGroupContent>
@@ -332,27 +370,34 @@ export function AppSidebar() {
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
-          {isImageStudioEnabled() ? (
+          {toolsItems.length > 0 ? (
             <SidebarGroup>
               <SidebarGroupLabel>Tools</SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      asChild
-                      tooltip="Image Studio"
-                      isActive={pathname.startsWith("/studio")}
-                      className="pr-14"
-                    >
-                      <Link href="/studio">
-                        <Icon icon="solar:magic-stick-3-linear" className="size-4" />
-                        <span>Image Studio</span>
-                      </Link>
-                    </SidebarMenuButton>
-                    <SidebarMenuBadge className="rounded-full border border-sidebar-border bg-sidebar-accent/80 px-2 text-[10px] font-semibold uppercase tracking-wide text-sidebar-accent-foreground">
-                      Beta
-                    </SidebarMenuBadge>
-                  </SidebarMenuItem>
+                  {toolsItems.map((item) => (
+                    <SidebarMenuItem key={item.href}>
+                      <SidebarMenuButton
+                        asChild
+                        tooltip={item.label}
+                        isActive={
+                          pathname === item.href ||
+                          pathname.startsWith(`${item.href}/`)
+                        }
+                        className={item.badge ? "pr-14" : undefined}
+                      >
+                        <Link href={item.href}>
+                          <Icon icon={item.icon} className="size-4" />
+                          <span>{item.label}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                      {item.badge ? (
+                        <SidebarMenuBadge className="rounded-full border border-sidebar-border bg-sidebar-accent/80 px-2 text-[10px] font-semibold uppercase tracking-wide text-sidebar-accent-foreground">
+                          {item.badge}
+                        </SidebarMenuBadge>
+                      ) : null}
+                    </SidebarMenuItem>
+                  ))}
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>
@@ -413,6 +458,12 @@ export function AppSidebar() {
                         <Link href="/settings/org">
                           <Icon icon="solar:buildings-2-linear" className="mr-2 size-4" />
                           Organization
+                        </Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild>
+                        <Link href="/settings/features">
+                          <Icon icon="solar:tuning-2-linear" className="mr-2 size-4" />
+                          Features
                         </Link>
                       </DropdownMenuItem>
                       <DropdownMenuItem asChild>

@@ -478,8 +478,8 @@ export async function fetchAgentExportRows(opts: {
         ac.angle AS angle,
         ac.persona AS persona,
         ac.awareness_level::text AS awareness_level,
-        ac.hook AS hook,
-        ac.cta AS cta,
+        ac.attributes->>'hook' AS hook,
+        ac.attributes->>'cta' AS cta,
         ac.asset_url AS asset_url,
         ac.video_url AS video_url,
 

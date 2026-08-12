@@ -21,7 +21,7 @@ interface Creative {
   name: string;
   format: string | null;
   awarenessLevel: string | null;
-  hook: string | null;
+  attributes: { hook?: string };
   angle: string | null;
   persona: string | null;
   [key: string]: unknown;
@@ -67,14 +67,14 @@ const COLORS = [
 ];
 
 function analyzeByDimension(
-  dimension: string,
+  getValue: (creative: Creative) => string | null | undefined,
   creatives: Creative[],
   creativePerf: Map<string, PerfLog[]>,
 ): DimensionResult[] {
   const groups = new Map<string, { spend: number; purchaseValue: number; count: number }>();
 
   for (const creative of creatives) {
-    const value = creative[dimension] as string | null;
+    const value = getValue(creative);
     if (!value) continue;
     const logs = creativePerf.get(creative.id) ?? [];
     if (logs.length === 0) continue;
@@ -155,15 +155,15 @@ export function CreativeInsights({ creatives, ads, performanceLogs }: CreativeIn
     }
 
     const dims: { key: string; label: string; data: DimensionResult[] }[] = [];
-    const formatDim = analyzeByDimension("format", creatives, creativePerf);
+    const formatDim = analyzeByDimension((creative) => creative.format, creatives, creativePerf);
     if (formatDim.length > 1) dims.push({ key: "format", label: "ROAS by Format", data: formatDim });
-    const awarenessDim = analyzeByDimension("awarenessLevel", creatives, creativePerf);
+    const awarenessDim = analyzeByDimension((creative) => creative.awarenessLevel, creatives, creativePerf);
     if (awarenessDim.length > 1) dims.push({ key: "awareness", label: "ROAS by Awareness Level", data: awarenessDim });
-    const hookDim = analyzeByDimension("hook", creatives, creativePerf);
+    const hookDim = analyzeByDimension((creative) => creative.attributes.hook, creatives, creativePerf);
     if (hookDim.length > 1) dims.push({ key: "hook", label: "ROAS by Hook", data: hookDim.slice(0, 8) });
-    const angleDim = analyzeByDimension("angle", creatives, creativePerf);
+    const angleDim = analyzeByDimension((creative) => creative.angle, creatives, creativePerf);
     if (angleDim.length > 1) dims.push({ key: "angle", label: "ROAS by Angle", data: angleDim.slice(0, 8) });
-    const personaDim = analyzeByDimension("persona", creatives, creativePerf);
+    const personaDim = analyzeByDimension((creative) => creative.persona, creatives, creativePerf);
     if (personaDim.length > 1) dims.push({ key: "persona", label: "ROAS by Persona", data: personaDim.slice(0, 8) });
 
     return { creativePerf, dimensions: dims };

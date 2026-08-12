@@ -276,7 +276,7 @@ export type WeeklyPromptInput = {
     hook?: string | null;
   }>;
   notTriedLately?: Array<{
-    kind: "angle" | "visual_style" | "hook_type";
+    kind: "message" | "concept" | "hook_type";
     name: string;
   }>;
   watchList?: Array<{

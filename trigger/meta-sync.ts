@@ -8,6 +8,8 @@ import {
   wait,
 } from "@trigger.dev/sdk";
 import { createApiClient, getEnvConfig } from "./client";
+import { enrichCreativeTagsTask } from "./enrich-creative-tags";
+import { harvestLandingPagesTask } from "./harvest-landing-pages";
 
 const BREAKDOWNS = [
   null,
@@ -562,6 +564,59 @@ export const metaSyncTask = task({
         skippedBreakdowns: accountResult.skippedBreakdowns,
         failures: accountResult.failures,
         totalRows,
+      });
+    }
+
+    // AI tagging runs once per organization, after every account has had its
+    // previews enriched — the copy and imagery it reads are what that step
+    // fetches, and creatives are org-scoped, not account-scoped.
+    metadata.set("currentBreakdown", "tagging");
+    metadata.set("step", "Enriching creative tags with AI");
+    try {
+      const tagResult = await enrichCreativeTagsTask.triggerAndWait({
+        organizationId: payload.organizationId,
+      });
+      if (tagResult.ok) {
+        logger.info("Completed AI tag enrichment", {
+          organizationId: payload.organizationId,
+          ...tagResult.output,
+        });
+      } else {
+        logger.error("AI tag enrichment run failed", {
+          organizationId: payload.organizationId,
+          error: tagResult.error,
+        });
+      }
+    } catch (error) {
+      logger.error("AI tag enrichment could not be triggered", {
+        organizationId: payload.organizationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // The ad side of the landing-page harvest (§5.1): destination URLs are
+    // whatever preview enrichment just wrote, so this runs after it.
+    metadata.set("currentBreakdown", "landing_pages");
+    metadata.set("step", "Harvesting landing pages");
+    try {
+      const harvestResult = await harvestLandingPagesTask.triggerAndWait({
+        organizationId: payload.organizationId,
+      });
+      if (harvestResult.ok) {
+        logger.info("Harvested landing pages", {
+          organizationId: payload.organizationId,
+          ...harvestResult.output,
+        });
+      } else {
+        logger.error("Landing page harvest run failed", {
+          organizationId: payload.organizationId,
+          error: harvestResult.error,
+        });
+      }
+    } catch (error) {
+      logger.error("Landing page harvest could not be triggered", {
+        organizationId: payload.organizationId,
+        error: error instanceof Error ? error.message : String(error),
       });
     }
 

@@ -1,18 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { addDays } from "@/lib/day";
 import {
+  evaluateAdLpFunnelMismatch,
   evaluateBrokenUtmTemplate,
   evaluateMetaOverclaim,
   evaluateRoasBelowTarget,
   evaluateSyncFailure,
+  evaluateUntaggedSpend,
   evaluateUnattributedSpike,
+  evaluateUtmTemplateDrift,
   evaluationDayFor,
+  FINDING_TYPES,
   isMuted,
   median,
   mutedUntilFrom,
+  UTM_TEMPLATE_LOCK_DATE,
+  type AdLpMismatchCandidate,
   type ClaimVerifiedDay,
   type RoasDay,
   type UnattributedDay,
+  type UtmDriftOrder,
 } from "@/lib/findings";
 
 const DAY = "2026-07-29";
@@ -57,6 +64,21 @@ function roasDays(entries: Array<[revenue: number, spend: number]>): RoasDay[] {
     spendCents,
   }));
 }
+
+describe("finding types", () => {
+  it("covers all eight finding enum values", () => {
+    expect(FINDING_TYPES).toEqual([
+      "meta_overclaim",
+      "unattributed_spike",
+      "broken_utm_template",
+      "sync_failure",
+      "roas_below_target",
+      "ad_lp_funnel_mismatch",
+      "untagged_spend",
+      "utm_template_drift",
+    ]);
+  });
+});
 
 describe("day helpers", () => {
   it("walks days across a month boundary", () => {
@@ -146,9 +168,24 @@ describe("evaluateMetaOverclaim", () => {
     expect(finding?.payload.windowMultiple).toBe(4);
     expect(finding?.payload.baselineMultiple).toBe(1);
     expect(finding?.payload.days).toEqual([
-      { day: "2026-07-27", claimedCents: 3000, verifiedCents: 1000, gapCents: 2000 },
-      { day: "2026-07-28", claimedCents: 5000, verifiedCents: 1000, gapCents: 4000 },
-      { day: "2026-07-29", claimedCents: 4000, verifiedCents: 1000, gapCents: 3000 },
+      {
+        day: "2026-07-27",
+        claimedCents: 3000,
+        verifiedCents: 1000,
+        gapCents: 2000,
+      },
+      {
+        day: "2026-07-28",
+        claimedCents: 5000,
+        verifiedCents: 1000,
+        gapCents: 4000,
+      },
+      {
+        day: "2026-07-29",
+        claimedCents: 4000,
+        verifiedCents: 1000,
+        gapCents: 3000,
+      },
     ]);
   });
 
@@ -483,6 +520,263 @@ describe("evaluateRoasBelowTarget", () => {
         target,
       }),
     ).toBeNull();
+  });
+});
+
+describe("evaluateAdLpFunnelMismatch", () => {
+  function candidate(
+    overrides: Partial<AdLpMismatchCandidate> = {},
+  ): AdLpMismatchCandidate {
+    return {
+      adId: "ad-1",
+      adName: "Cold problem ad",
+      adFunnelStage: "tof",
+      adFunnelStageSource: "ai",
+      landingPageId: "page-1",
+      normalizedUrl: "reviv.com/pages/bundle-offer",
+      pageFunnelStage: "bof",
+      pageClassificationStatus: "suggested",
+      pageClassificationSource: "ai",
+      trailing7dSpend: 100,
+      trailing7dRevenue: 250,
+      trailing7dLandingPageViews: 400,
+      ...overrides,
+    };
+  }
+
+  it("fires at exactly $100 and freezes suggested AI provenance", () => {
+    const finding = evaluateAdLpFunnelMismatch({
+      day: DAY,
+      candidates: [candidate()],
+    });
+
+    expect(finding?.type).toBe("ad_lp_funnel_mismatch");
+    expect(finding?.periodStart).toBe("2026-07-23");
+    expect(finding?.payload.totalCount).toBe(1);
+    expect(finding?.payload.offendingAds).toEqual([candidate()]);
+    expect(finding?.payload.headline).toContain("$100.00");
+  });
+
+  // The drawer prints "spend/back/land" off the frozen payload, so both extra
+  // figures have to survive the trip untouched.
+  it("carries back and land through to the payload untouched", () => {
+    const finding = evaluateAdLpFunnelMismatch({
+      day: DAY,
+      candidates: [
+        candidate({ trailing7dRevenue: 1234.56, trailing7dLandingPageViews: 89 }),
+      ],
+    });
+    const offenders = finding?.payload.offendingAds as AdLpMismatchCandidate[];
+    const topAd = finding?.payload.topAd as AdLpMismatchCandidate;
+
+    expect(offenders[0].trailing7dRevenue).toBe(1234.56);
+    expect(offenders[0].trailing7dLandingPageViews).toBe(89);
+    expect(topAd.trailing7dRevenue).toBe(1234.56);
+    expect(topAd.trailing7dLandingPageViews).toBe(89);
+  });
+
+  it("does not fire below $100", () => {
+    expect(
+      evaluateAdLpFunnelMismatch({
+        day: DAY,
+        candidates: [candidate({ trailing7dSpend: 99.99 })],
+      }),
+    ).toBeNull();
+  });
+
+  it("fires only for the three colder-to-hotter directions", () => {
+    const stages = ["tof", "mof", "bof"] as const;
+    const firingPairs: string[] = [];
+
+    for (const adFunnelStage of stages) {
+      for (const pageFunnelStage of stages) {
+        const finding = evaluateAdLpFunnelMismatch({
+          day: DAY,
+          candidates: [candidate({ adFunnelStage, pageFunnelStage })],
+        });
+        if (finding) firingPairs.push(`${adFunnelStage}->${pageFunnelStage}`);
+      }
+    }
+
+    expect(firingPairs).toEqual(["tof->mof", "tof->bof", "mof->bof"]);
+  });
+
+  it("orders by spend, caps at ten, and carries human provenance", () => {
+    const candidates = Array.from({ length: 12 }, (_, index) =>
+      candidate({
+        adId: `ad-${index}`,
+        adName: `Ad ${index}`,
+        adFunnelStageSource: "human",
+        pageClassificationStatus: "confirmed",
+        pageClassificationSource: "human",
+        trailing7dSpend: 100 + index,
+      }),
+    );
+    const finding = evaluateAdLpFunnelMismatch({ day: DAY, candidates });
+    const offenders = finding?.payload.offendingAds as AdLpMismatchCandidate[];
+
+    expect(finding?.payload.totalCount).toBe(12);
+    expect(offenders).toHaveLength(10);
+    expect(offenders[0]).toMatchObject({
+      adId: "ad-11",
+      adFunnelStageSource: "human",
+      pageClassificationStatus: "confirmed",
+      pageClassificationSource: "human",
+    });
+  });
+});
+
+describe("evaluateUntaggedSpend", () => {
+  it("fires above 20% and carries the coverage pause flag", () => {
+    const finding = evaluateUntaggedSpend({
+      day: DAY,
+      rollup: {
+        untaggedAdCount: 7,
+        untaggedSpend: 201,
+        totalActiveSpend: 1000,
+      },
+    });
+
+    expect(finding?.type).toBe("untagged_spend");
+    expect(finding?.payload.share).toBeCloseTo(0.201);
+    expect(finding?.payload.taggedSpendMinShare).toBe(0.8);
+    expect(finding?.payload.aggregateSliceAlertsPaused).toBe(true);
+  });
+
+  it("stays silent at exactly 20%", () => {
+    expect(
+      evaluateUntaggedSpend({
+        day: DAY,
+        rollup: {
+          untaggedAdCount: 2,
+          untaggedSpend: 200,
+          totalActiveSpend: 1000,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("stays silent when active ads have no spend", () => {
+    expect(
+      evaluateUntaggedSpend({
+        day: DAY,
+        rollup: {
+          untaggedAdCount: 3,
+          untaggedSpend: 0,
+          totalActiveSpend: 0,
+        },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("evaluateUtmTemplateDrift", () => {
+  function order(overrides: Partial<UtmDriftOrder> = {}): UtmDriftOrder {
+    return {
+      adId: "ad-1",
+      adName: "New ad",
+      adCreatedAt: new Date(UTM_TEMPLATE_LOCK_DATE.getTime() + 1),
+      metaAdId: "123456789012",
+      matchMethod: "name",
+      utmContent: "New ad",
+      ...overrides,
+    };
+  }
+
+  it("fires for exactly three name-matched orders from a post-lock ad", () => {
+    const finding = evaluateUtmTemplateDrift({
+      day: DAY,
+      orders: [order(), order(), order()],
+    });
+
+    expect(finding?.type).toBe("utm_template_drift");
+    expect(finding?.payload.orderCount).toBe(3);
+    expect(finding?.payload.matchMethods).toEqual(["name"]);
+    expect(finding?.payload.samples).toEqual([
+      { utmContent: "New ad", count: 3 },
+    ]);
+  });
+
+  it("does not fire for two orders or an ad created on the lock instant", () => {
+    expect(
+      evaluateUtmTemplateDrift({ day: DAY, orders: [order(), order()] }),
+    ).toBeNull();
+    expect(
+      evaluateUtmTemplateDrift({
+        day: DAY,
+        orders: Array.from({ length: 3 }, () =>
+          order({ adCreatedAt: UTM_TEMPLATE_LOCK_DATE }),
+        ),
+      }),
+    ).toBeNull();
+  });
+
+  it("fires for three unmatched orders sharing one non-numeric raw value", () => {
+    const finding = evaluateUtmTemplateDrift({
+      day: DAY,
+      orders: Array.from({ length: 3 }, () =>
+        order({
+          adId: null,
+          adName: null,
+          adCreatedAt: null,
+          metaAdId: "launch-ad-v2",
+          matchMethod: "unmatched",
+          utmContent: "launch-ad-v2",
+        }),
+      ),
+    });
+
+    expect(finding?.payload.offenders).toEqual([
+      {
+        adId: null,
+        adName: null,
+        rawUtmContent: "launch-ad-v2",
+        matchMethod: "unmatched",
+        orderCount: 3,
+      },
+    ]);
+  });
+
+  it("keeps numeric unmatched values silent", () => {
+    expect(
+      evaluateUtmTemplateDrift({
+        day: DAY,
+        orders: Array.from({ length: 3 }, () =>
+          order({
+            adId: null,
+            adName: null,
+            adCreatedAt: null,
+            metaAdId: "123456789012",
+            matchMethod: "unmatched",
+            utmContent: "123456789012",
+          }),
+        ),
+      }),
+    ).toBeNull();
+  });
+
+  it("requires three orders per offender instead of pooling unrelated UTMs", () => {
+    expect(
+      evaluateUtmTemplateDrift({
+        day: DAY,
+        orders: [
+          order({ metaAdId: "bad-a", matchMethod: "unmatched" }),
+          order({ metaAdId: "bad-a", matchMethod: "unmatched" }),
+          order({ metaAdId: "bad-b", matchMethod: "unmatched" }),
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("caps utm_content samples at five", () => {
+    const finding = evaluateUtmTemplateDrift({
+      day: DAY,
+      orders: Array.from({ length: 6 }, (_, index) =>
+        order({ utmContent: `New ad variant ${index}` }),
+      ),
+    });
+
+    expect(finding?.payload.samples).toHaveLength(5);
   });
 });
 
