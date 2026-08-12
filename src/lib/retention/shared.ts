@@ -42,6 +42,12 @@ export type RetentionCategoryDefinition = {
   dateExpression: SQL;
   /** Children before parents; see design §4. */
   deleteOrder: number;
+  /**
+   * Counted in the plan so approvers see the full blast radius, but never
+   * deleted directly — PostgreSQL removes these rows with their parent
+   * (ON DELETE CASCADE from klaviyo_event).
+   */
+  cascadeOnly?: boolean;
 };
 
 const BREAKDOWN_COLUMNS = [
@@ -63,6 +69,39 @@ function allDimensionsEmpty(alias: string): SQL {
     ),
     sql` AND `,
   );
+}
+
+function cascadeFromDoomedEvents(
+  organizationId: string,
+  cutoffs: RetentionCutoffs,
+  tables: { table: string; alias: string; eventColumns: string[] }[],
+): RetentionCategoryDefinition[] {
+  return tables.map(({ table, alias, eventColumns }) => ({
+    key: table,
+    table,
+    alias,
+    deleteOrder: 0,
+    cascadeOnly: true,
+    dateExpression: sql`NULL::date`,
+    predicate: sql.join(
+      [
+        sql`${sql.raw(`${alias}.organization_id`)} = ${organizationId} AND (`,
+        sql.join(
+          eventColumns.map(
+            (column) => sql`EXISTS (
+              SELECT 1 FROM klaviyo_event ke
+              WHERE ke.id = ${sql.raw(`${alias}.${column}`)}
+                AND ke.organization_id = ${organizationId}
+                AND ke.occurred_at < ${cutoffs.evidence}::timestamp
+            )`,
+          ),
+          sql` OR `,
+        ),
+        sql`)`,
+      ],
+      sql` `,
+    ),
+  }));
 }
 
 export function retentionCategoryDefinitions(
@@ -88,11 +127,28 @@ export function retentionCategoryDefinitions(
       dateExpression: sql`pl.date_end`,
       predicate: sql`pl.organization_id = ${organizationId}
         AND ${allDimensionsEmpty("pl")}
+        AND pl.date_start = pl.date_end
+        AND pl.date_end < ${cutoffs.base}::date`,
+    },
+    // Legacy multi-day base rows are their own category so an approver sees
+    // them: the monthly rollup deliberately never sums them (they duplicate
+    // daily rows where both exist; the admin purge tool is the sanctioned
+    // reconciler), so their spend leaves without entering a summary.
+    {
+      key: "performance_base_multi_day",
+      table: "performance_log",
+      alias: "pl",
+      deleteOrder: 12,
+      dateExpression: sql`pl.date_end`,
+      predicate: sql`pl.organization_id = ${organizationId}
+        AND ${allDimensionsEmpty("pl")}
+        AND pl.date_start <> pl.date_end
         AND pl.date_end < ${cutoffs.base}::date`,
     },
     // Klaviyo event lineage; event products, run observations, identity
     // observations, event-side HMACs, the match graph and attribution claims
-    // all cascade from klaviyo_event, so they are not separate categories.
+    // all cascade from klaviyo_event. The cascadeOnly categories below count
+    // that blast radius for the plan; only klaviyo_event itself is deleted.
     {
       key: "klaviyo_event",
       table: "klaviyo_event",
@@ -102,6 +158,21 @@ export function retentionCategoryDefinitions(
       predicate: sql`ke.organization_id = ${organizationId}
         AND ke.occurred_at < ${cutoffs.evidence}::timestamp`,
     },
+    ...cascadeFromDoomedEvents(organizationId, cutoffs, [
+      // Claims can also cascade via a doomed interaction event; counting by
+      // the (not-null) conversion event covers the practical population.
+      { table: "klaviyo_attribution_claim", alias: "kac", eventColumns: ["conversion_event_id"] },
+      { table: "klaviyo_match_candidate", alias: "kmc", eventColumns: ["event_id"] },
+      { table: "klaviyo_event_match_result", alias: "kemr", eventColumns: ["event_id"] },
+      { table: "klaviyo_order_match_result", alias: "komr", eventColumns: ["selected_event_id"] },
+      {
+        table: "klaviyo_product_evidence_link",
+        alias: "kpel",
+        eventColumns: ["ordered_product_event_id", "placed_order_event_id"],
+      },
+      { table: "klaviyo_event_product", alias: "kep", eventColumns: ["event_id"] },
+      { table: "klaviyo_event_run_observation", alias: "kero", eventColumns: ["event_id"] },
+    ]),
     {
       key: "shopify_order_line",
       table: "shopify_order_line",
@@ -139,7 +210,9 @@ export function retentionCategoryDefinitions(
         AND sero.observed_at < ${cutoffs.evidence}::timestamp`,
     },
     // Sync runs only once they are terminal, their requested window has
-    // expired, and no observation still points at them.
+    // expired, and nothing retained still points at them: neither an event
+    // observation nor a match run (match runs cascade from their sync runs,
+    // and they are only supposed to fall via their events — design §4).
     {
       key: "klaviyo_sync_run",
       table: "klaviyo_sync_run",
@@ -153,6 +226,11 @@ export function retentionCategoryDefinitions(
           SELECT 1 FROM klaviyo_event_run_observation kero
           WHERE kero.connection_id = ksr.connection_id
             AND kero.sync_run_id = ksr.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM klaviyo_match_run kmr
+          WHERE kmr.connection_id = ksr.connection_id
+            AND kmr.source_run_id = ksr.id
         )`,
     },
     {
@@ -169,6 +247,11 @@ export function retentionCategoryDefinitions(
           WHERE sero.organization_id = sesr.organization_id
             AND sero.store_id = sesr.store_id
             AND sero.evidence_run_id = sesr.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM klaviyo_match_run kmr
+          WHERE kmr.organization_id = sesr.organization_id
+            AND kmr.shopify_evidence_run_id = sesr.id
         )`,
     },
   ];

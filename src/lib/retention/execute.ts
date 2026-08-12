@@ -44,10 +44,14 @@ export async function executeRetention(input: {
     today: input.today,
   });
 
+  // cascadeOnly categories are plan-visibility rows; PostgreSQL deletes them
+  // with their parent, so deleting them here would double-fire.
   const definitions = retentionCategoryDefinitions(
     input.organizationId,
     retentionCutoffs(input.today),
-  ).sort((a, b) => a.deleteOrder - b.deleteOrder);
+  )
+    .filter((definition) => !definition.cascadeOnly)
+    .sort((a, b) => a.deleteOrder - b.deleteOrder);
 
   const deleted: Record<string, number> = {};
   for (const definition of definitions) {

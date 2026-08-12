@@ -1,10 +1,11 @@
 import { logger, metadata, schedules, task } from "@trigger.dev/sdk";
-import { sql } from "drizzle-orm";
-import { db } from "@/db";
 import { formatDateOnly } from "@/lib/date";
 import { executeRetention } from "@/lib/retention/execute";
-import { planRetention } from "@/lib/retention/plan";
-import { retentionEnforcedOrganizationIds } from "@/lib/retention/policy";
+import { listRetentionOrganizationIds, planRetention } from "@/lib/retention/plan";
+import {
+  redactOrganizationId,
+  retentionEnforcedOrganizationIds,
+} from "@/lib/retention/policy";
 import { rollupMonthlySummaries } from "@/lib/retention/rollup";
 import { RETENTION_TASK_RETRY } from "./retry";
 
@@ -18,14 +19,6 @@ type RetentionRunPayload = {
   execute?: boolean;
 };
 
-type OrganizationRow = {
-  organization_id: string;
-};
-
-export function redactOrgId(organizationId: string) {
-  return `${organizationId.slice(0, 6)}…`;
-}
-
 export function mayExecuteRetention(
   organizationId: string,
   executeRequested: boolean,
@@ -38,17 +31,6 @@ function deletedRowCount(deleted: Record<string, number>) {
   return Object.values(deleted).reduce((total, count) => total + count, 0);
 }
 
-async function listOrganizationIds() {
-  const result = await db.execute(sql`
-    SELECT DISTINCT organization_id
-    FROM performance_log
-    WHERE organization_id IS NOT NULL
-    ORDER BY organization_id
-  `);
-
-  return (result.rows as OrganizationRow[]).map((row) => row.organization_id);
-}
-
 async function runRetentionForOrganization(input: {
   organizationId: string;
   executeRequested: boolean;
@@ -56,7 +38,7 @@ async function runRetentionForOrganization(input: {
 }) {
   const { organizationId, executeRequested, progress } = input;
   const today = formatDateOnly(new Date());
-  const redactedOrganizationId = redactOrgId(organizationId);
+  const redactedOrganizationId = redactOrganizationId(organizationId);
   const enforcedOrganizationIds = retentionEnforcedOrganizationIds();
   const enforce = mayExecuteRetention(
     organizationId,
@@ -113,7 +95,7 @@ export const retentionSweepScheduled = schedules.task({
   retry: RETENTION_TASK_RETRY,
   queue: RETENTION_QUEUE,
   run: async () => {
-    const organizationIds = await listOrganizationIds();
+    const organizationIds = await listRetentionOrganizationIds();
     const results = [];
 
     for (const [index, organizationId] of organizationIds.entries()) {

@@ -6,7 +6,8 @@ import { useQueryState, parseAsString } from "nuqs";
 import { subDays } from "date-fns";
 import Link from "next/link";
 import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
-import { BREAKDOWN_RETENTION_DAYS, breakdownWindowStart } from "@/lib/retention/policy";
+import { clampBreakdownRange } from "@/lib/retention/policy";
+import { BreakdownWindowCaption } from "@/components/blocks/dashboard/breakdown-window-caption";
 import { useForm, Controller, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
@@ -129,18 +130,19 @@ export default function CreativeDetailPage() {
   const [demoDimension, setDemoDimension] = useState<"age" | "gender" | "country" | "device">("gender");
   // Breakdown rows are only retained for 14 days; the page default is 30, so
   // this clamp (and its caption) is the normal case, not an edge case.
-  const breakdownStart = breakdownWindowStart(formatDateOnly(new Date()));
-  const demoFromValue = fromValue < breakdownStart ? breakdownStart : fromValue;
-  const isDemoClamped = demoFromValue !== fromValue;
-  const hasDemoWindow = demoFromValue <= toValue;
+  const demoWindow = clampBreakdownRange({
+    from: fromValue,
+    to: toValue,
+    today: formatDateOnly(new Date()),
+  });
   const creativeDemographic = useQuery({
     ...trpc.performanceLog.creativeDemographicBreakdown.queryOptions({
       creativeId: id,
       dimension: demoDimension,
-      from: demoFromValue,
+      from: demoWindow.from,
       to: toValue,
     }),
-    enabled: hasDemoWindow,
+    enabled: demoWindow.hasWindow,
   });
 
   // Fetch ad preview iframe URL from Meta on demand (user clicks play)
@@ -706,16 +708,14 @@ export default function CreativeDetailPage() {
 
         {/* Demographics tab */}
         <TabsContent value="demographics" className="space-y-2 pt-4">
-          {!hasDemoWindow ? (
-            <p className="text-[11px] text-muted-foreground/70">
-              No demographic detail for this range. Breakdown data is kept for {BREAKDOWN_RETENTION_DAYS} days.
-            </p>
-          ) : isDemoClamped ? (
-            <p className="text-[11px] text-muted-foreground/70">
-              Demographic detail covers {demoFromValue}–{toValue}. Breakdown data is kept for {BREAKDOWN_RETENTION_DAYS} days.
-            </p>
+          {demoWindow.isClamped || !demoWindow.hasWindow ? (
+            <BreakdownWindowCaption
+              from={demoWindow.from}
+              to={toValue}
+              hasWindow={demoWindow.hasWindow}
+            />
           ) : null}
-          {hasDemoWindow ? (
+          {demoWindow.hasWindow ? (
             <DemographicBreakdownChart
               data={creativeDemographic.data}
               dimension={demoDimension}

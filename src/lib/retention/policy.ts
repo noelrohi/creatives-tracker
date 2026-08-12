@@ -71,6 +71,30 @@ export function retentionWindowStart(
     : breakdownWindowStart(todayYmd);
 }
 
+/** Six characters is enough to recognize an org without exposing the id. */
+export function redactOrganizationId(organizationId: string) {
+  return `${organizationId.slice(0, 6)}…`;
+}
+
+/**
+ * Clamp a report range to the breakdown window. `isClamped` drives the
+ * "detail covers …" captions; `hasWindow` is false when the whole range
+ * predates the window and there is nothing to chart.
+ */
+export function clampBreakdownRange(input: {
+  from: string;
+  to: string;
+  today: string;
+}) {
+  const windowStart = breakdownWindowStart(input.today);
+  const from = input.from < windowStart ? windowStart : input.from;
+  return {
+    from,
+    isClamped: from !== input.from,
+    hasWindow: from <= input.to,
+  };
+}
+
 /**
  * Organizations allowed to actually delete. Unset or empty means every
  * retention run is a dry-run everywhere — production stays in this state

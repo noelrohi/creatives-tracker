@@ -173,6 +173,46 @@ const FIXTURE_DDL = [
      identity_hmac_id text NOT NULL,
      observed_at timestamp NOT NULL
    )`,
+  // Cascade tables: transcribed with the ON DELETE CASCADE FKs the plan's
+  // blast-radius counts and the event-delete tests depend on.
+  `CREATE TABLE klaviyo_attribution_claim (
+     id text PRIMARY KEY,
+     organization_id text NOT NULL,
+     conversion_event_id text NOT NULL REFERENCES klaviyo_event(id) ON DELETE CASCADE
+   )`,
+  `CREATE TABLE klaviyo_match_candidate (
+     id text PRIMARY KEY,
+     organization_id text NOT NULL,
+     event_id text NOT NULL REFERENCES klaviyo_event(id) ON DELETE CASCADE
+   )`,
+  `CREATE TABLE klaviyo_event_match_result (
+     id text PRIMARY KEY,
+     organization_id text NOT NULL,
+     event_id text NOT NULL REFERENCES klaviyo_event(id) ON DELETE CASCADE
+   )`,
+  `CREATE TABLE klaviyo_order_match_result (
+     id text PRIMARY KEY,
+     organization_id text NOT NULL,
+     selected_event_id text REFERENCES klaviyo_event(id) ON DELETE CASCADE
+   )`,
+  `CREATE TABLE klaviyo_product_evidence_link (
+     id text PRIMARY KEY,
+     organization_id text NOT NULL,
+     ordered_product_event_id text NOT NULL REFERENCES klaviyo_event(id) ON DELETE CASCADE,
+     placed_order_event_id text NOT NULL REFERENCES klaviyo_event(id) ON DELETE CASCADE
+   )`,
+  `CREATE TABLE klaviyo_event_product (
+     id text PRIMARY KEY,
+     organization_id text NOT NULL,
+     event_id text NOT NULL REFERENCES klaviyo_event(id) ON DELETE CASCADE
+   )`,
+  `CREATE TABLE klaviyo_match_run (
+     id text PRIMARY KEY,
+     organization_id text NOT NULL,
+     connection_id text NOT NULL,
+     source_run_id text NOT NULL,
+     shopify_evidence_run_id text NOT NULL
+   )`,
 ];
 
 const TABLES = [
@@ -186,6 +226,13 @@ const TABLES = [
   "shopify_evidence_sync_run",
   "shopify_evidence_run_observation",
   "shopify_evidence_run_identity_observation",
+  "klaviyo_attribution_claim",
+  "klaviyo_match_candidate",
+  "klaviyo_event_match_result",
+  "klaviyo_order_match_result",
+  "klaviyo_product_evidence_link",
+  "klaviyo_event_product",
+  "klaviyo_match_run",
 ];
 
 type PerfRow = {
@@ -364,6 +411,9 @@ describeIfDb("retention library", () => {
       const base = plan.categories.find(
         (category) => category.key === "performance_base",
       );
+      const multiDay = plan.categories.find(
+        (category) => category.key === "performance_base_multi_day",
+      );
 
       expect(breakdown).toEqual({
         key: "performance_breakdown",
@@ -371,13 +421,25 @@ describeIfDb("retention library", () => {
         candidateRows: 2,
         oldestDate: shiftYmd(CUTOFFS.base, -5),
         newestDate: shiftYmd(CUTOFFS.breakdown, -1),
+        cascadeOnly: false,
       });
       expect(base).toEqual({
         key: "performance_base",
         table: "performance_log",
-        candidateRows: 3,
+        candidateRows: 2,
         oldestDate: shiftYmd(CUTOFFS.base, -40),
         newestDate: shiftYmd(CUTOFFS.base, -1),
+        cascadeOnly: false,
+      });
+      // Legacy multi-day rows are counted apart: their spend leaves without
+      // ever entering a monthly summary, and the approver must see that.
+      expect(multiDay).toEqual({
+        key: "performance_base_multi_day",
+        table: "performance_log",
+        candidateRows: 1,
+        oldestDate: shiftYmd(CUTOFFS.base, -10),
+        newestDate: shiftYmd(CUTOFFS.base, -10),
+        cascadeOnly: false,
       });
     });
 
@@ -400,7 +462,8 @@ describeIfDb("retention library", () => {
 
       expect(result.dryRun).toBe(false);
       expect(result.deleted.performance_breakdown).toBe(2);
-      expect(result.deleted.performance_base).toBe(3);
+      expect(result.deleted.performance_base).toBe(2);
+      expect(result.deleted.performance_base_multi_day).toBe(1);
 
       expect(await idsIn("performance_log")).toEqual([
         "base_aug_01",
@@ -604,6 +667,30 @@ describeIfDb("retention library", () => {
           (organization_id, shopify_store_id, connection_id, sync_run_id, event_id)
         VALUES (${ORG}, 'store_1', 'conn_1', 'ksr_old_guarded', 'ke_fresh')
       `);
+      // Old terminal runs on both sides, guarded only by a retained match run.
+      await testDb!.execute(sql`
+        INSERT INTO klaviyo_sync_run (id, organization_id, shopify_store_id, connection_id, status, requested_to)
+        VALUES ('ksr_old_match_guarded', ${ORG}, 'store_1', 'conn_1', 'success', ${oldStamp}::timestamp)
+      `);
+      await testDb!.execute(sql`
+        INSERT INTO shopify_evidence_sync_run (id, organization_id, store_id, status, requested_to)
+        VALUES ('ser_old_match_guarded', ${ORG}, 'store_1', 'success', ${oldStamp}::timestamp)
+      `);
+      await testDb!.execute(sql`
+        INSERT INTO klaviyo_match_run (id, organization_id, connection_id, source_run_id, shopify_evidence_run_id)
+        VALUES ('kmr_1', ${ORG}, 'conn_1', 'ksr_old_match_guarded', 'ser_old_match_guarded')
+      `);
+      // Rows that cascade from the doomed event; the plan must count them.
+      await testDb!.execute(sql`
+        INSERT INTO klaviyo_attribution_claim (id, organization_id, conversion_event_id)
+        VALUES
+          ('kac_doomed', ${ORG}, 'ke_old'),
+          ('kac_kept', ${ORG}, 'ke_fresh')
+      `);
+      await testDb!.execute(sql`
+        INSERT INTO klaviyo_match_candidate (id, organization_id, event_id)
+        VALUES ('kmc_doomed', ${ORG}, 'ke_old')
+      `);
     });
 
     it("plans one candidate per evidence table and spares guarded runs", async () => {
@@ -620,7 +707,16 @@ describeIfDb("retention library", () => {
         shopify_evidence_run_identity_observation: 1,
         klaviyo_sync_run: 1,
         shopify_evidence_sync_run: 1,
+        klaviyo_attribution_claim: 1,
+        klaviyo_match_candidate: 1,
+        klaviyo_event_match_result: 0,
       });
+
+      const cascadeFlags = Object.fromEntries(
+        plan.categories.map((category) => [category.key, category.cascadeOnly]),
+      );
+      expect(cascadeFlags.klaviyo_attribution_claim).toBe(true);
+      expect(cascadeFlags.klaviyo_event).toBe(false);
     });
 
     it("deletes expired evidence and leaves everything else", async () => {
@@ -651,14 +747,21 @@ describeIfDb("retention library", () => {
       expect(await idsIn("shopify_evidence_sync_run")).toEqual([
         "ser_fresh",
         "ser_old_guarded",
+        "ser_old_match_guarded",
         "ser_running",
       ]);
       expect(await idsIn("klaviyo_sync_run")).toEqual([
         "ksr_fresh",
         "ksr_no_window",
         "ksr_old_guarded",
+        "ksr_old_match_guarded",
         "ksr_running",
       ]);
+      // The doomed event took its claim and candidate with it via cascade;
+      // the executor never touched those tables directly.
+      expect(await idsIn("klaviyo_attribution_claim")).toEqual(["kac_kept"]);
+      expect(await idsIn("klaviyo_match_candidate")).toEqual([]);
+      expect(result.deleted).not.toHaveProperty("klaviyo_attribution_claim");
     });
   });
 });

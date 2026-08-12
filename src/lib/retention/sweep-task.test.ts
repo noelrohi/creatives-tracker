@@ -15,11 +15,12 @@ vi.mock("@/lib/retention/rollup", () => ({
   rollupMonthlySummaries: vi.fn(),
 }));
 
-import { mayExecuteRetention, redactOrgId } from "../../../trigger/retention-sweep";
+import { mayExecuteRetention } from "../../../trigger/retention-sweep";
+import { redactOrganizationId } from "./policy";
 
 describe("retention sweep safety helpers", () => {
   it("redacts organization ids to six characters", () => {
-    expect(redactOrgId("org_123456789")).toBe("org_12…");
+    expect(redactOrganizationId("org_123456789")).toBe("org_12…");
   });
 
   it("executes only when explicitly requested and allowlisted", () => {

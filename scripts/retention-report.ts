@@ -1,11 +1,8 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { formatDateOnly } from "@/lib/date";
-import { planRetention } from "@/lib/retention/plan";
-
-type OrganizationRow = {
-  organization_id: string;
-};
+import { listRetentionOrganizationIds, planRetention } from "@/lib/retention/plan";
+import { redactOrganizationId } from "@/lib/retention/policy";
 
 type StorageRow = {
   database_bytes: string | number;
@@ -36,10 +33,6 @@ type OrganizationReport = {
   databaseSizeBeforeBytes: number;
   estimatedLogicalSizeAfterBytes: number;
 };
-
-function redactOrgId(organizationId: string) {
-  return `${organizationId.slice(0, 6)}…`;
-}
 
 function numberValue(value: string | number | undefined) {
   return Number(value ?? 0);
@@ -80,13 +73,8 @@ function printTable(rows: string[][]) {
 }
 
 async function buildReport() {
-  const [organizationResult, storageResult] = await Promise.all([
-    db.execute(sql`
-      SELECT DISTINCT organization_id
-      FROM performance_log
-      WHERE organization_id IS NOT NULL
-      ORDER BY organization_id
-    `),
+  const [organizationIds, storageResult] = await Promise.all([
+    listRetentionOrganizationIds(),
     db.execute(sql`
       SELECT
         pg_database_size(current_database())::bigint AS database_bytes,
@@ -108,13 +96,10 @@ async function buildReport() {
   const today = formatDateOnly(new Date());
   const organizations: OrganizationReport[] = [];
 
-  for (const row of organizationResult.rows as OrganizationRow[]) {
-    const plan = await planRetention({
-      organizationId: row.organization_id,
-      today,
-    });
+  for (const organizationId of organizationIds) {
+    const plan = await planRetention({ organizationId, today });
     const categories = plan.categories.map((category) => ({
-      category: category.key,
+      category: category.cascadeOnly ? `${category.key} (cascade)` : category.key,
       table: category.table,
       candidateRows: category.candidateRows,
       oldestDate: category.oldestDate,
@@ -130,7 +115,7 @@ async function buildReport() {
     );
 
     organizations.push({
-      organizationId: redactOrgId(row.organization_id),
+      organizationId: redactOrganizationId(organizationId),
       today: plan.today,
       cutoffs: plan.cutoffs,
       categories,

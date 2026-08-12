@@ -631,8 +631,10 @@ describe("adCreative analytics procedures", () => {
       });
 
       const query = compileSql(mockState.executedSql[0]);
-      expect(query).toContain("pl.country IS NULL");
-      expect(query).toContain("pl.gender IS NULL");
+      // The shared canonical-daily contract: empty-or-null dims, single-day.
+      expect(query).toContain("coalesce(pl.country, '') = ''");
+      expect(query).toContain("coalesce(pl.gender, '') = ''");
+      expect(query).toContain("pl.date_start = pl.date_end");
     });
 
     it("scope 'all' inside the window keeps breakdown rows", async () => {
@@ -645,7 +647,7 @@ describe("adCreative analytics procedures", () => {
       });
 
       const query = compileSql(mockState.executedSql[0]);
-      expect(query).not.toContain("pl.country IS NULL");
+      expect(query).not.toContain("coalesce(pl.country, '') = ''");
     });
   });
 });

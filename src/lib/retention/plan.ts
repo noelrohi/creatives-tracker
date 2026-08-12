@@ -18,6 +18,8 @@ export type RetentionCategory = {
   candidateRows: number;
   oldestDate: string | null;
   newestDate: string | null;
+  /** Deleted by PostgreSQL with its parent, not by the executor. */
+  cascadeOnly: boolean;
 };
 
 export type RetentionPlan = {
@@ -33,6 +35,19 @@ type CountRow = {
   oldest_date: string | null;
   newest_date: string | null;
 };
+
+/** Every organization with performance data — the sweep and CLI iterate this. */
+export async function listRetentionOrganizationIds() {
+  const result = await db.execute(sql`
+    SELECT DISTINCT organization_id
+    FROM performance_log
+    WHERE organization_id IS NOT NULL
+    ORDER BY organization_id
+  `);
+  return (result.rows as { organization_id: string }[]).map(
+    (row) => row.organization_id,
+  );
+}
 
 export async function planRetention(input: {
   organizationId: string;
@@ -61,6 +76,7 @@ export async function planRetention(input: {
       candidateRows: Number(row.candidate_rows ?? 0),
       oldestDate: row.oldest_date ?? null,
       newestDate: row.newest_date ?? null,
+      cascadeOnly: definition.cascadeOnly ?? false,
     });
   }
 

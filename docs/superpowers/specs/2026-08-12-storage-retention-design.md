@@ -74,8 +74,15 @@ by the scheduled task and the CLI:
   candidate counts and date extents per category:
   1. breakdown rows with `date_end <` breakdown cutoff (this includes the legacy
      combined-breakdown rows — they are all far older than 14 days),
-  2. base rows with `date_end <` base cutoff,
-  3. evidence rows per table (see §4).
+  2. daily base rows with `date_end <` base cutoff,
+  3. legacy multi-day base rows past the base cutoff, as their own category:
+     the rollup never sums them (they duplicate daily rows where both exist),
+     so their spend leaves without entering a summary and the approver must
+     see that count separately,
+  4. evidence rows per table (see §4), including `cascadeOnly` categories that
+     count the claim/match/product rows PostgreSQL removes together with a
+     doomed `klaviyo_event` — counted for the approval report, never deleted
+     directly.
 - `execute.ts` — `executeRetention({ organizationId, today, dryRun })`. With
   `dryRun: true` (the default) it returns the plan untouched. With `dryRun: false`
   it deletes in id-batches of 5,000 (`DELETE … WHERE id IN (SELECT … LIMIT n)`)
@@ -95,10 +102,15 @@ range has expired.
   dry-run everywhere — which is exactly the state production stays in until the
   cleanup plan is separately approved.
 - `scripts/retention-report.ts` (`bun run retention:report`) — read-only CLI that
-  runs rollup-free `planRetention` against `DATABASE_URL` (or
-  `PRODUCTION_DATABASE_URL` with `--prod`) and prints candidate counts, cutoffs,
-  and estimated reclaimable bytes. It redacts organization ids to a short prefix.
-  It has no delete path at all; execution stays behind the Trigger task's env gate.
+  runs rollup-free `planRetention` against `DATABASE_URL` and prints candidate
+  counts, cutoffs, and estimated reclaimable bytes. It deliberately has no
+  `--prod` flag: the production report is produced from a local copy restored
+  with `scripts/pull-prod-data.sh`, so the CLI can never hold a production
+  connection. It redacts organization ids to a short prefix and has no delete
+  path at all; execution stays behind the Trigger task's env gate.
+- `retention-run` (manual Trigger task) — payload `{ organizationId, execute? }`
+  for a supervised single-org run. It deletes only when `execute: true` **and**
+  the org is in the env allowlist; anything else is a dry run.
 
 ### 4. Evidence retention (90 days)
 
@@ -126,6 +138,12 @@ rows is removed):
 The ~267/267/267/339 partial rows from the canceled production bootstrap are
 recent; the 90-day policy leaves them alone until they age out. Nothing in this
 milestone deletes them.
+
+Known follow-up: `klaviyo_match_run`, `klaviyo_claim_replay_run`, and
+`klaviyo_claim_replay_state` have no age rule yet. They are run-audit records
+that grow slowly (zero rows today) and are protected from accidental cascade by
+the sync-run guards above; an explicit retention rule for them is a separate,
+small change once the pilot produces real volume.
 
 ### 5. Breakdown window guard (14 days)
 
@@ -168,13 +186,17 @@ for good UX/economy:
   `date_end` is older than that row's grain cutoff (base 180d, breakdown 14d) and
   reports how many it dropped. Every Meta and CSV path funnels through here.
 - `metaSync.startReport` clamps `dateFrom` to the grain cutoff before asking Meta
-  for the report (no point paying for data we refuse to store) and no-ops with a
-  clear result when the whole window is expired.
+  for the report (no point paying for data we refuse to store). A fully expired
+  window throws `PRECONDITION_FAILED` with the `RETENTION_WINDOW_EXPIRED` token;
+  the sync task recognizes that error and records the grain as skipped, so the
+  run continues. (A throw keeps the procedure's output contract stable for
+  every other caller — chosen over the earlier "no-op result" sketch.)
 - `trigger.triggerMetaSync` (manual backfill) validates/clamps the custom range
   server-side and tells the caller what was clamped.
 - `performanceLog.create` / `bulkCreate` / `update` reject dates older than the
   base cutoff (they can only produce base rows today).
-- `ad.bulkImport` rejects performance rows older than the base cutoff.
+- `ad.bulkImport` skips performance rows older than the base cutoff and reports
+  the skipped count (its result gained a `skippedExpiredPerformanceRows` field).
 - CSV import inherits the universal staging guard; `adCreative.bulkImport`
   additionally reports dropped-row counts so the UI can surface them.
 

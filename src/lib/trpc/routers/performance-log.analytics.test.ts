@@ -223,7 +223,7 @@ describe("performanceLog analytics procedures", () => {
         dateTo: IN_WINDOW,
       });
       const where = compileSql(mockState.selectWhere[0]).toLowerCase();
-      expect(where).not.toContain('"country" is null');
+      expect(where).not.toContain("coalesce");
     });
 
     it("allows scope 'base' over any range and filters to base rows", async () => {
@@ -235,8 +235,9 @@ describe("performanceLog analytics procedures", () => {
         scope: "base",
       });
       const where = compileSql(mockState.selectWhere[0]).toLowerCase();
+      // Empty-or-null: the one base-row contract every reader shares.
       for (const column of ["country", "platform", "placement", "device", "age", "gender"]) {
-        expect(where).toContain(`"${column}" is null`);
+        expect(where).toContain(`coalesce("performance_log"."${column}", '') = ''`);
       }
     });
   });

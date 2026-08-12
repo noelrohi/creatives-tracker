@@ -45,13 +45,34 @@ describe("planRetention", () => {
     expect(plan.categories.map((category) => category.key)).toEqual([
       "performance_breakdown",
       "performance_base",
+      "performance_base_multi_day",
       "klaviyo_event",
+      "klaviyo_attribution_claim",
+      "klaviyo_match_candidate",
+      "klaviyo_event_match_result",
+      "klaviyo_order_match_result",
+      "klaviyo_product_evidence_link",
+      "klaviyo_event_product",
+      "klaviyo_event_run_observation",
       "shopify_order_line",
       "source_identity_hmac",
       "shopify_evidence_run_identity_observation",
       "shopify_evidence_run_observation",
       "klaviyo_sync_run",
       "shopify_evidence_sync_run",
+    ]);
+
+    const cascadeKeys = plan.categories
+      .filter((category) => category.cascadeOnly)
+      .map((category) => category.key);
+    expect(cascadeKeys).toEqual([
+      "klaviyo_attribution_claim",
+      "klaviyo_match_candidate",
+      "klaviyo_event_match_result",
+      "klaviyo_order_match_result",
+      "klaviyo_product_evidence_link",
+      "klaviyo_event_product",
+      "klaviyo_event_run_observation",
     ]);
   });
 
@@ -69,6 +90,7 @@ describe("planRetention", () => {
       candidateRows: 7,
       oldestDate: "2026-01-01",
       newestDate: "2026-07-28",
+      cascadeOnly: false,
     });
     expect(plan.categories[1].candidateRows).toBe(3);
     expect(plan.totalCandidateRows).toBe(10);
@@ -88,18 +110,29 @@ describe("planRetention", () => {
     expect(base).toContain("pl.date_end < $2::date");
   });
 
-  it("guards sync-run categories with NOT EXISTS on surviving observations", async () => {
+  it("guards sync-run categories with NOT EXISTS on surviving references", async () => {
     await planRetention({ organizationId: ORG, today: TODAY });
 
-    const klaviyoRun = compileSql(mockState.executedSql[7]).toLowerCase();
-    const shopifyRun = compileSql(mockState.executedSql[8]).toLowerCase();
+    const compiled = mockState.executedSql.map((query) =>
+      compileSql(query).toLowerCase(),
+    );
+    const klaviyoRun = compiled.find((query) =>
+      query.includes("from klaviyo_sync_run ksr"),
+    )!;
+    const shopifyRun = compiled.find((query) =>
+      query.includes("from shopify_evidence_sync_run sesr"),
+    )!;
 
     expect(klaviyoRun).toContain("ksr.status in ('success', 'partial', 'failed')");
     expect(klaviyoRun).toContain("ksr.requested_to < $2::timestamp");
     expect(klaviyoRun).toContain("not exists");
     expect(klaviyoRun).toContain("from klaviyo_event_run_observation kero");
+    expect(klaviyoRun).toContain("from klaviyo_match_run kmr");
+    expect(klaviyoRun).toContain("kmr.source_run_id = ksr.id");
     expect(shopifyRun).toContain("sesr.status in ('success', 'partial', 'failed')");
     expect(shopifyRun).toContain("from shopify_evidence_run_observation sero");
+    expect(shopifyRun).toContain("from klaviyo_match_run kmr");
+    expect(shopifyRun).toContain("kmr.shopify_evidence_run_id = sesr.id");
   });
 
   it("never touches the excluded tables", async () => {

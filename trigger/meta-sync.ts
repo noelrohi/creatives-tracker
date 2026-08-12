@@ -7,9 +7,23 @@ import {
   tags,
   wait,
 } from "@trigger.dev/sdk";
+import { TRPCClientError } from "@trpc/client";
 import { createApiClient, getEnvConfig } from "./client";
 import { enrichCreativeTagsTask } from "./enrich-creative-tags";
 import { harvestLandingPagesTask } from "./harvest-landing-pages";
+
+/**
+ * startReport refuses ranges past the retention window with
+ * PRECONDITION_FAILED; the message token narrows it to that one refusal so an
+ * unrelated precondition never masquerades as a routine skip.
+ */
+function isRetentionWindowExpiredError(error: unknown) {
+  return (
+    error instanceof TRPCClientError &&
+    error.data?.code === "PRECONDITION_FAILED" &&
+    error.message.includes("RETENTION_WINDOW_EXPIRED")
+  );
+}
 
 const BREAKDOWNS = [
   null,
@@ -513,7 +527,7 @@ export const metaSyncTask = task({
           });
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
-          if (errorMessage.includes("RETENTION_WINDOW_EXPIRED")) {
+          if (isRetentionWindowExpiredError(error)) {
             accountResult.skippedBreakdowns.push(label);
             logger.info("Skipped expired retention window", {
               accountName: account.name,

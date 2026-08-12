@@ -1509,8 +1509,7 @@ export const adCreativeRouter = router({
       if (input.scope === "all") assertBreakdownRange(input.from);
 
       const scopeFilter = input.scope === "base"
-        ? sql`AND pl.country IS NULL AND pl.platform IS NULL AND pl.placement IS NULL
-              AND pl.device IS NULL AND pl.age IS NULL AND pl.gender IS NULL`
+        ? sql`AND ${basePerformanceLogFilter("pl")}`
         : sql``;
       const accountFilter = input.accountId
         ? sql`AND ad.account_id = ${input.accountId}`
