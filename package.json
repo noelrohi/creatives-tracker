@@ -9,6 +9,7 @@
     "lint": "eslint",
     "trigger:dev": "trigger dev",
     "trigger:deploy": "trigger deploy",
+    "retention:report": "bun scripts/retention-report.ts",
     "db:push": "node ./scripts/disallow-db-push.mjs local",
     "db:push:prod": "node ./scripts/disallow-db-push.mjs production",
     "db:migrate": "drizzle-kit migrate",

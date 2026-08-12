@@ -4,6 +4,7 @@ import { campaignRouter } from "./campaign";
 import { adSetRouter } from "./ad-set";
 import { adRouter } from "./ad";
 import { performanceLogRouter } from "./performance-log";
+import { performanceSummaryRouter } from "./performance-summary";
 import { tagRouter } from "./tag";
 import { abTestRouter } from "./ab-test";
 import { adAccountRouter } from "./account";
@@ -28,6 +29,7 @@ export const appRouter = router({
   adSet: adSetRouter,
   ad: adRouter,
   performanceLog: performanceLogRouter,
+  performanceSummary: performanceSummaryRouter,
   tag: tagRouter,
   abTest: abTestRouter,
   adAccount: adAccountRouter,
