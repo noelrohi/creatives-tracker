@@ -1,21 +1,34 @@
 /**
- * The findings feed: five frozen rules, evaluated once a day per store.
+ * The findings feed: eight frozen rules, evaluated once a day per store.
  *
  * The evaluators at the top are pure — they take per-day numbers and return a
  * draft finding or null, so the thresholds are unit-testable without a DB. The
- * assembly function below is the only part that touches Postgres, and it reuses
- * `attribution-queries` for every read except the broken-UTM sample.
+ * assembly function below is the only part that touches Postgres; focused read
+ * helpers assemble each evaluator's input.
  *
  * Payloads are frozen at fire time: whatever a rule cites is stored, never
  * re-derived when the feed is read.
  */
 
-import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
+import {
+  and,
+  between,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  or,
+  sql,
+} from "drizzle-orm";
 import { db } from "@/db";
 import {
   PAID_LOOKING_MEDIUM_HINTS,
   PAID_LOOKING_MEDIUM_REGEX_SOURCE,
 } from "@/lib/attribution-bucket";
+import { isUntagged } from "@/lib/creative-insights-shared";
+import { type FunnelStage } from "@/lib/creative-taxonomy";
 import { addDays } from "@/lib/day";
 import {
   computeRoas,
@@ -26,9 +39,19 @@ import {
   getSyncHealth,
   type SyncHealth,
 } from "@/lib/attribution-queries";
+import { basePerformanceRowsOnly } from "@/lib/performance-rows";
 import { deriveDayInTimezone } from "@/lib/shopify-ingest";
-import { findingMutes, findings, type findingTypeEnum } from "@/schema/finding";
-import { shopifyOrders, shopifyStores, shopifySyncRuns } from "@/schema/shopify";
+import { ads } from "@/schema/ad";
+import { adCreatives } from "@/schema/ad-creative";
+import { findingMutes, findings, findingTypeEnum } from "@/schema/finding";
+import { landingPages } from "@/schema/landing-page";
+import { performanceLogs } from "@/schema/performance-log";
+import {
+  shopifyOrders,
+  shopifyRefunds,
+  shopifyStores,
+  shopifySyncRuns,
+} from "@/schema/shopify";
 
 /* ------------------------------------------------------------------ */
 /* Thresholds (frozen — spec §8; not configurable, by decision)        */
@@ -64,6 +87,21 @@ export const BROKEN_UTM_SAMPLE_LIMIT = 5;
 /** Verified ROAS under target for a full week of computable days. */
 export const ROAS_CONSECUTIVE_DAYS = 7;
 
+/** A classified ad needs this much trailing-seven-day spend for LP mismatch. */
+export const AD_LP_MISMATCH_MIN_SPEND_7D = 100;
+export const AD_LP_MISMATCH_LIST_LIMIT = 10;
+
+/** Aggregate slice alerts unlock at the exact complement: 80% tagged spend. */
+export const UNTAGGED_SPEND_MAX_SHARE = 0.2;
+
+/**
+ * The spec-assembly lock date from Intelligence v1 §4.4. Ads created after
+ * this instant must use the canonical ID-form UTM template.
+ */
+export const UTM_TEMPLATE_LOCK_DATE = new Date("2026-08-03T00:00:00Z");
+export const UTM_DRIFT_MIN_ORDERS_PER_DAY = 3;
+export const UTM_DRIFT_SAMPLE_LIMIT = 5;
+
 /** Mute is a fixed week — custom durations were explicitly rejected. */
 export const MUTE_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -75,6 +113,9 @@ export const FINDING_TYPES = [
   "broken_utm_template",
   "sync_failure",
   "roas_below_target",
+  "ad_lp_funnel_mismatch",
+  "untagged_spend",
+  "utm_template_drift",
 ] as const satisfies readonly FindingType[];
 
 export type FindingDraft = {
@@ -321,7 +362,8 @@ export function evaluateSyncFailure(params: {
     .filter((connector) => params.health[connector].stale)
     .map((connector) => ({
       connector,
-      lastSuccessAt: params.health[connector].lastSuccessAt?.toISOString() ?? null,
+      lastSuccessAt:
+        params.health[connector].lastSuccessAt?.toISOString() ?? null,
       hoursSinceLastSuccess: hoursSince(
         params.health[connector].lastSuccessAt,
         params.now,
@@ -383,6 +425,222 @@ export function evaluateRoasBelowTarget(params: {
       target: params.target,
       consecutiveDays: ROAS_CONSECUTIVE_DAYS,
       days: points,
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Rule 6 — ad_lp_funnel_mismatch                                      */
+/* ------------------------------------------------------------------ */
+
+export type AdLpMismatchCandidate = {
+  adId: string;
+  adName: string;
+  adFunnelStage: FunnelStage;
+  adFunnelStageSource: string | null;
+  landingPageId: string;
+  normalizedUrl: string;
+  pageFunnelStage: FunnelStage;
+  pageClassificationStatus: "suggested" | "confirmed" | "stale" | null;
+  pageClassificationSource: string | null;
+  trailing7dSpend: number;
+  /** Net Meta-bucket revenue attributed to the ad over the same window, in dollars. */
+  trailing7dRevenue: number;
+  /** Meta-reported landing page views over the same window. */
+  trailing7dLandingPageViews: number;
+};
+
+const FUNNEL_STAGE_RANK: Record<FunnelStage, number> = {
+  tof: 0,
+  mof: 1,
+  bof: 2,
+};
+
+const FUNNEL_STAGE_LABEL: Record<FunnelStage, string> = {
+  tof: "top-of-funnel",
+  mof: "middle-of-funnel",
+  bof: "bottom-of-funnel",
+};
+
+export function evaluateAdLpFunnelMismatch(params: {
+  day: string;
+  candidates: AdLpMismatchCandidate[];
+}): FindingDraft | null {
+  const offendingAds = params.candidates
+    .filter(
+      (candidate) =>
+        candidate.trailing7dSpend >= AD_LP_MISMATCH_MIN_SPEND_7D &&
+        FUNNEL_STAGE_RANK[candidate.adFunnelStage] <
+          FUNNEL_STAGE_RANK[candidate.pageFunnelStage],
+    )
+    .sort((a, b) => b.trailing7dSpend - a.trailing7dSpend);
+
+  if (offendingAds.length === 0) return null;
+
+  const topAd = offendingAds[0];
+  return {
+    type: "ad_lp_funnel_mismatch",
+    periodStart: addDays(params.day, -6),
+    periodEnd: params.day,
+    payload: {
+      minSpend7d: AD_LP_MISMATCH_MIN_SPEND_7D,
+      totalCount: offendingAds.length,
+      headline: `You spent $${topAd.trailing7dSpend.toFixed(2)} this week sending ${FUNNEL_STAGE_LABEL[topAd.adFunnelStage]} traffic to a ${FUNNEL_STAGE_LABEL[topAd.pageFunnelStage]} page.`,
+      topAd,
+      offendingAds: offendingAds.slice(0, AD_LP_MISMATCH_LIST_LIMIT),
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Rule 7 — untagged_spend                                             */
+/* ------------------------------------------------------------------ */
+
+export type UntaggedSpendRollup = {
+  untaggedAdCount: number;
+  untaggedSpend: number;
+  totalActiveSpend: number;
+};
+
+export function evaluateUntaggedSpend(params: {
+  day: string;
+  rollup: UntaggedSpendRollup;
+}): FindingDraft | null {
+  if (params.rollup.totalActiveSpend <= 0) return null;
+
+  const share = params.rollup.untaggedSpend / params.rollup.totalActiveSpend;
+  if (share <= UNTAGGED_SPEND_MAX_SHARE) return null;
+
+  return {
+    type: "untagged_spend",
+    periodStart: addDays(params.day, -6),
+    periodEnd: params.day,
+    payload: {
+      untaggedAdCount: params.rollup.untaggedAdCount,
+      untaggedSpend: params.rollup.untaggedSpend,
+      totalActiveSpend: params.rollup.totalActiveSpend,
+      share,
+      taggedSpendMinShare: 1 - UNTAGGED_SPEND_MAX_SHARE,
+      aggregateSliceAlertsPaused: true,
+      headline: `${params.rollup.untaggedAdCount} active ads are untagged — $${params.rollup.untaggedSpend.toFixed(2)}/wk of spend is invisible.`,
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Rule 8 — utm_template_drift                                         */
+/* ------------------------------------------------------------------ */
+
+export type UtmDriftOrder = {
+  adId: string | null;
+  adName: string | null;
+  adCreatedAt: Date | null;
+  metaAdId: string | null;
+  matchMethod: "id" | "name" | "unmatched" | null;
+  utmContent: string | null;
+};
+
+type UtmDriftOffender = {
+  adId: string | null;
+  adName: string | null;
+  rawUtmContent: string | null;
+  matchMethod: "name" | "unmatched";
+  orderCount: number;
+};
+
+function isNumericUtmContent(value: string): boolean {
+  return /^[0-9]+$/.test(value);
+}
+
+export function evaluateUtmTemplateDrift(params: {
+  day: string;
+  orders: UtmDriftOrder[];
+}): FindingDraft | null {
+  const eligible = params.orders.filter((order) => {
+    if (order.matchMethod === "name") {
+      return (
+        order.adCreatedAt !== null &&
+        order.adCreatedAt.getTime() > UTM_TEMPLATE_LOCK_DATE.getTime()
+      );
+    }
+    return (
+      order.matchMethod === "unmatched" &&
+      order.metaAdId !== null &&
+      !isNumericUtmContent(order.metaAdId)
+    );
+  });
+
+  const grouped = new Map<
+    string,
+    { offender: Omit<UtmDriftOffender, "orderCount">; orders: UtmDriftOrder[] }
+  >();
+  for (const order of eligible) {
+    if (order.matchMethod !== "name" && order.matchMethod !== "unmatched") {
+      continue;
+    }
+    const matchMethod = order.matchMethod;
+    const key =
+      matchMethod === "name"
+        ? `name:${order.adId ?? order.adName ?? order.metaAdId ?? "unknown"}`
+        : `unmatched:${order.metaAdId}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.orders.push(order);
+      continue;
+    }
+    grouped.set(key, {
+      offender: {
+        adId: matchMethod === "name" ? order.adId : null,
+        adName: matchMethod === "name" ? order.adName : null,
+        rawUtmContent: matchMethod === "unmatched" ? order.metaAdId : null,
+        matchMethod,
+      },
+      orders: [order],
+    });
+  }
+
+  const firingGroups = [...grouped.values()]
+    .filter((group) => group.orders.length >= UTM_DRIFT_MIN_ORDERS_PER_DAY)
+    .sort((a, b) => b.orders.length - a.orders.length);
+  if (firingGroups.length === 0) return null;
+
+  const offenders: UtmDriftOffender[] = firingGroups.map((group) => ({
+    ...group.offender,
+    orderCount: group.orders.length,
+  }));
+  const orderCount = offenders.reduce(
+    (total, offender) => total + offender.orderCount,
+    0,
+  );
+  const sampleCounts = new Map<string, number>();
+  for (const group of firingGroups) {
+    for (const order of group.orders) {
+      const sample = order.utmContent ?? order.metaAdId;
+      if (!sample) continue;
+      sampleCounts.set(sample, (sampleCounts.get(sample) ?? 0) + 1);
+    }
+  }
+  const samples = [...sampleCounts.entries()]
+    .map(([utmContent, count]) => ({ utmContent, count }))
+    .sort(
+      (a, b) => b.count - a.count || a.utmContent.localeCompare(b.utmContent),
+    )
+    .slice(0, UTM_DRIFT_SAMPLE_LIMIT);
+
+  return {
+    type: "utm_template_drift",
+    periodStart: params.day,
+    periodEnd: params.day,
+    payload: {
+      threshold: UTM_DRIFT_MIN_ORDERS_PER_DAY,
+      day: params.day,
+      orderCount,
+      headline: `A new ad is sending non-standard UTMs — ${orderCount} orders yesterday.`,
+      offenders,
+      matchMethods: [
+        ...new Set(offenders.map((offender) => offender.matchMethod)),
+      ],
+      samples,
     },
   };
 }
@@ -489,6 +747,234 @@ async function getBrokenUtmOrders(params: {
   return { orderCount: countRow?.orderCount ?? 0, samples };
 }
 
+/**
+ * What the ad brought back over the same trailing week, per ad: Meta-bucket
+ * orders whose ad we resolved (`id` or `name` — an `unmatched` row names no ad),
+ * netted of refunds exactly the way `getMetaVerified` nets verified revenue.
+ * Amounts stay in dollars, the unit `trailing7dSpend` is already in.
+ */
+async function getAdRevenueByAdId(params: {
+  organizationId: string;
+  storeId: string;
+  day: string;
+}): Promise<Map<string, number>> {
+  const from = addDays(params.day, -6);
+  const adJoin = and(
+    eq(ads.organizationId, params.organizationId),
+    inArray(shopifyOrders.metaAdMatchMethod, ["id", "name"]),
+    sql`lower(${ads.metaId}) = ${shopifyOrders.metaAdId}`,
+  );
+  const metaOrders = and(
+    eq(shopifyOrders.organizationId, params.organizationId),
+    eq(shopifyOrders.storeId, params.storeId),
+    eq(shopifyOrders.bucket, "meta"),
+  );
+
+  const [orderRows, refundRows] = await Promise.all([
+    db
+      .select({
+        adId: ads.id,
+        gross: sql<string>`coalesce(sum(${shopifyOrders.netSales}), 0)`,
+      })
+      .from(shopifyOrders)
+      .innerJoin(ads, adJoin)
+      .where(and(metaOrders, between(shopifyOrders.orderDay, from, params.day)))
+      .groupBy(ads.id),
+
+    // Refunds land on the day the money went back, so they carry their own
+    // range — the same rule the attribution ledger uses.
+    db
+      .select({
+        adId: ads.id,
+        refunded: sql<string>`coalesce(sum(${shopifyRefunds.amount}), 0)`,
+      })
+      .from(shopifyRefunds)
+      .innerJoin(shopifyOrders, eq(shopifyOrders.id, shopifyRefunds.orderId))
+      .innerJoin(ads, adJoin)
+      .where(
+        and(
+          metaOrders,
+          eq(shopifyRefunds.organizationId, params.organizationId),
+          eq(shopifyRefunds.storeId, params.storeId),
+          between(shopifyRefunds.refundDay, from, params.day),
+        ),
+      )
+      .groupBy(ads.id),
+  ]);
+
+  const revenue = new Map<string, number>();
+  for (const row of orderRows) {
+    revenue.set(row.adId, Number(row.gross));
+  }
+  for (const row of refundRows) {
+    revenue.set(row.adId, (revenue.get(row.adId) ?? 0) - Number(row.refunded));
+  }
+  return revenue;
+}
+
+async function getAdLpMismatchCandidates(params: {
+  organizationId: string;
+  storeId: string;
+  day: string;
+}): Promise<AdLpMismatchCandidate[]> {
+  const [rows, revenueByAd] = await Promise.all([
+    db
+      .select({
+        adId: ads.id,
+        adName: ads.name,
+        adFunnelStage: sql<FunnelStage>`${ads.funnelStage}`,
+        adFunnelStageSource: ads.funnelStageSource,
+        landingPageId: landingPages.id,
+        normalizedUrl: landingPages.normalizedUrl,
+        pageFunnelStage: sql<FunnelStage>`${landingPages.funnelStage}`,
+        pageClassificationStatus: landingPages.classificationStatus,
+        pageClassificationSource: landingPages.classificationSource,
+        trailing7dSpend: sql<string>`coalesce(sum(${performanceLogs.spend}), 0)`,
+        // The land side of "spend/back/land": the same base rows the spend sum
+        // is taken over, so the two can never disagree about the window.
+        trailing7dLandingPageViews: sql<number>`coalesce(sum(${performanceLogs.landingPageViews}), 0)::int`,
+      })
+      .from(ads)
+      .innerJoin(landingPages, eq(ads.landingPageId, landingPages.id))
+      .innerJoin(performanceLogs, eq(performanceLogs.adId, ads.id))
+      .where(
+        and(
+          eq(ads.organizationId, params.organizationId),
+          eq(landingPages.organizationId, params.organizationId),
+          eq(performanceLogs.organizationId, params.organizationId),
+          isNotNull(ads.funnelStage),
+          isNotNull(landingPages.funnelStage),
+          between(
+            performanceLogs.dateStart,
+            addDays(params.day, -6),
+            params.day,
+          ),
+          basePerformanceRowsOnly(),
+        ),
+      )
+      .groupBy(
+        ads.id,
+        ads.name,
+        ads.funnelStage,
+        ads.funnelStageSource,
+        landingPages.id,
+        landingPages.normalizedUrl,
+        landingPages.funnelStage,
+        landingPages.classificationStatus,
+        landingPages.classificationSource,
+      ),
+
+    getAdRevenueByAdId(params),
+  ]);
+
+  return rows.map((row) => ({
+    ...row,
+    trailing7dSpend: Number(row.trailing7dSpend),
+    trailing7dRevenue: revenueByAd.get(row.adId) ?? 0,
+  }));
+}
+
+async function getUntaggedSpendRollup(params: {
+  organizationId: string;
+  day: string;
+}): Promise<UntaggedSpendRollup> {
+  const rows = await db
+    .select({
+      funnelStage: ads.funnelStage,
+      creativeId: adCreatives.id,
+      persona: adCreatives.persona,
+      angle: adCreatives.angle,
+      awarenessLevel: adCreatives.awarenessLevel,
+      spend: sql<string>`coalesce(sum(${performanceLogs.spend}), 0)`,
+    })
+    .from(ads)
+    .leftJoin(adCreatives, eq(ads.adCreativeId, adCreatives.id))
+    .leftJoin(
+      performanceLogs,
+      and(
+        eq(performanceLogs.adId, ads.id),
+        eq(performanceLogs.organizationId, params.organizationId),
+        between(performanceLogs.dateStart, addDays(params.day, -6), params.day),
+        basePerformanceRowsOnly(),
+      ),
+    )
+    .where(
+      and(
+        eq(ads.organizationId, params.organizationId),
+        eq(ads.status, "active"),
+        isNotNull(ads.metaId),
+      ),
+    )
+    .groupBy(
+      ads.id,
+      ads.funnelStage,
+      adCreatives.id,
+      adCreatives.persona,
+      adCreatives.angle,
+      adCreatives.awarenessLevel,
+    );
+
+  return rows.reduce<UntaggedSpendRollup>(
+    (rollup, row) => {
+      const spend = Number(row.spend);
+      rollup.totalActiveSpend += spend;
+      // One definition of "tagged" for the whole app (§6.4).
+      if (isUntagged(row)) {
+        rollup.untaggedAdCount += 1;
+        rollup.untaggedSpend += spend;
+      }
+      return rollup;
+    },
+    { untaggedAdCount: 0, untaggedSpend: 0, totalActiveSpend: 0 },
+  );
+}
+
+async function getUtmDriftOrders(params: {
+  organizationId: string;
+  storeId: string;
+  day: string;
+}): Promise<UtmDriftOrder[]> {
+  const utmContent = sql<
+    string | null
+  >`${shopifyOrders.customerJourney}->'lastVisit'->'utmParameters'->>'content'`;
+
+  return db
+    .select({
+      adId: ads.id,
+      adName: ads.name,
+      adCreatedAt: ads.createdAt,
+      metaAdId: shopifyOrders.metaAdId,
+      matchMethod: shopifyOrders.metaAdMatchMethod,
+      utmContent,
+    })
+    .from(shopifyOrders)
+    .leftJoin(
+      ads,
+      and(
+        eq(ads.organizationId, params.organizationId),
+        eq(ads.metaId, shopifyOrders.metaAdId),
+      ),
+    )
+    .where(
+      and(
+        eq(shopifyOrders.organizationId, params.organizationId),
+        eq(shopifyOrders.storeId, params.storeId),
+        eq(shopifyOrders.orderDay, params.day),
+        or(
+          and(
+            eq(shopifyOrders.metaAdMatchMethod, "name"),
+            gt(ads.createdAt, UTM_TEMPLATE_LOCK_DATE),
+          ),
+          and(
+            eq(shopifyOrders.metaAdMatchMethod, "unmatched"),
+            isNotNull(shopifyOrders.metaAdId),
+            sql`${shopifyOrders.metaAdId} !~ '^[0-9]+$'`,
+          ),
+        ),
+      ),
+    );
+}
+
 /** Per-day Meta claims + Shopify-verified revenue, oldest day first. */
 async function getClaimVerifiedSeries(params: {
   organizationId: string;
@@ -576,22 +1062,41 @@ export async function evaluateFindingsForStore(params: {
     day,
     OVERCLAIM_CONSECUTIVE_DAYS + OVERCLAIM_BASELINE_DAYS,
   );
-  const bucketFrom = addDays(day, -(SPIKE_BASELINE_DAYS + SPIKE_CONSECUTIVE_DAYS - 1));
+  const bucketFrom = addDays(
+    day,
+    -(SPIKE_BASELINE_DAYS + SPIKE_CONSECUTIVE_DAYS - 1),
+  );
 
-  const [claimVerified, bucketSeries, brokenUtm, health, roasTarget, mutedTypes] =
-    await Promise.all([
-      getClaimVerifiedSeries({ ...params, days: claimDays }),
-      getDailyBucketSeries({
-        organizationId: params.organizationId,
-        storeId: params.storeId,
-        dateFrom: bucketFrom,
-        dateTo: day,
-      }),
-      getBrokenUtmOrders({ ...params, day }),
-      getSyncHealth({ ...params, now }),
-      getRoasTarget(params.organizationId),
-      getActiveMutedTypes({ organizationId: params.organizationId, now }),
-    ]);
+  const [
+    claimVerified,
+    bucketSeries,
+    brokenUtm,
+    mismatchCandidates,
+    untaggedSpend,
+    utmDriftOrders,
+    health,
+    roasTarget,
+    mutedTypes,
+  ] = await Promise.all([
+    getClaimVerifiedSeries({ ...params, days: claimDays }),
+    getDailyBucketSeries({
+      organizationId: params.organizationId,
+      storeId: params.storeId,
+      dateFrom: bucketFrom,
+      dateTo: day,
+    }),
+    getBrokenUtmOrders({ ...params, day }),
+    getAdLpMismatchCandidates({
+      organizationId: params.organizationId,
+      storeId: params.storeId,
+      day,
+    }),
+    getUntaggedSpendRollup({ organizationId: params.organizationId, day }),
+    getUtmDriftOrders({ ...params, day }),
+    getSyncHealth({ ...params, now }),
+    getRoasTarget(params.organizationId),
+    getActiveMutedTypes({ organizationId: params.organizationId, now }),
+  ]);
 
   // Days with no orders are omitted by the series query; the spike rule needs
   // them present so its trailing window really ends on the evaluation day.
@@ -629,6 +1134,15 @@ export async function evaluateFindingsForStore(params: {
         spendCents: entry.spendCents,
       })),
       target: roasTarget,
+    }),
+    ad_lp_funnel_mismatch: evaluateAdLpFunnelMismatch({
+      day,
+      candidates: mismatchCandidates,
+    }),
+    untagged_spend: evaluateUntaggedSpend({ day, rollup: untaggedSpend }),
+    utm_template_drift: evaluateUtmTemplateDrift({
+      day,
+      orders: utmDriftOrders,
     }),
   };
 
@@ -723,6 +1237,8 @@ export type TodaysCheck = { type: FindingType; status: CheckStatus };
 const META_DEPENDENT_TYPES: readonly FindingType[] = [
   "meta_overclaim",
   "roas_below_target",
+  "ad_lp_funnel_mismatch",
+  "untagged_spend",
 ];
 
 export async function getTodaysChecks(params: {

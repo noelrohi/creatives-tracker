@@ -15,6 +15,7 @@ import {
   type FindingItem,
   type VoiceContext,
 } from "./copy";
+import { FindingDetail } from "./finding-details";
 import { formatAge, formatDateInZone } from "./format";
 
 /** What the row needs to know about the page it sits in. */
@@ -107,6 +108,10 @@ export function FindingRow({
               {sentence}
             </p>
           ))}
+
+          {/* The three creative-insights rules carry a drawer of their own;
+              the other five say everything in their sentences. */}
+          <FindingDetail item={item} ctx={ctx} canAct={canAct} />
 
           {evidence.kind === "link" ? (
             <Link

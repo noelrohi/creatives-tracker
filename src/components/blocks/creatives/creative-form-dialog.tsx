@@ -1,6 +1,6 @@
 "use client";
 
-import { useForm, Controller } from "react-hook-form";
+import { useForm, useWatch, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTRPC } from "@/lib/trpc/client";
@@ -15,6 +15,7 @@ import {
 import {
   Field,
   FieldContent,
+  FieldDescription,
   FieldError,
   FieldLabel,
 } from "@/components/ui/field";
@@ -32,6 +33,7 @@ import { MultiSelect } from "@/components/multi-select";
 import { FileUpload } from "@/components/file-upload";
 import {
   AWARENESS_OPTIONS,
+  creativeCreateFormSchema,
   creativeFormSchema,
   FORMAT_OPTIONS,
   getCreativeFormValues,
@@ -40,6 +42,31 @@ import {
   toCreativeMutationInput,
   type CreativeFormValues,
 } from "@/lib/creative-form";
+import { angleLabels } from "@/components/blocks/insights/insights-copy";
+import { ANGLE_TYPES } from "@/lib/creative-taxonomy";
+
+/**
+ * The three tags the insights breakdowns are built on (spec §6.1). A creative
+ * saved without them can never appear in a persona, angle or awareness slice,
+ * so we ask for them once, at creation, rather than chasing them later. Editing
+ * an older creative stays open: the server allows a partial save, and blocking
+ * it here would only trap unrelated edits behind a tagging chore.
+ */
+const REQUIRED_TAGS = [
+  { name: "persona", label: "Persona" },
+  { name: "angle", label: "Angle" },
+  { name: "awarenessLevel", label: "Awareness level" },
+] as const;
+
+const ANGLE_OPTIONS = ANGLE_TYPES.map((value) => ({
+  value,
+  label: angleLabels[value] ?? value,
+}));
+
+function listMissing(labels: string[]): string {
+  if (labels.length <= 1) return labels.join("");
+  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+}
 
 export interface CreativeFormDialogProps {
   open: boolean;
@@ -53,9 +80,11 @@ export interface CreativeFormDialogProps {
     persona: string | null;
     awarenessLevel: string | null;
     ownership: string | null;
-    hook: string | null;
+    attributes: {
+      hook?: string;
+      cta?: string;
+    };
     tone: string[] | null;
-    cta: string | null;
     notes: string | null;
   };
   onSuccess?: (id: string) => void;
@@ -71,8 +100,13 @@ export function CreativeFormDialog({
   const queryClient = useQueryClient();
   const isEdit = !!creative;
 
+  /**
+   * Creating holds the §6.1 line — persona, angle and awareness or no creative;
+   * editing does not, so an older untagged creative can still take an unrelated
+   * change. Same two schemas the server enforces.
+   */
   const form = useForm<CreativeFormValues>({
-    resolver: zodResolver(creativeFormSchema),
+    resolver: zodResolver(isEdit ? creativeFormSchema : creativeCreateFormSchema),
     values: getCreativeFormValues(creative),
   });
 
@@ -89,6 +123,39 @@ export function CreativeFormDialog({
   });
 
   const isPending = createMutation.isPending || updateMutation.isPending;
+
+  /**
+   * Which of the three are still empty right now. On create this drives the
+   * gate; on edit it only drives the note that says what the creative will be
+   * left out of.
+   */
+  const watched = useWatch({ control: form.control });
+  const missing = REQUIRED_TAGS.filter(({ name }) => {
+    const value = watched?.[name];
+    return typeof value === "string" ? value.trim().length === 0 : !value;
+  });
+
+  const missingNames = new Set(missing.map((tag) => tag.name));
+
+  /** A star while the field is being asked for; a quiet word once it is late. */
+  const tagMark = (name: (typeof REQUIRED_TAGS)[number]["name"]) => {
+    if (!isEdit) {
+      return (
+        <span aria-hidden className="text-sm text-destructive/70">
+          *
+        </span>
+      );
+    }
+    return missingNames.has(name) ? (
+      <span className="text-xs font-normal text-muted-foreground">missing</span>
+    ) : null;
+  };
+
+  const currentAngle = typeof watched?.angle === "string" ? watched.angle : "";
+  const angleOptions =
+    currentAngle && !ANGLE_OPTIONS.some((opt) => opt.value === currentAngle)
+      ? [...ANGLE_OPTIONS, { value: currentAngle, label: currentAngle }]
+      : ANGLE_OPTIONS;
 
   const onSubmit = async (values: CreativeFormValues) => {
     const payload = toCreativeMutationInput(values);
@@ -109,8 +176,26 @@ export function CreativeFormDialog({
         onOpenChange(false);
         onSuccess?.(creative.id);
       } else {
+        // The resolver has already held the §6.1 line; re-reading it here is
+        // what turns the three fields into the types `create` asks for.
+        const gate = creativeCreateFormSchema.safeParse(values);
+        if (!gate.success) {
+          for (const { name, label } of REQUIRED_TAGS) {
+            if (gate.error.issues.some((issue) => issue.path[0] === name)) {
+              form.setError(name, {
+                type: "required",
+                message: `${label} is required.`,
+              });
+            }
+          }
+          return;
+        }
+
         const created = await createMutation.mutateAsync({
           name: payload.name,
+          persona: gate.data.persona,
+          angle: gate.data.angle,
+          awarenessLevel: gate.data.awarenessLevel,
         });
 
         if (hasCreativeExtraValues(payload)) {
@@ -203,46 +288,102 @@ export function CreativeFormDialog({
                 />
               </Field>
 
-              <Field>
-                <FieldLabel>Awareness Level</FieldLabel>
-                <Controller
-                  control={form.control}
-                  name="awarenessLevel"
-                  render={({ field }) => (
-                    <Select
-                      value={field.value ?? ""}
-                      onValueChange={(v) => field.onChange(v || null)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select awareness level" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {AWARENESS_OPTIONS.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
+              <Field data-invalid={!!form.formState.errors.awarenessLevel}>
+                <FieldLabel>
+                  Awareness Level
+                  {tagMark("awarenessLevel")}
+                </FieldLabel>
+                <FieldContent>
+                  <Controller
+                    control={form.control}
+                    name="awarenessLevel"
+                    render={({ field }) => (
+                      <Select
+                        value={field.value ?? ""}
+                        onValueChange={(v) => {
+                          field.onChange(v || null);
+                          form.clearErrors("awarenessLevel");
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select awareness level" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {AWARENESS_OPTIONS.map((opt) => (
+                            <SelectItem key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                  <FieldError errors={[form.formState.errors.awarenessLevel]} />
+                </FieldContent>
               </Field>
 
-              <Field>
-                <FieldLabel>Angle</FieldLabel>
-                <Input
-                  {...form.register("angle")}
-                  placeholder="e.g., sleep quality"
-                />
+              {/* One of the seven angles, named the way the insights screen
+                  names them — a free-text angle could never join a slice. An
+                  angle written before this list existed is kept as an option of
+                  its own so editing a creative never silently drops it. */}
+              <Field data-invalid={!!form.formState.errors.angle}>
+                <FieldLabel>
+                  Angle
+                  {tagMark("angle")}
+                </FieldLabel>
+                <FieldContent>
+                  <Controller
+                    control={form.control}
+                    name="angle"
+                    render={({ field }) => (
+                      <Select
+                        value={field.value || ""}
+                        onValueChange={(v) => {
+                          field.onChange(v);
+                          form.clearErrors("angle");
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select angle" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {angleOptions.map((opt) => (
+                            <SelectItem key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                  <FieldError errors={[form.formState.errors.angle]} />
+                </FieldContent>
               </Field>
 
-              <Field>
-                <FieldLabel>Persona</FieldLabel>
-                <Input
-                  {...form.register("persona")}
-                  placeholder="e.g., busy professionals"
-                />
+              <Field data-invalid={!!form.formState.errors.persona}>
+                <FieldLabel htmlFor="creative-persona">
+                  Persona
+                  {tagMark("persona")}
+                </FieldLabel>
+                <FieldContent>
+                  <Input
+                    id="creative-persona"
+                    {...form.register("persona")}
+                    placeholder="e.g., new mom with melasma"
+                  />
+                  <FieldError errors={[form.formState.errors.persona]} />
+                </FieldContent>
               </Field>
+
+              {isEdit && missing.length > 0 ? (
+                <FieldDescription className="sm:col-span-2 text-[13px]">
+                  {listMissing(missing.map((tag) => tag.label))}{" "}
+                  {missing.length === 1 ? "is" : "are"} still missing, so this
+                  creative sits out the persona, angle and awareness
+                  breakdowns on Creative insights. You can save your other
+                  changes now.
+                </FieldDescription>
+              ) : null}
 
               <Field className="sm:col-span-2">
                 <FieldLabel>Hook</FieldLabel>

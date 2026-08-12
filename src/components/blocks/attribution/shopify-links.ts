@@ -62,6 +62,35 @@ export function merRangeUrl(params: { dateFrom: string; dateTo: string }): strin
   return `/mer?${query.toString()}`;
 }
 
+/**
+ * The orders behind one channel on one day: the attribution screen itself,
+ * with its range set to that day and the channel's order panel already open.
+ * Every parameter here is one the screen reads back out of the URL.
+ */
+export function bucketOrdersUrl(params: {
+  bucket: string;
+  dateFrom: string;
+  dateTo?: string;
+}): string {
+  const query = new URLSearchParams({
+    range: "custom",
+    from: params.dateFrom,
+    to: params.dateTo ?? params.dateFrom,
+    bucket: params.bucket,
+  });
+  return `/attribution?${query.toString()}`;
+}
+
+/**
+ * The ad itself. There is no ad-level route in the app: the campaign manager
+ * is one URL-addressable tree, and its search prunes that tree to the branch
+ * holding the match — so the ad's name is the address we have for it.
+ */
+export function managerAdUrl(params: { adName: string }): string {
+  const query = new URLSearchParams({ q: params.adName });
+  return `/campaigns?${query.toString()}`;
+}
+
 /** Connector state lives on the dashboard's freshness panel. */
 export function connectionsUrl(): string {
   return "/#connections";

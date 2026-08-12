@@ -89,11 +89,19 @@ describe("adSet mutations", () => {
 });
 
 describe("adCreative mutations", () => {
+  const TAGGED_CREATIVE = {
+    persona: "busy parents",
+    angle: "problem_solution",
+    awarenessLevel: "problem_aware",
+  } as const;
+
   describeMutation(
     "create",
-    () => memberCaller.adCreative.create(),
-    () => adminCaller.adCreative.create(),
-    () => ownerCaller.adCreative.create(),
+    // §6.1: a creative cannot be born untagged, so even the access check has
+    // to supply the enforced trio.
+    () => memberCaller.adCreative.create(TAGGED_CREATIVE),
+    () => adminCaller.adCreative.create(TAGGED_CREATIVE),
+    () => ownerCaller.adCreative.create(TAGGED_CREATIVE),
   );
 
   describeMutation(

@@ -76,7 +76,7 @@ endpoint. Keys are managed in Settings → API Keys.
 Brand profile (\`studio/brandProfile\` / \`saveBrandProfile\`) carries voice,
 prohibited claims, and required disclaimers enforced at generation time.
 Taxonomies (\`studio/taxonomies\`, \`addTaxonomyValue\`, \`archiveTaxonomyValue\`)
-hold the angle / visual-style / hook-type vocabulary. Copy packages live under
+hold the message / concept / hook-type vocabulary. Copy packages live under
 \`studio/copyPackages\` and friends.
 `;
 

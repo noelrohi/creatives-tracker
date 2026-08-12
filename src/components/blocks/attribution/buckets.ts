@@ -34,7 +34,8 @@ export const BUCKET_ICON: Record<
   untracked: Ban,
 };
 
-export const BUCKET_ORDER: readonly AttributionBucket[] = [
+/** A literal tuple, so the URL parser can read a bucket name back out of it. */
+export const BUCKET_ORDER = [
   "meta",
   "google",
   "klaviyo",
@@ -43,7 +44,7 @@ export const BUCKET_ORDER: readonly AttributionBucket[] = [
   "organic_direct",
   "unattributed",
   "untracked",
-];
+] as const satisfies readonly AttributionBucket[];
 
 export { bucketColor } from "./colors";
 

@@ -72,7 +72,7 @@ export const studioPackageProcedures = {
     )
     .output(copyPackageOutputSchema)
     .mutation(async ({ input, ctx }) => {
-      await requireTaxonomyValue(ctx.organizationId, input.angleId, "angle");
+      await requireTaxonomyValue(ctx.organizationId, input.angleId, "message");
       const [pkg] = await db
         .insert(studioCopyPackages)
         .values({ organizationId: ctx.organizationId, ...input })
@@ -86,7 +86,7 @@ export const studioPackageProcedures = {
         "studio",
         "updateCopyPackage",
         "Update a copy package",
-        "Update, archive, or restore an organization copy package. Any supplied angle must be an active angle taxonomy value.",
+        "Update, archive, or restore an organization copy package. Any supplied angle must be an active message taxonomy value.",
       ),
     )
     .input(
@@ -103,7 +103,7 @@ export const studioPackageProcedures = {
     .output(copyPackageOutputSchema)
     .mutation(async ({ input, ctx }) => {
       const { id, archived, ...values } = input;
-      await requireTaxonomyValue(ctx.organizationId, values.angleId, "angle");
+      await requireTaxonomyValue(ctx.organizationId, values.angleId, "message");
       const [pkg] = await db
         .update(studioCopyPackages)
         .set({
@@ -128,7 +128,7 @@ export const studioPackageProcedures = {
         "studio",
         "createCopyPackageFromCreative",
         "Create a package from a creative",
-        "Create a reusable copy package from an organization creative and its latest synced ad copy. The creative angle is reused or added to the angle taxonomy when no angle is supplied.",
+        "Create a reusable copy package from an organization creative and its latest synced ad copy. The creative angle is reused or added to the message taxonomy when no angle is supplied.",
       ),
     )
     .input(
@@ -167,7 +167,7 @@ export const studioPackageProcedures = {
         .orderBy(desc(ads.updatedAt))
         .limit(1);
       if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Creative not found" });
-      await requireTaxonomyValue(ctx.organizationId, input.angleId, "angle");
+      await requireTaxonomyValue(ctx.organizationId, input.angleId, "message");
       let angleId = input.angleId ?? null;
       if (!angleId && row.angle?.trim()) {
         const [angle] = await db
@@ -176,7 +176,7 @@ export const studioPackageProcedures = {
           .where(
             and(
               eq(studioTaxonomyValues.organizationId, ctx.organizationId),
-              eq(studioTaxonomyValues.kind, "angle"),
+              eq(studioTaxonomyValues.kind, "message"),
               eq(studioTaxonomyValues.slug, studioSlug(row.angle)),
             ),
           )
@@ -188,7 +188,7 @@ export const studioPackageProcedures = {
             .insert(studioTaxonomyValues)
             .values({
               organizationId: ctx.organizationId,
-              kind: "angle",
+              kind: "message",
               name: row.angle.trim(),
               slug: studioSlug(row.angle),
             })

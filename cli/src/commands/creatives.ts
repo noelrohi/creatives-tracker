@@ -54,16 +54,22 @@ export function registerCreativeCommands(program: Command) {
     );
   });
 
+  // The enforced trio is required at create (spec §6.1) — the server rejects a
+  // creative that arrives without it.
   creatives
     .command("create")
     .option("--name <name>")
+    .requiredOption("--persona <persona>")
+    .requiredOption("--angle <angle>")
+    .requiredOption("--awareness-level <awarenessLevel>")
     .action(async (options, command) => {
       await runCommand(command, (client) =>
-        client.adCreative.create.mutate(
-          compactObject({
-            name: options.name,
-          }),
-        ),
+        client.adCreative.create.mutate({
+          persona: options.persona,
+          angle: options.angle,
+          awarenessLevel: options.awarenessLevel,
+          ...compactObject({ name: options.name }),
+        }),
       );
     });
 
@@ -90,9 +96,11 @@ export function registerCreativeCommands(program: Command) {
             angle: options.angle,
             persona: options.persona,
             awarenessLevel: options.awarenessLevel,
-            hook: options.hook,
+            attributes:
+              options.hook !== undefined || options.cta !== undefined
+                ? compactObject({ hook: options.hook, cta: options.cta })
+                : undefined,
             tone: parseList(options.tone),
-            cta: options.cta,
             notes: options.notes,
           }),
         }),

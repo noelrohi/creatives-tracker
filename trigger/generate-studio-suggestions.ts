@@ -586,19 +586,19 @@ async function generateStudioSuggestions(
     const notTriedLately = taxonomy.flatMap((value) => {
       if (value.archivedAt) return [];
       if (
-        value.kind !== "angle" &&
-        value.kind !== "visual_style" &&
+        value.kind !== "message" &&
+        value.kind !== "concept" &&
         value.kind !== "hook_type"
       ) {
         return [];
       }
-      const wasTried = value.kind === "angle"
+      const wasTried = value.kind === "message"
         ? recentlyUsedAngleSlugs.has(value.slug)
         : recentlyUsedTaxonomyIds.has(value.id);
       return wasTried
         ? []
         : [{
-            kind: value.kind as "angle" | "visual_style" | "hook_type",
+            kind: value.kind as "message" | "concept" | "hook_type",
             name: value.name,
           }];
     });
@@ -660,7 +660,7 @@ async function generateStudioSuggestions(
       untriedSwipes: swipeContext,
       copyPackages: packageContext,
       visualStyles: taxonomy
-        .filter((value) => value.kind === "visual_style" && !value.archivedAt)
+        .filter((value) => value.kind === "concept" && !value.archivedAt)
         .map((value) => value.name),
       hookTypes: taxonomy
         .filter((value) => value.kind === "hook_type" && !value.archivedAt)
@@ -833,7 +833,7 @@ async function generateStudioSuggestions(
           (swipe?.angleId ? taxonomyById.get(swipe.angleId) : null) ||
           null;
         const angleValue = taxonomy.find(
-          (value) => value.kind === "angle" && value.name === angle,
+          (value) => value.kind === "message" && value.name === angle,
         );
         const defaultPackage = packages.find(
           (pkg) => pkg.angleId && pkg.angleId === angleValue?.id,
@@ -841,7 +841,7 @@ async function generateStudioSuggestions(
         const visualStyleValue = card.visualStyle
           ? taxonomy.find(
               (value) =>
-                value.kind === "visual_style" &&
+                value.kind === "concept" &&
                 value.slug === studioSlug(card.visualStyle ?? ""),
             )
           : null;

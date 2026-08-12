@@ -4,6 +4,7 @@ import { centsToAmount, toCents } from "@/lib/money";
 import {
   cancellationGiveBackCents,
   cancellationRefundId,
+  candidateLastVisit,
   deriveDayInTimezone,
   groupBulkOrderLines,
   isTestOrder,
@@ -450,5 +451,54 @@ describe("groupBulkOrderLines", () => {
       },
     ]);
     expect(orders).toEqual([]);
+  });
+});
+
+describe("candidateLastVisit", () => {
+  function candidate(
+    utmParameters: Record<string, string | null> | null,
+    overrides: Record<string, unknown> = {},
+  ) {
+    return {
+      id: "order_1",
+      orderSourceName: "web",
+      journeyReady: true,
+      lastClickUtmSource: "facebook",
+      lastClickUtmMedium: "paid",
+      lastClickUtmCampaign: "120210000000123",
+      customerJourney: { lastVisit: { utmParameters } },
+      ...overrides,
+    };
+  }
+
+  // Neither term nor content has a column of its own; both come off the jsonb.
+  it("reads the ad set term and the ad content off the stored journey", () => {
+    expect(
+      candidateLastVisit(
+        candidate({ term: "23851234567890111", content: "120210000000456" }),
+      ),
+    ).toMatchObject({
+      utmTerm: "23851234567890111",
+      utmContent: "120210000000456",
+    });
+  });
+
+  it("reports a missing content as null", () => {
+    expect(
+      candidateLastVisit(candidate({ term: "23851234567890111" })),
+    ).toMatchObject({ utmContent: null });
+  });
+
+  it("returns no visit at all when neither the journey nor the columns have one", () => {
+    expect(
+      candidateLastVisit(
+        candidate(null, {
+          customerJourney: null,
+          lastClickUtmSource: null,
+          lastClickUtmMedium: null,
+          lastClickUtmCampaign: null,
+        }),
+      ),
+    ).toBeNull();
   });
 });
