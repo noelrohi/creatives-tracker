@@ -63,7 +63,7 @@ const {
   startShopifyEvidenceRun,
 } = await import("@/lib/shopify-evidence-store");
 
-const PRE_0053_FIXTURE_DDL = [
+const PRE_0055_FIXTURE_DDL = [
   `CREATE TABLE organization (
      id text PRIMARY KEY, name text NOT NULL, slug text NOT NULL UNIQUE,
      logo text, created_at timestamp NOT NULL, metadata text
@@ -131,13 +131,13 @@ const PRE_0053_FIXTURE_DDL = [
 ];
 
 const MIGRATION_PATHS = [
-  "drizzle/0053_klaviyo_shopify_evidence.sql",
-  "drizzle/0054_klaviyo_source_core.sql",
-  "drizzle/0055_klaviyo_advisory_matching.sql",
+  "drizzle/0055_klaviyo_shopify_evidence.sql",
+  "drizzle/0056_klaviyo_source_core.sql",
+  "drizzle/0057_klaviyo_advisory_matching.sql",
 ].map((file) => path.resolve(process.cwd(), file));
 
 async function createFixtureSchema(pool: Pool): Promise<void> {
-  for (const statement of PRE_0053_FIXTURE_DDL) await pool.query(statement);
+  for (const statement of PRE_0055_FIXTURE_DDL) await pool.query(statement);
   for (const migrationPath of MIGRATION_PATHS) {
     const migration = readFileSync(migrationPath, "utf8")
       .split("--> statement-breakpoint")
@@ -421,7 +421,7 @@ describeIfDb("Shopify evidence persistence", () => {
     );
   });
 
-  it("applies the checked-in 0053 migration to the disposable pre-0053 catalog", async () => {
+  it("applies the checked-in 0055 migration to the disposable pre-0055 catalog", async () => {
     const result = await testPool!.query<{ table_name: string }>(
       `SELECT table_name FROM information_schema.tables
        WHERE table_schema = 'public'

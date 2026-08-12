@@ -43,7 +43,7 @@ function migrationStatements(fileName: string): string[] {
     .filter(Boolean);
 }
 
-const PRE_0053_FIXTURE_DDL = [
+const PRE_0055_FIXTURE_DDL = [
   `CREATE TABLE organization (
      id text PRIMARY KEY, name text NOT NULL, slug text NOT NULL UNIQUE,
      logo text, created_at timestamp NOT NULL, metadata text
@@ -345,12 +345,12 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
     testPool?.on("error", () => {});
     await adminPool.query(`DROP DATABASE IF EXISTS ${TEST_DATABASE} WITH (FORCE)`);
     await adminPool.query(`CREATE DATABASE ${TEST_DATABASE}`);
-    for (const statement of PRE_0053_FIXTURE_DDL) await testPool!.query(statement);
+    for (const statement of PRE_0055_FIXTURE_DDL) await testPool!.query(statement);
     for (const migration of [
-      "0053_klaviyo_shopify_evidence.sql",
-      "0054_klaviyo_source_core.sql",
-      "0055_klaviyo_advisory_matching.sql",
-      "0056_klaviyo_claims_reporting.sql",
+      "0055_klaviyo_shopify_evidence.sql",
+      "0056_klaviyo_source_core.sql",
+      "0057_klaviyo_advisory_matching.sql",
+      "0058_klaviyo_claims_reporting.sql",
     ]) {
       for (const statement of migrationStatements(migration)) {
         await testPool!.query(statement);

@@ -54,7 +54,7 @@ const { ShopifyStoreOwnershipConflictError, upsertShopifyStore } = await import(
   "./shopify-ingest"
 );
 
-const PRE_0053_FIXTURE_DDL = [
+const PRE_0055_FIXTURE_DDL = [
   `CREATE TABLE organization (
      id text PRIMARY KEY,
      name text NOT NULL,
@@ -196,9 +196,9 @@ const LEGACY_FOREIGN_KEYS = [
 ] as const;
 
 const MIGRATION_PATHS = [
-  "drizzle/0053_klaviyo_shopify_evidence.sql",
-  "drizzle/0054_klaviyo_source_core.sql",
-  "drizzle/0055_klaviyo_advisory_matching.sql",
+  "drizzle/0055_klaviyo_shopify_evidence.sql",
+  "drizzle/0056_klaviyo_source_core.sql",
+  "drizzle/0057_klaviyo_advisory_matching.sql",
 ].map((file) => path.resolve(process.cwd(), file));
 
 function readMigrationStatements(): string[] {
@@ -223,7 +223,7 @@ async function expectConstraintViolation(
 }
 
 async function createFixtureSchema(pool: Pool) {
-  for (const statement of PRE_0053_FIXTURE_DDL) {
+  for (const statement of PRE_0055_FIXTURE_DDL) {
     await pool.query(statement);
   }
 }
@@ -540,7 +540,7 @@ describeIfDb("upsertShopifyStore ownership", () => {
   });
 
   describe("migration mismatch preflights", () => {
-    it("rejects an orphaned Shopify store before any 0053 mutation", async () => {
+    it("rejects an orphaned Shopify store before any 0055 mutation", async () => {
       await verifyMigrationPreflight({
         databaseSuffix: "store",
         expectedMessage: "shopify_store organization scope preflight failed",
