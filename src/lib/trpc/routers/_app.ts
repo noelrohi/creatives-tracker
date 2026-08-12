@@ -19,6 +19,7 @@ import { attributionRouter } from "./attribution";
 import { findingsRouter } from "./findings";
 import { landingPageRouter } from "./landing-page";
 import { creativeInsightsRouter } from "./creative-insights";
+import { orgSettingsRouter } from "./org-settings";
 
 export const appRouter = router({
   adCreative: adCreativeRouter,
@@ -41,6 +42,7 @@ export const appRouter = router({
   findings: findingsRouter,
   landingPage: landingPageRouter,
   creativeInsights: creativeInsightsRouter,
+  orgSettings: orgSettingsRouter,
 });
 
 export type AppRouter = typeof appRouter;
