@@ -51,6 +51,15 @@ PostgreSQL via Drizzle ORM with `node-postgres` driver. Connection uses `DATABAS
 - Schema files: `src/schema/*` (Drizzle config reads all files in this dir)
 - Drizzle config: `drizzle.config.ts` (`drizzle-prod.config.ts` for prod)
 
+#### Resolving migration conflicts
+
+When main gained a migration with the same (or later) number as one on your branch, do NOT rename migration files by hand — the number also lives in `drizzle/meta/_journal.json` and each snapshot chains off the previous one, so renaming the `.sql` file alone corrupts the chain. Instead, regenerate:
+
+1. On your branch, delete your migration's `.sql` file and its `drizzle/meta/<idx>_snapshot.json`, and remove its entry from `drizzle/meta/_journal.json` (keep your `src/schema/*` changes — those are the source of truth)
+2. Rebase onto main (`git fetch origin main && git rebase origin/main`)
+3. Re-run `bun run db:generate` — it regenerates your migration on top of main's latest snapshot with the correct number
+4. Verify with `node scripts/check-migrations.mjs` (CI runs this on every PR)
+
 ### UI
 
 shadcn/ui components live in `src/components/ui/` (config in `components.json`).
