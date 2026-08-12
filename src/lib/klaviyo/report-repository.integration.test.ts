@@ -53,6 +53,11 @@ const WINDOW = {
   to: new Date("2026-08-01T00:00:00.000Z"),
 };
 
+const WINDOW_B = {
+  from: new Date("2026-08-01T00:00:00.000Z"),
+  to: new Date("2026-09-01T00:00:00.000Z"),
+};
+
 const fakeCredentialProvider: KlaviyoCredentialProvider = {
   async getPilotBinding() {
     return {
@@ -92,7 +97,10 @@ function reportPage(
   };
 }
 
-function fakeReportClient(spacerLog: number[] = []) {
+function fakeReportClient(
+  spacerLog: number[] = [],
+  campaignConversions = 3,
+) {
   void spacerLog;
   return {
     queryValuesReport: vi
@@ -107,7 +115,10 @@ function fakeReportClient(spacerLog: number[] = []) {
           ? reportPage([
               {
                 groupings: { campaign_id: "campaign-ext-1", send_date: "2026-07-15" },
-                statistics: { conversions: 3, conversion_value: "99.50" },
+                statistics: {
+                  conversions: campaignConversions,
+                  conversion_value: "99.50",
+                },
               },
             ])
           : reportPage([
@@ -124,10 +135,11 @@ async function startRun(
   kinds: Array<"campaign" | "flow">,
   reason: "manual" | "scheduled" = "manual",
   now = new Date(),
+  window = WINDOW,
 ) {
   return repository.startOrResumeReportSync({
     scope,
-    window: WINDOW,
+    window,
     kinds,
     reason,
     now,
@@ -381,6 +393,7 @@ describeIfDb("Klaviyo report repository on PostgreSQL", () => {
     const current = await repository.listCurrentReportFacts({
       scope,
       kind: "campaign",
+      window: WINDOW,
     });
     expect(current.facts).toHaveLength(1);
     const run = await testPool!.query(
@@ -400,6 +413,7 @@ describeIfDb("Klaviyo report repository on PostgreSQL", () => {
     const before = await repository.listCurrentReportFacts({
       scope,
       kind: "campaign",
+      window: WINDOW,
     });
     expect(before.facts).toEqual([]);
     await repository.processReportBatch(
@@ -413,9 +427,51 @@ describeIfDb("Klaviyo report repository on PostgreSQL", () => {
     const after = await repository.listCurrentReportFacts({
       scope,
       kind: "campaign",
+      window: WINDOW,
     });
     expect(after.facts).toHaveLength(1);
     expect(after.facts[0].conversions).toBe("3");
+  });
+
+  it("reads facts from the current generation for the requested window", async () => {
+    const dependencies = {
+      credentialProvider: fakeCredentialProvider,
+      spacer: async () => {},
+    };
+    const firstRun = await startRun(["campaign"]);
+    if (firstRun.kind !== "started") throw new Error("expected started");
+    await repository.processReportBatch(
+      { scope, syncRunId: firstRun.syncRunId },
+      { ...dependencies, createClient: () => fakeReportClient([], 3) },
+    );
+
+    const secondRun = await startRun(
+      ["campaign"],
+      "manual",
+      new Date(),
+      WINDOW_B,
+    );
+    if (secondRun.kind !== "started") throw new Error("expected started");
+    await repository.processReportBatch(
+      { scope, syncRunId: secondRun.syncRunId },
+      { ...dependencies, createClient: () => fakeReportClient([], 7) },
+    );
+
+    const current = await repository.listCurrentReportFacts({
+      scope,
+      kind: "campaign",
+      window: WINDOW_B,
+    });
+    const generations = await testPool!.query(
+      `SELECT id, sync_run_id FROM klaviyo_report_generation
+        WHERE kind = 'campaign' AND status = 'current'
+        ORDER BY requested_from`,
+    );
+    expect(generations.rows).toHaveLength(2);
+    expect(current.generationId).toBe(generations.rows[1].id);
+    expect(generations.rows[1].sync_run_id).toBe(secondRun.syncRunId);
+    expect(current.facts).toHaveLength(1);
+    expect(current.facts[0].conversions).toBe("7");
   });
 
   it("reaps an expired report lease before staging a replacement", async () => {

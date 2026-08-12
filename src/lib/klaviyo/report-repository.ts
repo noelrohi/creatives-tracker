@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { KlaviyoApiClient, KLAVIYO_API_REVISIONS } from "@/lib/klaviyo/client";
 import {
@@ -778,6 +778,7 @@ export async function publishTerminalReportSync(input: {
 export async function listCurrentReportFacts(input: {
   scope: KlaviyoConnectionScope;
   kind: KlaviyoReportKind;
+  window: { from: Date; to: Date };
   limit?: number;
   offset?: number;
 }): Promise<{
@@ -809,9 +810,11 @@ export async function listCurrentReportFacts(input: {
         eq(klaviyoReportGenerations.storeId, input.scope.storeId),
         eq(klaviyoReportGenerations.kind, input.kind),
         eq(klaviyoReportGenerations.status, "current"),
+        eq(klaviyoReportGenerations.requestedFrom, input.window.from),
+        eq(klaviyoReportGenerations.requestedTo, input.window.to),
       ),
     )
-    .orderBy(asc(klaviyoReportGenerations.publishedAt))
+    .orderBy(desc(klaviyoReportGenerations.publishedAt))
     .limit(1);
   if (!generation) return { generationId: null, publishedAt: null, facts: [] };
   const facts = await db
