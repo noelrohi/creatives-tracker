@@ -12,6 +12,7 @@ export const featureFlagDefs = [
     badge: "Beta",
     href: "/attribution",
     icon: "solar:pie-chart-2-linear",
+    group: "analyze",
   },
   {
     key: "creativeInsights",
@@ -21,10 +22,23 @@ export const featureFlagDefs = [
     badge: "New",
     href: "/insights",
     icon: "solar:chart-square-linear",
+    group: "analyze",
+  },
+  {
+    key: "imageStudio",
+    label: "Image Studio",
+    description:
+      "Shows Image Studio, where briefs are composed into generated ad images.",
+    badge: "Beta",
+    href: "/studio",
+    icon: "solar:magic-stick-3-linear",
+    group: "tools",
   },
 ] as const;
 
-export type FeatureFlagKey = (typeof featureFlagDefs)[number]["key"];
+export type FeatureFlagDef = (typeof featureFlagDefs)[number];
+export type FeatureFlagKey = FeatureFlagDef["key"];
+export type FeatureFlagGroup = FeatureFlagDef["group"];
 export type FeatureFlags = Partial<Record<FeatureFlagKey, boolean>>;
 
 export const featureFlagKeys = featureFlagDefs.map((def) => def.key) as [

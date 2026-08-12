@@ -43,7 +43,6 @@ import { Label } from "@/components/ui/label";
 import { DeleteOrganizationDialog } from "@/components/delete-organization-dialog";
 import { AdsoluteMark } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { isImageStudioEnabled } from "@/lib/image-studio-enabled";
 import { useTRPC } from "@/lib/trpc/client";
 import { featureFlagDefs } from "@/lib/feature-flags";
 
@@ -92,9 +91,11 @@ export function AppSidebar() {
   const { data: featureFlags } = useQuery(
     trpc.orgSettings.getFeatureFlags.queryOptions(),
   );
-  const analyzeItems = featureFlagDefs.filter(
+  const enabledFlagDefs = featureFlagDefs.filter(
     (def) => featureFlags?.[def.key] ?? false,
   );
+  const analyzeItems = enabledFlagDefs.filter((def) => def.group === "analyze");
+  const toolsItems = enabledFlagDefs.filter((def) => def.group === "tools");
 
   const { data: fullOrg } = useQuery({
     queryKey: ["org-full", orgId],
@@ -369,27 +370,34 @@ export function AppSidebar() {
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
-          {isImageStudioEnabled() ? (
+          {toolsItems.length > 0 ? (
             <SidebarGroup>
               <SidebarGroupLabel>Tools</SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      asChild
-                      tooltip="Image Studio"
-                      isActive={pathname.startsWith("/studio")}
-                      className="pr-14"
-                    >
-                      <Link href="/studio">
-                        <Icon icon="solar:magic-stick-3-linear" className="size-4" />
-                        <span>Image Studio</span>
-                      </Link>
-                    </SidebarMenuButton>
-                    <SidebarMenuBadge className="rounded-full border border-sidebar-border bg-sidebar-accent/80 px-2 text-[10px] font-semibold uppercase tracking-wide text-sidebar-accent-foreground">
-                      Beta
-                    </SidebarMenuBadge>
-                  </SidebarMenuItem>
+                  {toolsItems.map((item) => (
+                    <SidebarMenuItem key={item.href}>
+                      <SidebarMenuButton
+                        asChild
+                        tooltip={item.label}
+                        isActive={
+                          pathname === item.href ||
+                          pathname.startsWith(`${item.href}/`)
+                        }
+                        className={item.badge ? "pr-14" : undefined}
+                      >
+                        <Link href={item.href}>
+                          <Icon icon={item.icon} className="size-4" />
+                          <span>{item.label}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                      {item.badge ? (
+                        <SidebarMenuBadge className="rounded-full border border-sidebar-border bg-sidebar-accent/80 px-2 text-[10px] font-semibold uppercase tracking-wide text-sidebar-accent-foreground">
+                          {item.badge}
+                        </SidebarMenuBadge>
+                      ) : null}
+                    </SidebarMenuItem>
+                  ))}
                 </SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>

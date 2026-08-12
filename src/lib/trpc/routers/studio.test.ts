@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { orgSettings } from "@/schema/org-settings";
+import type { FeatureFlags } from "@/lib/feature-flags";
 
 // --- Mocked DB: supports the studio router's select/insert/update chains.
 const dbState = {
@@ -6,17 +8,29 @@ const dbState = {
   selectRows: [] as Array<Record<string, unknown>[]>,
   inserted: [] as Array<Record<string, unknown> | Record<string, unknown>[]>,
   updated: [] as Array<Record<string, unknown>>,
+  // The studio procedures gate on this via getOrgFeatureFlags before any
+  // handler runs; it is answered off-queue so `selectRows` stays aligned with
+  // what each test queues for the handler itself.
+  featureFlags: {} as FeatureFlags,
 };
 
 const mockDb = {
   select: vi.fn(() => {
+    let flagLookup = false;
     const chain: Record<string, unknown> = {
-      from: vi.fn(() => chain),
+      from: vi.fn((table: unknown) => {
+        flagLookup = table === orgSettings;
+        return chain;
+      }),
       innerJoin: vi.fn(() => chain),
       where: vi.fn(() => chain),
       orderBy: vi.fn(() => chain),
       for: vi.fn(() => chain),
-      limit: vi.fn(async () => dbState.selectRows.shift() ?? []),
+      limit: vi.fn(async () =>
+        flagLookup
+          ? [{ featureFlags: dbState.featureFlags }]
+          : (dbState.selectRows.shift() ?? []),
+      ),
       groupBy: vi.fn(async () => dbState.groupByRows.shift() ?? []),
     };
     return chain;
@@ -96,6 +110,7 @@ describe("studio router — static-ad composer starters", () => {
     dbState.selectRows = [];
     dbState.inserted = [];
     dbState.updated = [];
+    dbState.featureFlags = { imageStudio: true };
     vi.clearAllMocks();
     triggerMock.trigger.mockResolvedValue({ id: "run_abc123" });
     triggerMock.createPublicToken.mockResolvedValue("public_token_xyz");
@@ -491,5 +506,16 @@ describe("studio router — static-ad composer starters", () => {
     await caller.studio.setVariantMark({ variantId: "variant_1", mark: null });
 
     expect(dbState.updated[0]).toMatchObject({ mark: null, publishedAt: null });
+  });
+
+  it("studioProcedure: hides the router behind NOT_FOUND when the org's imageStudio flag is off", async () => {
+    dbState.featureFlags = {};
+    const caller = createMockCaller({ role: "owner" });
+
+    await expect(caller.studio.winningAngles()).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    // The gate runs before the handler, so no query was queued or consumed.
+    expect(dbState.groupByRows).toHaveLength(0);
   });
 });
