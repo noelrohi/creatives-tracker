@@ -189,7 +189,12 @@ async function outerMain() {
     delete inheritedEnvironment.TRIGGER_SECRET_KEY;
     const exitCode = await spawnAndWait(
       process.execPath,
-      [`--env-file=${environmentPath}`, scriptPath, INTERNAL_FLAG],
+      [
+        `--env-file=${environmentPath}`,
+        scriptPath,
+        INTERNAL_FLAG,
+        ...(process.argv.includes("--yes") ? ["--yes"] : []),
+      ],
       {
         // Avoid Bun's automatic loading of the repository's local `.env`,
         // which would otherwise shadow the explicit production env file.
