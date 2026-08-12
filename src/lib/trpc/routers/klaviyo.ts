@@ -441,12 +441,12 @@ export const klaviyoRouter = router({
         dateTo: input.dateTo,
         timeZone: connection.accountTimezone ?? "UTC",
       });
-      void accountWindow;
       // Facts come only from the requested slot's single current
       // generation; staging, failed, and superseded rows never surface.
       return listCurrentReportFacts({
         scope: connection,
         kind: input.kind,
+        window: accountWindow,
         limit: input.limit,
         offset: input.offset,
       });

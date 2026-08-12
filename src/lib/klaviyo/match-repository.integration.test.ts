@@ -186,7 +186,7 @@ describeIfDb("Klaviyo match publication on PostgreSQL", () => {
       shopifyEvidenceRunId: "evidence-run-a",
       publicationScopeFingerprint: "scope-x",
       invocationFingerprint: "invocation-x",
-      matcherVersion: "klaviyo-v1",
+      matcherVersion: "klaviyo-v2",
       safeFailureCode: "MATCH_COMPUTATION_FAILED",
     });
     expect(failed).toEqual({ runId: "failed-attempt-1", changed: true });
@@ -198,7 +198,7 @@ describeIfDb("Klaviyo match publication on PostgreSQL", () => {
       shopifyEvidenceRunId: "evidence-run-a",
       publicationScopeFingerprint: "scope-x",
       invocationFingerprint: "invocation-x",
-      matcherVersion: "klaviyo-v1",
+      matcherVersion: "klaviyo-v2",
       safeFailureCode: "MATCH_COMPUTATION_FAILED",
     });
     expect(replayFailed.changed).toBe(false);
@@ -211,7 +211,7 @@ describeIfDb("Klaviyo match publication on PostgreSQL", () => {
       shopifyEvidenceRunId: "evidence-run-a",
       publicationScopeFingerprint: "scope-x",
       invocationFingerprint: "invocation-x",
-      matcherVersion: "klaviyo-v1",
+      matcherVersion: "klaviyo-v2",
       safeFailureCode: "MATCH_PUBLICATION_FAILED",
     });
     expect(cannotRewrite.changed).toBe(false);

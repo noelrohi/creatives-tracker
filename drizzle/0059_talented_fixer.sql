@@ -1,1 +1,0 @@
--- No-op: snapshot resync after merging main's 0053_damp_titanium_man/0054_simple_spiral lineage with the pilot's 0053-0056 klaviyo lineage. The tables this migration would have created are created by those migrations; this entry exists solely so the snapshot chain matches the full merged schema.

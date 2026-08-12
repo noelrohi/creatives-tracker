@@ -1,6 +1,7 @@
 import "server-only";
 
 import { and, eq, inArray, or, sql } from "drizzle-orm";
+import { MATCHER_VERSION } from "@/lib/klaviyo/match-types";
 import {
   withKlaviyoConnectionLock,
   type KlaviyoStoreTransaction,
@@ -21,8 +22,6 @@ const ALLOWED_CANONICALIZERS = new Set([
   "shopify_order_gid",
   "trimmed_exact",
 ] as const);
-
-export const KLAVIYO_MATCHER_VERSION = "klaviyo-v1";
 
 export function assertRuleCanBeApproved(input: {
   probeStatus: string;
@@ -375,7 +374,7 @@ export async function reviewJoinRule(input: {
         approverId: input.reviewerId,
         reviewNote: input.reviewNote,
         approvedAt: reviewedAt,
-        matcherVersion: KLAVIYO_MATCHER_VERSION,
+        matcherVersion: MATCHER_VERSION,
         updatedAt: reviewedAt,
       })
       .where(

@@ -56,12 +56,12 @@ describe("match normalization", () => {
   it("returns every applied canonicalizer in versioned explanation data", () => {
     const canonical = canonicalizeOrderIdCandidate(" gid://shopify/Order/5 ");
     expect(canonical!.appliedCanonicalizers).toEqual([
-      "trim@klaviyo-v1",
-      "shopify_order_gid@klaviyo-v1",
+      "trim@klaviyo-v2",
+      "shopify_order_gid@klaviyo-v2",
     ]);
     expect(canonicalizeSku(" A ")!.appliedCanonicalizers).toEqual([
-      "trim@klaviyo-v1",
-      "sku_trimmed_exact@klaviyo-v1",
+      "trim@klaviyo-v2",
+      "sku_trimmed_exact@klaviyo-v2",
     ]);
   });
 });

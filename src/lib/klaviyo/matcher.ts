@@ -24,15 +24,17 @@ import {
  */
 
 export const MATCH_WEIGHTS = {
-  identityEqual: 5,
+  identityEqual: 4,
   productExact: 4,
   productPartial: 2,
+  timeImmediate: 3,
   timeClose: 2,
   timeFar: 1,
   amount: 0,
 } as const;
 
 export const MATCH_TOLERANCES = {
+  timeImmediateMs: 5 * 60 * 1000,
   timeCloseMs: 60 * 60 * 1000,
   timeMaxMs: DIAGNOSTIC_MAX_DISTANCE_MS,
 } as const;
@@ -284,9 +286,11 @@ export function computeAdvisoryMatches(input: MatchInput): MatchComputation {
       // Identity or product presence is required for a diagnostic edge.
       if (!identityEqual && productContribution === 0) continue;
       const timeContribution =
-        distance <= MATCH_TOLERANCES.timeCloseMs
-          ? MATCH_WEIGHTS.timeClose
-          : MATCH_WEIGHTS.timeFar;
+        distance <= MATCH_TOLERANCES.timeImmediateMs
+          ? MATCH_WEIGHTS.timeImmediate
+          : distance <= MATCH_TOLERANCES.timeCloseMs
+            ? MATCH_WEIGHTS.timeClose
+            : MATCH_WEIGHTS.timeFar;
       const score =
         (identityEqual ? MATCH_WEIGHTS.identityEqual : 0) +
         productContribution +
@@ -323,9 +327,11 @@ export function computeAdvisoryMatches(input: MatchInput): MatchComputation {
           ...(productContribution > 0
             ? [`product_${comparison.status}`]
             : []),
-          distance <= MATCH_TOLERANCES.timeCloseMs
-            ? "time_close"
-            : "time_within_tolerance",
+          distance <= MATCH_TOLERANCES.timeImmediateMs
+            ? "time_immediate"
+            : distance <= MATCH_TOLERANCES.timeCloseMs
+              ? "time_close"
+              : "time_within_tolerance",
         ],
       });
     }

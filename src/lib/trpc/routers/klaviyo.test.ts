@@ -705,6 +705,10 @@ describe("claims, journey, inspector, and report procedures", () => {
     expect(mocks.listCurrentReportFacts).toHaveBeenCalledWith({
       scope: mocks.connection,
       kind: "flow",
+      window: {
+        from: new Date("2026-07-01T07:00:00.000Z"),
+        to: new Date("2026-08-01T07:00:00.000Z"),
+      },
       limit: 10,
       offset: undefined,
     });

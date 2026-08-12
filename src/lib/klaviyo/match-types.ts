@@ -29,7 +29,7 @@ export type ProductMatchStatus =
   | "contradictory"
   | "unavailable";
 
-export const MATCHER_VERSION = "klaviyo-v1" as const;
+export const MATCHER_VERSION = "klaviyo-v2" as const;
 export const DIAGNOSTIC_MIN_SCORE = 5;
 export const DIAGNOSTIC_MAX_SCORE = 11;
 export const DIAGNOSTIC_MAX_DISTANCE_MS = 24 * 60 * 60 * 1000;

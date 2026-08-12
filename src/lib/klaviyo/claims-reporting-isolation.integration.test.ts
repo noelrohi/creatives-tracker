@@ -373,6 +373,10 @@ describeIfDb("Plan 4 claims/reporting end-to-end isolation", () => {
     const facts = await reportRepository.listCurrentReportFacts({
       scope,
       kind: "campaign",
+      window: {
+        from: new Date("2026-07-01T00:00:00Z"),
+        to: new Date("2026-08-01T00:00:00Z"),
+      },
     });
     expect(facts.facts).toHaveLength(1);
 

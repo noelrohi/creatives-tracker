@@ -118,7 +118,7 @@ describeIfDb("Klaviyo evidence queries on PostgreSQL", () => {
     });
     expect(explanation).toMatchObject({
       orderStatus: "confirmed",
-      matcherVersion: "klaviyo-v1",
+      matcherVersion: "klaviyo-v2",
     });
     expect(explanation!.candidates).toHaveLength(1);
     expect(explanation!.candidates[0]).toMatchObject({
