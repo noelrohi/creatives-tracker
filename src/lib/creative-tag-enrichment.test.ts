@@ -182,7 +182,7 @@ describe("buildCreativeTagUpdate", () => {
     expect(update.attributes.mode).toBe("coloured");
   });
 
-  it("leaves fields untouched when the model returns null or blanks", () => {
+  it("records enforced null verdicts so they are not paid for again", () => {
     const update = buildCreativeTagUpdate({
       existing: existing({ attributes: { hook: "kept" } }),
       output: {
@@ -203,9 +203,13 @@ describe("buildCreativeTagUpdate", () => {
       },
     });
 
-    expect(update.changed).toBe(false);
+    expect(update.changed).toBe(true);
     expect(update.attributes).toEqual({ hook: "kept" });
-    expect(update.attributesMeta).toEqual({});
+    expect(update.attributesMeta).toEqual({
+      persona: { source: "ai" },
+      angle: { source: "ai" },
+      awarenessLevel: { source: "ai" },
+    });
   });
 
   it("stores a confidence-free provenance when confidence is unusable", () => {
@@ -251,6 +255,7 @@ describe("resolveFunnelStageVerdicts", () => {
 
     expect(accepted).toEqual([
       { adSetId: "set_a", funnelStage: "bof", confidence: 0.95 },
+      { adSetId: "set_b", funnelStage: null, confidence: 0.1 },
       { adSetId: "set_d", funnelStage: "mof", confidence: null },
     ]);
     expect(rejected).toEqual([

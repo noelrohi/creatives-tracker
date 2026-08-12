@@ -1,14 +1,7 @@
-/**
- * Landing-page classification (spec §5.3, §5.4).
- *
- * One pass per run: fetch each due page, strip it to text, hash it, and only
- * call the model when the write rules say fresh values are wanted. A human
- * confirmation is never overwritten — changed copy under a confirmed page goes
- * `stale` and waits for a person (see `planLandingPageClassification`).
- */
+/** Durable landing-page classification with bounded child batches. */
 import { generateObject } from "ai";
 import { logger, metadata, schedules, tags, task } from "@trigger.dev/sdk";
-import { and, asc, eq, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { openai } from "@/lib/ai";
@@ -26,18 +19,20 @@ import { landingPages } from "@/schema/landing-page";
 import { ATTRIBUTION_TASK_RETRY } from "./retry";
 
 const CLASSIFY_MODEL = "gpt-5.6-luna";
-const PAGE_BATCH_SIZE = 40;
-/** Re-fetch cadence: a page classified within the week is not due again. */
+const PAGE_BATCH_SIZE = 10;
+const MAX_ITERATIONS = 500;
 const RECLASSIFY_AFTER_DAYS = 7;
 const FETCH_TIMEOUT_MS = 20_000;
-/** Enough copy to classify a long advertorial without a giant prompt. */
 const MAX_TEXT_CHARS = 12_000;
 
 export type ClassifyLandingPagesPayload = {
   organizationId: string;
-  /** Pages per run; the rest are picked up by the next one. */
+  /** Records handled by each bounded child task. */
   limit?: number;
+  maxIterations?: number;
 };
+
+type PageCursor = { classifiedAt: string | null; id: string };
 
 const classificationSchema = z.object({
   pageType: z.enum(pageTypeEnum.enumValues),
@@ -60,6 +55,12 @@ const SYSTEM_PROMPT = [
   "Rules: judge only from the text supplied — never guess from the URL alone. Thin or truncated copy is a reason to report low confidence, not a reason to pick `other` by default. Report confidence honestly.",
 ].join("\n");
 
+function requireModelConfiguration() {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is required for landing-page classification");
+  }
+}
+
 function buildUserPrompt(page: { normalizedUrl: string; text: string }) {
   return [
     `URL: ${page.normalizedUrl}`,
@@ -74,35 +75,50 @@ async function fetchPageText(normalizedUrl: string): Promise<string> {
     redirect: "follow",
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     headers: {
-      // Some storefronts serve a bare shell to unknown clients.
       "user-agent":
         "Mozilla/5.0 (compatible; AdsoluteBot/1.0; +https://adsolute.app)",
       accept: "text/html,application/xhtml+xml",
     },
   });
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
-  }
-
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return stripHtmlToText(await response.text());
 }
 
-async function classifyDuePages(params: {
+function afterPageCursor(cursor: PageCursor | null | undefined) {
+  if (!cursor) return undefined;
+  if (cursor.classifiedAt === null) {
+    return or(
+      and(isNull(landingPages.classifiedAt), gt(landingPages.id, cursor.id)),
+      isNotNull(landingPages.classifiedAt),
+    );
+  }
+
+  const classifiedAt = new Date(cursor.classifiedAt);
+  return or(
+    gt(landingPages.classifiedAt, classifiedAt),
+    and(
+      eq(landingPages.classifiedAt, classifiedAt),
+      gt(landingPages.id, cursor.id),
+    ),
+  );
+}
+
+async function classifyDuePageBatch(params: {
   organizationId: string;
   limit: number;
   now: Date;
+  cursor?: PageCursor | null;
 }) {
   const dueBefore = new Date(
     params.now.getTime() - RECLASSIFY_AFTER_DAYS * 24 * 60 * 60 * 1000,
   );
-
   const candidates = await db
     .select({
       id: landingPages.id,
       normalizedUrl: landingPages.normalizedUrl,
       classificationStatus: landingPages.classificationStatus,
       contentHash: landingPages.contentHash,
+      classifiedAt: landingPages.classifiedAt,
     })
     .from(landingPages)
     .where(
@@ -112,10 +128,14 @@ async function classifyDuePages(params: {
           isNull(landingPages.classifiedAt),
           lt(landingPages.classifiedAt, dueBefore),
         ),
+        afterPageCursor(params.cursor),
       ),
     )
-    // Never-classified pages first, then the longest unchecked.
-    .orderBy(asc(sql`${landingPages.classifiedAt} nulls first`))
+    // PostgreSQL requires ASC before NULLS FIRST.
+    .orderBy(
+      sql`${landingPages.classifiedAt} asc nulls first`,
+      asc(landingPages.id),
+    )
     .limit(params.limit);
 
   let fetched = 0;
@@ -130,8 +150,6 @@ async function classifyDuePages(params: {
       text = await fetchPageText(page.normalizedUrl);
       fetched += 1;
     } catch (error) {
-      // Skipped, not recorded: `classifiedAt` stays put so the page is due
-      // again on the next run.
       failed += 1;
       logger.warn("Landing page fetch failed", {
         landingPageId: page.id,
@@ -158,7 +176,6 @@ async function classifyDuePages(params: {
     }
 
     if (action === "mark_stale") {
-      // The confirmed values stay exactly as the human left them.
       await db
         .update(landingPages)
         .set({
@@ -178,7 +195,6 @@ async function classifyDuePages(params: {
         system: SYSTEM_PROMPT,
         prompt: buildUserPrompt({ normalizedUrl: page.normalizedUrl, text }),
       });
-
       await db
         .update(landingPages)
         .set({
@@ -187,8 +203,6 @@ async function classifyDuePages(params: {
           awarenessFit: result.object.awarenessFit,
           classificationStatus: "suggested",
           classificationSource: "ai",
-          // The funnel stage is the sliced field, so its confidence is the one
-          // the diagnostics quote (§5.3).
           classificationConfidence: String(result.object.funnelStageConfidence),
           contentHash: hash,
           classifiedAt: params.now,
@@ -205,6 +219,7 @@ async function classifyDuePages(params: {
     }
   }
 
+  const last = candidates.at(-1);
   return {
     candidates: candidates.length,
     fetched,
@@ -212,50 +227,108 @@ async function classifyDuePages(params: {
     markedStale,
     touched,
     failed,
+    nextCursor: last
+      ? { classifiedAt: last.classifiedAt?.toISOString() ?? null, id: last.id }
+      : null,
   };
 }
+
+export const classifyLandingPagesBatchTask = task({
+  id: "classify-landing-pages-batch",
+  retry: ATTRIBUTION_TASK_RETRY,
+  queue: { name: "classify-landing-pages-batch", concurrencyLimit: 1 },
+  maxDuration: 300,
+  run: async (payload: {
+    organizationId: string;
+    limit: number;
+    now: string;
+    cursor?: PageCursor | null;
+  }) => {
+    requireModelConfiguration();
+    return classifyDuePageBatch({
+      organizationId: payload.organizationId,
+      limit: payload.limit,
+      now: new Date(payload.now),
+      cursor: payload.cursor,
+    });
+  },
+});
 
 export const classifyLandingPagesTask = task({
   id: "classify-landing-pages",
   retry: ATTRIBUTION_TASK_RETRY,
   queue: { name: "classify-landing-pages", concurrencyLimit: 1 },
+  maxDuration: 3600,
   run: async (payload: ClassifyLandingPagesPayload) => {
     await tags.add(`classify-landing-pages:org:${payload.organizationId}`);
+    requireModelConfiguration();
 
-    metadata.set("status", "classifying");
-    metadata.set("step", "Classifying landing pages");
+    const limit = Math.max(1, Math.min(payload.limit ?? PAGE_BATCH_SIZE, PAGE_BATCH_SIZE));
+    const maxIterations = payload.maxIterations ?? MAX_ITERATIONS;
+    const now = new Date();
+    let cursor: PageCursor | null = null;
+    const totals = {
+      candidates: 0,
+      fetched: 0,
+      classified: 0,
+      markedStale: 0,
+      touched: 0,
+      failed: 0,
+    };
 
-    const result = await classifyDuePages({
-      organizationId: payload.organizationId,
-      limit: payload.limit ?? PAGE_BATCH_SIZE,
-      now: new Date(),
-    });
+    for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+      metadata
+        .set("status", "classifying")
+        .set("step", `Classifying landing-page batch ${iteration + 1}`)
+        .set("processed", totals.candidates)
+        .set("classified", totals.classified)
+        .set("failed", totals.failed)
+        .set("cursor", cursor);
+      const result = await classifyLandingPagesBatchTask.triggerAndWait({
+        organizationId: payload.organizationId,
+        limit,
+        now: now.toISOString(),
+        cursor,
+      });
+      if (!result.ok) {
+        throw new Error(
+          `Landing-page batch ${iteration + 1} failed after ${cursor?.id ?? "start"}: ${String(result.error)}`,
+        );
+      }
 
-    metadata.set("status", "completed");
+      totals.candidates += result.output.candidates;
+      totals.fetched += result.output.fetched;
+      totals.classified += result.output.classified;
+      totals.markedStale += result.output.markedStale;
+      totals.touched += result.output.touched;
+      totals.failed += result.output.failed;
+      if (!result.output.nextCursor) break;
+      cursor = result.output.nextCursor;
+    }
+
+    metadata
+      .set("status", "completed")
+      .set("processed", totals.candidates)
+      .set("classified", totals.classified)
+      .set("failed", totals.failed);
     logger.info("Classified landing pages", {
       organizationId: payload.organizationId,
-      ...result,
+      ...totals,
     });
-
     return {
-      ...result,
-      summary: `Classified ${result.classified} landing pages (${result.markedStale} marked stale, ${result.failed} failed)`,
+      ...totals,
+      summary: `Classified ${totals.classified} landing pages (${totals.markedStale} marked stale, ${totals.failed} failed)`,
     };
   },
 });
 
 export const classifyLandingPagesScheduled = schedules.task({
   id: "classify-landing-pages-weekly",
-  // Mondays 21:00 UTC — 5am PHT Tuesday. Page copy changes on the scale of
-  // weeks, and this hour is clear of the Meta daily sync (18:00), the hourly
-  // Shopify stamp and the daily checks (19:30), so the harvest that feeds it
-  // has already run.
   cron: "0 21 * * 1",
   run: async () => {
     const organizations = await db
       .selectDistinct({ organizationId: landingPages.organizationId })
       .from(landingPages);
-
     if (organizations.length === 0) {
       logger.warn("No landing pages harvested yet — nothing to classify");
       return { organizations: 0, results: [] };
@@ -263,16 +336,16 @@ export const classifyLandingPagesScheduled = schedules.task({
 
     const results = [];
     for (const org of organizations) {
-      results.push({
+      const result = await classifyLandingPagesTask.triggerAndWait({
         organizationId: org.organizationId,
-        ...(await classifyDuePages({
-          organizationId: org.organizationId,
-          limit: PAGE_BATCH_SIZE,
-          now: new Date(),
-        })),
       });
+      if (!result.ok) {
+        throw new Error(
+          `Weekly landing-page classification failed for ${org.organizationId}: ${String(result.error)}`,
+        );
+      }
+      results.push({ organizationId: org.organizationId, ...result.output });
     }
-
     return { organizations: organizations.length, results };
   },
 });

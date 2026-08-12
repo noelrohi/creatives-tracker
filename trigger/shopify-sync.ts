@@ -22,6 +22,7 @@ import {
   loadSyncedMetaAds,
   loadSyncedMetaAdSets,
   loadSyncedMetaCampaignIds,
+  stampBucketBatch,
   stampBuckets,
   startSyncRun,
   touchStoreLastSyncedAt,
@@ -36,6 +37,7 @@ const SHOPIFY_SYNC_QUEUE = { name: "shopify-sync", concurrencyLimit: 1 };
 
 const INCREMENTAL_OVERLAP_MS = 15 * 60 * 1000;
 const JOURNEY_REPOLL_DAYS = 3;
+const REBUCKET_BATCH_SIZE = 500;
 
 type BackfillPayload = {
   organizationId: string;
@@ -512,10 +514,31 @@ export const shopifyIncrementalTask = task({
   },
 });
 
+export const shopifyRebucketBatchTask = task({
+  id: "shopify-rebucket-batch",
+  retry: ATTRIBUTION_TASK_RETRY,
+  queue: { name: "shopify-rebucket-batch", concurrencyLimit: 1 },
+  maxDuration: 300,
+  run: async (payload: {
+    organizationId: string;
+    storeId: string;
+    afterId?: string | null;
+    limit?: number;
+  }) =>
+    stampBucketBatch({
+      organizationId: payload.organizationId,
+      storeId: payload.storeId,
+      scope: "rebucket",
+      afterId: payload.afterId,
+      limit: payload.limit ?? REBUCKET_BATCH_SIZE,
+    }),
+});
+
 export const shopifyRebucketTask = task({
   id: "shopify-rebucket",
   retry: ATTRIBUTION_TASK_RETRY,
   queue: SHOPIFY_SYNC_QUEUE,
+  maxDuration: 3600,
   run: async (payload: RebucketPayload) => {
     await tags.add(shopifyOrgTag(payload.organizationId));
 
@@ -541,37 +564,63 @@ export const shopifyRebucketTask = task({
       syncRunId: run.id,
     });
 
-    try {
-      metadata.set("status", "stamping");
-      metadata.set("step", "Re-stamping attribution buckets");
+    let afterId: string | null = null;
+    let scanned = 0;
+    let stamped = 0;
+    let batch = 0;
 
-      const stamped = await stampAndLog({
-        organizationId: payload.organizationId,
-        storeId: store.id,
-        scope: "rebucket",
-      });
+    try {
+      while (true) {
+        batch += 1;
+        metadata
+          .set("status", "stamping")
+          .set("step", `Re-stamping attribution buckets (batch ${batch})`)
+          .set("scanned", scanned)
+          .set("stamped", stamped)
+          .set("cursor", afterId);
+
+        const result = await shopifyRebucketBatchTask.triggerAndWait({
+          organizationId: payload.organizationId,
+          storeId: store.id,
+          afterId,
+          limit: REBUCKET_BATCH_SIZE,
+        });
+        if (!result.ok) {
+          throw new Error(
+            `Rebucket batch ${batch} failed after ${afterId ?? "start"}: ${String(result.error)}`,
+          );
+        }
+
+        scanned += result.output.scanned;
+        stamped += result.output.stamped;
+        if (!result.output.nextCursor) break;
+        afterId = result.output.nextCursor;
+      }
 
       await finishSyncRun({
         runId: run.id,
         result: "success",
-        ordersSynced: stamped.stamped,
-        meta: {
-          scanned: stamped.scanned,
-          bucketRuleVersion: BUCKET_RULE_VERSION,
-        },
+        ordersSynced: stamped,
+        meta: { scanned, batches: batch, bucketRuleVersion: BUCKET_RULE_VERSION },
       });
 
-      metadata.set("status", "completed");
+      metadata
+        .set("status", "completed")
+        .set("scanned", scanned)
+        .set("stamped", stamped);
       return {
-        scanned: stamped.scanned,
-        stamped: stamped.stamped,
-        summary: `Re-bucketed ${stamped.stamped} of ${stamped.scanned} orders`,
+        scanned,
+        stamped,
+        batches: batch,
+        summary: `Re-bucketed ${stamped} of ${scanned} orders`,
       };
     } catch (error) {
       logger.error("Shopify rebucket failed", {
         organizationId: payload.organizationId,
         storeId: store.id,
         syncRunId: run.id,
+        batch,
+        afterId,
         error: errorMessage(error),
       });
 
@@ -579,6 +628,7 @@ export const shopifyRebucketTask = task({
         runId: run.id,
         result: "failed",
         error: errorMessage(error),
+        meta: { scanned, stamped, batch, afterId, bucketRuleVersion: BUCKET_RULE_VERSION },
       });
       throw error;
     }
