@@ -1,9 +1,10 @@
 import { z } from "zod";
-import { eq, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { router, orgProcedure, orgAdminProcedure } from "../init";
 import { db } from "@/db";
 import { orgSettings } from "@/schema/org-settings";
 import { featureFlagKeys, type FeatureFlags } from "@/lib/feature-flags";
+import { getOrgFeatureFlags } from "@/lib/feature-flags.server";
 
 const setFeatureFlagInput = z.object({
   key: z.enum(featureFlagKeys),
@@ -11,15 +12,9 @@ const setFeatureFlagInput = z.object({
 });
 
 export const orgSettingsRouter = router({
-  getFeatureFlags: orgProcedure.query(async ({ ctx }) => {
-    const [row] = await db
-      .select({ featureFlags: orgSettings.featureFlags })
-      .from(orgSettings)
-      .where(eq(orgSettings.organizationId, ctx.organizationId))
-      .limit(1);
-
-    return (row?.featureFlags ?? {}) as FeatureFlags;
-  }),
+  getFeatureFlags: orgProcedure.query(({ ctx }) =>
+    getOrgFeatureFlags(ctx.organizationId),
+  ),
 
   setFeatureFlag: orgAdminProcedure
     .input(setFeatureFlagInput)

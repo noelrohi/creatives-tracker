@@ -15,7 +15,7 @@ import {
   studioVariants,
 } from "@/schema/studio";
 import { AWARENESS_LEVELS, type AwarenessLevel } from "@/lib/awareness";
-import { isImageStudioEnabled } from "@/lib/image-studio-enabled";
+import { isImageStudioEnabled } from "@/lib/feature-flags.server";
 import { isHttpUrl } from "@/lib/remote-image";
 import { getStudioBrandProfile } from "@/lib/studio-brand";
 import {
@@ -75,18 +75,18 @@ export const queuedGenerationSchema = z.object({
 });
 const STALE_GENERATION_MS = 15 * 60 * 1000;
 
-function requireImageStudioEnabled() {
-  if (!isImageStudioEnabled()) {
+async function requireImageStudioEnabled(organizationId: string) {
+  if (!(await isImageStudioEnabled(organizationId))) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Image Studio is not enabled" });
   }
 }
 
-export const studioProcedure = orgProcedure.use(async ({ next }) => {
-  requireImageStudioEnabled();
+export const studioProcedure = orgProcedure.use(async ({ ctx, next }) => {
+  await requireImageStudioEnabled(ctx.organizationId);
   return next();
 });
-export const studioWriteProcedure = orgWriteProcedure.use(async ({ next }) => {
-  requireImageStudioEnabled();
+export const studioWriteProcedure = orgWriteProcedure.use(async ({ ctx, next }) => {
+  await requireImageStudioEnabled(ctx.organizationId);
   return next();
 });
 
