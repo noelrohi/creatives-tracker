@@ -48,20 +48,28 @@ export function EmailRevenueHeadline({
     klaviyoSays === null
       ? null
       : centsOf(klaviyoSays.conversionValue) - centsOf(email.revenue);
+  // Report timestamps typed as Date arrive as ISO strings over the tRPC
+  // wire (same reality lab-header defends against) — coerce before use.
+  const saysFrom = klaviyoSays ? new Date(klaviyoSays.requestedFrom) : null;
+  const saysTo = klaviyoSays ? new Date(klaviyoSays.requestedTo) : null;
   // "Klaviyo says" is their report over its own window, never re-sliced to
   // the page range. Comparing it against a shorter page range manufactures
   // a phantom "unconfirmed" gap, so the delta only renders when the page
   // range spans at least the report window.
-  const saysWindowDays = klaviyoSays
-    ? Math.max(
-        1,
-        Math.round(
-          (klaviyoSays.requestedTo.getTime() -
-            klaviyoSays.requestedFrom.getTime()) /
-            86_400_000,
-        ),
-      )
-    : null;
+  const saysWindowDays =
+    saysFrom !== null && saysTo !== null
+      ? Math.max(
+          1,
+          Math.round((saysTo.getTime() - saysFrom.getTime()) / 86_400_000),
+        )
+      : null;
+  const saysWindowLabel =
+    saysFrom !== null && saysTo !== null
+      ? formatDayRange(
+          saysFrom.toISOString().slice(0, 10),
+          saysTo.toISOString().slice(0, 10),
+        )
+      : null;
   const showDelta =
     deltaCents !== null &&
     deltaCents > 0 &&
@@ -111,15 +119,11 @@ export function EmailRevenueHeadline({
             </p>
             <p className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
               {copy.says}
-              <span className="ml-1" data-testid="klaviyo-says-window">
-                ·{" "}
-                {copy.saysWindow(
-                  formatDayRange(
-                    klaviyoSays.requestedFrom.toISOString().slice(0, 10),
-                    klaviyoSays.requestedTo.toISOString().slice(0, 10),
-                  ),
-                )}
-              </span>
+              {saysWindowLabel !== null ? (
+                <span className="ml-1" data-testid="klaviyo-says-window">
+                  · {copy.saysWindow(saysWindowLabel)}
+                </span>
+              ) : null}
               {showDelta ? (
                 <span
                   className="ml-1 text-amber-600"

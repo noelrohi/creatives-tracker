@@ -122,6 +122,32 @@ describe("EmailRevenueHeadline", () => {
     );
   });
 
+  it("survives report timestamps arriving as ISO strings off the wire", () => {
+    // Over tRPC the Date-typed report window fields deserialize as ISO
+    // strings in the real app (lab-header defends the same way); Date
+    // fixtures alone masked a runtime `.getTime is not a function` crash.
+    render(
+      <EmailRevenueHeadline
+        summary={summary({
+          klaviyoSays: {
+            conversionValue: "1450.00",
+            requestedFrom: "2026-06-01T00:00:00.000Z" as unknown as Date,
+            requestedTo: "2026-08-01T00:00:00.000Z" as unknown as Date,
+            asOf: "2026-08-01T00:00:00.000Z" as unknown as Date,
+          },
+        })}
+        shopifyTotal="10000.00"
+        currency="USD"
+        {...coveringRange}
+      />,
+    );
+    expect(screen.getByTestId("klaviyo-says")).toHaveTextContent("$1,450.00");
+    expect(screen.getByTestId("klaviyo-says-window")).toHaveTextContent(
+      "report",
+    );
+    expect(screen.getByTestId("klaviyo-says-delta")).toBeInTheDocument();
+  });
+
   it("omits the delta when the page range is shorter than the report window", () => {
     // Klaviyo's figure spans their ~2-month report; comparing it against a
     // single day would manufacture a phantom "unconfirmed" gap.
