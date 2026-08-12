@@ -3,8 +3,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useTRPC } from "@/lib/trpc/client";
+import { authClient } from "@/lib/auth-client";
 import { getUserFacingErrorMessage } from "@/lib/errors";
 import { featureFlagDefs, type FeatureFlagKey } from "@/lib/feature-flags";
+import { isOrgRole, isPrivilegedOrgRole } from "@/lib/organization-access";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
@@ -12,6 +14,29 @@ import { Switch } from "@/components/ui/switch";
 export default function FeatureSettingsPage() {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
+  const { data: activeOrg } = authClient.useActiveOrganization();
+  const { data: session } = authClient.useSession();
+
+  const orgId = activeOrg?.id;
+
+  const { data: fullOrg } = useQuery({
+    queryKey: ["org-full", orgId],
+    queryFn: async () => {
+      if (!orgId) return null;
+      const { data } = await authClient.organization.getFullOrganization({
+        query: { organizationId: orgId },
+      });
+      return data;
+    },
+    enabled: !!orgId,
+  });
+
+  const currentUserRole = fullOrg?.members?.find(
+    (member: { userId: string }) => member.userId === session?.user?.id,
+  )?.role;
+  const canEdit = isPrivilegedOrgRole(
+    isOrgRole(currentUserRole) ? currentUserRole : null,
+  );
 
   const flagsQuery = useQuery(trpc.orgSettings.getFeatureFlags.queryOptions());
 
@@ -43,6 +68,11 @@ export default function FeatureSettingsPage() {
         <p className="text-sm text-muted-foreground">
           Turn optional features on for this workspace.
         </p>
+        {!canEdit ? (
+          <p className="mt-1 text-xs text-muted-foreground">
+            Only owners and admins can change features.
+          </p>
+        ) : null}
       </div>
 
       <div className="rounded-lg border divide-y">
@@ -80,7 +110,7 @@ export default function FeatureSettingsPage() {
                 </div>
                 <Switch
                   checked={flags[def.key] ?? false}
-                  disabled={pendingKey === def.key}
+                  disabled={!canEdit || pendingKey === def.key}
                   aria-label={def.label}
                   onCheckedChange={(enabled) =>
                     setFlagMutation.mutate({ key: def.key, enabled })
