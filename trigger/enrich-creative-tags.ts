@@ -213,67 +213,100 @@ async function processCreativeBatch(params: {
   let failed = 0;
   let rejectedValues = 0;
 
-  for (const creative of candidates) {
-    const context = contextByCreative.get(creative.id);
-    const userText = buildCreativeUserText({
-      name: creative.name,
-      notes: creative.notes,
-      caption: context?.caption ?? null,
-      adName: context?.adName ?? null,
-      format: creative.format,
-    });
-    const imageUrl =
-      creative.assetUrl && !isVideoFile(creative.assetUrl)
-        ? creative.assetUrl
-        : null;
+  for (const [index, creative] of candidates.entries()) {
+    metadata
+      .set("step", `Creative ${index + 1}/${candidates.length}: ${creative.name}`)
+      .set("currentItem", {
+        type: "creative",
+        id: creative.id,
+        name: creative.name,
+        position: index + 1,
+        total: candidates.length,
+      });
 
     try {
-      const result = await generateObject({
-        model: openai(TAG_MODEL),
-        schema: creativeTagSchema,
-        system: CREATIVE_SYSTEM_PROMPT,
-        messages: [
-          {
-            role: "user",
-            content: imageUrl
-              ? [
-                  { type: "text" as const, text: userText },
-                  { type: "image" as const, image: imageUrl },
-                ]
-              : [{ type: "text" as const, text: userText }],
-          },
-        ],
-      });
-      const update = buildCreativeTagUpdate({
-        existing: creative,
-        output: result.object as CreativeTagModelOutput,
-      });
-      rejectedValues += update.rejected.length;
-      if (update.rejected.length > 0) {
-        logger.warn("Dropped out-of-vocabulary creative tags", {
-          creativeId: creative.id,
-          rejected: update.rejected,
-        });
-      }
-      if (!update.changed) continue;
+      await logger.trace(
+        `Creative ${index + 1}/${candidates.length} · ${creative.name}`,
+        async () => {
+          const context = contextByCreative.get(creative.id);
+          const userText = buildCreativeUserText({
+            name: creative.name,
+            notes: creative.notes,
+            caption: context?.caption ?? null,
+            adName: context?.adName ?? null,
+            format: creative.format,
+          });
+          const imageUrl =
+            creative.assetUrl && !isVideoFile(creative.assetUrl)
+              ? creative.assetUrl
+              : null;
 
-      await db
-        .update(adCreatives)
-        .set({
-          ...(update.persona !== undefined ? { persona: update.persona } : {}),
-          ...(update.angle !== undefined ? { angle: update.angle } : {}),
-          ...(update.awarenessLevel !== undefined
-            ? { awarenessLevel: update.awarenessLevel }
-            : {}),
-          attributes: update.attributes,
-          attributesMeta: update.attributesMeta,
-        })
-        .where(eq(adCreatives.id, creative.id));
-      updated += 1;
+          metadata.set("itemStep", "Calling Luna");
+          const result = await logger.trace("Call Luna", () =>
+            generateObject({
+              model: openai(TAG_MODEL),
+              schema: creativeTagSchema,
+              system: CREATIVE_SYSTEM_PROMPT,
+              messages: [
+                {
+                  role: "user",
+                  content: imageUrl
+                    ? [
+                        { type: "text" as const, text: userText },
+                        { type: "image" as const, image: imageUrl },
+                      ]
+                    : [{ type: "text" as const, text: userText }],
+                },
+              ],
+            }),
+          );
+
+          metadata.set("itemStep", "Validating and writing tags");
+          await logger.trace("Validate and write tags", async () => {
+            const update = buildCreativeTagUpdate({
+              existing: creative,
+              output: result.object as CreativeTagModelOutput,
+            });
+            rejectedValues += update.rejected.length;
+            if (update.rejected.length > 0) {
+              logger.warn("Dropped out-of-vocabulary creative tags", {
+                creativeId: creative.id,
+                rejected: update.rejected,
+              });
+            }
+            if (!update.changed) return;
+
+            await db
+              .update(adCreatives)
+              .set({
+                ...(update.persona !== undefined ? { persona: update.persona } : {}),
+                ...(update.angle !== undefined ? { angle: update.angle } : {}),
+                ...(update.awarenessLevel !== undefined
+                  ? { awarenessLevel: update.awarenessLevel }
+                  : {}),
+                attributes: update.attributes,
+                attributesMeta: update.attributesMeta,
+              })
+              .where(eq(adCreatives.id, creative.id));
+            updated += 1;
+          });
+          metadata.set("itemStep", "Completed");
+        },
+        {
+          attributes: {
+            "intelligence.item.type": "creative",
+            "intelligence.item.id": creative.id,
+            "intelligence.item.position": index + 1,
+            "intelligence.item.total": candidates.length,
+          },
+        },
+      );
     } catch (error) {
       failed += 1;
+      metadata.set("itemStep", "Failed");
       logger.error("Creative tag enrichment failed", {
         creativeId: creative.id,
+        creativeName: creative.name,
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -326,13 +359,33 @@ async function processAdSetBatch(params: {
     };
   }
 
+  metadata
+    .set("step", `Classifying ${candidates.length} ad sets with Luna`)
+    .set("currentItem", {
+      type: "ad_set_batch",
+      ids: candidates.map((candidate) => candidate.id),
+      total: candidates.length,
+    })
+    .set("itemStep", "Calling Luna");
+
   try {
-    const result = await generateObject({
-      model: openai(TAG_MODEL),
-      schema: funnelStageBatchSchema,
-      system: FUNNEL_SYSTEM_PROMPT,
-      prompt: `Classify these ad sets:\n${JSON.stringify(candidates.map(describeAdSet), null, 2)}`,
-    });
+    const result = await logger.trace(
+      `Classify ${candidates.length} ad sets with Luna`,
+      () =>
+        generateObject({
+          model: openai(TAG_MODEL),
+          schema: funnelStageBatchSchema,
+          system: FUNNEL_SYSTEM_PROMPT,
+          prompt: `Classify these ad sets:\n${JSON.stringify(candidates.map(describeAdSet), null, 2)}`,
+        }),
+      {
+        attributes: {
+          "intelligence.item.type": "ad_set_batch",
+          "intelligence.item.total": candidates.length,
+        },
+      },
+    );
+    metadata.set("itemStep", "Validating and writing stages");
     const { accepted, rejected } = resolveFunnelStageVerdicts({
       knownAdSetIds: candidates.map((row) => row.id),
       verdicts: result.object.adSets,
@@ -343,26 +396,49 @@ async function processAdSetBatch(params: {
     }
 
     let adsStamped = 0;
-    for (const verdict of accepted) {
-      const stamped = await db
-        .update(ads)
-        .set({
-          funnelStage: verdict.funnelStage,
-          funnelStageSource: "ai",
-          funnelStageConfidence:
-            verdict.confidence === null ? null : String(verdict.confidence),
-        })
-        .where(
-          and(
-            eq(ads.adSetId, verdict.adSetId),
-            eq(ads.organizationId, params.organizationId),
-            isNotNull(ads.metaId),
-            isNull(ads.funnelStageSource),
-          ),
-        )
-        .returning({ id: ads.id });
+    const adSetNameById = new Map(candidates.map((row) => [row.id, row.name]));
+    for (const [index, verdict] of accepted.entries()) {
+      const adSetName = adSetNameById.get(verdict.adSetId) ?? verdict.adSetId;
+      metadata
+        .set("step", `Ad set ${index + 1}/${accepted.length}: ${adSetName}`)
+        .set("currentItem", {
+          type: "ad_set",
+          id: verdict.adSetId,
+          name: adSetName,
+          position: index + 1,
+          total: accepted.length,
+        });
+      const stamped = await logger.trace(
+        `Ad set ${index + 1}/${accepted.length} · ${adSetName}`,
+        () =>
+          db
+            .update(ads)
+            .set({
+              funnelStage: verdict.funnelStage,
+              funnelStageSource: "ai",
+              funnelStageConfidence:
+                verdict.confidence === null ? null : String(verdict.confidence),
+            })
+            .where(
+              and(
+                eq(ads.adSetId, verdict.adSetId),
+                eq(ads.organizationId, params.organizationId),
+                isNotNull(ads.metaId),
+                isNull(ads.funnelStageSource),
+              ),
+            )
+            .returning({ id: ads.id }),
+        {
+          attributes: {
+            "intelligence.item.type": "ad_set",
+            "intelligence.item.id": verdict.adSetId,
+            "intelligence.funnel_stage": verdict.funnelStage ?? "untagged",
+          },
+        },
+      );
       adsStamped += stamped.length;
     }
+    metadata.set("itemStep", "Completed");
 
     return {
       processed: candidates.length,
@@ -373,6 +449,7 @@ async function processAdSetBatch(params: {
       nextCursor: candidates.at(-1)?.id ?? null,
     };
   } catch (error) {
+    metadata.set("itemStep", "Failed");
     logger.error("Funnel stage classification failed", {
       adSetIds: candidates.map((row) => row.id),
       error: error instanceof Error ? error.message : String(error),
