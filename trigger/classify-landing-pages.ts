@@ -144,73 +144,101 @@ async function classifyDuePageBatch(params: {
   let touched = 0;
   let failed = 0;
 
-  for (const page of candidates) {
-    let text: string;
-    try {
-      text = await fetchPageText(page.normalizedUrl);
-      fetched += 1;
-    } catch (error) {
-      failed += 1;
-      logger.warn("Landing page fetch failed", {
-        landingPageId: page.id,
-        normalizedUrl: page.normalizedUrl,
-        error: error instanceof Error ? error.message : String(error),
+  for (const [index, page] of candidates.entries()) {
+    metadata
+      .set("step", `Landing page ${index + 1}/${candidates.length}: ${page.normalizedUrl}`)
+      .set("currentItem", {
+        type: "landing_page",
+        id: page.id,
+        url: page.normalizedUrl,
+        position: index + 1,
+        total: candidates.length,
       });
-      continue;
-    }
-
-    const hash = contentHash(text);
-    const action = planLandingPageClassification({
-      status: page.classificationStatus,
-      priorHash: page.contentHash,
-      newHash: hash,
-    });
-
-    if (action === "touch") {
-      await db
-        .update(landingPages)
-        .set({ contentHash: hash, classifiedAt: params.now })
-        .where(eq(landingPages.id, page.id));
-      touched += 1;
-      continue;
-    }
-
-    if (action === "mark_stale") {
-      await db
-        .update(landingPages)
-        .set({
-          classificationStatus: "stale",
-          contentHash: hash,
-          classifiedAt: params.now,
-        })
-        .where(eq(landingPages.id, page.id));
-      markedStale += 1;
-      continue;
-    }
 
     try {
-      const result = await generateObject({
-        model: openai(CLASSIFY_MODEL),
-        schema: classificationSchema,
-        system: SYSTEM_PROMPT,
-        prompt: buildUserPrompt({ normalizedUrl: page.normalizedUrl, text }),
-      });
-      await db
-        .update(landingPages)
-        .set({
-          pageType: result.object.pageType,
-          funnelStage: result.object.funnelStage,
-          awarenessFit: result.object.awarenessFit,
-          classificationStatus: "suggested",
-          classificationSource: "ai",
-          classificationConfidence: String(result.object.funnelStageConfidence),
-          contentHash: hash,
-          classifiedAt: params.now,
-        })
-        .where(eq(landingPages.id, page.id));
-      classified += 1;
+      await logger.trace(
+        `Landing page ${index + 1}/${candidates.length} · ${page.normalizedUrl}`,
+        async () => {
+          metadata.set("itemStep", "Fetching page copy");
+          const text = await logger.trace("Fetch page copy", () =>
+            fetchPageText(page.normalizedUrl),
+          );
+          fetched += 1;
+
+          const hash = contentHash(text);
+          const action = planLandingPageClassification({
+            status: page.classificationStatus,
+            priorHash: page.contentHash,
+            newHash: hash,
+          });
+
+          if (action === "touch") {
+            metadata.set("itemStep", "Recording unchanged content");
+            await db
+              .update(landingPages)
+              .set({ contentHash: hash, classifiedAt: params.now })
+              .where(eq(landingPages.id, page.id));
+            touched += 1;
+            return;
+          }
+
+          if (action === "mark_stale") {
+            metadata.set("itemStep", "Marking confirmed page stale");
+            await db
+              .update(landingPages)
+              .set({
+                classificationStatus: "stale",
+                contentHash: hash,
+                classifiedAt: params.now,
+              })
+              .where(eq(landingPages.id, page.id));
+            markedStale += 1;
+            return;
+          }
+
+          metadata.set("itemStep", "Calling Luna");
+          const result = await logger.trace("Call Luna", () =>
+            generateObject({
+              model: openai(CLASSIFY_MODEL),
+              schema: classificationSchema,
+              system: SYSTEM_PROMPT,
+              prompt: buildUserPrompt({ normalizedUrl: page.normalizedUrl, text }),
+            }),
+          );
+
+          metadata.set("itemStep", "Writing classification");
+          await logger.trace("Write classification", () =>
+            db
+              .update(landingPages)
+              .set({
+                pageType: result.object.pageType,
+                funnelStage: result.object.funnelStage,
+                awarenessFit: result.object.awarenessFit,
+                classificationStatus: "suggested",
+                classificationSource: "ai",
+                classificationConfidence: String(
+                  result.object.funnelStageConfidence,
+                ),
+                contentHash: hash,
+                classifiedAt: params.now,
+              })
+              .where(eq(landingPages.id, page.id)),
+          );
+          classified += 1;
+          metadata.set("itemStep", "Completed");
+        },
+        {
+          attributes: {
+            "intelligence.item.type": "landing_page",
+            "intelligence.item.id": page.id,
+            "intelligence.item.position": index + 1,
+            "intelligence.item.total": candidates.length,
+          },
+        },
+      );
     } catch (error) {
       failed += 1;
+      metadata.set("itemStep", "Failed");
       logger.error("Landing page classification failed", {
         landingPageId: page.id,
         normalizedUrl: page.normalizedUrl,

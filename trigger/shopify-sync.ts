@@ -524,14 +524,38 @@ export const shopifyRebucketBatchTask = task({
     storeId: string;
     afterId?: string | null;
     limit?: number;
-  }) =>
-    stampBucketBatch({
-      organizationId: payload.organizationId,
-      storeId: payload.storeId,
-      scope: "rebucket",
-      afterId: payload.afterId,
-      limit: payload.limit ?? REBUCKET_BATCH_SIZE,
-    }),
+  }) => {
+    const limit = payload.limit ?? REBUCKET_BATCH_SIZE;
+    metadata
+      .set("step", `Scanning up to ${limit} eligible orders`)
+      .set("cursor", payload.afterId ?? null);
+
+    return logger.trace(
+      `Scan and stamp up to ${limit} orders`,
+      async () => {
+        metadata.set("itemStep", "Loading and resolving attribution");
+        const result = await stampBucketBatch({
+          organizationId: payload.organizationId,
+          storeId: payload.storeId,
+          scope: "rebucket",
+          afterId: payload.afterId,
+          limit,
+        });
+        metadata
+          .set("itemStep", "Completed")
+          .set("scanned", result.scanned)
+          .set("stamped", result.stamped)
+          .set("nextCursor", result.nextCursor);
+        return result;
+      },
+      {
+        attributes: {
+          "intelligence.item.type": "order_batch",
+          "intelligence.item.limit": limit,
+        },
+      },
+    );
+  },
 });
 
 export const shopifyRebucketTask = task({
