@@ -414,6 +414,13 @@
       "when": 1786501076739,
       "tag": "0058_klaviyo_claims_reporting",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1786531563071,
+      "tag": "0059_abnormal_jack_murdock",
+      "breakpoints": true
     }
   ]
 }
