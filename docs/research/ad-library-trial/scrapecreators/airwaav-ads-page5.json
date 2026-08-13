@@ -1,0 +1,1151 @@
+{
+  "success": true,
+  "credits_remaining": 94,
+  "credits_charged": 1,
+  "results": [
+    {
+      "ad_archive_id": "1490168362554804",
+      "collation_count": null,
+      "collation_id": null,
+      "page_id": "109178280892310",
+      "snapshot": {
+        "branded_content": null,
+        "page_id": "109178280892310",
+        "page_is_deleted": false,
+        "page_profile_uri": "https://facebook.com/AIRWAAV",
+        "root_reshared_post": null,
+        "byline": null,
+        "disclaimer_label": null,
+        "page_name": "AIRWAAV",
+        "page_profile_picture_url": "https://scontent-lga3-1.xx.fbcdn.net/v/t39.35426-6/620011128_2355370118240940_2997903262519788575_n.jpg?stp=dst-jpg_s60x60_tt6&_nc_cat=103&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=NrE_6AmUJJsQ7kNvwGOthE6&_nc_oc=AdpgaN2zfabN65INHBMZ6ju1QcHHrHVlA7V-CkxbHyDd_eaVtSxKNESb3yYVWaiHTuo&_nc_zt=14&_nc_ht=scontent-lga3-1.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQEW9NQZygEonq7N7D5dh7nUWN01QOsXPQ_F8rsjtj412w&oe=6A83597B",
+        "event": null,
+        "caption": "airwaav.com",
+        "cta_text": "Shop now",
+        "cards": [],
+        "body": {
+          "text": "🚨The #1 hidden reason you wake up groggy? Blocked airways.🚨\n\nWhen your tongue relaxes at night, it can fall back and block airflow — stopping you from reaching the restorative sleep your body needs.\n\nAIRWAAV Recovery’s patented Reflex Technology™ keeps your airway open by guiding your tongue forward naturally. That means smooth breathing all night, and real recovery while you rest.\n\nWith AIRWAAV:\n🌙 Deeper, restorative sleep\n🌬️ Consistent nighttime breathing\n🌅 Wake clear-headed and refreshed\n\nSlim. Comfortable. Backed by 200,000+ happy sleepers.\n\nTry it today with a 30-day risk-free trial!"
+        },
+        "cta_type": "SHOP_NOW",
+        "display_format": "IMAGE",
+        "link_description": "30-Day Risk-Free Trial",
+        "link_url": "https://airwaav.com/products/airwaav-recovery-mouthpiece",
+        "images": [
+          {
+            "image_crops": [],
+            "original_image_url": "https://scontent-lga3-3.xx.fbcdn.net/v/t39.35426-6/617156519_1879696469573739_3594289453255792177_n.jpg?_nc_cat=104&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=CbIe5h5-f_MQ7kNvwEGMGyP&_nc_oc=AdpKqUJY6j5XK7UTj_WSHKjML_Ypj7PSLxpNiR2iSy3228-T3G6dvjTsTRJkCb3O_AA&_nc_zt=14&_nc_ht=scontent-lga3-3.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQHF_64-b-EW28Asf4YjzzRJGqUrFmkU2Lu1x_56nNmESw&oe=6A835D14",
+            "resized_image_url": "https://scontent-lga3-3.xx.fbcdn.net/v/t39.35426-6/621798641_1647991922738865_875925982607571099_n.jpg?stp=dst-jpg_s600x600_tt6&_nc_cat=104&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=GLwTcTCGGzgQ7kNvwGpFraH&_nc_oc=AdpOcutzhwXn2m-R41O1SZoK1T4FoCXSQdLnW6rQENG62bt8dUPbkjv64JzDjeAkOiE&_nc_zt=14&_nc_ht=scontent-lga3-3.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQGydfYtyMjcwZlCho4VeZ_RiCmQAP-hRr8fIXXzCWerOA&oe=6A83534F",
+            "watermarked_resized_image_url": ""
+          }
+        ],
+        "page_categories": [
+          "Product/service"
+        ],
+        "page_like_count": 8419,
+        "title": "The key to better sleep",
+        "videos": [],
+        "is_reshared": false,
+        "extra_links": [],
+        "extra_texts": [],
+        "extra_images": [],
+        "extra_videos": [],
+        "country_iso_code": null,
+        "brazil_tax_id": null,
+        "additional_info": null,
+        "ec_certificates": []
+      },
+      "is_active": true,
+      "has_user_reported": false,
+      "report_count": null,
+      "menu_items": [],
+      "state_media_run_label": null,
+      "page_is_deleted": false,
+      "page_name": "AIRWAAV",
+      "impressions_with_index": {
+        "impressions_text": null,
+        "impressions_index": -1
+      },
+      "gated_type": "ELIGIBLE",
+      "categories": [
+        "UNKNOWN"
+      ],
+      "is_aaa_eligible": true,
+      "contains_digital_created_media": false,
+      "reach_estimate": null,
+      "currency": "",
+      "spend": null,
+      "end_date": 1786518000,
+      "publisher_platform": [
+        "FACEBOOK",
+        "INSTAGRAM",
+        "AUDIENCE_NETWORK",
+        "MESSENGER",
+        "THREADS"
+      ],
+      "start_date": 1777705200,
+      "contains_sensitive_content": false,
+      "total_active_time": null,
+      "regional_regulation_data": {
+        "finserv": {
+          "is_deemed_finserv": false,
+          "is_limited_delivery": false
+        },
+        "tw_anti_scam": {
+          "is_limited_delivery": false
+        }
+      },
+      "hide_data_status": "NONE",
+      "fev_info": null,
+      "ad_id": null,
+      "targeted_or_reached_countries": [],
+      "url": "https://www.facebook.com/ads/library?id=1490168362554804",
+      "start_date_string": "2026-05-02T07:00:00.000Z",
+      "end_date_string": "2026-08-12T07:00:00.000Z"
+    },
+    {
+      "ad_archive_id": "1451846209964735",
+      "collation_count": 1,
+      "collation_id": "478360268549483",
+      "page_id": "109178280892310",
+      "snapshot": {
+        "branded_content": null,
+        "page_id": "109178280892310",
+        "page_is_deleted": false,
+        "page_profile_uri": "https://facebook.com/AIRWAAV",
+        "root_reshared_post": null,
+        "byline": "",
+        "disclaimer_label": null,
+        "page_name": "AIRWAAV",
+        "page_profile_picture_url": "https://scontent-lga3-1.xx.fbcdn.net/v/t39.35426-6/660513167_2033363190858401_4502363844110987074_n.jpg?stp=dst-jpg_s60x60_tt6&_nc_cat=111&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=FsC-ORetj_IQ7kNvwFsJWet&_nc_oc=Adpff8M4N0yAFOWU0eP5NnT7P0cftkG5EJryFt6Lug6cpaMstBEOI3z0VKV4Qj9gCwg&_nc_zt=14&_nc_ht=scontent-lga3-1.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQEq4yY_49Q7sX0AdYeCkxGflep65jymyQrQSxQwahkasQ&oe=6A835DF6",
+        "event": null,
+        "caption": "airwaav.com",
+        "cta_text": "Shop now",
+        "cards": [],
+        "body": {
+          "text": "Optimize breathing and unlock better sleep with AIRWAAV RECOVERY. \n\nStart recharging your potential ⚡️https://airwaav.com/collections/airwaav/products/airwaav-recovery-mouthpiece"
+        },
+        "cta_type": "SHOP_NOW",
+        "display_format": "VIDEO",
+        "link_description": "Innovative technology for better breathing.",
+        "link_url": "https://airwaav.com/collections/airwaav/products/airwaav-recovery-mouthpiece",
+        "images": [],
+        "page_categories": [
+          "Product/service"
+        ],
+        "page_like_count": 8419,
+        "title": "Recharge Your Potential",
+        "videos": [
+          {
+            "video_hd_url": "https://video-lga3-3.xx.fbcdn.net/o1/v/t2/f2/m366/AQP9xf_KrTn9t_05IHs1UwXAjHk9EvWc9lL5Q7qDkeLy6jvy2VOGYwkQmBQxFyo1e54xQwZryEsLwKyfj68AA8AiZ7rwH8Wtj4sQgr1PnCSmGg.mp4?_nc_cat=102&_nc_sid=b66105&_nc_ht=video-lga3-3.xx.fbcdn.net&_nc_ohc=2pAEsdbyhGUQ7kNvwF8jweB&efg=eyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5WSV9VU0VDQVNFX1BST0RVQ1RfVFlQRS4uQzMuNzIwLmRhc2hfaDI2NC1iYXNpYy1nZW4yXzcyMHAiLCJ4cHZfYXNzZXRfaWQiOjQxNTg2NTA0NDcyODg2MywiYXNzZXRfYWdlX2RheXMiOjY1MCwidmlfdXNlY2FzZV9pZCI6MTA3OTksImR1cmF0aW9uX3MiOjY4LCJ1cmxnZW5fc291cmNlIjoid3d3In0%3D&ccb=17-1&vs=3f4deb49db8a7bd0&_nc_vs=HBksFQIYRWZiX2VwaGVtZXJhbC9FRTQ5ODc0RTQ5OTIxOUQ5NENENDY0QjVEQjdCOTg4MF9tdF8xX3ZpZGVvX2Rhc2hpbml0Lm1wNBUAAsgBEgAVAhg6cGFzc3Rocm91Z2hfZXZlcnN0b3JlL0dHNGJ1QnRlZE5ZWTdod0RBSzRwc1Q5Z3pOTTJidjRHQUFBRhUCAsgBEgAoABgAGwKIB3VzZV9vaWwBMRJwcm9ncmVzc2l2ZV9yZWNpcGUBMRUAACa-8J-ExI69ARUCKAJDMywXQFEu6XjU_fQYGWRhc2hfaDI2NC1iYXNpYy1nZW4yXzcyMHARAHUAZd6oAQA&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&_nc_zt=28&oh=00_AQE9T1RB2Hl7S9bzMabdvDdMMyfBQ9pFwkKYrhtcS8-ZQA&oe=6A83535A",
+            "video_preview_image_url": "https://scontent-lga3-3.xx.fbcdn.net/v/t39.35426-6/659157222_801876395864438_2601221185184939781_n.jpg?_nc_cat=104&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=I0zTQm4tUFUQ7kNvwEkCoe-&_nc_oc=AdoCAiIRApW_UmfdmwdjJGnfWNW4g-ME9VHQJUxTivl6dtO9ybA5l8EcjT27Cs4BiZw&_nc_zt=14&_nc_ht=scontent-lga3-3.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQFJ7jCt4CRO3MHcHETrcsjpbpVToPAJ1RueMGQZ1X78sw&oe=6A83650D",
+            "video_sd_url": "https://video-lga3-3.xx.fbcdn.net/o1/v/t2/f2/m69/AQOKu7jWF6KjO2-VeAyjoS3dPrTCA0-SLPgBLRu-xxXgCsaaDYDpJHqk70EDrzT2oGseoXW9RXnIcuzaluEAhb6N.mp4?strext=1&_nc_cat=102&_nc_sid=ef5aa3&_nc_ht=video-lga3-3.xx.fbcdn.net&_nc_ohc=mYMdaCeZKvkQ7kNvwG_EGKW&efg=eyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5WSV9VU0VDQVNFX1BST0RVQ1RfVFlQRS4uQzMuMzYwLnN2ZV9zZCIsInhwdl9hc3NldF9pZCI6NDE1ODY1MDQ0NzI4ODYzLCJhc3NldF9hZ2VfZGF5cyI6NjUwLCJ2aV91c2VjYXNlX2lkIjoxMDc5OSwiZHVyYXRpb25fcyI6NjgsInVybGdlbl9zb3VyY2UiOiJ3d3cifQ%3D%3D&ccb=17-1&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&_nc_zt=28&oh=00_AQHuL1xB31kt3WbGIEWMabCrTB5J1opTETgY9tS5KvLeSg&oe=6A835834",
+            "watermarked_video_hd_url": null,
+            "watermarked_video_sd_url": null
+          }
+        ],
+        "is_reshared": false,
+        "extra_links": [],
+        "extra_texts": [],
+        "extra_images": [],
+        "extra_videos": [],
+        "country_iso_code": null,
+        "brazil_tax_id": null,
+        "additional_info": null,
+        "ec_certificates": []
+      },
+      "is_active": true,
+      "has_user_reported": false,
+      "report_count": null,
+      "menu_items": [],
+      "state_media_run_label": null,
+      "page_is_deleted": false,
+      "page_name": "AIRWAAV",
+      "impressions_with_index": {
+        "impressions_text": null,
+        "impressions_index": -1
+      },
+      "gated_type": "ELIGIBLE",
+      "categories": [
+        "UNKNOWN"
+      ],
+      "is_aaa_eligible": true,
+      "contains_digital_created_media": false,
+      "reach_estimate": null,
+      "currency": "",
+      "spend": null,
+      "end_date": 1786431600,
+      "publisher_platform": [
+        "FACEBOOK",
+        "INSTAGRAM",
+        "AUDIENCE_NETWORK",
+        "MESSENGER",
+        "THREADS"
+      ],
+      "start_date": 1777618800,
+      "contains_sensitive_content": false,
+      "total_active_time": null,
+      "regional_regulation_data": {
+        "finserv": {
+          "is_deemed_finserv": false,
+          "is_limited_delivery": false
+        },
+        "tw_anti_scam": {
+          "is_limited_delivery": false
+        }
+      },
+      "hide_data_status": "NONE",
+      "fev_info": null,
+      "ad_id": null,
+      "targeted_or_reached_countries": [],
+      "url": "https://www.facebook.com/ads/library?id=1451846209964735",
+      "start_date_string": "2026-05-01T07:00:00.000Z",
+      "end_date_string": "2026-08-11T07:00:00.000Z"
+    },
+    {
+      "ad_archive_id": "26829013346695232",
+      "collation_count": 1,
+      "collation_id": "1457170955951143",
+      "page_id": "109178280892310",
+      "snapshot": {
+        "branded_content": null,
+        "page_id": "109178280892310",
+        "page_is_deleted": false,
+        "page_profile_uri": "https://facebook.com/AIRWAAV",
+        "root_reshared_post": null,
+        "byline": "",
+        "disclaimer_label": null,
+        "page_name": "AIRWAAV",
+        "page_profile_picture_url": "https://scontent-lga3-2.xx.fbcdn.net/v/t39.35426-6/658930519_2079563182992031_8277758058818960594_n.jpg?stp=dst-jpg_s60x60_tt6&_nc_cat=101&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=bUMlCCM4k5YQ7kNvwEgHZbc&_nc_oc=Adqb2OsBSqOU7tnem3rBgEwDwg2WF3UVoYk_2oNxWyky8jTRQTQ7ZB-ee2wEdOkcFqo&_nc_zt=14&_nc_ht=scontent-lga3-2.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQEdI5wgejkRbW8EMP-yiXsY5EZC0pfesfu7Cigvnja8qQ&oe=6A8344EA",
+        "event": null,
+        "caption": "airwaav.com",
+        "cta_text": "Shop now",
+        "cards": [
+          {
+            "body": "If you’re waking up tired, groggy, or feeling like you barely slept, your nighttime breathing might be to blame. 😴\n\nYou might not realize it, but one of the biggest reasons for poor sleep is restricted breathing during the night. When your airway is blocked, even slightly, it prevents you from getting the deep, restful sleep your body needs to recover. This can leave you feeling tired, drained, and far from refreshed, no matter how many hours you spend in bed.\n\nBut there’s good news—improving your nighttime breathing can make a world of difference. Here’s how:\n\n1. Focus on Your Airway\n\nYour airway plays a huge role in how well you sleep. If your airway becomes blocked—whether from your tongue falling back, nasal congestion, or other factors—it can disrupt your breathing and wake you up multiple times throughout the night, even if you don’t realize it.\n\nThe key to better sleep is making sure your airway stays open while you rest.\n\n2. Position Matters\n\nYour sleeping position can affect how well you breathe. Sleeping on your back can make it more likely for your tongue to fall back into your airway, causing interruptions in your breathing. If this is happening, try sleeping on your side to help keep your airway clear.\n\nBut for many, positioning alone isn’t enough. That’s where a mouthpiece like Airwaav Recovery comes in to provide extra support.\n\n3. Support Your Natural Breathing\n\nThe AIRWAAV Recovery Mouthpiece is designed to help you breathe better while you sleep. It uses patented Reflex Technology to gently guide your tongue forward, naturally opening up your airway and allowing for unrestricted airflow. This helps prevent the blockages that can disrupt your sleep.\n\n💡 Here’s how it works:\n\nMany sleep products try to fix breathing issues by shifting your jaw forward, which can cause discomfort and long-term problems. AIRWAAV Recovery is different—it doesn’t force your jaw into an unnatural position. Instead, it relies on small, soft bumps inside the mouthpiece that trigger your tongue’s reflex to move forward and up. This keeps your tongue out of your airway, allowing you to breathe easier all night long.\n\nWhy does this matter?\n\nWhen your breathing is restricted, you don’t get enough oxygen, and your body can’t enter the deeper stages of sleep where the most recovery happens. This leads to shallow sleep, more wake-ups, and less time in REM or deep sleep cycles—meaning you wake up feeling like you barely slept.\n\nBy improving your breathing with AIRWAAV Recovery, you can experience:\n\n✅ Deeper, more restorative sleep\nWhen your airway stays open, you spend more time in the deep stages of sleep, which helps you wake up feeling more refreshed and energized.\n\n✅ More energy during the day\nWith better sleep comes better recovery. You’ll feel more alert, less tired, and ready to take on the day.\n\n✅ Immediate results\nMany users report improved breathing and better sleep after just one night with the AIRWAAV Recovery Mouthpiece.\n\nMade in the USA with materials that are BPA, latex, and phthalate-free, the AIRWAAV Recovery Mouthpiece is safe and comfortable to wear every night. 🌙\n\nHere’s what some of our users are saying:\n“Seems to be a tighter fit and more compact than others he’s tried, he’s breathing properly and it also quiets the teeth grinding so better sleep for everyone!.” ⭐️⭐️⭐️⭐️⭐️ – Jennifer G. (Verified Buyer)\n\n“I have better REM and deep sleep when wearing it, tracked using devices” ⭐️⭐️⭐️⭐️⭐️ – Ryan E. (Verified Buyer)\n\nIf you’re waking up feeling tired or if you struggle with breathing at night, it’s time to make a change. The Airwaav Recovery Mouthpiece is an easy-to-use, comfortable solution that helps you keep your airway open, so you can breathe better and sleep deeper.\n\n🎯 Ready to breathe better and sleep better?\nTry AIRWAAV Recovery risk-free for 30 days. If you don’t feel the difference, we’ll give you your money back—no questions asked.\n\nShop now and start breathing better tonight with AIRWAAV Recovery 👉https://airwaav.com/pages/rx1-listicle-og-male-1",
+            "cta_type": "SHOP_NOW",
+            "caption": "",
+            "link_description": "Innovative technology for better breathing.",
+            "link_url": "https://airwaav.com/pages/rx1-listicle-og-male-1",
+            "title": "Breathe better, sleep deeper, feel more energized.",
+            "cta_text": "Shop Now",
+            "video_hd_url": "https://video-lga3-3.xx.fbcdn.net/o1/v/t2/f2/m366/AQP9xf_KrTn9t_05IHs1UwXAjHk9EvWc9lL5Q7qDkeLy6jvy2VOGYwkQmBQxFyo1e54xQwZryEsLwKyfj68AA8AiZ7rwH8Wtj4sQgr1PnCSmGg.mp4?_nc_cat=102&_nc_sid=b66105&_nc_ht=video-lga3-3.xx.fbcdn.net&_nc_ohc=2pAEsdbyhGUQ7kNvwF8jweB&efg=eyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5WSV9VU0VDQVNFX1BST0RVQ1RfVFlQRS4uQzMuNzIwLmRhc2hfaDI2NC1iYXNpYy1nZW4yXzcyMHAiLCJ4cHZfYXNzZXRfaWQiOjQxNTg2NTA0NDcyODg2MywiYXNzZXRfYWdlX2RheXMiOjY1MCwidmlfdXNlY2FzZV9pZCI6MTA3OTksImR1cmF0aW9uX3MiOjY4LCJ1cmxnZW5fc291cmNlIjoid3d3In0%3D&ccb=17-1&vs=3f4deb49db8a7bd0&_nc_vs=HBksFQIYRWZiX2VwaGVtZXJhbC9FRTQ5ODc0RTQ5OTIxOUQ5NENENDY0QjVEQjdCOTg4MF9tdF8xX3ZpZGVvX2Rhc2hpbml0Lm1wNBUAAsgBEgAVAhg6cGFzc3Rocm91Z2hfZXZlcnN0b3JlL0dHNGJ1QnRlZE5ZWTdod0RBSzRwc1Q5Z3pOTTJidjRHQUFBRhUCAsgBEgAoABgAGwKIB3VzZV9vaWwBMRJwcm9ncmVzc2l2ZV9yZWNpcGUBMRUAACa-8J-ExI69ARUCKAJDMywXQFEu6XjU_fQYGWRhc2hfaDI2NC1iYXNpYy1nZW4yXzcyMHARAHUAZd6oAQA&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&_nc_zt=28&oh=00_AQE9T1RB2Hl7S9bzMabdvDdMMyfBQ9pFwkKYrhtcS8-ZQA&oe=6A83535A",
+            "video_preview_image_url": "https://scontent-lga3-1.xx.fbcdn.net/v/t39.35426-6/659222178_1457430409379585_2259074340965700284_n.jpg?_nc_cat=109&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=btbrVZ0YfNsQ7kNvwGa7mUR&_nc_oc=AdrWbDyXBPb5JaC2DowvGeS3Vm_qJ-kWGADQTugPLQNNjLQwcwDW2AxjF2RCRuo7tmI&_nc_zt=14&_nc_ht=scontent-lga3-1.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQGsyffq1vOoTAqVkcqNnU8KAZDfbnHd6kPtj5_o33t7Cw&oe=6A834988",
+            "video_sd_url": "https://video-lga3-3.xx.fbcdn.net/o1/v/t2/f2/m69/AQOKu7jWF6KjO2-VeAyjoS3dPrTCA0-SLPgBLRu-xxXgCsaaDYDpJHqk70EDrzT2oGseoXW9RXnIcuzaluEAhb6N.mp4?strext=1&_nc_cat=102&_nc_sid=ef5aa3&_nc_ht=video-lga3-3.xx.fbcdn.net&_nc_ohc=mYMdaCeZKvkQ7kNvwG_EGKW&efg=eyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5WSV9VU0VDQVNFX1BST0RVQ1RfVFlQRS4uQzMuMzYwLnN2ZV9zZCIsInhwdl9hc3NldF9pZCI6NDE1ODY1MDQ0NzI4ODYzLCJhc3NldF9hZ2VfZGF5cyI6NjUwLCJ2aV91c2VjYXNlX2lkIjoxMDc5OSwiZHVyYXRpb25fcyI6NjgsInVybGdlbl9zb3VyY2UiOiJ3d3cifQ%3D%3D&ccb=17-1&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&_nc_zt=28&oh=00_AQHuL1xB31kt3WbGIEWMabCrTB5J1opTETgY9tS5KvLeSg&oe=6A835834",
+            "watermarked_video_hd_url": null,
+            "watermarked_video_sd_url": null,
+            "image_crops": [],
+            "original_image_url": null,
+            "resized_image_url": null,
+            "watermarked_resized_image_url": null
+          },
+          {
+            "body": "If you’re waking up tired, groggy, or feeling like you barely slept, your nighttime breathing might be to blame. 😴\n\nYou might not realize it, but one of the biggest reasons for poor sleep is restricted breathing during the night. When your airway is blocked, even slightly, it prevents you from getting the deep, restful sleep your body needs to recover. This can leave you feeling tired, drained, and far from refreshed, no matter how many hours you spend in bed.\n\nBut there’s good news—improving your nighttime breathing can make a world of difference. Here’s how:\n\n1. Focus on Your Airway\n\nYour airway plays a huge role in how well you sleep. If your airway becomes blocked—whether from your tongue falling back, nasal congestion, or other factors—it can disrupt your breathing and wake you up multiple times throughout the night, even if you don’t realize it.\n\nThe key to better sleep is making sure your airway stays open while you rest.\n\n2. Position Matters\n\nYour sleeping position can affect how well you breathe. Sleeping on your back can make it more likely for your tongue to fall back into your airway, causing interruptions in your breathing. If this is happening, try sleeping on your side to help keep your airway clear.\n\nBut for many, positioning alone isn’t enough. That’s where a mouthpiece like Airwaav Recovery comes in to provide extra support.\n\n3. Support Your Natural Breathing\n\nThe AIRWAAV Recovery Mouthpiece is designed to help you breathe better while you sleep. It uses patented Reflex Technology to gently guide your tongue forward, naturally opening up your airway and allowing for unrestricted airflow. This helps prevent the blockages that can disrupt your sleep.\n\n💡 Here’s how it works:\n\nMany sleep products try to fix breathing issues by shifting your jaw forward, which can cause discomfort and long-term problems. AIRWAAV Recovery is different—it doesn’t force your jaw into an unnatural position. Instead, it relies on small, soft bumps inside the mouthpiece that trigger your tongue’s reflex to move forward and up. This keeps your tongue out of your airway, allowing you to breathe easier all night long.\n\nWhy does this matter?\n\nWhen your breathing is restricted, you don’t get enough oxygen, and your body can’t enter the deeper stages of sleep where the most recovery happens. This leads to shallow sleep, more wake-ups, and less time in REM or deep sleep cycles—meaning you wake up feeling like you barely slept.\n\nBy improving your breathing with AIRWAAV Recovery, you can experience:\n\n✅ Deeper, more restorative sleep\nWhen your airway stays open, you spend more time in the deep stages of sleep, which helps you wake up feeling more refreshed and energized.\n\n✅ More energy during the day\nWith better sleep comes better recovery. You’ll feel more alert, less tired, and ready to take on the day.\n\n✅ Immediate results\nMany users report improved breathing and better sleep after just one night with the AIRWAAV Recovery Mouthpiece.\n\nMade in the USA with materials that are BPA, latex, and phthalate-free, the AIRWAAV Recovery Mouthpiece is safe and comfortable to wear every night. 🌙\n\nHere’s what some of our users are saying:\n“Seems to be a tighter fit and more compact than others he’s tried, he’s breathing properly and it also quiets the teeth grinding so better sleep for everyone!.” ⭐️⭐️⭐️⭐️⭐️ – Jennifer G. (Verified Buyer)\n\n“I have better REM and deep sleep when wearing it, tracked using devices” ⭐️⭐️⭐️⭐️⭐️ – Ryan E. (Verified Buyer)\n\nIf you’re waking up feeling tired or if you struggle with breathing at night, it’s time to make a change. The Airwaav Recovery Mouthpiece is an easy-to-use, comfortable solution that helps you keep your airway open, so you can breathe better and sleep deeper.\n\n🎯 Ready to breathe better and sleep better?\nTry AIRWAAV Recovery risk-free for 30 days. If you don’t feel the difference, we’ll give you your money back—no questions asked.\n\nShop now and start breathing better tonight with AIRWAAV Recovery 👉https://airwaav.com/pages/rx1-listicle-og-male-1",
+            "cta_type": "SHOP_NOW",
+            "caption": "",
+            "link_description": "Innovative technology for better breathing.",
+            "link_url": "https://airwaav.com/pages/rx1-listicle-og-male-1",
+            "title": "Breathe better, sleep deeper, feel more energized.",
+            "cta_text": "Shop Now",
+            "video_hd_url": "https://video-lga3-3.xx.fbcdn.net/o1/v/t2/f2/m366/AQP9xf_KrTn9t_05IHs1UwXAjHk9EvWc9lL5Q7qDkeLy6jvy2VOGYwkQmBQxFyo1e54xQwZryEsLwKyfj68AA8AiZ7rwH8Wtj4sQgr1PnCSmGg.mp4?_nc_cat=102&_nc_sid=b66105&_nc_ht=video-lga3-3.xx.fbcdn.net&_nc_ohc=2pAEsdbyhGUQ7kNvwF8jweB&efg=eyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5WSV9VU0VDQVNFX1BST0RVQ1RfVFlQRS4uQzMuNzIwLmRhc2hfaDI2NC1iYXNpYy1nZW4yXzcyMHAiLCJ4cHZfYXNzZXRfaWQiOjQxNTg2NTA0NDcyODg2MywiYXNzZXRfYWdlX2RheXMiOjY1MCwidmlfdXNlY2FzZV9pZCI6MTA3OTksImR1cmF0aW9uX3MiOjY4LCJ1cmxnZW5fc291cmNlIjoid3d3In0%3D&ccb=17-1&vs=3f4deb49db8a7bd0&_nc_vs=HBksFQIYRWZiX2VwaGVtZXJhbC9FRTQ5ODc0RTQ5OTIxOUQ5NENENDY0QjVEQjdCOTg4MF9tdF8xX3ZpZGVvX2Rhc2hpbml0Lm1wNBUAAsgBEgAVAhg6cGFzc3Rocm91Z2hfZXZlcnN0b3JlL0dHNGJ1QnRlZE5ZWTdod0RBSzRwc1Q5Z3pOTTJidjRHQUFBRhUCAsgBEgAoABgAGwKIB3VzZV9vaWwBMRJwcm9ncmVzc2l2ZV9yZWNpcGUBMRUAACa-8J-ExI69ARUCKAJDMywXQFEu6XjU_fQYGWRhc2hfaDI2NC1iYXNpYy1nZW4yXzcyMHARAHUAZd6oAQA&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&_nc_zt=28&oh=00_AQE9T1RB2Hl7S9bzMabdvDdMMyfBQ9pFwkKYrhtcS8-ZQA&oe=6A83535A",
+            "video_preview_image_url": "https://scontent-lga3-1.xx.fbcdn.net/v/t39.35426-6/659853980_1646378763222508_8448905626619584008_n.jpg?_nc_cat=109&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=qKhqDd1-5GwQ7kNvwG1-lqm&_nc_oc=Ado2IXzA4M0AJOejbk6Z0DiIsJccNDTGmX6XS1RHHLEq-ZSlXKFH7XsHRoaExNNbrHU&_nc_zt=14&_nc_ht=scontent-lga3-1.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQHuHcA9mFTvi4Jc-8XCpg6pH7sO-KIDlWWl2YBaWnkMLA&oe=6A837741",
+            "video_sd_url": "https://video-lga3-3.xx.fbcdn.net/o1/v/t2/f2/m69/AQOKu7jWF6KjO2-VeAyjoS3dPrTCA0-SLPgBLRu-xxXgCsaaDYDpJHqk70EDrzT2oGseoXW9RXnIcuzaluEAhb6N.mp4?strext=1&_nc_cat=102&_nc_sid=ef5aa3&_nc_ht=video-lga3-3.xx.fbcdn.net&_nc_ohc=mYMdaCeZKvkQ7kNvwG_EGKW&efg=eyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5WSV9VU0VDQVNFX1BST0RVQ1RfVFlQRS4uQzMuMzYwLnN2ZV9zZCIsInhwdl9hc3NldF9pZCI6NDE1ODY1MDQ0NzI4ODYzLCJhc3NldF9hZ2VfZGF5cyI6NjUwLCJ2aV91c2VjYXNlX2lkIjoxMDc5OSwiZHVyYXRpb25fcyI6NjgsInVybGdlbl9zb3VyY2UiOiJ3d3cifQ%3D%3D&ccb=17-1&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&_nc_zt=28&oh=00_AQHuL1xB31kt3WbGIEWMabCrTB5J1opTETgY9tS5KvLeSg&oe=6A835834",
+            "watermarked_video_hd_url": null,
+            "watermarked_video_sd_url": null,
+            "image_crops": [],
+            "original_image_url": null,
+            "resized_image_url": null,
+            "watermarked_resized_image_url": null
+          }
+        ],
+        "body": {
+          "text": "If you’re waking up tired, groggy, or feeling like you barely slept, your nighttime breathing might be to blame. 😴\n\nYou might not realize it, but one of the biggest reasons for poor sleep is restricted breathing during the night. When your airway is blocked, even slightly, it prevents you from getting the deep, restful sleep your body needs to recover. This can leave you feeling tired, drained, and far from refreshed, no matter how many hours you spend in bed.\n\nBut there’s good news—improving your nighttime breathing can make a world of difference. Here’s how:\n\n1. Focus on Your Airway\n\nYour airway plays a huge role in how well you sleep. If your airway becomes blocked—whether from your tongue falling back, nasal congestion, or other factors—it can disrupt your breathing and wake you up multiple times throughout the night, even if you don’t realize it.\n\nThe key to better sleep is making sure your airway stays open while you rest.\n\n2. Position Matters\n\nYour sleeping position can affect how well you breathe. Sleeping on your back can make it more likely for your tongue to fall back into your airway, causing interruptions in your breathing. If this is happening, try sleeping on your side to help keep your airway clear.\n\nBut for many, positioning alone isn’t enough. That’s where a mouthpiece like Airwaav Recovery comes in to provide extra support.\n\n3. Support Your Natural Breathing\n\nThe AIRWAAV Recovery Mouthpiece is designed to help you breathe better while you sleep. It uses patented Reflex Technology to gently guide your tongue forward, naturally opening up your airway and allowing for unrestricted airflow. This helps prevent the blockages that can disrupt your sleep.\n\n💡 Here’s how it works:\n\nMany sleep products try to fix breathing issues by shifting your jaw forward, which can cause discomfort and long-term problems. AIRWAAV Recovery is different—it doesn’t force your jaw into an unnatural position. Instead, it relies on small, soft bumps inside the mouthpiece that trigger your tongue’s reflex to move forward and up. This keeps your tongue out of your airway, allowing you to breathe easier all night long.\n\nWhy does this matter?\n\nWhen your breathing is restricted, you don’t get enough oxygen, and your body can’t enter the deeper stages of sleep where the most recovery happens. This leads to shallow sleep, more wake-ups, and less time in REM or deep sleep cycles—meaning you wake up feeling like you barely slept.\n\nBy improving your breathing with AIRWAAV Recovery, you can experience:\n\n✅ Deeper, more restorative sleep\nWhen your airway stays open, you spend more time in the deep stages of sleep, which helps you wake up feeling more refreshed and energized.\n\n✅ More energy during the day\nWith better sleep comes better recovery. You’ll feel more alert, less tired, and ready to take on the day.\n\n✅ Immediate results\nMany users report improved breathing and better sleep after just one night with the AIRWAAV Recovery Mouthpiece.\n\nMade in the USA with materials that are BPA, latex, and phthalate-free, the AIRWAAV Recovery Mouthpiece is safe and comfortable to wear every night. 🌙\n\nHere’s what some of our users are saying:\n“Seems to be a tighter fit and more compact than others he’s tried, he’s breathing properly and it also quiets the teeth grinding so better sleep for everyone!.” ⭐️⭐️⭐️⭐️⭐️ – Jennifer G. (Verified Buyer)\n\n“I have better REM and deep sleep when wearing it, tracked using devices” ⭐️⭐️⭐️⭐️⭐️ – Ryan E. (Verified Buyer)\n\nIf you’re waking up feeling tired or if you struggle with breathing at night, it’s time to make a change. The Airwaav Recovery Mouthpiece is an easy-to-use, comfortable solution that helps you keep your airway open, so you can breathe better and sleep deeper.\n\n🎯 Ready to breathe better and sleep better?\nTry AIRWAAV Recovery risk-free for 30 days. If you don’t feel the difference, we’ll give you your money back—no questions asked.\n\nShop now and start breathing better tonight with AIRWAAV Recovery 👉https://airwaav.com/pages/rx1-listicle-og-male-1"
+        },
+        "cta_type": "SHOP_NOW",
+        "display_format": "DCO",
+        "link_description": "Innovative technology for better breathing.",
+        "link_url": "https://airwaav.com/pages/rx1-listicle-og-male-1",
+        "images": [],
+        "page_categories": [
+          "Product/service"
+        ],
+        "page_like_count": 8419,
+        "title": "Breathe better, sleep deeper, feel more energized.",
+        "videos": [],
+        "is_reshared": false,
+        "extra_links": [],
+        "extra_texts": [],
+        "extra_images": [],
+        "extra_videos": [],
+        "country_iso_code": null,
+        "brazil_tax_id": null,
+        "additional_info": null,
+        "ec_certificates": []
+      },
+      "is_active": true,
+      "has_user_reported": false,
+      "report_count": null,
+      "menu_items": [],
+      "state_media_run_label": null,
+      "page_is_deleted": false,
+      "page_name": "AIRWAAV",
+      "impressions_with_index": {
+        "impressions_text": null,
+        "impressions_index": -1
+      },
+      "gated_type": "ELIGIBLE",
+      "categories": [
+        "UNKNOWN"
+      ],
+      "is_aaa_eligible": true,
+      "contains_digital_created_media": false,
+      "reach_estimate": null,
+      "currency": "",
+      "spend": null,
+      "end_date": 1786431600,
+      "publisher_platform": [
+        "FACEBOOK",
+        "INSTAGRAM",
+        "AUDIENCE_NETWORK",
+        "MESSENGER",
+        "THREADS"
+      ],
+      "start_date": 1777705200,
+      "contains_sensitive_content": false,
+      "total_active_time": null,
+      "regional_regulation_data": {
+        "finserv": {
+          "is_deemed_finserv": false,
+          "is_limited_delivery": false
+        },
+        "tw_anti_scam": {
+          "is_limited_delivery": false
+        }
+      },
+      "hide_data_status": "NONE",
+      "fev_info": null,
+      "ad_id": null,
+      "targeted_or_reached_countries": [],
+      "url": "https://www.facebook.com/ads/library?id=26829013346695232",
+      "start_date_string": "2026-05-02T07:00:00.000Z",
+      "end_date_string": "2026-08-11T07:00:00.000Z"
+    },
+    {
+      "ad_archive_id": "2160917731368401",
+      "collation_count": 2,
+      "collation_id": "27319185727691614",
+      "page_id": "109178280892310",
+      "snapshot": {
+        "branded_content": null,
+        "page_id": "109178280892310",
+        "page_is_deleted": false,
+        "page_profile_uri": "https://facebook.com/AIRWAAV",
+        "root_reshared_post": null,
+        "byline": null,
+        "disclaimer_label": null,
+        "page_name": "AIRWAAV",
+        "page_profile_picture_url": "https://scontent-lga3-3.xx.fbcdn.net/v/t39.35426-6/740215601_2032514304324005_5180734221669608622_n.jpg?stp=dst-jpg_s60x60_tt6&_nc_cat=104&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=VBsNXFrYVvIQ7kNvwHgAnVP&_nc_oc=Adp5vU6Y7d91OXxkfq2lQ1Al1mQcfgLUltvX5SVJ1LqpbPLhmZ30zbkPrcVdJqltMaI&_nc_zt=14&_nc_ht=scontent-lga3-3.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQH2Fb3VyGbrYf4DpMtAyOCk7p5sQnKubiyjwzjLLhjA8g&oe=6A8355D2",
+        "event": null,
+        "caption": "airwaav.com",
+        "cta_text": "Shop now",
+        "cards": [
+          {
+            "body": "Most people blame their mattress, their schedule, or their stress. But if you're waking up tired, foggy, or sore – your breathing at night is likely the real reason.\n\nWhen you sleep, your tongue relaxes and can fall back, narrowing your airway and disrupting the deep, restorative stages of sleep your body needs to recover.\n\nThe AIRWAAV RX1 fixes that. Using patented Reflex Technology, it gently keeps your tongue forward so your airway stays open all night – no jaw-pushing, no bulky devices, no pills.\n\nThe result? Deeper sleep. Fewer wake-ups. More energy, better recovery, and mornings that actually feel like rest.\n✅ No jaw repositioning\n✅ Works for men and women\n✅ HSA/FSA eligible\n✅ Backed by 15+ years of research\n\nLoved by 300,000+ customers. Try it risk-free for 30 days.",
+            "cta_type": "SHOP_NOW",
+            "caption": "",
+            "link_description": "Your airway is the missing piece. The RX1 keeps it open.",
+            "link_url": "https://airwaav.com/pages/the-recovery-mouthpiece-rx1",
+            "title": "The Sleep Fix Nobody Talks About",
+            "cta_text": "Shop Now",
+            "video_hd_url": null,
+            "video_preview_image_url": null,
+            "video_sd_url": null,
+            "watermarked_video_hd_url": null,
+            "watermarked_video_sd_url": null,
+            "image_crops": [],
+            "original_image_url": "https://scontent-lga3-2.xx.fbcdn.net/v/t39.35426-6/739264494_1538236527993951_6244039403773600137_n.jpg?_nc_cat=107&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=v9ucSqQ5NgsQ7kNvwHP-LbQ&_nc_oc=AdoCtEGvwsihN6_A062RnD37OCGxCTTClDhYjvXueGIQdZWuIa2qBwjmu33EH-miut8&_nc_zt=14&_nc_ht=scontent-lga3-2.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQERE-4w9Pgf-vUBaX8HL56x8k0-oZow8FMG_b04-khcRg&oe=6A834062",
+            "resized_image_url": "https://scontent-lga3-2.xx.fbcdn.net/v/t39.35426-6/742278086_1346511207592298_4123195108776335407_n.jpg?stp=dst-jpg_s600x600_tt6&_nc_cat=105&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=92ZwYzcVWpQQ7kNvwG0vNt5&_nc_oc=AdpwokYyJHyIjEBC_BWqEQ3qUc1XK3s9rfaD9uaXGETL43DqxNRHKDzPhilHLsEIDMM&_nc_zt=14&_nc_ht=scontent-lga3-2.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQE5eHuGKBsFhpVj6rshL-gxDfEjUO-s4e2hQ-pjVa5t_g&oe=6A835E36",
+            "watermarked_resized_image_url": ""
+          },
+          {
+            "body": "Most people blame their mattress, their schedule, or their stress. But if you're waking up tired, foggy, or sore – your breathing at night is likely the real reason.\n\nWhen you sleep, your tongue relaxes and can fall back, narrowing your airway and disrupting the deep, restorative stages of sleep your body needs to recover.\n\nThe AIRWAAV RX1 fixes that. Using patented Reflex Technology, it gently keeps your tongue forward so your airway stays open all night – no jaw-pushing, no bulky devices, no pills.\n\nThe result? Deeper sleep. Fewer wake-ups. More energy, better recovery, and mornings that actually feel like rest.\n✅ No jaw repositioning\n✅ Works for men and women\n✅ HSA/FSA eligible\n✅ Backed by 15+ years of research\n\nLoved by 300,000+ customers. Try it risk-free for 30 days.",
+            "cta_type": "SHOP_NOW",
+            "caption": "",
+            "link_description": "Your airway is the missing piece. The RX1 keeps it open.",
+            "link_url": "https://airwaav.com/pages/the-recovery-mouthpiece-rx1",
+            "title": "The Sleep Fix Nobody Talks About",
+            "cta_text": "Shop Now",
+            "video_hd_url": null,
+            "video_preview_image_url": null,
+            "video_sd_url": null,
+            "watermarked_video_hd_url": null,
+            "watermarked_video_sd_url": null,
+            "image_crops": [],
+            "original_image_url": "https://scontent-lga3-1.xx.fbcdn.net/v/t39.35426-6/740276539_1026229970054830_8067456550306470476_n.jpg?_nc_cat=103&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=VvpkCbUupHQQ7kNvwEMPRJD&_nc_oc=AdpUzYy3WUMqO6jXpCsoJ8fSKmRMHGWnOBdQCn0vA6yHRL4yQXwrvqEHaeECuIeZ9hM&_nc_zt=14&_nc_ht=scontent-lga3-1.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQEb8_ZXMxr8sxAQq2e5_p2SCMyuMB5EG-2FmHMJcewFRw&oe=6A837235",
+            "resized_image_url": "https://scontent-lga3-1.xx.fbcdn.net/v/t39.35426-6/740846461_1550199569907113_5094710031709650497_n.jpg?stp=dst-jpg_s600x600_tt6&_nc_cat=110&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=MXUBX6DJnSYQ7kNvwHlplx7&_nc_oc=AdozMrqnMa0jS22AeRCOd82YAD4SbJN9lJhZh8qhloKtd4X4lNg91BpiZ60OYRvrWJ4&_nc_zt=14&_nc_ht=scontent-lga3-1.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQH_k6epJDHK8souVt_UjdsDRalVc7Vjec-WovHBrW6O2A&oe=6A83468F",
+            "watermarked_resized_image_url": ""
+          }
+        ],
+        "body": {
+          "text": "Most people blame their mattress, their schedule, or their stress. But if you're waking up tired, foggy, or sore – your breathing at night is likely the real reason.\n\nWhen you sleep, your tongue relaxes and can fall back, narrowing your airway and disrupting the deep, restorative stages of sleep your body needs to recover.\n\nThe AIRWAAV RX1 fixes that. Using patented Reflex Technology, it gently keeps your tongue forward so your airway stays open all night – no jaw-pushing, no bulky devices, no pills.\n\nThe result? Deeper sleep. Fewer wake-ups. More energy, better recovery, and mornings that actually feel like rest.\n✅ No jaw repositioning\n✅ Works for men and women\n✅ HSA/FSA eligible\n✅ Backed by 15+ years of research\n\nLoved by 300,000+ customers. Try it risk-free for 30 days."
+        },
+        "cta_type": "SHOP_NOW",
+        "display_format": "DCO",
+        "link_description": "Your airway is the missing piece. The RX1 keeps it open.",
+        "link_url": "https://airwaav.com/pages/the-recovery-mouthpiece-rx1",
+        "images": [],
+        "page_categories": [
+          "Product/service"
+        ],
+        "page_like_count": 8419,
+        "title": "The Sleep Fix Nobody Talks About",
+        "videos": [],
+        "is_reshared": false,
+        "extra_links": [],
+        "extra_texts": [],
+        "extra_images": [],
+        "extra_videos": [],
+        "country_iso_code": null,
+        "brazil_tax_id": null,
+        "additional_info": null,
+        "ec_certificates": []
+      },
+      "is_active": true,
+      "has_user_reported": false,
+      "report_count": null,
+      "menu_items": [],
+      "state_media_run_label": null,
+      "page_is_deleted": false,
+      "page_name": "AIRWAAV",
+      "impressions_with_index": {
+        "impressions_text": null,
+        "impressions_index": -1
+      },
+      "gated_type": "ELIGIBLE",
+      "categories": [
+        "UNKNOWN"
+      ],
+      "is_aaa_eligible": true,
+      "contains_digital_created_media": false,
+      "reach_estimate": null,
+      "currency": "",
+      "spend": null,
+      "end_date": 1785999600,
+      "publisher_platform": [
+        "FACEBOOK",
+        "INSTAGRAM",
+        "AUDIENCE_NETWORK",
+        "MESSENGER",
+        "THREADS"
+      ],
+      "start_date": 1783494000,
+      "contains_sensitive_content": false,
+      "total_active_time": null,
+      "regional_regulation_data": {
+        "finserv": {
+          "is_deemed_finserv": false,
+          "is_limited_delivery": false
+        },
+        "tw_anti_scam": {
+          "is_limited_delivery": false
+        }
+      },
+      "hide_data_status": "NONE",
+      "fev_info": null,
+      "ad_id": null,
+      "targeted_or_reached_countries": [],
+      "url": "https://www.facebook.com/ads/library?id=2160917731368401",
+      "start_date_string": "2026-07-08T07:00:00.000Z",
+      "end_date_string": "2026-08-06T07:00:00.000Z"
+    },
+    {
+      "ad_archive_id": "4037413586551573",
+      "collation_count": 1,
+      "collation_id": "1472296414298219",
+      "page_id": "109178280892310",
+      "snapshot": {
+        "branded_content": null,
+        "page_id": "109178280892310",
+        "page_is_deleted": false,
+        "page_profile_uri": "https://facebook.com/AIRWAAV",
+        "root_reshared_post": null,
+        "byline": "",
+        "disclaimer_label": null,
+        "page_name": "AIRWAAV",
+        "page_profile_picture_url": "https://scontent-lga3-1.xx.fbcdn.net/v/t39.35426-6/663048936_882332751503213_7578610328711923551_n.jpg?stp=dst-jpg_s60x60_tt6&_nc_cat=109&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=M6HtxNvjgpoQ7kNvwESYYVd&_nc_oc=Adp8NcInw2SVbEBAFuaYk4jicxHMsa2W-DxaFBEF-TNDqP1kkarMxlt6Wdh_ZRo8-gk&_nc_zt=14&_nc_ht=scontent-lga3-1.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQGpvzV60dfRJ8Q5_iySuRzlVrNw3u9Avd34jOe29qTKLQ&oe=6A836EDE",
+        "event": null,
+        "caption": "airwaav.com",
+        "cta_text": "Shop now",
+        "cards": [
+          {
+            "body": "Tired of spending money on sleep products that are bulky, uncomfortable, or just don’t work? 😴\n\nI’ve been there. No matter how many different sleep aids I tried, I’d still wake up feeling groggy, drained, and far from refreshed. Most products were uncomfortable, bulky, or kept falling out during the night. Some even forced my jaw forward, leaving me with jaw pain that made things worse. I knew there had to be a better solution.\n\nThat’s when I found AIRWAAV Recovery, and everything changed.\n\nThis mouthpiece isn’t just another uncomfortable, bulky sleep gadget—it’s an innovative solution that uses patented Reflex technology to improve your breathing, without shifting your jaw. Plus, it’s BPA, latex, and phthalate-free, making it incredibly safe to use every night. 🌙\n\nHere’s how it works:\n\n💡 No Jaw Shifting, No Discomfort\nUnlike many products that force your jaw forward (which can cause long-term issues), AIRWAAV Recovery is different. It doesn’t force your jaw into an unnatural position. Instead, it uses small, soft bumps inside the mouthpiece to trigger your tongue’s natural reflex, moving it forward and up to the roof of your mouth.\n\nThis keeps your tongue out of the airway, helping you breathe better and sleep deeper—without jaw pain or discomfort. 🌙\n\n✅ Custom fit in just 60 seconds\nIt’s incredibly easy to use. You mold it to your teeth in under a minute, and it stays securely in place all night.\n\n✅ See results after your first night\nI noticed the difference immediately. I was breathing freely all night and slept deeper than I had in years. No more tossing and turning, no more mouthpieces falling out halfway through the night, and best of all—no jaw discomfort.\n\n✅ Wake up rested and energized\nFor the first time in ages, I wake up feeling fully rested and ready to take on the day. And I’m not alone—thousands of happy customers are already experiencing the same incredible results with AIRWAAV Recovery.\n\n✅ Patented Reflex Technology\nOur mouthpiece is designed with patented Reflex technology that naturally positions your tongue to improve airflow while you sleep, helping you breathe easier and sleep better. Plus, it’s made in the USA and BPA, latex, and phthalate-free, so it’s both effective and safe to use.\n\nHere’s what some users are saying:\n“Seems to be a tighter fit and more compact than others he’s tried, he’s breathing properly and it also quiets the teeth grinding so better sleep for everyone!.” ⭐️⭐️⭐️⭐️⭐️ – Jennifer G. (Verified Buyer)\n\n“Love it! Helps me sleep so much better & helps me wake ready to go! ⭐️⭐️⭐️⭐️⭐️” – Benjamin M. (Verified Buyer)\n\n“I have better REM and deep sleep when wearing it, tracked using devices” ⭐️⭐️⭐️⭐️⭐️ – Ryan E. (Verified Buyer)\n\nIf you’re tired of bulky, uncomfortable sleep products that don’t stay in place or cause jaw pain, AIRWAAV Recovery is the solution you’ve been looking for.\n\n🎯 Join thousands of happy customers who are already sleeping better with AIRWAAV Recovery.\n\nIt’s time to finally wake up rested and energized, without the frustration of uncomfortable sleep aids. Ready to make the change? 👇https://airwaav.com/pages/rx1-listicle-og-male-1",
+            "cta_type": "SHOP_NOW",
+            "caption": "",
+            "link_description": "Innovative technology for better breathing.",
+            "link_url": "https://airwaav.com/pages/rx1-listicle-og-male-1",
+            "title": "Breathe better, sleep deeper, feel more energized.",
+            "cta_text": "Shop Now",
+            "video_hd_url": "https://video-lga3-3.xx.fbcdn.net/o1/v/t2/f2/m366/AQP9xf_KrTn9t_05IHs1UwXAjHk9EvWc9lL5Q7qDkeLy6jvy2VOGYwkQmBQxFyo1e54xQwZryEsLwKyfj68AA8AiZ7rwH8Wtj4sQgr1PnCSmGg.mp4?_nc_cat=102&_nc_sid=b66105&_nc_ht=video-lga3-3.xx.fbcdn.net&_nc_ohc=2pAEsdbyhGUQ7kNvwF8jweB&efg=eyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5WSV9VU0VDQVNFX1BST0RVQ1RfVFlQRS4uQzMuNzIwLmRhc2hfaDI2NC1iYXNpYy1nZW4yXzcyMHAiLCJ4cHZfYXNzZXRfaWQiOjQxNTg2NTA0NDcyODg2MywiYXNzZXRfYWdlX2RheXMiOjY1MCwidmlfdXNlY2FzZV9pZCI6MTA3OTksImR1cmF0aW9uX3MiOjY4LCJ1cmxnZW5fc291cmNlIjoid3d3In0%3D&ccb=17-1&vs=3f4deb49db8a7bd0&_nc_vs=HBksFQIYRWZiX2VwaGVtZXJhbC9FRTQ5ODc0RTQ5OTIxOUQ5NENENDY0QjVEQjdCOTg4MF9tdF8xX3ZpZGVvX2Rhc2hpbml0Lm1wNBUAAsgBEgAVAhg6cGFzc3Rocm91Z2hfZXZlcnN0b3JlL0dHNGJ1QnRlZE5ZWTdod0RBSzRwc1Q5Z3pOTTJidjRHQUFBRhUCAsgBEgAoABgAGwKIB3VzZV9vaWwBMRJwcm9ncmVzc2l2ZV9yZWNpcGUBMRUAACa-8J-ExI69ARUCKAJDMywXQFEu6XjU_fQYGWRhc2hfaDI2NC1iYXNpYy1nZW4yXzcyMHARAHUAZd6oAQA&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&_nc_zt=28&oh=00_AQE9T1RB2Hl7S9bzMabdvDdMMyfBQ9pFwkKYrhtcS8-ZQA&oe=6A83535A",
+            "video_preview_image_url": "https://scontent-lga3-2.xx.fbcdn.net/v/t39.35426-6/661247360_1079496608574606_2527306851339642142_n.jpg?_nc_cat=101&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=AzRGnUxfcIMQ7kNvwE9vpTQ&_nc_oc=AdqF2DSGOd5IEwwhTAUuqmEefozog_hXyKK90hUdf5Ap202UL_hNPcsovzlgKTNF7Uc&_nc_zt=14&_nc_ht=scontent-lga3-2.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQGPIWthI2zANZzSQhRIlUACXgNjUO5f7a_gsuzq9C21Ug&oe=6A834102",
+            "video_sd_url": "https://video-lga3-3.xx.fbcdn.net/o1/v/t2/f2/m69/AQOKu7jWF6KjO2-VeAyjoS3dPrTCA0-SLPgBLRu-xxXgCsaaDYDpJHqk70EDrzT2oGseoXW9RXnIcuzaluEAhb6N.mp4?strext=1&_nc_cat=102&_nc_sid=ef5aa3&_nc_ht=video-lga3-3.xx.fbcdn.net&_nc_ohc=mYMdaCeZKvkQ7kNvwG_EGKW&efg=eyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5WSV9VU0VDQVNFX1BST0RVQ1RfVFlQRS4uQzMuMzYwLnN2ZV9zZCIsInhwdl9hc3NldF9pZCI6NDE1ODY1MDQ0NzI4ODYzLCJhc3NldF9hZ2VfZGF5cyI6NjUwLCJ2aV91c2VjYXNlX2lkIjoxMDc5OSwiZHVyYXRpb25fcyI6NjgsInVybGdlbl9zb3VyY2UiOiJ3d3cifQ%3D%3D&ccb=17-1&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&_nc_zt=28&oh=00_AQHuL1xB31kt3WbGIEWMabCrTB5J1opTETgY9tS5KvLeSg&oe=6A835834",
+            "watermarked_video_hd_url": null,
+            "watermarked_video_sd_url": null,
+            "image_crops": [],
+            "original_image_url": null,
+            "resized_image_url": null,
+            "watermarked_resized_image_url": null
+          },
+          {
+            "body": "Tired of spending money on sleep products that are bulky, uncomfortable, or just don’t work? 😴\n\nI’ve been there. No matter how many different sleep aids I tried, I’d still wake up feeling groggy, drained, and far from refreshed. Most products were uncomfortable, bulky, or kept falling out during the night. Some even forced my jaw forward, leaving me with jaw pain that made things worse. I knew there had to be a better solution.\n\nThat’s when I found AIRWAAV Recovery, and everything changed.\n\nThis mouthpiece isn’t just another uncomfortable, bulky sleep gadget—it’s an innovative solution that uses patented Reflex technology to improve your breathing, without shifting your jaw. Plus, it’s BPA, latex, and phthalate-free, making it incredibly safe to use every night. 🌙\n\nHere’s how it works:\n\n💡 No Jaw Shifting, No Discomfort\nUnlike many products that force your jaw forward (which can cause long-term issues), AIRWAAV Recovery is different. It doesn’t force your jaw into an unnatural position. Instead, it uses small, soft bumps inside the mouthpiece to trigger your tongue’s natural reflex, moving it forward and up to the roof of your mouth.\n\nThis keeps your tongue out of the airway, helping you breathe better and sleep deeper—without jaw pain or discomfort. 🌙\n\n✅ Custom fit in just 60 seconds\nIt’s incredibly easy to use. You mold it to your teeth in under a minute, and it stays securely in place all night.\n\n✅ See results after your first night\nI noticed the difference immediately. I was breathing freely all night and slept deeper than I had in years. No more tossing and turning, no more mouthpieces falling out halfway through the night, and best of all—no jaw discomfort.\n\n✅ Wake up rested and energized\nFor the first time in ages, I wake up feeling fully rested and ready to take on the day. And I’m not alone—thousands of happy customers are already experiencing the same incredible results with AIRWAAV Recovery.\n\n✅ Patented Reflex Technology\nOur mouthpiece is designed with patented Reflex technology that naturally positions your tongue to improve airflow while you sleep, helping you breathe easier and sleep better. Plus, it’s made in the USA and BPA, latex, and phthalate-free, so it’s both effective and safe to use.\n\nHere’s what some users are saying:\n“Seems to be a tighter fit and more compact than others he’s tried, he’s breathing properly and it also quiets the teeth grinding so better sleep for everyone!.” ⭐️⭐️⭐️⭐️⭐️ – Jennifer G. (Verified Buyer)\n\n“Love it! Helps me sleep so much better & helps me wake ready to go! ⭐️⭐️⭐️⭐️⭐️” – Benjamin M. (Verified Buyer)\n\n“I have better REM and deep sleep when wearing it, tracked using devices” ⭐️⭐️⭐️⭐️⭐️ – Ryan E. (Verified Buyer)\n\nIf you’re tired of bulky, uncomfortable sleep products that don’t stay in place or cause jaw pain, AIRWAAV Recovery is the solution you’ve been looking for.\n\n🎯 Join thousands of happy customers who are already sleeping better with AIRWAAV Recovery.\n\nIt’s time to finally wake up rested and energized, without the frustration of uncomfortable sleep aids. Ready to make the change? 👇https://airwaav.com/pages/rx1-listicle-og-male-1",
+            "cta_type": "SHOP_NOW",
+            "caption": "",
+            "link_description": "Innovative technology for better breathing.",
+            "link_url": "https://airwaav.com/pages/rx1-listicle-og-male-1",
+            "title": "Breathe better, sleep deeper, feel more energized.",
+            "cta_text": "Shop Now",
+            "video_hd_url": "https://video-lga3-3.xx.fbcdn.net/o1/v/t2/f2/m366/AQP9xf_KrTn9t_05IHs1UwXAjHk9EvWc9lL5Q7qDkeLy6jvy2VOGYwkQmBQxFyo1e54xQwZryEsLwKyfj68AA8AiZ7rwH8Wtj4sQgr1PnCSmGg.mp4?_nc_cat=102&_nc_sid=b66105&_nc_ht=video-lga3-3.xx.fbcdn.net&_nc_ohc=2pAEsdbyhGUQ7kNvwF8jweB&efg=eyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5WSV9VU0VDQVNFX1BST0RVQ1RfVFlQRS4uQzMuNzIwLmRhc2hfaDI2NC1iYXNpYy1nZW4yXzcyMHAiLCJ4cHZfYXNzZXRfaWQiOjQxNTg2NTA0NDcyODg2MywiYXNzZXRfYWdlX2RheXMiOjY1MCwidmlfdXNlY2FzZV9pZCI6MTA3OTksImR1cmF0aW9uX3MiOjY4LCJ1cmxnZW5fc291cmNlIjoid3d3In0%3D&ccb=17-1&vs=3f4deb49db8a7bd0&_nc_vs=HBksFQIYRWZiX2VwaGVtZXJhbC9FRTQ5ODc0RTQ5OTIxOUQ5NENENDY0QjVEQjdCOTg4MF9tdF8xX3ZpZGVvX2Rhc2hpbml0Lm1wNBUAAsgBEgAVAhg6cGFzc3Rocm91Z2hfZXZlcnN0b3JlL0dHNGJ1QnRlZE5ZWTdod0RBSzRwc1Q5Z3pOTTJidjRHQUFBRhUCAsgBEgAoABgAGwKIB3VzZV9vaWwBMRJwcm9ncmVzc2l2ZV9yZWNpcGUBMRUAACa-8J-ExI69ARUCKAJDMywXQFEu6XjU_fQYGWRhc2hfaDI2NC1iYXNpYy1nZW4yXzcyMHARAHUAZd6oAQA&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&_nc_zt=28&oh=00_AQE9T1RB2Hl7S9bzMabdvDdMMyfBQ9pFwkKYrhtcS8-ZQA&oe=6A83535A",
+            "video_preview_image_url": "https://scontent-lga3-2.xx.fbcdn.net/v/t39.35426-6/658374711_1939262620283775_5335833712767531476_n.jpg?_nc_cat=107&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=89BAkw_qlhUQ7kNvwG4-YW_&_nc_oc=AdqMSlUlB4RXT2StHVq4TA3YKBw-SJGumN4-PzvSIcoRh9ziILobSdJsrSmzSAvSjlI&_nc_zt=14&_nc_ht=scontent-lga3-2.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQHSLL3j-_b4P2VKVj2IxMIHmw_UO6WoZKus_aZnDU9-jA&oe=6A836BF0",
+            "video_sd_url": "https://video-lga3-3.xx.fbcdn.net/o1/v/t2/f2/m69/AQOKu7jWF6KjO2-VeAyjoS3dPrTCA0-SLPgBLRu-xxXgCsaaDYDpJHqk70EDrzT2oGseoXW9RXnIcuzaluEAhb6N.mp4?strext=1&_nc_cat=102&_nc_sid=ef5aa3&_nc_ht=video-lga3-3.xx.fbcdn.net&_nc_ohc=mYMdaCeZKvkQ7kNvwG_EGKW&efg=eyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5WSV9VU0VDQVNFX1BST0RVQ1RfVFlQRS4uQzMuMzYwLnN2ZV9zZCIsInhwdl9hc3NldF9pZCI6NDE1ODY1MDQ0NzI4ODYzLCJhc3NldF9hZ2VfZGF5cyI6NjUwLCJ2aV91c2VjYXNlX2lkIjoxMDc5OSwiZHVyYXRpb25fcyI6NjgsInVybGdlbl9zb3VyY2UiOiJ3d3cifQ%3D%3D&ccb=17-1&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&_nc_zt=28&oh=00_AQHuL1xB31kt3WbGIEWMabCrTB5J1opTETgY9tS5KvLeSg&oe=6A835834",
+            "watermarked_video_hd_url": null,
+            "watermarked_video_sd_url": null,
+            "image_crops": [],
+            "original_image_url": null,
+            "resized_image_url": null,
+            "watermarked_resized_image_url": null
+          }
+        ],
+        "body": {
+          "text": "Tired of spending money on sleep products that are bulky, uncomfortable, or just don’t work? 😴\n\nI’ve been there. No matter how many different sleep aids I tried, I’d still wake up feeling groggy, drained, and far from refreshed. Most products were uncomfortable, bulky, or kept falling out during the night. Some even forced my jaw forward, leaving me with jaw pain that made things worse. I knew there had to be a better solution.\n\nThat’s when I found AIRWAAV Recovery, and everything changed.\n\nThis mouthpiece isn’t just another uncomfortable, bulky sleep gadget—it’s an innovative solution that uses patented Reflex technology to improve your breathing, without shifting your jaw. Plus, it’s BPA, latex, and phthalate-free, making it incredibly safe to use every night. 🌙\n\nHere’s how it works:\n\n💡 No Jaw Shifting, No Discomfort\nUnlike many products that force your jaw forward (which can cause long-term issues), AIRWAAV Recovery is different. It doesn’t force your jaw into an unnatural position. Instead, it uses small, soft bumps inside the mouthpiece to trigger your tongue’s natural reflex, moving it forward and up to the roof of your mouth.\n\nThis keeps your tongue out of the airway, helping you breathe better and sleep deeper—without jaw pain or discomfort. 🌙\n\n✅ Custom fit in just 60 seconds\nIt’s incredibly easy to use. You mold it to your teeth in under a minute, and it stays securely in place all night.\n\n✅ See results after your first night\nI noticed the difference immediately. I was breathing freely all night and slept deeper than I had in years. No more tossing and turning, no more mouthpieces falling out halfway through the night, and best of all—no jaw discomfort.\n\n✅ Wake up rested and energized\nFor the first time in ages, I wake up feeling fully rested and ready to take on the day. And I’m not alone—thousands of happy customers are already experiencing the same incredible results with AIRWAAV Recovery.\n\n✅ Patented Reflex Technology\nOur mouthpiece is designed with patented Reflex technology that naturally positions your tongue to improve airflow while you sleep, helping you breathe easier and sleep better. Plus, it’s made in the USA and BPA, latex, and phthalate-free, so it’s both effective and safe to use.\n\nHere’s what some users are saying:\n“Seems to be a tighter fit and more compact than others he’s tried, he’s breathing properly and it also quiets the teeth grinding so better sleep for everyone!.” ⭐️⭐️⭐️⭐️⭐️ – Jennifer G. (Verified Buyer)\n\n“Love it! Helps me sleep so much better & helps me wake ready to go! ⭐️⭐️⭐️⭐️⭐️” – Benjamin M. (Verified Buyer)\n\n“I have better REM and deep sleep when wearing it, tracked using devices” ⭐️⭐️⭐️⭐️⭐️ – Ryan E. (Verified Buyer)\n\nIf you’re tired of bulky, uncomfortable sleep products that don’t stay in place or cause jaw pain, AIRWAAV Recovery is the solution you’ve been looking for.\n\n🎯 Join thousands of happy customers who are already sleeping better with AIRWAAV Recovery.\n\nIt’s time to finally wake up rested and energized, without the frustration of uncomfortable sleep aids. Ready to make the change? 👇https://airwaav.com/pages/rx1-listicle-og-male-1"
+        },
+        "cta_type": "SHOP_NOW",
+        "display_format": "DCO",
+        "link_description": "Innovative technology for better breathing.",
+        "link_url": "https://airwaav.com/pages/rx1-listicle-og-male-1",
+        "images": [],
+        "page_categories": [
+          "Product/service"
+        ],
+        "page_like_count": 8419,
+        "title": "Breathe better, sleep deeper, feel more energized.",
+        "videos": [],
+        "is_reshared": false,
+        "extra_links": [],
+        "extra_texts": [],
+        "extra_images": [],
+        "extra_videos": [],
+        "country_iso_code": null,
+        "brazil_tax_id": null,
+        "additional_info": null,
+        "ec_certificates": []
+      },
+      "is_active": true,
+      "has_user_reported": false,
+      "report_count": null,
+      "menu_items": [],
+      "state_media_run_label": null,
+      "page_is_deleted": false,
+      "page_name": "AIRWAAV",
+      "impressions_with_index": {
+        "impressions_text": null,
+        "impressions_index": -1
+      },
+      "gated_type": "ELIGIBLE",
+      "categories": [
+        "UNKNOWN"
+      ],
+      "is_aaa_eligible": true,
+      "contains_digital_created_media": false,
+      "reach_estimate": null,
+      "currency": "",
+      "spend": null,
+      "end_date": 1786345200,
+      "publisher_platform": [
+        "FACEBOOK",
+        "INSTAGRAM",
+        "AUDIENCE_NETWORK",
+        "MESSENGER",
+        "THREADS"
+      ],
+      "start_date": 1777791600,
+      "contains_sensitive_content": false,
+      "total_active_time": null,
+      "regional_regulation_data": {
+        "finserv": {
+          "is_deemed_finserv": false,
+          "is_limited_delivery": false
+        },
+        "tw_anti_scam": {
+          "is_limited_delivery": false
+        }
+      },
+      "hide_data_status": "NONE",
+      "fev_info": null,
+      "ad_id": null,
+      "targeted_or_reached_countries": [],
+      "url": "https://www.facebook.com/ads/library?id=4037413586551573",
+      "start_date_string": "2026-05-03T07:00:00.000Z",
+      "end_date_string": "2026-08-10T07:00:00.000Z"
+    },
+    {
+      "ad_archive_id": "1376920144572197",
+      "collation_count": 1,
+      "collation_id": "1549239573599176",
+      "page_id": "109178280892310",
+      "snapshot": {
+        "branded_content": null,
+        "page_id": "109178280892310",
+        "page_is_deleted": false,
+        "page_profile_uri": "https://facebook.com/AIRWAAV",
+        "root_reshared_post": null,
+        "byline": null,
+        "disclaimer_label": null,
+        "page_name": "AIRWAAV",
+        "page_profile_picture_url": "https://scontent-lga3-3.xx.fbcdn.net/v/t39.35426-6/738206550_1012750345005055_7552323248196685718_n.jpg?stp=dst-jpg_s60x60_tt6&_nc_cat=104&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=Emo3B-RdLrEQ7kNvwF5DHtP&_nc_oc=AdqQ4aTBZsJqfE3-mqpRje-LYG6HsivCzSbkdaz_anvoVdQ0klkP0mm1N4N4lzWuIfU&_nc_zt=14&_nc_ht=scontent-lga3-3.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQEOAC4miwoWu_YtqMxnxFmblGU1ifufMLMBc9G5EG3L2Q&oe=6A83747A",
+        "event": null,
+        "caption": "airwaav.com",
+        "cta_text": "Shop now",
+        "cards": [
+          {
+            "body": "Most people never connect their exhaustion to their breathing at night. When your tongue relaxes during sleep it falls back and narrows your airway. Less oxygen. Lighter sleep. Groggy mornings no matter how many hours you logged 😮‍💨\n\nThe AIRWAAV RX1 uses patented Reflex Technology to gently keep your tongue forward so your airway stays open all night. No jaw pushing. No discomfort.\n\n✅ Deeper, more restorative sleep\n✅ Wake up clear-headed, not foggy\n✅ Better recovery by morning\n\nLoved by 300,000+ customers. HSA/FSA eligible. Try it risk-free for 30 days.",
+            "cta_type": "SHOP_NOW",
+            "caption": "",
+            "link_description": " Naturally opens the airway so you breathe easier and sleep deeper.",
+            "link_url": "https://airwaav.com/products/airwaav-recovery-rx1-mouthpiece-for-sleep-2-pack",
+            "title": "Bad sleep? It's your breathing. ",
+            "cta_text": "Shop Now",
+            "video_hd_url": null,
+            "video_preview_image_url": null,
+            "video_sd_url": null,
+            "watermarked_video_hd_url": null,
+            "watermarked_video_sd_url": null,
+            "image_crops": [],
+            "original_image_url": "https://scontent-lga3-2.xx.fbcdn.net/v/t39.35426-6/740052309_1336743127994259_5691955360391545044_n.jpg?_nc_cat=101&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=GD7oOaIhw-UQ7kNvwGLyGuv&_nc_oc=AdrQ6rPSyZdqszyEnifIeyfzp23-QrNNY8yDTJqNcIKEhO69WDJFmQv-ZeIQ5qNNSSY&_nc_zt=14&_nc_ht=scontent-lga3-2.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQHQLMBSixNffkBnHVHM1xWB6MLu2Sx-jrhudUsvt923OA&oe=6A836E34",
+            "resized_image_url": "https://scontent-lga3-1.xx.fbcdn.net/v/t39.35426-6/739264759_1053135330552662_7093869851260316987_n.jpg?stp=dst-jpg_s600x600_tt6&_nc_cat=109&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=p95AzCvS4LMQ7kNvwGI8TNd&_nc_oc=Adp7UdhPd3TzGb4JIECbSQo2doMPiFY_bvzkmLoQtfWSgTn63EtlDqlX_ten5bPbyc4&_nc_zt=14&_nc_ht=scontent-lga3-1.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQGeJebOF9zo_1tzn2qq2dkG4M3Y0PDtgVKJcayaT2qjBQ&oe=6A83533F",
+            "watermarked_resized_image_url": ""
+          },
+          {
+            "body": "Most people never connect their exhaustion to their breathing at night. When your tongue relaxes during sleep it falls back and narrows your airway. Less oxygen. Lighter sleep. Groggy mornings no matter how many hours you logged 😮‍💨\n\nThe AIRWAAV RX1 uses patented Reflex Technology to gently keep your tongue forward so your airway stays open all night. No jaw pushing. No discomfort.\n\n✅ Deeper, more restorative sleep\n✅ Wake up clear-headed, not foggy\n✅ Better recovery by morning\n\nLoved by 300,000+ customers. HSA/FSA eligible. Try it risk-free for 30 days.",
+            "cta_type": "SHOP_NOW",
+            "caption": "",
+            "link_description": " Naturally opens the airway so you breathe easier and sleep deeper.",
+            "link_url": "https://airwaav.com/products/airwaav-recovery-rx1-mouthpiece-for-sleep-2-pack",
+            "title": "Bad sleep? It's your breathing. ",
+            "cta_text": "Shop Now",
+            "video_hd_url": null,
+            "video_preview_image_url": null,
+            "video_sd_url": null,
+            "watermarked_video_hd_url": null,
+            "watermarked_video_sd_url": null,
+            "image_crops": [],
+            "original_image_url": "https://scontent-lga3-1.xx.fbcdn.net/v/t39.35426-6/738206550_2030693514228151_648818692474300405_n.jpg?_nc_cat=103&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=0GydPlqzpGAQ7kNvwGJQdLB&_nc_oc=AdpinYrC5yd9ad2_4s-V5iIAIAOihf2aBu4LVIeOujJHrSCLRNOBpZ8Aq8B6fwdDQec&_nc_zt=14&_nc_ht=scontent-lga3-1.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQEvB72550kzgt6a1JovcmpH0bm22CXFC5S7zNIIE7_xZg&oe=6A8362BC",
+            "resized_image_url": "https://scontent-lga3-3.xx.fbcdn.net/v/t39.35426-6/737827340_1288201733122253_3788476420790517896_n.jpg?stp=dst-jpg_s600x600_tt6&_nc_cat=108&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=Eghb1aWj3HoQ7kNvwHzsQxd&_nc_oc=AdpnOq6EunDDLbHQLpWq9PwwnZjjQ6sfOM2eo4Zag-P5VdQzCESwFD_Sk5RoL7MbYso&_nc_zt=14&_nc_ht=scontent-lga3-3.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQGIkjNr5x2ayOROWulBVtKqcmVDdLM-4kF6Fh0mxjpnFA&oe=6A83725F",
+            "watermarked_resized_image_url": ""
+          }
+        ],
+        "body": {
+          "text": "Most people never connect their exhaustion to their breathing at night. When your tongue relaxes during sleep it falls back and narrows your airway. Less oxygen. Lighter sleep. Groggy mornings no matter how many hours you logged 😮‍💨\n\nThe AIRWAAV RX1 uses patented Reflex Technology to gently keep your tongue forward so your airway stays open all night. No jaw pushing. No discomfort.\n\n✅ Deeper, more restorative sleep\n✅ Wake up clear-headed, not foggy\n✅ Better recovery by morning\n\nLoved by 300,000+ customers. HSA/FSA eligible. Try it risk-free for 30 days."
+        },
+        "cta_type": "SHOP_NOW",
+        "display_format": "DCO",
+        "link_description": " Naturally opens the airway so you breathe easier and sleep deeper.",
+        "link_url": "https://airwaav.com/products/airwaav-recovery-rx1-mouthpiece-for-sleep-2-pack",
+        "images": [],
+        "page_categories": [
+          "Product/service"
+        ],
+        "page_like_count": 8419,
+        "title": "Bad sleep? It's your breathing. ",
+        "videos": [],
+        "is_reshared": false,
+        "extra_links": [],
+        "extra_texts": [],
+        "extra_images": [],
+        "extra_videos": [],
+        "country_iso_code": null,
+        "brazil_tax_id": null,
+        "additional_info": null,
+        "ec_certificates": []
+      },
+      "is_active": true,
+      "has_user_reported": false,
+      "report_count": null,
+      "menu_items": [],
+      "state_media_run_label": null,
+      "page_is_deleted": false,
+      "page_name": "AIRWAAV",
+      "impressions_with_index": {
+        "impressions_text": null,
+        "impressions_index": -1
+      },
+      "gated_type": "ELIGIBLE",
+      "categories": [
+        "UNKNOWN"
+      ],
+      "is_aaa_eligible": true,
+      "contains_digital_created_media": false,
+      "reach_estimate": null,
+      "currency": "",
+      "spend": null,
+      "end_date": 1786604400,
+      "publisher_platform": [
+        "FACEBOOK",
+        "INSTAGRAM",
+        "AUDIENCE_NETWORK",
+        "MESSENGER",
+        "THREADS"
+      ],
+      "start_date": 1784185200,
+      "contains_sensitive_content": false,
+      "total_active_time": null,
+      "regional_regulation_data": {
+        "finserv": {
+          "is_deemed_finserv": false,
+          "is_limited_delivery": false
+        },
+        "tw_anti_scam": {
+          "is_limited_delivery": false
+        }
+      },
+      "hide_data_status": "NONE",
+      "fev_info": null,
+      "ad_id": null,
+      "targeted_or_reached_countries": [],
+      "url": "https://www.facebook.com/ads/library?id=1376920144572197",
+      "start_date_string": "2026-07-16T07:00:00.000Z",
+      "end_date_string": "2026-08-13T07:00:00.000Z"
+    },
+    {
+      "ad_archive_id": "1314173330702178",
+      "collation_count": 1,
+      "collation_id": "1090135040340783",
+      "page_id": "109178280892310",
+      "snapshot": {
+        "branded_content": {
+          "page_id": "109178280892310",
+          "page_is_deleted": false,
+          "page_profile_uri": "https://facebook.com/AIRWAAV",
+          "page_name": "AIRWAAV"
+        },
+        "page_id": "319766667895661",
+        "page_is_deleted": false,
+        "page_profile_uri": "https://facebook.com/61562168942283",
+        "root_reshared_post": null,
+        "byline": "",
+        "disclaimer_label": null,
+        "page_name": "Girls by 10PM Curfew",
+        "page_profile_picture_url": "https://scontent-lga3-2.xx.fbcdn.net/v/t39.35426-6/752782072_2030186104527694_6634428363668655561_n.jpg?stp=dst-jpg_s60x60_tt6&_nc_cat=105&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=BNbVdx6M3rYQ7kNvwGGt8I3&_nc_oc=AdpRJDFssrN7QLzRLjo65AZTliF3G2BepEhd39OUonYNUzTJWocyQSUcnwZG5IID2tg&_nc_zt=14&_nc_ht=scontent-lga3-2.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQE8QNWEQsgZW_TvDiJgYsZKAzI1TkVtph5KXPnJwbDveg&oe=6A8353FD",
+        "event": null,
+        "caption": "airwaav.com",
+        "cta_text": "Shop now",
+        "cards": [
+          {
+            "body": "As someone who has tried virtually every sleep hack on the internet, this takes the cake. My sleep scores were struggling, so I went looking. Tried the mouth tape, the cervical pillow, the sleeping mask. Turns out my interrupted sleep was because my airway was blocked. This fits comfortably in your mouth to adjust your jaw and tongue position. Since I started using it, I wake up every morning feeling rested and recovered. So simple, so effective.",
+            "cta_type": "SHOP_NOW",
+            "caption": "",
+            "link_description": " ",
+            "link_url": "https://airwaav.com/pages/rx1-problemaware-branded",
+            "title": " Finally Found What Fixes My Sleep",
+            "cta_text": "Shop Now",
+            "video_hd_url": "https://video-lga3-1.xx.fbcdn.net/o1/v/t2/f2/m366/AQN96-SjLglNkh5xkUrNfZpdfBc7F-okvgZkY4GRCqy4i4PSgWwrg5UwwJXe6pYYkYd6R-i87BUzZZ8pobMY5m2HYi_iFWGO8hQtVrZpFQ7SKg.mp4?_nc_cat=109&_nc_sid=b66105&_nc_ht=video-lga3-1.xx.fbcdn.net&_nc_ohc=oKNjhzRPMG8Q7kNvwFxzf51&efg=eyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5WSV9VU0VDQVNFX1BST0RVQ1RfVFlQRS4uQzMuNzIwLmRhc2hfaDI2NC1iYXNpYy1nZW4yXzcyMHAiLCJ4cHZfYXNzZXRfaWQiOjE2MDY3NDQ4Nzc3OTU5MDYsImFzc2V0X2FnZV9kYXlzIjoxOSwidmlfdXNlY2FzZV9pZCI6MTAxMzksImR1cmF0aW9uX3MiOjMwLCJ1cmxnZW5fc291cmNlIjoid3d3In0%3D&ccb=17-1&vs=8245e6c65bccb7bc&_nc_vs=HBksFQIYRWZiX2VwaGVtZXJhbC85NDRGMzYzNzlBOTA0NkQzNkFGNEZCQUUxQkY1RTk5Ml9tdF8xX3ZpZGVvX2Rhc2hpbml0Lm1wNBUAAsgBEgAVAhhAZmJfcGVybWFuZW50L0U2NDQ4RDc3M0Y3ODgzNzI0ODFCNTZEOTYxNDcwRjhDX2F1ZGlvX2Rhc2hpbml0Lm1wNBUCAsgBEgAoABgAGwKIB3VzZV9vaWwBMRJwcm9ncmVzc2l2ZV9yZWNpcGUBMRUAACaEqfya7tTaBRUCKAJDMywXQD664UeuFHsYGWRhc2hfaDI2NC1iYXNpYy1nZW4yXzcyMHARAHUAZbaeAQA&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&_nc_zt=28&oh=00_AQGW-zAMkdqsnO6nfmzEmyK57smunHA8yYmesSO7d69ddA&oe=6A835637",
+            "video_preview_image_url": "https://scontent-lga3-3.xx.fbcdn.net/v/t39.35426-6/755010636_1063122962904519_3795084852036243059_n.jpg?_nc_cat=108&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=velbz41iMbIQ7kNvwEXHZJk&_nc_oc=AdobWLW-DuCdY3Pb6Uhp4qXgPcOqLyREg-6VNZg5KTdE4mnf6vFFDmsjUwl7O6PxbBw&_nc_zt=14&_nc_ht=scontent-lga3-3.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQGUA6dj999xNMJdgMdpSRvDZNBRVZ204MSis5f4TqvhWg&oe=6A83767F",
+            "video_sd_url": "https://video-lga3-3.xx.fbcdn.net/o1/v/t2/f2/m412/AQOWn8kIgpgs5do5dQH9aKLX9uYOWj-r-9mwgu_UF5p7yG77_XN8W4j-prk03RrhH6BCnwro5Q-HkUqqIptvToa1XmVju-pok9McF9QWng.mp4?_nc_cat=102&_nc_sid=ef5aa3&_nc_ht=video-lga3-3.xx.fbcdn.net&_nc_ohc=nit84Q8ci4cQ7kNvwG6v1kH&efg=eyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5WSV9VU0VDQVNFX1BST0RVQ1RfVFlQRS4uQzMuMzYwLnN2ZV9zZCIsInhwdl9hc3NldF9pZCI6MTYwNjc0NDg3Nzc5NTkwNiwiYXNzZXRfYWdlX2RheXMiOjE5LCJ2aV91c2VjYXNlX2lkIjoxMDEzOSwiZHVyYXRpb25fcyI6MzAsInVybGdlbl9zb3VyY2UiOiJ3d3cifQ%3D%3D&ccb=17-1&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&_nc_zt=28&oh=00_AQG3Wr2SHC8EdHg1p6eLe6rxcQUY5NKMoHh-Z8C_4qqngQ&oe=6A8342DC",
+            "watermarked_video_hd_url": null,
+            "watermarked_video_sd_url": null,
+            "image_crops": [],
+            "original_image_url": null,
+            "resized_image_url": null,
+            "watermarked_resized_image_url": null
+          },
+          {
+            "body": "As someone who has tried virtually every sleep hack on the internet, this takes the cake. My sleep scores were struggling, so I went looking. Tried the mouth tape, the cervical pillow, the sleeping mask. Turns out my interrupted sleep was because my airway was blocked. This fits comfortably in your mouth to adjust your jaw and tongue position. Since I started using it, I wake up every morning feeling rested and recovered. So simple, so effective.",
+            "cta_type": "SHOP_NOW",
+            "caption": "",
+            "link_description": " ",
+            "link_url": "https://airwaav.com/pages/rx1-problemaware-branded",
+            "title": " Finally Found What Fixes My Sleep",
+            "cta_text": "Shop Now",
+            "video_hd_url": "https://video-lga3-1.xx.fbcdn.net/o1/v/t2/f2/m366/AQOQMDaVgMTHRerKLzexWvJX5TPUOhfnYNT0y27oJi_vAXE0DfvlB8o-FIwGt8Vvp64hhO1bZW8E3JxwAO4baQ9ok8gFsp2UKpBYqwEGFIM9zw.mp4?_nc_cat=109&_nc_sid=b66105&_nc_ht=video-lga3-1.xx.fbcdn.net&_nc_ohc=6llO5MuzRBQQ7kNvwHbrMO2&efg=eyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5WSV9VU0VDQVNFX1BST0RVQ1RfVFlQRS4uQzMuNzIwLmRhc2hfaDI2NC1iYXNpYy1nZW4yXzcyMHAiLCJ4cHZfYXNzZXRfaWQiOjEwMTM3ODY0OTQ1ODU5NDIsImFzc2V0X2FnZV9kYXlzIjoxOSwidmlfdXNlY2FzZV9pZCI6MTAxMzksImR1cmF0aW9uX3MiOjMwLCJ1cmxnZW5fc291cmNlIjoid3d3In0%3D&ccb=17-1&vs=db7ba58d243ac435&_nc_vs=HBksFQIYRWZiX2VwaGVtZXJhbC9EMzQ0NDQ2MzQ4OUIzODE0MjFDOUQwODJCMzk4MkM4Rl9tdF8xX3ZpZGVvX2Rhc2hpbml0Lm1wNBUAAsgBEgAVAhhAZmJfcGVybWFuZW50L0RFNERGNDMxRTIwNjdDRjRDQ0NGNERENjdCQzU3Q0I4X2F1ZGlvX2Rhc2hpbml0Lm1wNBUCAsgBEgAoABgAGwKIB3VzZV9vaWwBMRJwcm9ncmVzc2l2ZV9yZWNpcGUBMRUAACassZr-kYLNAxUCKAJDMywXQD664UeuFHsYGWRhc2hfaDI2NC1iYXNpYy1nZW4yXzcyMHARAHUAZbaeAQA&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&_nc_zt=28&oh=00_AQFX3E1qZ7VMjS-SazfyDk9Rn5YNX4a9FRgRjf4HfNrwDg&oe=6A835497",
+            "video_preview_image_url": "https://scontent-lga3-3.xx.fbcdn.net/v/t39.35426-6/752782072_1569891714637615_4936520367911451298_n.jpg?_nc_cat=104&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=_OWKnBOo99QQ7kNvwGHHeKG&_nc_oc=AdpK1Ogav2P7qemZT0UuW-ehIfx1voJTCh4vx7JUDevsnaDmXyAWKPSaWMPUp1zSrgQ&_nc_zt=14&_nc_ht=scontent-lga3-3.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQFRROBbLpetaGLw1lXrTM7I4WRSBkSOmFWH1i21pBceJg&oe=6A83483D",
+            "video_sd_url": "https://video-lga3-3.xx.fbcdn.net/o1/v/t2/f2/m412/AQObWeIiffbfR31eakbLR33uDQuvDKitex_JAI79PeTFvI8d55LFxq8HBQenAtaM_0qmKWZ1Oiz4HD27E-6lWdBqEa0FlCEUrXbT80Znzw.mp4?_nc_cat=108&_nc_sid=ef5aa3&_nc_ht=video-lga3-3.xx.fbcdn.net&_nc_ohc=0TIJRINYOPkQ7kNvwE9xECJ&efg=eyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5WSV9VU0VDQVNFX1BST0RVQ1RfVFlQRS4uQzMuMzYwLnN2ZV9zZCIsInhwdl9hc3NldF9pZCI6MTAxMzc4NjQ5NDU4NTk0MiwiYXNzZXRfYWdlX2RheXMiOjE5LCJ2aV91c2VjYXNlX2lkIjoxMDEzOSwiZHVyYXRpb25fcyI6MzAsInVybGdlbl9zb3VyY2UiOiJ3d3cifQ%3D%3D&ccb=17-1&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&_nc_zt=28&oh=00_AQGgEafyq_2qabIL5obBUYpumrYYBSMpwMf9CE9K26gAew&oe=6A8344D6",
+            "watermarked_video_hd_url": null,
+            "watermarked_video_sd_url": null,
+            "image_crops": [],
+            "original_image_url": null,
+            "resized_image_url": null,
+            "watermarked_resized_image_url": null
+          }
+        ],
+        "body": {
+          "text": "As someone who has tried virtually every sleep hack on the internet, this takes the cake. My sleep scores were struggling, so I went looking. Tried the mouth tape, the cervical pillow, the sleeping mask. Turns out my interrupted sleep was because my airway was blocked. This fits comfortably in your mouth to adjust your jaw and tongue position. Since I started using it, I wake up every morning feeling rested and recovered. So simple, so effective."
+        },
+        "cta_type": "SHOP_NOW",
+        "display_format": "DCO",
+        "link_description": " ",
+        "link_url": "https://airwaav.com/pages/rx1-problemaware-branded",
+        "images": [],
+        "page_categories": [
+          "Media/news company"
+        ],
+        "page_like_count": 97878,
+        "title": " Finally Found What Fixes My Sleep",
+        "videos": [],
+        "is_reshared": false,
+        "extra_links": [],
+        "extra_texts": [],
+        "extra_images": [],
+        "extra_videos": [],
+        "country_iso_code": null,
+        "brazil_tax_id": null,
+        "additional_info": null,
+        "ec_certificates": []
+      },
+      "is_active": true,
+      "has_user_reported": false,
+      "report_count": null,
+      "menu_items": [],
+      "state_media_run_label": null,
+      "page_is_deleted": false,
+      "page_name": "AIRWAAV",
+      "impressions_with_index": {
+        "impressions_text": null,
+        "impressions_index": -1
+      },
+      "gated_type": "ELIGIBLE",
+      "categories": [
+        "UNKNOWN"
+      ],
+      "is_aaa_eligible": true,
+      "contains_digital_created_media": false,
+      "reach_estimate": null,
+      "currency": "",
+      "spend": null,
+      "end_date": 1786518000,
+      "publisher_platform": [
+        "FACEBOOK",
+        "INSTAGRAM",
+        "AUDIENCE_NETWORK",
+        "MESSENGER",
+        "THREADS"
+      ],
+      "start_date": 1784876400,
+      "contains_sensitive_content": false,
+      "total_active_time": null,
+      "regional_regulation_data": {
+        "finserv": {
+          "is_deemed_finserv": false,
+          "is_limited_delivery": false
+        },
+        "tw_anti_scam": {
+          "is_limited_delivery": false
+        }
+      },
+      "hide_data_status": "NONE",
+      "fev_info": null,
+      "ad_id": null,
+      "targeted_or_reached_countries": [],
+      "url": "https://www.facebook.com/ads/library?id=1314173330702178",
+      "start_date_string": "2026-07-24T07:00:00.000Z",
+      "end_date_string": "2026-08-12T07:00:00.000Z"
+    },
+    {
+      "ad_archive_id": "1714173733243417",
+      "collation_count": 2,
+      "collation_id": "1351775906897030",
+      "page_id": "109178280892310",
+      "snapshot": {
+        "branded_content": {
+          "page_id": "109178280892310",
+          "page_is_deleted": false,
+          "page_profile_uri": "https://facebook.com/AIRWAAV",
+          "page_name": "AIRWAAV"
+        },
+        "page_id": "319766667895661",
+        "page_is_deleted": false,
+        "page_profile_uri": "https://facebook.com/61562168942283",
+        "root_reshared_post": null,
+        "byline": null,
+        "disclaimer_label": null,
+        "page_name": "Girls by 10PM Curfew",
+        "page_profile_picture_url": "https://scontent-lga3-3.xx.fbcdn.net/v/t39.35426-6/745644649_1695372981957349_8947739201038944179_n.jpg?stp=dst-jpg_s60x60_tt6&_nc_cat=106&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=TwxuJjw9iCkQ7kNvwHBflHY&_nc_oc=AdqERTWsG6XJvNSAdR4CSGWdvJKHtLDnU5sTGoqArbvoUblBKqQs_VHwnR-u6laaRCU&_nc_zt=14&_nc_ht=scontent-lga3-3.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQH0-4hj_RWPScARG3UcbteuPYu-U37Sn2OFf6gbubW7pw&oe=6A83578C",
+        "event": null,
+        "caption": "airwaav.com",
+        "cta_text": "Shop now",
+        "cards": [],
+        "body": {
+          "text": "Bad habits ruined my sleep and I genuinely thought I'd never feel rested again. Then I tried the RX1 mouthpiece from AIRWAAV and after one week I was completely sold. It naturally opens your airway while you sleep so you actually breathe properly and wake up rested. Even after hard gym days. Custom fit so you forget it's even there. Non-negotiable in my routine now."
+        },
+        "cta_type": "SHOP_NOW",
+        "display_format": "VIDEO",
+        "link_description": null,
+        "link_url": "https://airwaav.com/products/airwaav-recovery-rx1-mouthpiece-for-sleep-2-pack",
+        "images": [],
+        "page_categories": [
+          "Media/news company"
+        ],
+        "page_like_count": 97878,
+        "title": "Bad Habits Ruined My Sleep. Fixed.",
+        "videos": [
+          {
+            "video_hd_url": "https://video-lga3-1.xx.fbcdn.net/o1/v/t2/f2/m366/AQO4N0yu1fXgvUppxWc9k4_ZUnvdYtvLeLb778XpfAkCwDF_U5BcWv-4r0qq_Ve88jSXAXOhRsxfg7iKHNWw8aIPmJ2nrCiGbERtpOZohCh6tQ.mp4?_nc_cat=109&_nc_sid=b66105&_nc_ht=video-lga3-1.xx.fbcdn.net&_nc_ohc=3CWxtmEh7ZAQ7kNvwEQeZkb&efg=eyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5WSV9VU0VDQVNFX1BST0RVQ1RfVFlQRS4uQzMuNzIwLmRhc2hfaDI2NC1iYXNpYy1nZW4yXzcyMHAiLCJ4cHZfYXNzZXRfaWQiOjE3ODYyNzA0NzIzNDEzMDMsImFzc2V0X2FnZV9kYXlzIjozOSwidmlfdXNlY2FzZV9pZCI6MTAxMzksImR1cmF0aW9uX3MiOjM1LCJ1cmxnZW5fc291cmNlIjoid3d3In0%3D&ccb=17-1&vs=dede670e6b8a294&_nc_vs=HBksFQIYRWZiX2VwaGVtZXJhbC82MDQ1QjdDQTgxNDQwOTJEOTlBREFDNDM0NkExNzQ5Q19tdF8xX3ZpZGVvX2Rhc2hpbml0Lm1wNBUAAsgBEgAVAhhAZmJfcGVybWFuZW50LzhDNDFDNTZCN0MzNTg0MTM4RkZFOTk5NThCRTcyODkyX2F1ZGlvX2Rhc2hpbml0Lm1wNBUCAsgBEgAoABgAGwKIB3VzZV9vaWwBMRJwcm9ncmVzc2l2ZV9yZWNpcGUBMRUAACbunNCP0KasBhUCKAJDMywXQEHCj1wo9cMYGWRhc2hfaDI2NC1iYXNpYy1nZW4yXzcyMHARAHUAZbaeAQA&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&_nc_zt=28&oh=00_AQFShhP39LrAFxvxu1WT63rs8R4gj26n7t-ZqixvJ5o9GA&oe=6A8357B3",
+            "video_preview_image_url": "https://scontent-lga3-3.xx.fbcdn.net/v/t39.35426-6/746394576_1653222829076851_172096541763263092_n.jpg?_nc_cat=102&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=GZr1vs3Jg3oQ7kNvwH2Ag2W&_nc_oc=AdrWiRMF04jlL6ulEa_fDESWNwTryJ4-qmjkOKT03OeIGjenilu--A2KaZ1SOlW0KKE&_nc_zt=14&_nc_ht=scontent-lga3-3.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQFFbUzSF6z-hH9B1cZUzAv2-J0s0N-yOv5oynuG9G51aA&oe=6A835427",
+            "video_sd_url": "https://video-lga3-2.xx.fbcdn.net/o1/v/t2/f2/m412/AQO63mpVUbgcz7xSIVHrWCOPYB5KWmmG0aRMFp0jW9nQTyn2oVNKI5RCcvRZZRDqqV1DnXYrBf0jYQghqmOkMpCOG0jE1ifmHdLoTS6_4w.mp4?_nc_cat=100&_nc_sid=ef5aa3&_nc_ht=video-lga3-2.xx.fbcdn.net&_nc_ohc=lpAXtYpO2o8Q7kNvwGV6RKH&efg=eyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5WSV9VU0VDQVNFX1BST0RVQ1RfVFlQRS4uQzMuMzYwLnN2ZV9zZCIsInhwdl9hc3NldF9pZCI6MTc4NjI3MDQ3MjM0MTMwMywiYXNzZXRfYWdlX2RheXMiOjM5LCJ2aV91c2VjYXNlX2lkIjoxMDEzOSwiZHVyYXRpb25fcyI6MzUsInVybGdlbl9zb3VyY2UiOiJ3d3cifQ%3D%3D&ccb=17-1&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&_nc_zt=28&oh=00_AQGlusaeqwoarwkBJOsKKJyz6zMYWjcwaKRPQciq_5elkg&oe=6A835566",
+            "watermarked_video_hd_url": null,
+            "watermarked_video_sd_url": null
+          }
+        ],
+        "is_reshared": false,
+        "extra_links": [],
+        "extra_texts": [],
+        "extra_images": [],
+        "extra_videos": [],
+        "country_iso_code": null,
+        "brazil_tax_id": null,
+        "additional_info": null,
+        "ec_certificates": []
+      },
+      "is_active": true,
+      "has_user_reported": false,
+      "report_count": null,
+      "menu_items": [],
+      "state_media_run_label": null,
+      "page_is_deleted": false,
+      "page_name": "AIRWAAV",
+      "impressions_with_index": {
+        "impressions_text": null,
+        "impressions_index": -1
+      },
+      "gated_type": "ELIGIBLE",
+      "categories": [
+        "UNKNOWN"
+      ],
+      "is_aaa_eligible": true,
+      "contains_digital_created_media": false,
+      "reach_estimate": null,
+      "currency": "",
+      "spend": null,
+      "end_date": 1786604400,
+      "publisher_platform": [
+        "FACEBOOK",
+        "INSTAGRAM",
+        "AUDIENCE_NETWORK",
+        "MESSENGER",
+        "THREADS"
+      ],
+      "start_date": 1784012400,
+      "contains_sensitive_content": false,
+      "total_active_time": null,
+      "regional_regulation_data": {
+        "finserv": {
+          "is_deemed_finserv": false,
+          "is_limited_delivery": false
+        },
+        "tw_anti_scam": {
+          "is_limited_delivery": false
+        }
+      },
+      "hide_data_status": "NONE",
+      "fev_info": null,
+      "ad_id": null,
+      "targeted_or_reached_countries": [],
+      "url": "https://www.facebook.com/ads/library?id=1714173733243417",
+      "start_date_string": "2026-07-14T07:00:00.000Z",
+      "end_date_string": "2026-08-13T07:00:00.000Z"
+    },
+    {
+      "ad_archive_id": "1375276731286562",
+      "collation_count": null,
+      "collation_id": null,
+      "page_id": "109178280892310",
+      "snapshot": {
+        "branded_content": null,
+        "page_id": "109178280892310",
+        "page_is_deleted": false,
+        "page_profile_uri": "https://facebook.com/AIRWAAV",
+        "root_reshared_post": null,
+        "byline": null,
+        "disclaimer_label": null,
+        "page_name": "AIRWAAV",
+        "page_profile_picture_url": "https://scontent-lga3-3.xx.fbcdn.net/v/t39.35426-6/621701215_1428987798808030_7806013503787154690_n.jpg?stp=dst-jpg_s60x60_tt6&_nc_cat=104&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=zJTTMpQ_X4MQ7kNvwHpj4rg&_nc_oc=AdogKtkpd1ZpyPPQFRNlm_SgdiaRl8mhfB7_GS4bkl1h-qsi-kEbSFx3C-1kGKGj4vg&_nc_zt=14&_nc_ht=scontent-lga3-3.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQGxYamQENq9pwUdOEDo5x9dEtiBrwMQ29GJ1R5anqXKRA&oe=6A836DD4",
+        "event": null,
+        "caption": "airwaav.com",
+        "cta_text": "Shop now",
+        "cards": [],
+        "body": {
+          "text": "Feel like your recovery scores could be better?\nThe AIRWAAV Recovery Mouthpiece uses patented Reflex Technology to help you breathe better during sleep—so you can wake up fully recharged and see the difference in your recovery data.\n\n✅ Deeper, uninterrupted sleep\n✅ More efficent breathing\n✅ Improved HRV and recovery\n\nSleep smarter—recover faster."
+        },
+        "cta_type": "SHOP_NOW",
+        "display_format": "IMAGE",
+        "link_description": "30-Day Risk-Free Trial",
+        "link_url": "https://airwaav.com/products/airwaav-recovery-mouthpiece",
+        "images": [
+          {
+            "image_crops": [],
+            "original_image_url": "https://scontent-lga3-2.xx.fbcdn.net/v/t39.35426-6/616051469_2737882056586936_6939483135153712255_n.jpg?_nc_cat=107&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=fsqJa1M0PVEQ7kNvwEkSIgx&_nc_oc=AdoBe_eyzY0kaX7mxi-5Wvl-r0T-d4mNY9rDXf7ZGVhFhmnvT7j4ve2BZLQa5RaotbA&_nc_zt=14&_nc_ht=scontent-lga3-2.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQEOQhR2zL-oytR24fJjXiciGjATwNSLSKw0I1OUYUxs-w&oe=6A836DDD",
+            "resized_image_url": "https://scontent-lga3-3.xx.fbcdn.net/v/t39.35426-6/619315001_1522548942179940_4349620153944000703_n.jpg?stp=dst-jpg_s600x600_tt6&_nc_cat=108&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=88AhqsKgS_8Q7kNvwE1956t&_nc_oc=Adp8HKPj22ygz_CvuvaI3ZHnwR_4u0FThAG0LKZA_A5Z9lA_7XjSfr-yxLwc3jaHWSY&_nc_zt=14&_nc_ht=scontent-lga3-3.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQEfE6-QUDv84FgHwxE1rrKQDeduGBz4X7BlVN6jOBL9rg&oe=6A836562",
+            "watermarked_resized_image_url": ""
+          }
+        ],
+        "page_categories": [
+          "Product/service"
+        ],
+        "page_like_count": 8419,
+        "title": "Improve Sleep Scores with AIRWAAV",
+        "videos": [],
+        "is_reshared": false,
+        "extra_links": [],
+        "extra_texts": [],
+        "extra_images": [],
+        "extra_videos": [],
+        "country_iso_code": null,
+        "brazil_tax_id": null,
+        "additional_info": null,
+        "ec_certificates": []
+      },
+      "is_active": true,
+      "has_user_reported": false,
+      "report_count": null,
+      "menu_items": [],
+      "state_media_run_label": null,
+      "page_is_deleted": false,
+      "page_name": "AIRWAAV",
+      "impressions_with_index": {
+        "impressions_text": null,
+        "impressions_index": -1
+      },
+      "gated_type": "ELIGIBLE",
+      "categories": [
+        "UNKNOWN"
+      ],
+      "is_aaa_eligible": true,
+      "contains_digital_created_media": false,
+      "reach_estimate": null,
+      "currency": "",
+      "spend": null,
+      "end_date": 1786431600,
+      "publisher_platform": [
+        "FACEBOOK",
+        "INSTAGRAM",
+        "AUDIENCE_NETWORK",
+        "MESSENGER",
+        "THREADS"
+      ],
+      "start_date": 1777618800,
+      "contains_sensitive_content": false,
+      "total_active_time": null,
+      "regional_regulation_data": {
+        "finserv": {
+          "is_deemed_finserv": false,
+          "is_limited_delivery": false
+        },
+        "tw_anti_scam": {
+          "is_limited_delivery": false
+        }
+      },
+      "hide_data_status": "NONE",
+      "fev_info": null,
+      "ad_id": null,
+      "targeted_or_reached_countries": [],
+      "url": "https://www.facebook.com/ads/library?id=1375276731286562",
+      "start_date_string": "2026-05-01T07:00:00.000Z",
+      "end_date_string": "2026-08-11T07:00:00.000Z"
+    },
+    {
+      "ad_archive_id": "928305209548971",
+      "collation_count": 1,
+      "collation_id": "1559975652345011",
+      "page_id": "109178280892310",
+      "snapshot": {
+        "branded_content": null,
+        "page_id": "109178280892310",
+        "page_is_deleted": false,
+        "page_profile_uri": "https://facebook.com/AIRWAAV",
+        "root_reshared_post": null,
+        "byline": null,
+        "disclaimer_label": null,
+        "page_name": "AIRWAAV",
+        "page_profile_picture_url": "https://scontent-lga3-3.xx.fbcdn.net/v/t39.35426-6/762797054_1365028161702302_4020349597825540616_n.jpg?stp=dst-jpg_s60x60_tt6&_nc_cat=102&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=iwN_kTk2f6gQ7kNvwH-Xgjv&_nc_oc=AdqJNQ0d955RgePZRU-imdnz6YWRv888SNvCBvctHam2EVY7yh7SQWrzXfbRX_RtJbM&_nc_zt=14&_nc_ht=scontent-lga3-3.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQEbS3xR9RCXfmXv9NytfEtSTSEK0ZRsvXKpofuuEvQqLA&oe=6A83483C",
+        "event": null,
+        "caption": "airwaav.com",
+        "cta_text": "Shop now",
+        "cards": [],
+        "body": {
+          "text": "Most people think they have a sleep problem. What they actually have is trouble shutting off their brain and getting out of work mode, stress mode, and scrolling mode.\n\nThat's the gap AIRWAAV built Pro Sleep for. It's designed to calm an overstimulated mind so you can actually wind down at night. No melatonin, so it's not trying to knock you out like other supplements on the market. It works with your mind instead.\n\nSix research-backed ingredients: L-theanine, magnesium bisglycinate, NAC, apigenin, reishi mushroom, and vitamin B6. Clean formulation, nothing extra.\n\nPeople who've tried it report waking up refreshed, not groggy.\n\nIf you're someone who lies awake with your mind still running, or spends more time doom scrolling than sleeping, this was built for you.\n\nTry Pro Sleep, only at AIRWAAV."
+        },
+        "cta_type": "SHOP_NOW",
+        "display_format": "VIDEO",
+        "link_description": "It's not that you can't sleep. It's that your brain won't stop scrolling and stressing.",
+        "link_url": "https://airwaav.com/pages/airwaav-pro-sleep-supplement",
+        "images": [],
+        "page_categories": [
+          "Product/service"
+        ],
+        "page_like_count": 8419,
+        "title": "Your Sleep Problem Is Actually Your Brain",
+        "videos": [
+          {
+            "video_hd_url": "https://video-lga3-1.xx.fbcdn.net/o1/v/t2/f2/m366/AQOT0iP2mdqqCQca1h8s3qNC1XxDoW-XMOdZC_xCjX6lvQbpqy786L7iAgUwlJuOXx5uiffflmI1OlUpOG-U4zbzXXf5AhMchAgWPj6ZeMljGA.mp4?_nc_cat=111&_nc_sid=b66105&_nc_ht=video-lga3-1.xx.fbcdn.net&_nc_ohc=oNEoJKS6QPIQ7kNvwEavjbU&efg=eyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5WSV9VU0VDQVNFX1BST0RVQ1RfVFlQRS4uQzMuNzIwLmRhc2hfaDI2NC1iYXNpYy1nZW4yXzcyMHAiLCJ4cHZfYXNzZXRfaWQiOjE2MDcwMzkwMjQ0MDkxMjEsImFzc2V0X2FnZV9kYXlzIjo5LCJ2aV91c2VjYXNlX2lkIjoxMDEzOSwiZHVyYXRpb25fcyI6NDcsInVybGdlbl9zb3VyY2UiOiJ3d3cifQ%3D%3D&ccb=17-1&vs=e7694772355eba74&_nc_vs=HBksFQIYRWZiX2VwaGVtZXJhbC9BRjRENTU0QzdEREVCODNBNURFNDgzQjFFNzM3MDNBMl9tdF8xX3ZpZGVvX2Rhc2hpbml0Lm1wNBUAAsgBEgAVAhhAZmJfcGVybWFuZW50L0IyNDgzMkQzQzNBNEY5OUVBOURDQzQzM0UyQTcwNUE0X2F1ZGlvX2Rhc2hpbml0Lm1wNBUCAsgBEgAoABgAGwKIB3VzZV9vaWwBMRJwcm9ncmVzc2l2ZV9yZWNpcGUBMRUAACbCqIXj_eXaBRUCKAJDMywXQEeIcrAgxJwYGWRhc2hfaDI2NC1iYXNpYy1nZW4yXzcyMHARAHUAZbaeAQA&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&_nc_zt=28&oh=00_AQFEIeSZ7ybt1QmhsWdQ6B_G5KVI5h5vF8k6u2E5JR3spg&oe=6A83409D",
+            "video_preview_image_url": "https://scontent-lga3-1.xx.fbcdn.net/v/t39.35426-6/760620699_2270927327011609_8104690508638343977_n.jpg?_nc_cat=111&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=fXt5moyL6ioQ7kNvwFsCBeV&_nc_oc=AdokP6mc1zZHYy99l6gYjFP-_zJuFSZ_VpTW1iDiXQ99wUQ7C6-JwXiNK3vsoY-K9x0&_nc_zt=14&_nc_ht=scontent-lga3-1.xx&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&oh=00_AQHyYTKsr7gvedvnaL3cyNPF5F4PAKNkf6apqaBzCzVZ9g&oe=6A837716",
+            "video_sd_url": "https://video-lga3-2.xx.fbcdn.net/o1/v/t2/f2/m412/AQO81Us3kBPqM093aa0JFJZTA5-Bn979yp7EVzz-2imUoRal3pUWvF6-VQtF5ce0rCvd8ptyzwYws_3p62a_33J99tyiyXxqzTb-fTAaCQ.mp4?_nc_cat=107&_nc_sid=ef5aa3&_nc_ht=video-lga3-2.xx.fbcdn.net&_nc_ohc=6Wws2QpKfIYQ7kNvwEs9GXB&efg=eyJ2ZW5jb2RlX3RhZyI6Inhwdl9wcm9ncmVzc2l2ZS5WSV9VU0VDQVNFX1BST0RVQ1RfVFlQRS4uQzMuMzYwLnN2ZV9zZCIsInhwdl9hc3NldF9pZCI6MTYwNzAzOTAyNDQwOTEyMSwiYXNzZXRfYWdlX2RheXMiOjksInZpX3VzZWNhc2VfaWQiOjEwMTM5LCJkdXJhdGlvbl9zIjo0NywidXJsZ2VuX3NvdXJjZSI6Ind3dyJ9&ccb=17-1&_nc_gid=k8Kq3j6C7yrqMLQPAgH9iA&_nc_ss=7f289&_nc_zt=28&oh=00_AQEc5kfeK8EJyz6_pnNM1q1wPjgIB3yiZvjzvP0wgLAuAQ&oe=6A8369A7",
+            "watermarked_video_hd_url": null,
+            "watermarked_video_sd_url": null
+          }
+        ],
+        "is_reshared": false,
+        "extra_links": [],
+        "extra_texts": [],
+        "extra_images": [],
+        "extra_videos": [],
+        "country_iso_code": null,
+        "brazil_tax_id": null,
+        "additional_info": null,
+        "ec_certificates": []
+      },
+      "is_active": true,
+      "has_user_reported": false,
+      "report_count": null,
+      "menu_items": [],
+      "state_media_run_label": null,
+      "page_is_deleted": false,
+      "page_name": "AIRWAAV",
+      "impressions_with_index": {
+        "impressions_text": null,
+        "impressions_index": -1
+      },
+      "gated_type": "ELIGIBLE",
+      "categories": [
+        "UNKNOWN"
+      ],
+      "is_aaa_eligible": true,
+      "contains_digital_created_media": false,
+      "reach_estimate": null,
+      "currency": "",
+      "spend": null,
+      "end_date": 1786604400,
+      "publisher_platform": [
+        "FACEBOOK",
+        "INSTAGRAM",
+        "AUDIENCE_NETWORK",
+        "MESSENGER",
+        "THREADS"
+      ],
+      "start_date": 1785740400,
+      "contains_sensitive_content": false,
+      "total_active_time": null,
+      "regional_regulation_data": {
+        "finserv": {
+          "is_deemed_finserv": false,
+          "is_limited_delivery": false
+        },
+        "tw_anti_scam": {
+          "is_limited_delivery": false
+        }
+      },
+      "hide_data_status": "NONE",
+      "fev_info": null,
+      "ad_id": null,
+      "targeted_or_reached_countries": [],
+      "url": "https://www.facebook.com/ads/library?id=928305209548971",
+      "start_date_string": "2026-08-03T07:00:00.000Z",
+      "end_date_string": "2026-08-13T07:00:00.000Z"
+    }
+  ],
+  "cursor": "AQHSprCuhhjNGqAlR2hzCKiMrf8AQGXuKbn0x4hkjbMhFWOFsoHmXRgyLvAYoOVC0WkZ"
+}

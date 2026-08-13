@@ -1,0 +1,22 @@
+[
+  {
+    "vendor": "scrapecreators",
+    "target": "AIRWAAV",
+    "requests": 8,
+    "adsReturned": 100,
+    "uniqueArchiveIds": 100,
+    "adsPerResponse": 13,
+    "nullTitleRate": "2/100",
+    "sampleMediaUrl": "https://scontent-lga3-1.xx.fbcdn.net/v/t39.35426-6/599952915_1586839359137341_6464307161690753425_n.jpg?_nc_cat=109&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=uwkNPNx1b7sQ7kNvwFKfjIP&_nc_oc=AdoRksXxUmL6nbUX4zfB_Cou80ctmargEqb-hbr8Ur84iJUMmkOO6Dpb93Bpao_etuM&_nc_zt=14&_nc_ht=scontent-lga3-1.xx&_nc_gid=zzPOFNk0qBXHINf5kRr9pg&_nc_ss=7f289&oh=00_AQGc6i7_nip5oimWlERYo4D3Snx8JG_1xL_UtQ91wwx-cw&oe=6A836A60"
+  },
+  {
+    "vendor": "scrapecreators",
+    "target": "Shock Doctor",
+    "requests": 1,
+    "adsReturned": 1,
+    "uniqueArchiveIds": 1,
+    "adsPerResponse": 1,
+    "nullTitleRate": "0/1",
+    "sampleMediaUrl": "https://scontent-bos5-1.xx.fbcdn.net/v/t39.35426-6/772510881_990201154067210_5009661546583632227_n.jpg?_nc_cat=100&ccb=1-7&_nc_sid=c53f8f&_nc_ohc=a_rHUpG_jdIQ7kNvwHEkZe8&_nc_oc=Ado82zyk9v4Px6w2LsgM_QKvRUqnLwkOby5V0dtNXTvrlEx-y98fkNLzrjG_MMA5QO0&_nc_zt=14&_nc_ht=scontent-bos5-1.xx&_nc_gid=PMRIAH94nJW4ChYHKzMVbg&_nc_ss=7f289&oh=00_AQG7FO6kQEDvT2yKdUkgxSrAPKVlKww47dMAUWs_9Vrwpw&oe=6A8344EA"
+  }
+]
