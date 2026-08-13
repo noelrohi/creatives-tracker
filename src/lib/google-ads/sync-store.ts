@@ -20,6 +20,13 @@ export type SyncRunRecord = typeof googleAdsSyncRuns.$inferSelect;
 
 export type SanitizedSyncError = { code: string; message: string };
 
+/**
+ * Facts rows carry 17 bind params each; Postgres caps a single statement at
+ * 65535. 500 rows/statement (8,500 params) matches the batch-size idiom used
+ * in shopify-ingest.ts/meta-import.ts with headroom to spare.
+ */
+const FACT_UPSERT_BATCH_SIZE = 500;
+
 /** Store-scoped (not just org-scoped) lookup used by the bootstrap path. */
 async function getConnectionForStore(
   organizationId: string,
@@ -150,29 +157,32 @@ export async function commitCampaignFactsChunk(params: {
   currencyCode: string | null;
 }): Promise<void> {
   await db.transaction(async (tx) => {
-    if (params.facts.length > 0) {
+    const rows = params.facts.map((fact) => ({
+      organizationId: params.scope.organizationId,
+      storeId: params.scope.storeId,
+      connectionId: params.scope.connectionId,
+      campaignId: fact.campaignId,
+      campaignName: fact.campaignName,
+      campaignStatus: fact.campaignStatus,
+      channelType: fact.channelType,
+      factDate: fact.factDate,
+      costMicros: fact.costMicros,
+      impressions: fact.impressions,
+      clicks: fact.clicks,
+      conversions: fact.conversions,
+      conversionsValue: fact.conversionsValue,
+      currencyCode: params.currencyCode,
+      apiVersion: params.apiVersion,
+      fetchedAt: new Date(),
+    }));
+    // Sliced (not one INSERT) so a large chunk can never exceed Postgres's
+    // 65535 bind-param ceiling (17 params/row); still one transaction, so
+    // the chunk remains atomic with the checkpoint UPDATE below.
+    for (let index = 0; index < rows.length; index += FACT_UPSERT_BATCH_SIZE) {
+      const batch = rows.slice(index, index + FACT_UPSERT_BATCH_SIZE);
       await tx
         .insert(googleAdsCampaignFacts)
-        .values(
-          params.facts.map((fact) => ({
-            organizationId: params.scope.organizationId,
-            storeId: params.scope.storeId,
-            connectionId: params.scope.connectionId,
-            campaignId: fact.campaignId,
-            campaignName: fact.campaignName,
-            campaignStatus: fact.campaignStatus,
-            channelType: fact.channelType,
-            factDate: fact.factDate,
-            costMicros: fact.costMicros,
-            impressions: fact.impressions,
-            clicks: fact.clicks,
-            conversions: fact.conversions,
-            conversionsValue: fact.conversionsValue,
-            currencyCode: params.currencyCode,
-            apiVersion: params.apiVersion,
-            fetchedAt: new Date(),
-          })),
-        )
+        .values(batch)
         .onConflictDoUpdate({
           target: [
             googleAdsCampaignFacts.connectionId,

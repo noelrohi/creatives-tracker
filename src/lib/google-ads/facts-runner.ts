@@ -1,6 +1,6 @@
 import "server-only";
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { googleAdsConnections } from "@/schema/google-ads";
 import {
@@ -32,6 +32,8 @@ import {
 
 /** ≤14 account-days per batch invocation keeps each run far inside maxDuration. */
 const CHUNK_DAYS = 14;
+/** Guards against a same-pageToken spin turning into a maxDuration kill. */
+const MAX_PAGES_PER_CHUNK = 20;
 
 export type FactsChunk = { fromDay: string; toDay: string; done: boolean };
 
@@ -71,13 +73,26 @@ export async function prepareGoogleAdsFactsRun(params: {
   if (connection.status !== "ready") {
     throw new Error("Google Ads connection is not ready; run discovery first");
   }
-  return createGoogleAdsSyncRun({
-    scope: connectionScope(connection),
-    operation: "facts",
-    windowFromDay: params.windowFromDay,
-    windowToDay: params.windowToDay,
-    apiVersion: GOOGLE_ADS_API_VERSION,
-  });
+  try {
+    return await createGoogleAdsSyncRun({
+      scope: connectionScope(connection),
+      operation: "facts",
+      windowFromDay: params.windowFromDay,
+      windowToDay: params.windowToDay,
+      apiVersion: GOOGLE_ADS_API_VERSION,
+    });
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? String(error.code)
+        : undefined;
+    if (code === "23505") {
+      throw new Error(
+        "A Google Ads facts sync is already running for this connection",
+      );
+    }
+    throw error;
+  }
 }
 
 /**
@@ -111,18 +126,32 @@ export async function processGoogleAdsFactsBatch(params: {
   }
 
   const [connection] = await db
-    .select({ currencyCode: googleAdsConnections.currencyCode })
+    .select({
+      googleCustomerId: googleAdsConnections.googleCustomerId,
+      currencyCode: googleAdsConnections.currencyCode,
+    })
     .from(googleAdsConnections)
-    .where(eq(googleAdsConnections.id, scope.connectionId))
+    .where(
+      and(
+        eq(googleAdsConnections.id, scope.connectionId),
+        eq(googleAdsConnections.organizationId, scope.organizationId),
+        eq(googleAdsConnections.storeId, scope.storeId),
+      ),
+    )
     .limit(1);
   if (!connection) {
     throw new Error("Google Ads connection does not exist for this sync run's scope");
   }
 
+  // Fail-closed account binding: the resolved credential must match the
+  // customer ID this connection was discovered against. A repointed env
+  // credential throws the provider's binding-mismatch error here, exactly
+  // as discovery does, instead of silently fetching a different account's
+  // facts under this connection's identity.
   const provider = params.provider ?? new EnvironmentGoogleAdsCredentialProvider();
   const credential = await provider.resolve({
     credentialReference: GOOGLE_ADS_CREDENTIAL_REFERENCE,
-    persistedGoogleCustomerId: null,
+    persistedGoogleCustomerId: connection.googleCustomerId,
   });
   const client =
     params.clientFactory?.(credential) ?? new GoogleAdsClient({ credential });
@@ -132,7 +161,12 @@ export async function processGoogleAdsFactsBatch(params: {
   let rowsRead = 0;
   let failureCount = 0;
   let pageToken: string | null = null;
+  let pageCount = 0;
   do {
+    pageCount += 1;
+    if (pageCount > MAX_PAGES_PER_CHUNK) {
+      throw new Error("Google Ads facts chunk exceeded the page cap");
+    }
     const page: GoogleAdsSearchPage = await client.search({ query, pageToken });
     for (const row of page.results) {
       rowsRead += 1;
