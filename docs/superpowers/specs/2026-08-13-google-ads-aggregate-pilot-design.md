@@ -178,7 +178,7 @@ New schema file `src/schema/google-ads.ts`. Primary keys are `crypto.randomUUID(
 
 ### `gclid_probe_report`
 
-- Organization + Shopify store scope; connection reference nullable (Phase 0 predates any connection).
+- No connection reference: the probe is purely organization/store-scoped and runs before any Google Ads connection exists.
 - Sampled half-open window; orders scanned.
 - Counts: orders with any click ID; per-kind (`gclid`/`wbraid`/`gbraid`) counts; per-production-bucket coverage matrix; journey-missing counts; multi-kind orders.
 - Redacted parameter-shape fingerprints (key presence + coarse shape; no values).

@@ -1,5 +1,5 @@
 {
-  "id": "f60c2d2d-5891-40f4-8ea3-2c54aaecfddd",
+  "id": "7330d8dc-4253-4349-9575-ef200ae3105b",
   "prevId": "0302ab63-b4a6-4397-8a04-3d584e261af8",
   "version": "7",
   "dialect": "postgresql",
@@ -2207,12 +2207,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "connection_id": {
-          "name": "connection_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "window_from_day": {
           "name": "window_from_day",
           "type": "date",
@@ -2301,19 +2295,6 @@
         }
       },
       "foreignKeys": {
-        "gclid_probe_report_connection_id_google_ads_connection_id_fk": {
-          "name": "gclid_probe_report_connection_id_google_ads_connection_id_fk",
-          "tableFrom": "gclid_probe_report",
-          "tableTo": "google_ads_connection",
-          "columnsFrom": [
-            "connection_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
         "gclid_probe_report_org_store_fk": {
           "name": "gclid_probe_report_org_store_fk",
           "tableFrom": "gclid_probe_report",
@@ -2341,6 +2322,10 @@
         "gclid_probe_report_window_check": {
           "name": "gclid_probe_report_window_check",
           "value": "\"gclid_probe_report\".\"window_from_day\" <= \"gclid_probe_report\".\"window_to_day\""
+        },
+        "gclid_probe_report_completed_shape_check": {
+          "name": "gclid_probe_report_completed_shape_check",
+          "value": "(\"gclid_probe_report\".\"status\" <> 'completed') or (\"gclid_probe_report\".\"summary\" is not null and \"gclid_probe_report\".\"checksum\" is not null)"
         }
       },
       "isRLSEnabled": false
@@ -2511,7 +2496,7 @@
       "checkConstraints": {
         "google_ads_campaign_fact_nonnegative_check": {
           "name": "google_ads_campaign_fact_nonnegative_check",
-          "value": "\"google_ads_campaign_fact\".\"cost_micros\" >= 0 and \"google_ads_campaign_fact\".\"impressions\" >= 0 and \"google_ads_campaign_fact\".\"clicks\" >= 0"
+          "value": "\"google_ads_campaign_fact\".\"cost_micros\" >= 0 and \"google_ads_campaign_fact\".\"impressions\" >= 0 and \"google_ads_campaign_fact\".\"clicks\" >= 0 and \"google_ads_campaign_fact\".\"conversions\" >= 0 and \"google_ads_campaign_fact\".\"conversions_value\" >= 0"
         }
       },
       "isRLSEnabled": false
@@ -2834,6 +2819,38 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "google_ads_sync_run_one_running_discovery_uidx": {
+          "name": "google_ads_sync_run_one_running_discovery_uidx",
+          "columns": [
+            {
+              "expression": "connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"google_ads_sync_run\".\"operation\" = 'discovery' and \"google_ads_sync_run\".\"status\" = 'running'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "google_ads_sync_run_one_running_facts_uidx": {
+          "name": "google_ads_sync_run_one_running_facts_uidx",
+          "columns": [
+            {
+              "expression": "connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"google_ads_sync_run\".\"operation\" = 'facts' and \"google_ads_sync_run\".\"status\" = 'running'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -2870,6 +2887,10 @@
         "google_ads_sync_run_window_check": {
           "name": "google_ads_sync_run_window_check",
           "value": "(\"google_ads_sync_run\".\"operation\" = 'discovery' and \"google_ads_sync_run\".\"window_from_day\" is null and \"google_ads_sync_run\".\"window_to_day\" is null)\n        or (\"google_ads_sync_run\".\"operation\" = 'facts' and \"google_ads_sync_run\".\"window_from_day\" is not null and \"google_ads_sync_run\".\"window_to_day\" is not null\n          and \"google_ads_sync_run\".\"window_from_day\" <= \"google_ads_sync_run\".\"window_to_day\")"
+        },
+        "google_ads_sync_run_counters_check": {
+          "name": "google_ads_sync_run_counters_check",
+          "value": "\"google_ads_sync_run\".\"rows_read\" >= 0 and \"google_ads_sync_run\".\"rows_upserted\" >= 0 and \"google_ads_sync_run\".\"failure_count\" >= 0"
         }
       },
       "isRLSEnabled": false

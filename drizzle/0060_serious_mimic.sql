@@ -2,7 +2,6 @@ CREATE TABLE "gclid_probe_report" (
 	"id" text PRIMARY KEY NOT NULL,
 	"organization_id" text NOT NULL,
 	"shopify_store_id" text NOT NULL,
-	"connection_id" text,
 	"window_from_day" date NOT NULL,
 	"window_to_day" date NOT NULL,
 	"status" text DEFAULT 'running' NOT NULL,
@@ -14,7 +13,8 @@ CREATE TABLE "gclid_probe_report" (
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"finished_at" timestamp,
 	CONSTRAINT "gclid_probe_report_status_check" CHECK ("gclid_probe_report"."status" in ('running', 'completed', 'failed')),
-	CONSTRAINT "gclid_probe_report_window_check" CHECK ("gclid_probe_report"."window_from_day" <= "gclid_probe_report"."window_to_day")
+	CONSTRAINT "gclid_probe_report_window_check" CHECK ("gclid_probe_report"."window_from_day" <= "gclid_probe_report"."window_to_day"),
+	CONSTRAINT "gclid_probe_report_completed_shape_check" CHECK (("gclid_probe_report"."status" <> 'completed') or ("gclid_probe_report"."summary" is not null and "gclid_probe_report"."checksum" is not null))
 );
 --> statement-breakpoint
 CREATE TABLE "google_ads_campaign_fact" (
@@ -36,7 +36,7 @@ CREATE TABLE "google_ads_campaign_fact" (
 	"api_version" text NOT NULL,
 	"fetched_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "google_ads_campaign_fact_day_uniq" UNIQUE("connection_id","campaign_id","fact_date"),
-	CONSTRAINT "google_ads_campaign_fact_nonnegative_check" CHECK ("google_ads_campaign_fact"."cost_micros" >= 0 and "google_ads_campaign_fact"."impressions" >= 0 and "google_ads_campaign_fact"."clicks" >= 0)
+	CONSTRAINT "google_ads_campaign_fact_nonnegative_check" CHECK ("google_ads_campaign_fact"."cost_micros" >= 0 and "google_ads_campaign_fact"."impressions" >= 0 and "google_ads_campaign_fact"."clicks" >= 0 and "google_ads_campaign_fact"."conversions" >= 0 and "google_ads_campaign_fact"."conversions_value" >= 0)
 );
 --> statement-breakpoint
 CREATE TABLE "google_ads_connection" (
@@ -84,10 +84,10 @@ CREATE TABLE "google_ads_sync_run" (
 	CONSTRAINT "google_ads_sync_run_status_check" CHECK ("google_ads_sync_run"."status" in ('running', 'completed', 'failed')),
 	CONSTRAINT "google_ads_sync_run_window_check" CHECK (("google_ads_sync_run"."operation" = 'discovery' and "google_ads_sync_run"."window_from_day" is null and "google_ads_sync_run"."window_to_day" is null)
         or ("google_ads_sync_run"."operation" = 'facts' and "google_ads_sync_run"."window_from_day" is not null and "google_ads_sync_run"."window_to_day" is not null
-          and "google_ads_sync_run"."window_from_day" <= "google_ads_sync_run"."window_to_day"))
+          and "google_ads_sync_run"."window_from_day" <= "google_ads_sync_run"."window_to_day")),
+	CONSTRAINT "google_ads_sync_run_counters_check" CHECK ("google_ads_sync_run"."rows_read" >= 0 and "google_ads_sync_run"."rows_upserted" >= 0 and "google_ads_sync_run"."failure_count" >= 0)
 );
 --> statement-breakpoint
-ALTER TABLE "gclid_probe_report" ADD CONSTRAINT "gclid_probe_report_connection_id_google_ads_connection_id_fk" FOREIGN KEY ("connection_id") REFERENCES "public"."google_ads_connection"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "gclid_probe_report" ADD CONSTRAINT "gclid_probe_report_org_store_fk" FOREIGN KEY ("organization_id","shopify_store_id") REFERENCES "public"."shopify_store"("organization_id","id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "google_ads_campaign_fact" ADD CONSTRAINT "google_ads_campaign_fact_scope_fk" FOREIGN KEY ("organization_id","shopify_store_id","connection_id") REFERENCES "public"."google_ads_connection"("organization_id","shopify_store_id","id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "google_ads_connection" ADD CONSTRAINT "google_ads_connection_organization_id_organization_id_fk" FOREIGN KEY ("organization_id") REFERENCES "public"."organization"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -96,4 +96,6 @@ ALTER TABLE "google_ads_sync_run" ADD CONSTRAINT "google_ads_sync_run_scope_fk" 
 CREATE INDEX "gclid_probe_report_store_idx" ON "gclid_probe_report" USING btree ("shopify_store_id","created_at");--> statement-breakpoint
 CREATE INDEX "google_ads_campaign_fact_date_idx" ON "google_ads_campaign_fact" USING btree ("connection_id","fact_date");--> statement-breakpoint
 CREATE UNIQUE INDEX "google_ads_connection_active_customer_uidx" ON "google_ads_connection" USING btree ("google_customer_id") WHERE "google_ads_connection"."google_customer_id" is not null and "google_ads_connection"."status" <> 'disabled';--> statement-breakpoint
-CREATE INDEX "google_ads_sync_run_connection_idx" ON "google_ads_sync_run" USING btree ("connection_id","started_at");
+CREATE INDEX "google_ads_sync_run_connection_idx" ON "google_ads_sync_run" USING btree ("connection_id","started_at");--> statement-breakpoint
+CREATE UNIQUE INDEX "google_ads_sync_run_one_running_discovery_uidx" ON "google_ads_sync_run" USING btree ("connection_id") WHERE "google_ads_sync_run"."operation" = 'discovery' and "google_ads_sync_run"."status" = 'running';--> statement-breakpoint
+CREATE UNIQUE INDEX "google_ads_sync_run_one_running_facts_uidx" ON "google_ads_sync_run" USING btree ("connection_id") WHERE "google_ads_sync_run"."operation" = 'facts' and "google_ads_sync_run"."status" = 'running';

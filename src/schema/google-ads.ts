@@ -123,6 +123,12 @@ export const googleAdsSyncRuns = pgTable(
       table.connectionId,
       table.startedAt,
     ),
+    uniqueIndex("google_ads_sync_run_one_running_discovery_uidx")
+      .on(table.connectionId)
+      .where(sql`${table.operation} = 'discovery' and ${table.status} = 'running'`),
+    uniqueIndex("google_ads_sync_run_one_running_facts_uidx")
+      .on(table.connectionId)
+      .where(sql`${table.operation} = 'facts' and ${table.status} = 'running'`),
     check(
       "google_ads_sync_run_operation_check",
       sql`${table.operation} in ('discovery', 'facts')`,
@@ -136,6 +142,10 @@ export const googleAdsSyncRuns = pgTable(
       sql`(${table.operation} = 'discovery' and ${table.windowFromDay} is null and ${table.windowToDay} is null)
         or (${table.operation} = 'facts' and ${table.windowFromDay} is not null and ${table.windowToDay} is not null
           and ${table.windowFromDay} <= ${table.windowToDay})`,
+    ),
+    check(
+      "google_ads_sync_run_counters_check",
+      sql`${table.rowsRead} >= 0 and ${table.rowsUpserted} >= 0 and ${table.failureCount} >= 0`,
     ),
   ],
 );
@@ -183,7 +193,7 @@ export const googleAdsCampaignFacts = pgTable(
     ),
     check(
       "google_ads_campaign_fact_nonnegative_check",
-      sql`${table.costMicros} >= 0 and ${table.impressions} >= 0 and ${table.clicks} >= 0`,
+      sql`${table.costMicros} >= 0 and ${table.impressions} >= 0 and ${table.clicks} >= 0 and ${table.conversions} >= 0 and ${table.conversionsValue} >= 0`,
     ),
   ],
 );
@@ -194,11 +204,6 @@ export const gclidProbeReports = pgTable(
     id: id(),
     organizationId: text("organization_id").notNull(),
     storeId: text("shopify_store_id").notNull(),
-    /** Nullable: Phase 0 runs before any Google Ads connection exists. */
-    connectionId: text("connection_id").references(
-      () => googleAdsConnections.id,
-      { onDelete: "set null" },
-    ),
     /** Inclusive store-day window scanned. */
     windowFromDay: date("window_from_day").notNull(),
     windowToDay: date("window_to_day").notNull(),
@@ -226,6 +231,10 @@ export const gclidProbeReports = pgTable(
     check(
       "gclid_probe_report_window_check",
       sql`${table.windowFromDay} <= ${table.windowToDay}`,
+    ),
+    check(
+      "gclid_probe_report_completed_shape_check",
+      sql`(${table.status} <> 'completed') or (${table.summary} is not null and ${table.checksum} is not null)`,
     ),
   ],
 );
