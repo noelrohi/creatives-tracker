@@ -24,14 +24,23 @@ describe("EnvironmentGoogleAdsCredentialProvider", () => {
     expect(credential.customerId).toBe("0987654321");
     expect(credential.loginCustomerId).toBe("1234567890");
     expect(credential.developerToken).toBe("dev-token");
+    expect(credential.oauthClientSecret).toBe("client-secret");
+    expect(credential.refreshToken).toBe("refresh-token");
     expect(credential.reference).toBe("reviv_environment");
   });
 
-  it("exposes the pilot binding with a lowercased shop domain", async () => {
+  it("exposes the pilot binding with a lowercased shop domain and no secrets", async () => {
     const provider = new EnvironmentGoogleAdsCredentialProvider(FULL_ENV);
     const binding = await provider.getPilotBinding();
     expect(binding.shopDomain).toBe("reviv.myshopify.com");
     expect(binding.customerId).toBe("0987654321");
+    expect(Object.keys(binding).sort()).toEqual(
+      ["customerId", "loginCustomerId", "shopDomain"].sort(),
+    );
+    const serialized = JSON.stringify(binding);
+    expect(serialized).not.toContain("dev-token");
+    expect(serialized).not.toContain("client-secret");
+    expect(serialized).not.toContain("refresh-token");
   });
 
   it("rejects a persisted customer ID that differs from the environment", async () => {
@@ -47,7 +56,16 @@ describe("EnvironmentGoogleAdsCredentialProvider", () => {
   it.each(Object.keys(FULL_ENV))("fails closed when %s is missing", async (name) => {
     const environment = { ...FULL_ENV, [name]: "  " };
     const provider = new EnvironmentGoogleAdsCredentialProvider(environment);
-    await expect(provider.getPilotBinding()).rejects.toThrow(/is required/);
+    try {
+      await provider.getPilotBinding();
+      expect.unreachable("expected getPilotBinding to reject");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).toMatch(/is required/);
+      expect(message).not.toContain("dev-token");
+      expect(message).not.toContain("client-secret");
+      expect(message).not.toContain("refresh-token");
+    }
   });
 
   it("rejects an unsupported credential reference", async () => {

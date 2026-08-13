@@ -115,9 +115,21 @@ export class EnvironmentGoogleAdsCredentialProvider
       throw new Error("Unsupported Google Ads credential reference");
     }
     const { binding, secrets } = this.#readConfiguration();
+    let persistedCustomerId: string | null = null;
+    if (request.persistedGoogleCustomerId !== null) {
+      try {
+        persistedCustomerId = normalizeCustomerId(
+          request.persistedGoogleCustomerId,
+          "persistedGoogleCustomerId",
+        );
+      } catch {
+        // Treat malformed persisted input as a binding mismatch. Do not
+        // reveal which portion of the server-side binding failed comparison.
+      }
+    }
     if (
       request.persistedGoogleCustomerId !== null &&
-      request.persistedGoogleCustomerId !== binding.customerId
+      persistedCustomerId !== binding.customerId
     ) {
       throw new Error(
         "Google Ads connection binding does not match the configured account",
