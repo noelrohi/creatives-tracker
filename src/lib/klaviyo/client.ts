@@ -8,6 +8,12 @@ import {
 const KLAVIYO_ORIGIN = "https://a.klaviyo.com";
 const MAX_ATTEMPTS = 4;
 const MAX_RETRY_DELAY_MS = 60_000;
+/**
+ * Per-request abort: a stalled-open connection never rejects on its own,
+ * which starves the whole batch until the task's maxDuration kills it.
+ * Aborting converts the stall into a retryable network failure.
+ */
+const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_CURSOR_LENGTH = 4_096;
 
 export const KLAVIYO_API_REVISIONS = {
@@ -368,6 +374,7 @@ export class KlaviyoApiClient {
       try {
         response = await this.#fetchImpl(url.toString(), {
           method: options.method ?? "GET",
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
           headers: {
             accept: "application/vnd.api+json",
             authorization: `Klaviyo-API-Key ${this.#privateApiKey}`,

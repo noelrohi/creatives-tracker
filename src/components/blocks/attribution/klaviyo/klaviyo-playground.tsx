@@ -328,8 +328,13 @@ export function KlaviyoPlayground() {
   const connectionReady = health.data?.configured === true;
   const evidenceUnlocked = connectionReady && probePassed && range !== null;
 
+  // Stale running runs (heartbeat past the lease) must not lock the button:
+  // the server reaps them on the next start, and locking on them wedges the
+  // Lab behind a run that will never finish.
   const serverRunning =
-    syncRuns.data?.items.some((run) => run.status === "running") ?? false;
+    syncRuns.data?.items.some(
+      (run) => run.status === "running" && !run.stale,
+    ) ?? false;
 
   return (
     <div className="space-y-4 overflow-x-hidden p-6">

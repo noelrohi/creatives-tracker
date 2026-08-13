@@ -687,7 +687,10 @@ describe("klaviyo source task boundary", () => {
     ]) {
       expect(source).toContain(exported);
     }
-    expect(source.match(/maxDuration: 600/g)).toHaveLength(3);
+    // Discovery and probe stay tight; the batch task carries headroom for
+    // worst-case page cost (aborted attempts + full 429 waits per page).
+    expect(source.match(/maxDuration: 600/g)).toHaveLength(2);
+    expect(source.match(/maxDuration: 1_800/g)).toHaveLength(1);
     expect(source.match(/retry: KLAVIYO_TASK_RETRY/g)).toHaveLength(3);
     expect(source.match(/onFailure: async \(\{ payload \}\)/g)).toHaveLength(3);
   });

@@ -2238,6 +2238,7 @@ export async function listKlaviyoSyncRuns(input: {
       checkpoint: klaviyoSyncRuns.checkpoint,
       startedAt: klaviyoSyncRuns.startedAt,
       finishedAt: klaviyoSyncRuns.finishedAt,
+      heartbeatAt: klaviyoSyncRuns.heartbeatAt,
     })
     .from(klaviyoSyncRuns)
     .where(
@@ -2260,11 +2261,16 @@ export async function listKlaviyoSyncRuns(input: {
     .limit(input.limit + 1);
   const hasMore = rows.length > input.limit;
   const page = rows.slice(0, input.limit);
-  const items = page.map(({ checkpoint, ...row }) => ({
+  // A running run whose heartbeat outlived the lease is reapable on the
+  // next start; the server owns that rule so the UI never has to guess
+  // (and never wedges a start button on a dead run).
+  const staleHeartbeatAt = new Date(Date.now() - KLAVIYO_RUN_STALE_AFTER_MS);
+  const items = page.map(({ checkpoint, heartbeatAt, ...row }) => ({
     ...row,
     errorCode: row.errorCode ? SAFE_SYNC_ERROR.code : null,
     errorMessage: row.errorCode ? safeSyncError(null).message : null,
     checkpointSummary: summarizeCheckpoint(row.operation, checkpoint),
+    stale: row.status === "running" && heartbeatAt < staleHeartbeatAt,
   }));
   const last = page.at(-1);
   return {

@@ -17,7 +17,10 @@ const KLAVIYO_EVENTS_QUEUE = {
   name: "klaviyo-events",
   concurrencyLimit: 1,
 };
-const MAX_PAGES_PER_BATCH = 5;
+// Two pages keeps the worst case (4 aborted attempts + full 429 waits per
+// page ≈ 5 min) far inside the batch task's maxDuration; total volume only
+// adds self-chained batches, never per-batch duration.
+const MAX_PAGES_PER_BATCH = 2;
 
 type SourceBatchPayload = { syncRunId: string };
 
@@ -114,7 +117,9 @@ export const klaviyoProbeTask = task({
 export const klaviyoOrderCoreBatchTask = task({
   id: "klaviyo-order-core-batch",
   retry: KLAVIYO_TASK_RETRY,
-  maxDuration: 600,
+  // Headroom over the worst per-page cost (aborted attempts + 429 waits);
+  // a batch that still exceeds this is genuinely wedged, not slow.
+  maxDuration: 1_800,
   queue: KLAVIYO_EVENTS_QUEUE,
   onFailure: async ({ payload }) => {
     await finalizeExhaustedSourceRun(payload, "events");
