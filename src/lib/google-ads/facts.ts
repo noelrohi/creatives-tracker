@@ -79,22 +79,26 @@ function countMetric(value: unknown): number | null {
   return parsed;
 }
 
+/** Plain non-negative decimal, e.g. "1.5" or "0" — rejects hex/octal/binary/signed forms. */
+const PLAIN_DECIMAL_PATTERN = /^\d+(\.\d+)?$/;
+
 function decimalMetric(value: unknown): string | null {
   if (value === undefined || value === null) return "0";
-  const parsed =
-    typeof value === "number"
-      ? value
-      : typeof value === "string" && value.trim() !== ""
-        ? Number(value)
-        : Number.NaN;
-  if (!Number.isFinite(parsed) || parsed < 0) return null;
-  return String(parsed);
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value < 0) return null;
+    return String(value);
+  }
+  if (typeof value === "string" && PLAIN_DECIMAL_PATTERN.test(value)) {
+    return String(Number(value));
+  }
+  return null;
 }
 
 /** Returns null for rows this pilot cannot represent; callers count them as failures. */
 export function normalizeCampaignFactRow(
   row: Record<string, unknown>,
 ): NormalizedCampaignFact | null {
+  if (!isRecord(row)) return null;
   const campaign = isRecord(row.campaign) ? row.campaign : null;
   const segments = isRecord(row.segments) ? row.segments : null;
   const metrics = isRecord(row.metrics) ? row.metrics : {};

@@ -110,4 +110,26 @@ describe("normalizeCampaignFactRow", () => {
       }),
     ).toBeNull();
   });
+
+  it("rejects a negative numeric conversions value", () => {
+    expect(
+      normalizeCampaignFactRow({
+        ...ROW,
+        metrics: { ...ROW.metrics, conversions: -1.5 },
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects non-decimal string forms like hex", () => {
+    expect(
+      normalizeCampaignFactRow({
+        ...ROW,
+        metrics: { ...ROW.metrics, conversions: "0x10" },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for a non-object row", () => {
+    expect(normalizeCampaignFactRow(null as never)).toBeNull();
+  });
 });
