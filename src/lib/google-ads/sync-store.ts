@@ -20,8 +20,22 @@ export type SyncRunRecord = typeof googleAdsSyncRuns.$inferSelect;
 
 export type SanitizedSyncError = { code: string; message: string };
 
-function sqlExcluded(column: string) {
-  return sql.raw(`excluded.${column}`);
+/** Store-scoped (not just org-scoped) lookup used by the bootstrap path. */
+async function getConnectionForStore(
+  organizationId: string,
+  storeId: string,
+): Promise<ConnectionRecord | null> {
+  const [connection] = await db
+    .select()
+    .from(googleAdsConnections)
+    .where(
+      and(
+        eq(googleAdsConnections.organizationId, organizationId),
+        eq(googleAdsConnections.storeId, storeId),
+      ),
+    )
+    .limit(1);
+  return connection ?? null;
 }
 
 /**
@@ -41,9 +55,7 @@ export async function ensurePilotGoogleAdsConnection(
   if (!store) {
     throw new Error("Configured Google Ads shop domain has no Shopify store");
   }
-  const existing = await getPilotGoogleAdsConnectionForOrganization(
-    store.organizationId,
-  );
+  const existing = await getConnectionForStore(store.organizationId, store.id);
   if (existing) return existing;
   const [created] = await db
     .insert(googleAdsConnections)
@@ -53,7 +65,7 @@ export async function ensurePilotGoogleAdsConnection(
     })
     .returning();
   if (created) return created;
-  const raced = await getPilotGoogleAdsConnectionForOrganization(store.organizationId);
+  const raced = await getConnectionForStore(store.organizationId, store.id);
   if (!raced) throw new Error("Google Ads connection bootstrap raced and lost");
   return raced;
 }
@@ -120,8 +132,12 @@ export async function resolveGoogleAdsSyncRun(
 }
 
 /**
- * One transaction per chunk: upsert the chunk's facts, advance the
- * checkpoint, and bump counters. A retried chunk re-upserts harmlessly.
+ * One transaction per chunk: upsert the chunk's facts, then atomically
+ * advance the checkpoint and bump counters with a single guarded UPDATE. A
+ * retried chunk re-upserts harmlessly. If the run isn't an active `facts`
+ * run in this scope, the checkpoint UPDATE matches zero rows and the whole
+ * transaction (including the fact upserts) rolls back — this closes the
+ * write-to-terminal-run hole.
  */
 export async function commitCampaignFactsChunk(params: {
   scope: GoogleAdsScope;
@@ -131,6 +147,7 @@ export async function commitCampaignFactsChunk(params: {
   rowsRead: number;
   failureCount: number;
   apiVersion: string;
+  currencyCode: string | null;
 }): Promise<void> {
   await db.transaction(async (tx) => {
     if (params.facts.length > 0) {
@@ -151,6 +168,7 @@ export async function commitCampaignFactsChunk(params: {
             clicks: fact.clicks,
             conversions: fact.conversions,
             conversionsValue: fact.conversionsValue,
+            currencyCode: params.currencyCode,
             apiVersion: params.apiVersion,
             fetchedAt: new Date(),
           })),
@@ -162,38 +180,42 @@ export async function commitCampaignFactsChunk(params: {
             googleAdsCampaignFacts.factDate,
           ],
           set: {
-            campaignName: sqlExcluded("campaign_name"),
-            campaignStatus: sqlExcluded("campaign_status"),
-            channelType: sqlExcluded("channel_type"),
-            costMicros: sqlExcluded("cost_micros"),
-            impressions: sqlExcluded("impressions"),
-            clicks: sqlExcluded("clicks"),
-            conversions: sqlExcluded("conversions"),
-            conversionsValue: sqlExcluded("conversions_value"),
-            apiVersion: sqlExcluded("api_version"),
-            fetchedAt: sqlExcluded("fetched_at"),
+            campaignName: sql`excluded.campaign_name`,
+            campaignStatus: sql`excluded.campaign_status`,
+            channelType: sql`excluded.channel_type`,
+            costMicros: sql`excluded.cost_micros`,
+            impressions: sql`excluded.impressions`,
+            clicks: sql`excluded.clicks`,
+            conversions: sql`excluded.conversions`,
+            conversionsValue: sql`excluded.conversions_value`,
+            currencyCode: sql`excluded.currency_code`,
+            apiVersion: sql`excluded.api_version`,
+            fetchedAt: sql`excluded.fetched_at`,
           },
         });
     }
-    const [current] = await tx
-      .select({
-        rowsRead: googleAdsSyncRuns.rowsRead,
-        rowsUpserted: googleAdsSyncRuns.rowsUpserted,
-        failureCount: googleAdsSyncRuns.failureCount,
-      })
-      .from(googleAdsSyncRuns)
-      .where(eq(googleAdsSyncRuns.id, params.syncRunId))
-      .limit(1);
-    if (!current) throw new Error("Google Ads sync run vanished mid-chunk");
-    await tx
+    const advanced = await tx
       .update(googleAdsSyncRuns)
       .set({
         checkpointDay: params.checkpointDay,
-        rowsRead: current.rowsRead + params.rowsRead,
-        rowsUpserted: current.rowsUpserted + params.facts.length,
-        failureCount: current.failureCount + params.failureCount,
+        rowsRead: sql`${googleAdsSyncRuns.rowsRead} + ${params.rowsRead}`,
+        rowsUpserted: sql`${googleAdsSyncRuns.rowsUpserted} + ${params.facts.length}`,
+        failureCount: sql`${googleAdsSyncRuns.failureCount} + ${params.failureCount}`,
       })
-      .where(eq(googleAdsSyncRuns.id, params.syncRunId));
+      .where(
+        and(
+          eq(googleAdsSyncRuns.id, params.syncRunId),
+          eq(googleAdsSyncRuns.organizationId, params.scope.organizationId),
+          eq(googleAdsSyncRuns.storeId, params.scope.storeId),
+          eq(googleAdsSyncRuns.connectionId, params.scope.connectionId),
+          eq(googleAdsSyncRuns.operation, "facts"),
+          eq(googleAdsSyncRuns.status, "running"),
+        ),
+      )
+      .returning({ id: googleAdsSyncRuns.id });
+    if (advanced.length !== 1) {
+      throw new Error("Google Ads facts checkpoint raced");
+    }
   });
 }
 
@@ -204,22 +226,36 @@ export async function completeGoogleAdsSyncRun(params: {
 }): Promise<void> {
   const now = new Date();
   await db.transaction(async (tx) => {
-    await tx
+    const completed = await tx
       .update(googleAdsSyncRuns)
       .set({ status: "completed", finishedAt: now })
       .where(
         and(
           eq(googleAdsSyncRuns.id, params.syncRunId),
+          eq(googleAdsSyncRuns.organizationId, params.scope.organizationId),
+          eq(googleAdsSyncRuns.storeId, params.scope.storeId),
+          eq(googleAdsSyncRuns.connectionId, params.scope.connectionId),
+          eq(googleAdsSyncRuns.operation, params.operation),
           eq(googleAdsSyncRuns.status, "running"),
         ),
-      );
+      )
+      .returning({ id: googleAdsSyncRuns.id });
+    if (completed.length !== 1) {
+      throw new Error("Google Ads sync run completion raced");
+    }
     if (params.operation === "facts") {
       const [connection] = await tx
         .select({ backfillCompletedAt: googleAdsConnections.backfillCompletedAt })
         .from(googleAdsConnections)
-        .where(eq(googleAdsConnections.id, params.scope.connectionId))
+        .where(
+          and(
+            eq(googleAdsConnections.id, params.scope.connectionId),
+            eq(googleAdsConnections.organizationId, params.scope.organizationId),
+            eq(googleAdsConnections.storeId, params.scope.storeId),
+          ),
+        )
         .limit(1);
-      await tx
+      const refreshed = await tx
         .update(googleAdsConnections)
         .set({
           lastFactsSyncedAt: now,
@@ -227,13 +263,25 @@ export async function completeGoogleAdsSyncRun(params: {
           // are only scheduled once this stamp exists.
           backfillCompletedAt: connection?.backfillCompletedAt ?? now,
         })
-        .where(eq(googleAdsConnections.id, params.scope.connectionId));
+        .where(
+          and(
+            eq(googleAdsConnections.id, params.scope.connectionId),
+            eq(googleAdsConnections.organizationId, params.scope.organizationId),
+            eq(googleAdsConnections.storeId, params.scope.storeId),
+          ),
+        )
+        .returning({ id: googleAdsConnections.id });
+      if (refreshed.length !== 1) {
+        throw new Error("Google Ads connection is not active in this scope");
+      }
     }
   });
 }
 
 export async function failGoogleAdsSyncRun(params: {
+  scope: GoogleAdsScope;
   syncRunId: string;
+  operation: "discovery" | "facts";
   error: SanitizedSyncError;
 }): Promise<void> {
   await db
@@ -247,6 +295,10 @@ export async function failGoogleAdsSyncRun(params: {
     .where(
       and(
         eq(googleAdsSyncRuns.id, params.syncRunId),
+        eq(googleAdsSyncRuns.organizationId, params.scope.organizationId),
+        eq(googleAdsSyncRuns.storeId, params.scope.storeId),
+        eq(googleAdsSyncRuns.connectionId, params.scope.connectionId),
+        eq(googleAdsSyncRuns.operation, params.operation),
         eq(googleAdsSyncRuns.status, "running"),
       ),
     );

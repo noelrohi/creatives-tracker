@@ -74,6 +74,7 @@ const store = await import("@/lib/google-ads/sync-store");
 const describeIfDb = baseConnectionString ? describe : describe.skip;
 
 const SEEDED_SHOP_DOMAIN = "reviv-google-test.myshopify.com";
+const SEEDED_SHOP_DOMAIN_B = "reviv-google-test-b.myshopify.com";
 
 function fakeProvider(shopDomain: string): GoogleAdsCredentialProvider {
   return {
@@ -88,7 +89,7 @@ function fakeProvider(shopDomain: string): GoogleAdsCredentialProvider {
   };
 }
 
-async function connectionScopeOf(connection: ConnectionRecord) {
+function connectionScopeOf(connection: ConnectionRecord) {
   return store.connectionScope(connection);
 }
 
@@ -202,7 +203,7 @@ describeIfDb("Google Ads sync store on PostgreSQL", () => {
     const connection = await store.ensurePilotGoogleAdsConnection(
       fakeProvider(SEEDED_SHOP_DOMAIN),
     );
-    const scope = await connectionScopeOf(connection);
+    const scope = connectionScopeOf(connection);
     const run = await store.createGoogleAdsSyncRun({
       scope,
       operation: "facts",
@@ -218,6 +219,7 @@ describeIfDb("Google Ads sync store on PostgreSQL", () => {
       rowsRead: 1,
       failureCount: 0,
       apiVersion: "v21",
+      currencyCode: "USD",
     });
     await store.commitCampaignFactsChunk({
       scope,
@@ -225,8 +227,9 @@ describeIfDb("Google Ads sync store on PostgreSQL", () => {
       facts: [fact({ conversionsValue: "150" })],
       checkpointDay: "2026-08-01",
       rowsRead: 1,
-      failureCount: 0,
+      failureCount: 1,
       apiVersion: "v21",
+      currencyCode: "USD",
     });
     const facts = await testPool!.query(
       `SELECT conversions_value AS "conversionsValue" FROM google_ads_campaign_fact
@@ -235,19 +238,59 @@ describeIfDb("Google Ads sync store on PostgreSQL", () => {
     );
     expect(facts.rows).toEqual([{ conversionsValue: "150" }]);
     const runRow = await testPool!.query(
-      `SELECT checkpoint_day::text AS "checkpointDay", rows_read AS "rowsRead"
+      `SELECT checkpoint_day::text AS "checkpointDay", rows_read AS "rowsRead",
+              rows_upserted AS "rowsUpserted", failure_count AS "failureCount"
          FROM google_ads_sync_run WHERE id = $1`,
       [run.id],
     );
     expect(runRow.rows[0].checkpointDay).toBe("2026-08-01");
     expect(runRow.rows[0].rowsRead).toBe(2);
+    expect(runRow.rows[0].rowsUpserted).toBe(2);
+    expect(runRow.rows[0].failureCount).toBe(1);
+  });
+
+  it("rejects a chunk commit against a non-running run and writes no fact rows", async () => {
+    const connection = await store.ensurePilotGoogleAdsConnection(
+      fakeProvider(SEEDED_SHOP_DOMAIN),
+    );
+    const scope = connectionScopeOf(connection);
+    const run = await store.createGoogleAdsSyncRun({
+      scope,
+      operation: "facts",
+      windowFromDay: "2026-08-01",
+      windowToDay: "2026-08-14",
+      apiVersion: "v21",
+    });
+    await store.failGoogleAdsSyncRun({
+      scope,
+      syncRunId: run.id,
+      operation: "facts",
+      error: { code: "TIMEOUT", message: "request timed out" },
+    });
+    await expect(
+      store.commitCampaignFactsChunk({
+        scope,
+        syncRunId: run.id,
+        facts: [fact()],
+        checkpointDay: "2026-08-01",
+        rowsRead: 1,
+        failureCount: 0,
+        apiVersion: "v21",
+        currencyCode: "USD",
+      }),
+    ).rejects.toThrow(/checkpoint raced/);
+    const facts = await testPool!.query(
+      `SELECT count(*)::int AS count FROM google_ads_campaign_fact WHERE connection_id = $1`,
+      [connection.id],
+    );
+    expect(facts.rows[0].count).toBe(0);
   });
 
   it("stamps backfillCompletedAt only on the first completed facts run", async () => {
     const connection = await store.ensurePilotGoogleAdsConnection(
       fakeProvider(SEEDED_SHOP_DOMAIN),
     );
-    const scope = await connectionScopeOf(connection);
+    const scope = connectionScopeOf(connection);
     const firstRun = await store.createGoogleAdsSyncRun({
       scope,
       operation: "facts",
@@ -286,7 +329,7 @@ describeIfDb("Google Ads sync store on PostgreSQL", () => {
     const connection = await store.ensurePilotGoogleAdsConnection(
       fakeProvider(SEEDED_SHOP_DOMAIN),
     );
-    const scope = await connectionScopeOf(connection);
+    const scope = connectionScopeOf(connection);
     const run = await store.createGoogleAdsSyncRun({
       scope,
       operation: "facts",
@@ -295,7 +338,9 @@ describeIfDb("Google Ads sync store on PostgreSQL", () => {
       apiVersion: "v21",
     });
     await store.failGoogleAdsSyncRun({
+      scope,
       syncRunId: run.id,
+      operation: "facts",
       error: { code: "TIMEOUT", message: "request timed out" },
     });
     const { run: reloaded } = await store.resolveGoogleAdsSyncRun(run.id);
@@ -304,11 +349,66 @@ describeIfDb("Google Ads sync store on PostgreSQL", () => {
     expect(reloaded.errorMessage).toBe("request timed out");
   });
 
+  it("rejects completing an already-failed run and does not stamp backfillCompletedAt", async () => {
+    const connection = await store.ensurePilotGoogleAdsConnection(
+      fakeProvider(SEEDED_SHOP_DOMAIN),
+    );
+    const scope = connectionScopeOf(connection);
+    const run = await store.createGoogleAdsSyncRun({
+      scope,
+      operation: "facts",
+      windowFromDay: "2026-08-01",
+      windowToDay: "2026-08-14",
+      apiVersion: "v21",
+    });
+    await store.failGoogleAdsSyncRun({
+      scope,
+      syncRunId: run.id,
+      operation: "facts",
+      error: { code: "TIMEOUT", message: "request timed out" },
+    });
+    await expect(
+      store.completeGoogleAdsSyncRun({
+        scope,
+        syncRunId: run.id,
+        operation: "facts",
+      }),
+    ).rejects.toThrow(/completion raced/);
+    const reloaded = await reloadConnection(connection.id);
+    expect(reloaded.backfillCompletedAt).toBeNull();
+  });
+
+  it("rejects resolving an unknown sync run", async () => {
+    await expect(
+      store.resolveGoogleAdsSyncRun("missing-run-id"),
+    ).rejects.toThrow(/does not exist/);
+  });
+
+  it("scopes bootstrap to the resolved store, not just the organization", async () => {
+    await testPool!.query(
+      `INSERT INTO shopify_store (id, organization_id, shop_domain, iana_timezone) VALUES
+         ('store-b', 'org-a', '${SEEDED_SHOP_DOMAIN_B}', 'America/New_York')`,
+    );
+    const connectionA = await store.ensurePilotGoogleAdsConnection(
+      fakeProvider(SEEDED_SHOP_DOMAIN),
+    );
+    const connectionB = await store.ensurePilotGoogleAdsConnection(
+      fakeProvider(SEEDED_SHOP_DOMAIN_B),
+    );
+    expect(connectionB.id).not.toBe(connectionA.id);
+    expect(connectionA.storeId).toBe("store-a");
+    expect(connectionB.storeId).toBe("store-b");
+    const rows = await testPool!.query(
+      `SELECT count(*)::int AS count FROM google_ads_connection WHERE organization_id = 'org-a'`,
+    );
+    expect(rows.rows[0].count).toBe(2);
+  });
+
   it("one running facts run per connection", async () => {
     const connection = await store.ensurePilotGoogleAdsConnection(
       fakeProvider(SEEDED_SHOP_DOMAIN),
     );
-    const scope = await connectionScopeOf(connection);
+    const scope = connectionScopeOf(connection);
     const first = await store.createGoogleAdsSyncRun({
       scope,
       operation: "facts",
