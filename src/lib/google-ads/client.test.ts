@@ -214,8 +214,10 @@ describe("GoogleAdsClient", () => {
   });
 
   it("fails non-retryably after two consecutive 401s", async () => {
+    let searchAttempts = 0;
     const fetchImpl = (async (input: RequestInfo | URL) => {
       if (String(input).includes("oauth2")) return tokenResponse();
+      searchAttempts += 1;
       return jsonResponse(401, {});
     }) as typeof fetch;
 
@@ -226,6 +228,7 @@ describe("GoogleAdsClient", () => {
     const apiError = failure as GoogleAdsApiError;
     expect(apiError.retryable).toBe(false);
     expect(apiError.status).toBe(401);
+    expect(searchAttempts).toBe(2);
   });
 
   it("rejects a token response with a non-positive expires_in", async () => {
@@ -240,6 +243,58 @@ describe("GoogleAdsClient", () => {
     await expect(
       client.search({ query: "SELECT campaign.id FROM campaign" }),
     ).rejects.toThrow(/malformed/i);
+  });
+
+  it("retries a search response whose body read fails mid-stream", async () => {
+    let searchAttempts = 0;
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      if (String(input).includes("oauth2")) return tokenResponse();
+      searchAttempts += 1;
+      if (searchAttempts === 1) {
+        // Simulates an undici "terminated" socket error surfacing from
+        // response.json() after headers already arrived: ok, but the body
+        // read itself fails with something other than a SyntaxError.
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: () => Promise.reject(new TypeError("terminated")),
+        } as unknown as Response;
+      }
+      return jsonResponse(200, { results: [] });
+    }) as typeof fetch;
+
+    const client = makeClient(fetchImpl);
+    const page = await client.search({ query: "SELECT campaign.id FROM campaign" });
+    expect(page.results).toEqual([]);
+    expect(searchAttempts).toBe(2);
+  });
+
+  it("uses the full jitter band when random() is at its ceiling", async () => {
+    let searchAttempts = 0;
+    const sleeps: number[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      if (String(input).includes("oauth2")) return tokenResponse();
+      searchAttempts += 1;
+      return jsonResponse(429, {}, { "retry-after": "1" });
+    }) as typeof fetch;
+
+    const client = new GoogleAdsClient({
+      credential: CREDENTIAL,
+      fetchImpl,
+      sleep: async (milliseconds) => {
+        sleeps.push(milliseconds);
+      },
+      random: () => 1,
+    });
+    const failure = await client
+      .search({ query: "SELECT campaign.id FROM campaign" })
+      .then(() => null, (error: unknown) => error);
+    const apiError = failure as GoogleAdsApiError;
+    expect(apiError.retryable).toBe(true);
+    expect(searchAttempts).toBe(4);
+    // base + 0.25*base at random()=1: 1250, 2500, 5000.
+    expect(sleeps).toEqual([1250, 2500, 5000]);
   });
 
   it("treats a null nextPageToken as end of pages", async () => {

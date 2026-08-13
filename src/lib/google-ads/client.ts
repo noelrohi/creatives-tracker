@@ -88,26 +88,22 @@ function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
-function isAbortLikeError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.name === "AbortError" || error.name === "TimeoutError")
-  );
-}
-
 /**
  * Reads a JSON body with the same abort budget the request was made under.
- * A timeout that fires mid-body-read must be classified as a retryable
- * transport failure, not conflated with a genuinely malformed payload.
+ * `response.json()` only throws `SyntaxError` for a genuinely malformed
+ * payload; every other failure mode (an abort/timeout mid-body-read, an
+ * undici `TypeError: terminated` from a dropped socket, etc.) is a
+ * transport failure and must be classified as retryable, not conflated
+ * with malformed content.
  */
 async function readJson(response: Response, malformedMessage: string): Promise<unknown> {
   try {
     return await response.json();
   } catch (error) {
-    if (isAbortLikeError(error)) {
-      throw new GoogleAdsApiError("Google Ads request failed to complete", null, true);
+    if (error instanceof SyntaxError) {
+      throw new GoogleAdsApiError(malformedMessage, null, false);
     }
-    throw new GoogleAdsApiError(malformedMessage, null, false);
+    throw new GoogleAdsApiError("Google Ads request failed to complete", null, true);
   }
 }
 
@@ -291,7 +287,22 @@ export class GoogleAdsClient {
         continue;
       }
 
-      const payload = await readJson(response, "Google Ads search response was malformed");
+      let payload: unknown;
+      try {
+        payload = await readJson(response, "Google Ads search response was malformed");
+      } catch (error) {
+        // readJson always throws GoogleAdsApiError; the instanceof guard is
+        // defensive. A non-retryable (malformed) error must escape here
+        // unchanged, not get rewrapped into a retryable transport error.
+        const apiError =
+          error instanceof GoogleAdsApiError
+            ? error
+            : new GoogleAdsApiError("Google Ads request failed to complete", null, true);
+        if (!apiError.retryable) throw apiError;
+        lastError = apiError;
+        await this.#backoff(attempt, null);
+        continue;
+      }
       const record = payload as { results?: unknown; nextPageToken?: unknown };
       const results = record.results ?? [];
       if (
