@@ -421,8 +421,10 @@ async function buildProductionAdapters(): Promise<BootstrapWizardAdapters> {
         select coalesce(max(created_at), 0)::text as latest
         from drizzle.__drizzle_migrations
       `);
-      const latest = String(rows(migrationResult)[0]?.latest ?? "0");
-      if (latest !== "1786501076739") {
+      // 1786501076739 is 0058_klaviyo_claims_reporting, the last migration
+      // the Klaviyo pilot schema needs; later migrations are fine.
+      const latest = Number(rows(migrationResult)[0]?.latest ?? "0");
+      if (!Number.isFinite(latest) || latest < 1786501076739) {
         throw new Error("Production migrations through 0058 are not applied");
       }
       const store = await evidenceStore.resolveConfiguredEvidenceStore(
@@ -482,10 +484,14 @@ async function buildProductionAdapters(): Promise<BootstrapWizardAdapters> {
         evidenceRunId = existing.id;
         return;
       }
+      // The key must vary per invocation: a fixed key dedupes a retry to the
+      // previous failed run for the whole 7-day TTL and bricks the stage.
+      // Reuse of good runs happens above via the database check, and the
+      // one-running-per-store unique index blocks concurrent evidence runs.
       const triggerRunId = await triggerTask(
         "shopify-evidence-start",
         { mode: "initial_90d" },
-        `wizard:shopify-evidence:${context.storeId}:initial_90d`,
+        `wizard:shopify-evidence:${context.storeId}:initial_90d:${crypto.randomUUID()}`,
       );
       const run = await poll({
         label: "Shopify evidence",
