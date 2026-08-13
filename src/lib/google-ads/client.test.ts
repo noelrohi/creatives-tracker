@@ -101,9 +101,122 @@ describe("GoogleAdsClient", () => {
   });
 
   it("throws a retryable error after exhausting attempts on 429", async () => {
+    let searchAttempts = 0;
+    const sleeps: number[] = [];
     const fetchImpl = (async (input: RequestInfo | URL) => {
       if (String(input).includes("oauth2")) return tokenResponse();
+      searchAttempts += 1;
       return jsonResponse(429, {}, { "retry-after": "1" });
+    }) as typeof fetch;
+
+    const client = new GoogleAdsClient({
+      credential: CREDENTIAL,
+      fetchImpl,
+      sleep: async (milliseconds) => {
+        sleeps.push(milliseconds);
+      },
+      random: () => 0,
+    });
+    const failure = await client
+      .search({ query: "SELECT campaign.id FROM campaign" })
+      .then(() => null, (error: unknown) => error);
+    const apiError = failure as GoogleAdsApiError;
+    expect(apiError.retryable).toBe(true);
+    expect(apiError.status).toBe(429);
+    expect(searchAttempts).toBe(4);
+    // retry-after: "1" (1000ms) never exceeds later bases, so with
+    // random()=0 each sleep is exactly the unjittered base: 1000, 2000, 4000.
+    expect(sleeps).toEqual([1000, 2000, 4000]);
+  });
+
+  it("throws immediately when retry-after exceeds the client's retry cap", async () => {
+    let searchAttempts = 0;
+    const sleeps: number[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      if (String(input).includes("oauth2")) return tokenResponse();
+      searchAttempts += 1;
+      return jsonResponse(429, {}, { "retry-after": "3600" });
+    }) as typeof fetch;
+
+    const client = new GoogleAdsClient({
+      credential: CREDENTIAL,
+      fetchImpl,
+      sleep: async (milliseconds) => {
+        sleeps.push(milliseconds);
+      },
+      random: () => 0,
+    });
+    const failure = await client
+      .search({ query: "SELECT campaign.id FROM campaign" })
+      .then(() => null, (error: unknown) => error);
+    const apiError = failure as GoogleAdsApiError;
+    expect(apiError.retryable).toBe(true);
+    expect(apiError.status).toBe(429);
+    expect(apiError.retryAfterMs).toBe(3_600_000);
+    expect(searchAttempts).toBe(1);
+    expect(sleeps).toHaveLength(0);
+  });
+
+  it("shares a single in-flight token refresh across concurrent searches", async () => {
+    let tokenFetches = 0;
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      if (String(input).includes("oauth2")) {
+        tokenFetches += 1;
+        return tokenResponse();
+      }
+      return jsonResponse(200, { results: [] });
+    }) as typeof fetch;
+
+    const client = makeClient(fetchImpl);
+    await Promise.all([
+      client.search({ query: "SELECT campaign.id FROM campaign" }),
+      client.search({ query: "SELECT campaign.id FROM campaign" }),
+      client.search({ query: "SELECT campaign.id FROM campaign" }),
+    ]);
+
+    expect(tokenFetches).toBe(1);
+  });
+
+  it("retries a token endpoint transport failure and succeeds", async () => {
+    let tokenAttempts = 0;
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      if (String(input).includes("oauth2")) {
+        tokenAttempts += 1;
+        if (tokenAttempts === 1) throw new Error("ECONNRESET");
+        return tokenResponse();
+      }
+      return jsonResponse(200, { results: [] });
+    }) as typeof fetch;
+
+    const client = makeClient(fetchImpl);
+    const page = await client.search({ query: "SELECT campaign.id FROM campaign" });
+    expect(page.results).toEqual([]);
+    expect(tokenAttempts).toBe(2);
+  });
+
+  it("retries once after a 401 with a forced token refresh", async () => {
+    let tokenFetches = 0;
+    let searchAttempts = 0;
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      if (String(input).includes("oauth2")) {
+        tokenFetches += 1;
+        return tokenResponse();
+      }
+      searchAttempts += 1;
+      if (searchAttempts === 1) return jsonResponse(401, {});
+      return jsonResponse(200, { results: [] });
+    }) as typeof fetch;
+
+    const client = makeClient(fetchImpl);
+    const page = await client.search({ query: "SELECT campaign.id FROM campaign" });
+    expect(page.results).toEqual([]);
+    expect(tokenFetches).toBe(2);
+  });
+
+  it("fails non-retryably after two consecutive 401s", async () => {
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      if (String(input).includes("oauth2")) return tokenResponse();
+      return jsonResponse(401, {});
     }) as typeof fetch;
 
     const client = makeClient(fetchImpl);
@@ -111,8 +224,33 @@ describe("GoogleAdsClient", () => {
       .search({ query: "SELECT campaign.id FROM campaign" })
       .then(() => null, (error: unknown) => error);
     const apiError = failure as GoogleAdsApiError;
-    expect(apiError.retryable).toBe(true);
-    expect(apiError.status).toBe(429);
+    expect(apiError.retryable).toBe(false);
+    expect(apiError.status).toBe(401);
+  });
+
+  it("rejects a token response with a non-positive expires_in", async () => {
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      if (String(input).includes("oauth2")) {
+        return jsonResponse(200, { access_token: "at-1", expires_in: 0 });
+      }
+      return jsonResponse(200, { results: [] });
+    }) as typeof fetch;
+
+    const client = makeClient(fetchImpl);
+    await expect(
+      client.search({ query: "SELECT campaign.id FROM campaign" }),
+    ).rejects.toThrow(/malformed/i);
+  });
+
+  it("treats a null nextPageToken as end of pages", async () => {
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      if (String(input).includes("oauth2")) return tokenResponse();
+      return jsonResponse(200, { results: [], nextPageToken: null });
+    }) as typeof fetch;
+
+    const client = makeClient(fetchImpl);
+    const page = await client.search({ query: "SELECT campaign.id FROM campaign" });
+    expect(page.nextPageToken).toBeNull();
   });
 
   it("treats a token endpoint rejection as terminal", async () => {
