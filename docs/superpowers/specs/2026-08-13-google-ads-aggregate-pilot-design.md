@@ -83,7 +83,10 @@ Runs immediately and in parallel with everything else, since it consumes only st
 - Tallies published to the durable report:
   - Orders scanned; orders with any click ID; per-click-ID-kind counts.
   - Coverage split by production bucket. The diagnostic cells: google-bucket orders **without** a click ID and non-google-bucket orders **with** one — both are misclassification/coverage signals.
-  - First-visit vs last-visit click-ID presence, and orders with multiple distinct click IDs.
+  - Orders whose stored journey is missing or not ready (`customerJourney` null or
+    `lastVisit` absent), and orders carrying more than one click-ID kind. The stored
+    journey is Shopify's `customerJourneySummary` (last visit only — no moments/first
+    visit), so click-ID presence is measured on the last visit's landing/referrer URLs.
   - Redacted parameter-shape fingerprints (key presence and coarse value shape only).
 - The report gates Phase 3's order-level question: high coverage → a click-ID evidence graph earns a spec; low coverage → the panel stays aggregate-only, with the report stating so in numbers.
 
@@ -177,7 +180,7 @@ New schema file `src/schema/google-ads.ts`. Primary keys are `crypto.randomUUID(
 
 - Organization + Shopify store scope; connection reference nullable (Phase 0 predates any connection).
 - Sampled half-open window; orders scanned.
-- Counts: orders with any click ID; per-kind (`gclid`/`wbraid`/`gbraid`) counts; per-production-bucket coverage matrix; first-visit vs last-visit presence; multi-click-ID orders.
+- Counts: orders with any click ID; per-kind (`gclid`/`wbraid`/`gbraid`) counts; per-production-bucket coverage matrix; journey-missing counts; multi-kind orders.
 - Redacted parameter-shape fingerprints (key presence + coarse shape; no values).
 - Status (`pending` / `completed` / `failed`), immutable checksum, created timestamp.
 
