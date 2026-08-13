@@ -79,6 +79,25 @@ describe("EnvironmentGoogleAdsCredentialProvider", () => {
     ).rejects.toThrow(/Unsupported/);
   });
 
+  it("treats a malformed persisted customer ID as a binding mismatch", async () => {
+    const provider = new EnvironmentGoogleAdsCredentialProvider(FULL_ENV);
+    await expect(
+      provider.resolve({
+        credentialReference: GOOGLE_ADS_CREDENTIAL_REFERENCE,
+        persistedGoogleCustomerId: "not-a-number",
+      }),
+    ).rejects.toThrow(/binding does not match/);
+  });
+
+  it("resolves a dashed persisted customer ID that matches the environment", async () => {
+    const provider = new EnvironmentGoogleAdsCredentialProvider(FULL_ENV);
+    const credential = await provider.resolve({
+      credentialReference: GOOGLE_ADS_CREDENTIAL_REFERENCE,
+      persistedGoogleCustomerId: "098-765-4321",
+    });
+    expect(credential.customerId).toBe("0987654321");
+  });
+
   it("rejects a customer ID that is not 10 digits", async () => {
     const provider = new EnvironmentGoogleAdsCredentialProvider({
       ...FULL_ENV,
