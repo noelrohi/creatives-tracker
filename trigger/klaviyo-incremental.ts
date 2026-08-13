@@ -1,4 +1,13 @@
-import { idempotencyKeys, metadata, runs, tags, task, tasks, wait } from "@trigger.dev/sdk";
+import {
+  idempotencyKeys,
+  metadata,
+  runs,
+  schedules,
+  tags,
+  task,
+  tasks,
+  wait,
+} from "@trigger.dev/sdk";
 import { inclusiveStoreDaysToHalfOpenUtc } from "@/lib/klaviyo/types";
 import {
   recoverExhaustedClaimBatch,
@@ -437,40 +446,55 @@ function buildChildren(): IncrementalChildren {
   };
 }
 
+async function runIncrementalSupervisor(payload: SupervisorPayload) {
+  const eligible = await listEligibleConnections();
+  const targets = payload?.organizationId
+    ? eligible.filter(
+        (scope) => scope.organizationId === payload.organizationId,
+      )
+    : eligible;
+  const reports: Record<string, unknown> = {};
+  for (const scope of targets) {
+    await tags.add(`klaviyo:org:${scope.organizationId}`);
+    reports[scope.connectionId] = await runIncrementalConnection(
+      { scope },
+      buildChildren(),
+    );
+  }
+  metadata.set("connections", targets.length);
+  await metadata.flush();
+  return { ok: true as const, connections: targets.length, reports };
+}
+
 /**
- * Manual-only staged incremental supervisor. It enumerates only
- * repository-eligible connections and hands children internal IDs and
- * safe ranges — never private keys, HMACs, profile IDs, raw provider
- * data, or raw cursors. Durable child waits run sequentially through
- * named stages (never a parallel wait), the supervisor checkpoint is flushed to
- * run metadata before every handoff and poll, and database terminal-state
- * waits use durable intervals bounded by a persisted deadline. The daily
- * schedule stays disabled in deployment until the Reviv
- * backfill/freshness checklist is signed off; this manual task remains
- * available.
+ * Staged incremental supervisor. It enumerates only repository-eligible
+ * connections and hands children internal IDs and safe ranges — never
+ * private keys, HMACs, profile IDs, raw provider data, or raw cursors.
+ * Durable child waits run sequentially through named stages (never a
+ * parallel wait), the supervisor checkpoint is flushed to run metadata
+ * before every handoff and poll, and database terminal-state waits use
+ * durable intervals bounded by a persisted deadline.
+ *
+ * Eligibility (connection ready + probe passed + order-core backfill
+ * complete) is the per-connection gate the pilot design requires before
+ * daily refresh, so the schedule below no-ops until bootstrap succeeds.
+ * This manual task remains available for single-organization runs.
  */
 export const klaviyoIncrementalTask = task({
   id: "klaviyo-incremental",
   retry: ATTRIBUTION_TASK_RETRY,
   maxDuration: 3_000,
   queue: SUPERVISOR_QUEUE,
-  run: async (payload: SupervisorPayload) => {
-    const eligible = await listEligibleConnections();
-    const targets = payload?.organizationId
-      ? eligible.filter(
-          (scope) => scope.organizationId === payload.organizationId,
-        )
-      : eligible;
-    const reports: Record<string, unknown> = {};
-    for (const scope of targets) {
-      await tags.add(`klaviyo:org:${scope.organizationId}`);
-      reports[scope.connectionId] = await runIncrementalConnection(
-        { scope },
-        buildChildren(),
-      );
-    }
-    metadata.set("connections", targets.length);
-    await metadata.flush();
-    return { ok: true as const, connections: targets.length, reports };
-  },
+  run: async (payload: SupervisorPayload) => runIncrementalSupervisor(payload),
+});
+
+export const klaviyoIncrementalScheduled = schedules.task({
+  id: "klaviyo-incremental-scheduled",
+  // 20:30 UTC = 4:30am store time (PHT): after the 18:00 Meta sync and
+  // 19:30 attribution checks, clear of the top-of-hour Shopify sync.
+  cron: "30 20 * * *",
+  retry: ATTRIBUTION_TASK_RETRY,
+  maxDuration: 3_000,
+  queue: SUPERVISOR_QUEUE,
+  run: async () => runIncrementalSupervisor({}),
 });

@@ -217,11 +217,15 @@ describe("klaviyo-incremental trigger source boundary", () => {
     "utf8",
   );
 
-  it("exports only the manual supervisor task on a single-concurrency queue", () => {
+  it("exports the manual and scheduled supervisors on one single-concurrency queue", () => {
     expect(source).toContain("export const klaviyoIncrementalTask");
+    expect(source).toContain("export const klaviyoIncrementalScheduled");
     expect(source).toContain('name: "klaviyo-incremental-supervisor"');
-    expect(source).toContain("concurrencyLimit: 1");
-    expect(source).not.toContain("schedules.task");
+    // A single shared queue definition means the scheduled and manual
+    // supervisors can never run concurrently.
+    expect(source.match(/concurrencyLimit: 1/g)).toHaveLength(1);
+    expect(source.match(/queue: SUPERVISOR_QUEUE/g)).toHaveLength(2);
+    expect(source).toContain('cron: "30 20 * * *"');
   });
 
   it("keys evidence handoffs by connection and store day", () => {
