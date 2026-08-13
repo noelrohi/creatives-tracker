@@ -1,8 +1,8 @@
 import "server-only";
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { googleAdsConnections } from "@/schema/google-ads";
+import { googleAdsConnections, googleAdsSyncRuns } from "@/schema/google-ads";
 import {
   GoogleAdsClient,
   GoogleAdsApiError,
@@ -16,7 +16,6 @@ import {
 import { buildCustomerQuery } from "@/lib/google-ads/facts";
 import {
   completeGoogleAdsSyncRun,
-  failGoogleAdsSyncRun,
   resolveGoogleAdsSyncRun,
   type SanitizedSyncError,
 } from "@/lib/google-ads/sync-store";
@@ -46,6 +45,11 @@ export function evaluateDiscoveryRow(
       ? String(customer.id)
       : null;
   if (!customer || !rawId) return { ok: false, code: "malformed_customer" };
+  // Fail closed: a missing or non-boolean `manager` field is treated as
+  // malformed rather than assumed non-manager.
+  if (typeof customer.manager !== "boolean") {
+    return { ok: false, code: "malformed_customer" };
+  }
   if (customer.manager === true) return { ok: false, code: "manager_account" };
   if (rawId !== expectedCustomerId) return { ok: false, code: "customer_mismatch" };
   return {
@@ -87,6 +91,13 @@ export async function runGoogleAdsDiscovery(params: {
   if (run.operation !== "discovery") {
     throw new Error("Google Ads discovery run has the wrong operation");
   }
+  // Guards against a stale re-dispatch (e.g. a duplicated Trigger.dev
+  // invocation) acting on a run that already reached a terminal state —
+  // without this a late retry could flip an already-degraded connection
+  // back to ready off of a completed/failed run.
+  if (run.status !== "running") {
+    throw new Error("Google Ads discovery run is not running");
+  }
   const provider = params.provider ?? new EnvironmentGoogleAdsCredentialProvider();
   const [connection] = await db
     .select()
@@ -95,26 +106,59 @@ export async function runGoogleAdsDiscovery(params: {
     .limit(1);
   if (!connection) throw new Error("Google Ads connection does not exist");
 
-  const credential = await provider.resolve({
-    credentialReference: GOOGLE_ADS_CREDENTIAL_REFERENCE,
-    persistedGoogleCustomerId: connection.googleCustomerId,
-  });
-  const client =
-    params.clientFactory?.(credential) ?? new GoogleAdsClient({ credential });
-
+  // Both writes below (the run's terminal state and the connection's
+  // status) must land together — a crash between two separate statements
+  // could otherwise leave a "failed" run pointing at a "ready" connection,
+  // or vice versa.
   const degrade = async (error: SanitizedSyncError) => {
-    await failGoogleAdsSyncRun({
-      scope,
-      syncRunId: params.syncRunId,
-      operation: "discovery",
-      error,
+    await db.transaction(async (tx) => {
+      await tx
+        .update(googleAdsSyncRuns)
+        .set({
+          status: "failed",
+          errorCode: error.code,
+          errorMessage: error.message,
+          finishedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(googleAdsSyncRuns.id, params.syncRunId),
+            eq(googleAdsSyncRuns.organizationId, scope.organizationId),
+            eq(googleAdsSyncRuns.storeId, scope.storeId),
+            eq(googleAdsSyncRuns.connectionId, scope.connectionId),
+            eq(googleAdsSyncRuns.operation, "discovery"),
+            eq(googleAdsSyncRuns.status, "running"),
+          ),
+        );
+      await tx
+        .update(googleAdsConnections)
+        .set({ status: "degraded" })
+        .where(eq(googleAdsConnections.id, scope.connectionId));
     });
-    await db
-      .update(googleAdsConnections)
-      .set({ status: "degraded" })
-      .where(eq(googleAdsConnections.id, scope.connectionId));
     return { status: "degraded" as const, code: error.code };
   };
+
+  // Pre-flight: a credential-resolution failure (missing/invalid env
+  // configuration, a persisted-customer-id mismatch) must never leave the
+  // run stuck in "running" — that would wedge the partial unique index
+  // that allows only one running discovery run per connection. The caught
+  // error's message is never surfaced: even though today's failures are
+  // just missing env var names, the sanitized-error boundary must stay
+  // absolute regardless of what a provider implementation might throw.
+  let credential: ResolvedGoogleAdsCredential;
+  try {
+    credential = await provider.resolve({
+      credentialReference: GOOGLE_ADS_CREDENTIAL_REFERENCE,
+      persistedGoogleCustomerId: connection.googleCustomerId,
+    });
+  } catch {
+    return degrade({
+      code: "credential_invalid",
+      message: "Google Ads credential configuration is invalid",
+    });
+  }
+  const client =
+    params.clientFactory?.(credential) ?? new GoogleAdsClient({ credential });
 
   let evaluation: DiscoveryEvaluation;
   try {
@@ -131,6 +175,19 @@ export async function runGoogleAdsDiscovery(params: {
     return degrade({
       code: evaluation.code,
       message: `Google Ads discovery rejected: ${evaluation.code}`,
+    });
+  }
+
+  // Fail closed on a currency change (spec §12): once a connection has a
+  // recorded currency, discovery must not silently repoint historical
+  // facts at a new currency — that would misrepresent past cost/revenue.
+  if (
+    connection.currencyCode !== null &&
+    connection.currencyCode !== evaluation.customer.currencyCode
+  ) {
+    return degrade({
+      code: "currency_changed",
+      message: "Google Ads account currency changed since last discovery",
     });
   }
 

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { evaluateDiscoveryRow } from "@/lib/google-ads/discovery";
+import { GoogleAdsApiError } from "@/lib/google-ads/client";
+import {
+  evaluateDiscoveryRow,
+  sanitizeGoogleAdsError,
+} from "@/lib/google-ads/discovery";
 
 describe("evaluateDiscoveryRow", () => {
   const GOOD = {
@@ -42,6 +46,47 @@ describe("evaluateDiscoveryRow", () => {
     expect(evaluateDiscoveryRow({}, "1234567890")).toEqual({
       ok: false,
       code: "malformed_customer",
+    });
+  });
+
+  it("rejects a row with a missing manager field", () => {
+    const result = evaluateDiscoveryRow(
+      {
+        customer: {
+          id: "1234567890",
+          descriptiveName: "Reviv Ads",
+          currencyCode: "USD",
+          timeZone: "America/New_York",
+        },
+      },
+      "1234567890",
+    );
+    expect(result).toEqual({ ok: false, code: "malformed_customer" });
+  });
+});
+
+describe("sanitizeGoogleAdsError", () => {
+  it("maps a retryable GoogleAdsApiError to provider_unavailable", () => {
+    const error = new GoogleAdsApiError("upstream is down", 503, true);
+    expect(sanitizeGoogleAdsError(error)).toEqual({
+      code: "provider_unavailable",
+      message: "upstream is down",
+    });
+  });
+
+  it("maps a non-retryable GoogleAdsApiError to provider_rejected", () => {
+    const error = new GoogleAdsApiError("bad request", 400, false);
+    expect(sanitizeGoogleAdsError(error)).toEqual({
+      code: "provider_rejected",
+      message: "bad request",
+    });
+  });
+
+  it("maps a plain Error to a fixed internal_error message", () => {
+    const error = new Error("something exploded");
+    expect(sanitizeGoogleAdsError(error)).toEqual({
+      code: "internal_error",
+      message: "Google Ads sync failed unexpectedly",
     });
   });
 });
