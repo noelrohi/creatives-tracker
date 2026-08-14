@@ -18,7 +18,6 @@ import {
   processGoogleAdsFactsBatch,
 } from "@/lib/google-ads/facts-runner";
 import {
-  connectionScope,
   failGoogleAdsSyncRun,
   resolveGoogleAdsSyncRun,
 } from "@/lib/google-ads/sync-store";
@@ -243,16 +242,36 @@ export const googleAdsNightlySchedule = schedules.task({
         // ever starts, so onFailure never fires to close it out. Left alone
         // the run stays "running" forever and the one-running-facts partial
         // unique index wedges every future night for this connection; fail
-        // it here instead.
-        await failGoogleAdsSyncRun({
-          scope: connectionScope(connection),
-          syncRunId: run.id,
-          operation: "facts",
-          error: {
-            code: "trigger_dispatch_failed",
-            message: "Google Ads facts dispatch failed",
-          },
-        });
+        // it here instead. Scope comes from the run row itself, not the
+        // loop connection, so this stays correct even if prepare ever
+        // resolves a different connection than the one iterated here.
+        try {
+          await failGoogleAdsSyncRun({
+            scope: {
+              organizationId: run.organizationId,
+              storeId: run.storeId,
+              connectionId: run.connectionId,
+            },
+            syncRunId: run.id,
+            operation: "facts",
+            error: {
+              code: "trigger_dispatch_failed",
+              message: "Google Ads facts dispatch failed",
+            },
+          });
+        } catch (cleanupError) {
+          // A DB blip while marking the run failed must not abort the rest
+          // of tonight's connections — the run is left "running" and will
+          // need manual or next-run attention instead.
+          logger.warn("Failed to mark Google Ads facts run failed after dispatch error", {
+            connectionId: connection.id,
+            syncRunId: run.id,
+            error:
+              cleanupError instanceof Error
+                ? cleanupError.message
+                : String(cleanupError),
+          });
+        }
         logger.warn("Google Ads nightly facts dispatch failed; run marked failed", {
           connectionId: connection.id,
           syncRunId: run.id,
