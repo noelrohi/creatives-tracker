@@ -421,6 +421,13 @@
       "when": 1786531563071,
       "tag": "0059_abnormal_jack_murdock",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1786682573213,
+      "tag": "0060_loose_bloodstorm",
+      "breakpoints": true
     }
   ]
 }
