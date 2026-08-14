@@ -6,3 +6,6 @@ export type Competitor =
 export type TopCluster = Competitor["topClusters"][number];
 
 export type ClusterTier = NonNullable<TopCluster["tier"]>;
+
+export type RankedSignal =
+  RouterOutputs["signals"]["rankedSignals"]["signals"][number];
