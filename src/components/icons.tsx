@@ -11,6 +11,7 @@ function createSolarIcon(name: string) {
 
 export const AlertCircle = createSolarIcon("danger-circle");
 export const AlertTriangle = createSolarIcon("danger-triangle");
+export const Archive = createSolarIcon("archive");
 export const ArrowDown = createSolarIcon("arrow-down");
 export const ArrowDownIcon = createSolarIcon("arrow-down");
 export const ArrowLeft = createSolarIcon("arrow-left");
@@ -70,6 +71,7 @@ export const PenLine = createSolarIcon("pen");
 export const Pencil = createSolarIcon("pen");
 export const PlayIcon = createSolarIcon("play");
 export const Plus = createSolarIcon("add-circle");
+export const Radar = createSolarIcon("radar-2");
 export const RefreshCw = createSolarIcon("refresh");
 export const RotateCw = createSolarIcon("refresh");
 export const Save = createSolarIcon("diskette");
