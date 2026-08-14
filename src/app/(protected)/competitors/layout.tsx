@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 const tabs = [
   { label: "Competitors", href: "/competitors" },
   { label: "Signals", href: "/competitors/signals" },
+  { label: "Test plan", href: "/competitors/test-plan" },
 ];
 
 export default function CompetitorsLayout({
