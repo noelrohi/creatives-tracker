@@ -45,6 +45,7 @@ import {
 } from "@/components/blocks/attribution/days";
 import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role";
 import { KlaviyoLabLink } from "@/components/blocks/attribution/klaviyo/lab-link";
+import { GoogleAdsLabLink } from "@/components/blocks/attribution/google-ads/lab-link";
 import { EmailRevenuePanel } from "@/components/blocks/attribution/klaviyo/email-revenue-panel";
 import type { AttributionBucket } from "@/lib/attribution-bucket";
 import { formatDateOnly } from "@/lib/date";
@@ -313,6 +314,7 @@ export default function AttributionPage() {
         </h1>
         <div className="flex items-center gap-2">
           <KlaviyoLabLink role={role} />
+          <GoogleAdsLabLink role={role} />
           <FreshnessCaption
             shopify={health?.shopify}
             meta={health?.meta}
