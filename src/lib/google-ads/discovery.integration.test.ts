@@ -177,4 +177,71 @@ describeIfDb("Google Ads discovery on PostgreSQL", () => {
     expect(reloadedConnection.currencyCode).toBeNull();
     expect(reloadedConnection.timezone).toBeNull();
   });
+
+  it("degrades on a currency change and preserves the previously recorded currency", async () => {
+    const connection = await store.ensurePilotGoogleAdsConnection(fakeProvider());
+    const scope = store.connectionScope(connection);
+    const firstRun = await store.createGoogleAdsSyncRun({
+      scope,
+      operation: "discovery",
+      apiVersion: "v21",
+    });
+    const firstResult = await runGoogleAdsDiscovery({
+      syncRunId: firstRun.id,
+      provider: fakeProvider(),
+      clientFactory: fakeClientFactory({
+        results: [
+          {
+            customer: {
+              id: CREDENTIAL.customerId,
+              descriptiveName: "Reviv Ads",
+              currencyCode: "USD",
+              timeZone: "America/New_York",
+              manager: false,
+            },
+          },
+        ],
+        nextPageToken: null,
+        apiVersion: "v21",
+      }),
+    });
+    expect(firstResult).toEqual({ status: "ready" });
+
+    const secondRun = await store.createGoogleAdsSyncRun({
+      scope,
+      operation: "discovery",
+      apiVersion: "v21",
+    });
+    const secondResult = await runGoogleAdsDiscovery({
+      syncRunId: secondRun.id,
+      provider: fakeProvider(),
+      clientFactory: fakeClientFactory({
+        results: [
+          {
+            customer: {
+              id: CREDENTIAL.customerId,
+              descriptiveName: "Reviv Ads",
+              currencyCode: "EUR",
+              timeZone: "America/New_York",
+              manager: false,
+            },
+          },
+        ],
+        nextPageToken: null,
+        apiVersion: "v21",
+      }),
+    });
+
+    expect(secondResult).toEqual({ status: "degraded", code: "currency_changed" });
+
+    const { run: reloadedSecondRun } = await store.resolveGoogleAdsSyncRun(
+      secondRun.id,
+    );
+    expect(reloadedSecondRun.status).toBe("failed");
+    expect(reloadedSecondRun.errorCode).toBe("currency_changed");
+
+    const reloadedConnection = await reloadConnection(connection.id);
+    expect(reloadedConnection.status).toBe("degraded");
+    expect(reloadedConnection.currencyCode).toBe("USD");
+  });
 });
