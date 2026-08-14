@@ -185,6 +185,19 @@ export function GoogleAdsLab() {
         journey · {probeReport.data.summary.multiKindOrders} with multiple
         kinds
       </p>
+      <p className="text-muted-foreground">
+        Google-bucket orders without a click ID:{" "}
+        {(probeReport.data.summary.byBucket.google?.orders ?? 0) -
+          (probeReport.data.summary.byBucket.google?.withClickId ?? 0)}
+      </p>
+      <p className="text-muted-foreground">
+        Non-google orders WITH a click ID:{" "}
+        {Object.entries(probeReport.data.summary.byBucket).reduce(
+          (total, [bucket, cell]) =>
+            bucket === "google" ? total : total + cell.withClickId,
+          0,
+        )}
+      </p>
       <div className="overflow-x-auto">
         <Table>
           <TableHeader>

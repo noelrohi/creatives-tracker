@@ -257,26 +257,20 @@ export const googleAdsRouter = router({
   }),
 
   runProbe: orgAdminProcedure.mutation(async ({ ctx }) => {
-    const report = await prepareGclidProbeRun();
-    if (report.organizationId !== ctx.organizationId) {
-      // The report row was minted for the configured store's org; an
-      // unrelated org's admin cannot claim it. Terminally fail the row here
-      // so the owning org's "latest report" read never sees a permanently
-      // running orphan left behind by the rejected caller.
-      try {
-        await failGclidProbeReport({
-          probeReportId: report.id,
-          code: "org_mismatch",
-          message: "Probe requested by a different organization",
-        });
-      } catch {
-        // The reconciler covers a finalizer race; the safe error still returns.
-      }
+    // Check the org BEFORE any row is created: an unrelated org's admin
+    // must never be able to mint (even a terminally-failed) probe report
+    // row, since that row would become the pilot org's "latest report" the
+    // moment it exists. `store` is null when the shop domain has no store
+    // yet — fall through to `prepareGclidProbeRun`, which raises that
+    // domain error itself.
+    const store = await resolvePilotProbeStore();
+    if (store && store.organizationId !== ctx.organizationId) {
       throw new TRPCError({
         code: "FORBIDDEN",
         message: "Google Ads pilot is configured for a different organization",
       });
     }
+    const report = await prepareGclidProbeRun();
     try {
       const idempotencyKey = await idempotencyKeys.create(
         `gclid-probe:first:${report.id}`,

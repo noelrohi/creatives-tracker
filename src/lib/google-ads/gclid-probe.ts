@@ -49,16 +49,21 @@ export type PilotProbeStore = {
 
 /**
  * Resolves the pilot store directly from the provider's server-side
- * shop-domain binding — no connection row required. Readers (e.g. the
- * `probeReport` tRPC query) use this so a probe that ran before any Google
- * Ads connection existed is still resolvable; `null` means either the
- * binding's shop domain has no Shopify store yet, or the caller should treat
- * probe lookup as unavailable.
+ * shop-domain binding — no connection row and no Google Ads credentials
+ * required. This is the Phase 0 promise: the gclid probe reads only stored
+ * Shopify data plus the shop-domain binding, so `getPilotShopDomain` (which
+ * validates only `GOOGLE_ADS_REVIV_SHOP_DOMAIN`) is used here instead of
+ * `getPilotBinding` (which requires the full credential set, including
+ * secrets this path must never need). Readers (e.g. the `probeReport` tRPC
+ * query) use this so a probe that ran before any Google Ads connection
+ * existed is still resolvable; `null` means either the binding's shop
+ * domain has no Shopify store yet, or the caller should treat probe lookup
+ * as unavailable.
  */
 export async function resolvePilotProbeStore(
   provider: GoogleAdsCredentialProvider = new EnvironmentGoogleAdsCredentialProvider(),
 ): Promise<PilotProbeStore | null> {
-  const binding = await provider.getPilotBinding();
+  const shopDomain = await provider.getPilotShopDomain();
   const [store] = await db
     .select({
       id: shopifyStores.id,
@@ -66,7 +71,7 @@ export async function resolvePilotProbeStore(
       ianaTimezone: shopifyStores.ianaTimezone,
     })
     .from(shopifyStores)
-    .where(eq(shopifyStores.shopDomain, binding.shopDomain))
+    .where(eq(shopifyStores.shopDomain, shopDomain))
     .limit(1);
   return store ?? null;
 }

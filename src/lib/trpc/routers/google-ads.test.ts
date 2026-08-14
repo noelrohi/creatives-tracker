@@ -256,20 +256,17 @@ describe("googleAds router behavior", () => {
     expect(mocks.taskTrigger).not.toHaveBeenCalled();
   });
 
-  it("runProbe throws FORBIDDEN when the probe report belongs to a different org, marks it failed, and never triggers a task", async () => {
-    mocks.prepareGclidProbeRun.mockResolvedValue({
-      id: "probe-1",
+  it("runProbe throws FORBIDDEN when the store belongs to a different org, without ever minting a probe report row", async () => {
+    mocks.resolvePilotProbeStore.mockResolvedValue({
+      id: "store-1",
       organizationId: "org-2",
-      storeId: "store-1",
+      ianaTimezone: "America/New_York",
     });
     await expect(sessionCaller("admin").runProbe()).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
-    expect(mocks.failGclidProbeReport).toHaveBeenCalledWith({
-      probeReportId: "probe-1",
-      code: "org_mismatch",
-      message: "Probe requested by a different organization",
-    });
+    expect(mocks.prepareGclidProbeRun).not.toHaveBeenCalled();
+    expect(mocks.failGclidProbeReport).not.toHaveBeenCalled();
     expect(mocks.taskTrigger).not.toHaveBeenCalled();
   });
 

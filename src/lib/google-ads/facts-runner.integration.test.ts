@@ -62,6 +62,7 @@ function fakeProvider(
       loginCustomerId: CREDENTIAL.loginCustomerId,
       shopDomain: SEEDED_SHOP_DOMAIN,
     }),
+    getPilotShopDomain: async () => SEEDED_SHOP_DOMAIN,
     resolve: async (request) => {
       calls.push(request);
       return CREDENTIAL;

@@ -105,4 +105,18 @@ describe("EnvironmentGoogleAdsCredentialProvider", () => {
     });
     await expect(provider.getPilotBinding()).rejects.toThrow(/10 digits/);
   });
+
+  it("getPilotShopDomain succeeds with ONLY the shop-domain var set — Phase 0 needs no Google Ads credentials", async () => {
+    const provider = new EnvironmentGoogleAdsCredentialProvider({
+      GOOGLE_ADS_REVIV_SHOP_DOMAIN: "Reviv.myshopify.com",
+    });
+    await expect(provider.getPilotShopDomain()).resolves.toBe(
+      "reviv.myshopify.com",
+    );
+  });
+
+  it("getPilotShopDomain fails closed when the shop-domain var is missing", async () => {
+    const provider = new EnvironmentGoogleAdsCredentialProvider({});
+    await expect(provider.getPilotShopDomain()).rejects.toThrow(/is required/);
+  });
 });

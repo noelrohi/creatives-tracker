@@ -55,6 +55,7 @@ function fakeProvider(): GoogleAdsCredentialProvider {
       loginCustomerId: CREDENTIAL.loginCustomerId,
       shopDomain: SEEDED_SHOP_DOMAIN,
     }),
+    getPilotShopDomain: async () => SEEDED_SHOP_DOMAIN,
     resolve: async () => CREDENTIAL,
   };
 }

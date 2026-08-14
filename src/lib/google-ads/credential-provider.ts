@@ -27,6 +27,13 @@ export type ResolvedGoogleAdsCredential = {
 
 export interface GoogleAdsCredentialProvider {
   getPilotBinding(): Promise<RevivGoogleAdsBinding>;
+  /**
+   * Phase 0 contract: the gclid probe must run with NO Google Ads
+   * credentials at all — only stored Shopify data plus this shop-domain
+   * binding. Validates ONLY `GOOGLE_ADS_REVIV_SHOP_DOMAIN`; never touches
+   * the customer IDs or OAuth secrets `getPilotBinding` requires.
+   */
+  getPilotShopDomain(): Promise<string>;
   resolve(
     request: GoogleAdsCredentialRequest,
   ): Promise<ResolvedGoogleAdsCredential>;
@@ -106,6 +113,16 @@ export class EnvironmentGoogleAdsCredentialProvider
     // Validates the full set (including secrets) so a half-configured
     // environment fails before any connection bootstrap can write.
     return this.#readConfiguration().binding;
+  }
+
+  async getPilotShopDomain(): Promise<string> {
+    // Deliberately independent of #readConfiguration(): that method also
+    // requires the developer token and OAuth secrets, which Phase 0 (the
+    // gclid probe) must never need. Reading only the shop-domain var here is
+    // what lets the probe run with zero Google Ads credentials configured.
+    return normalizeShopDomain(
+      required(this.#environment, "GOOGLE_ADS_REVIV_SHOP_DOMAIN"),
+    );
   }
 
   async resolve(

@@ -42,6 +42,7 @@ function fakeProvider(shopDomain: string): GoogleAdsCredentialProvider {
       loginCustomerId: "0987654321",
       shopDomain,
     }),
+    getPilotShopDomain: async () => shopDomain,
     resolve: async () => {
       throw new Error("not needed");
     },
