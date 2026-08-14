@@ -410,7 +410,7 @@ describe("signals router (competitor-signals v1 §4/§5, Phase 1)", () => {
       expect(dbState.inserts[0].values[0].pipelineStatus).toBe("received");
     });
 
-    it("skips the job when no ad carries a media URL", async () => {
+    it("skips the job when there is neither media nor clusters", async () => {
       queueKnownCompetitor();
 
       await adminCaller.signals.ingestFill({
@@ -418,6 +418,38 @@ describe("signals router (competitor-signals v1 §4/§5, Phase 1)", () => {
         source: "meta_ads_collector",
         ads: [normalizedAd()],
         clusters: null,
+      });
+
+      expect(triggerMock).not.toHaveBeenCalled();
+      expect(dbState.inserts[0].values[0].pipelineStatus).toBe("complete");
+    });
+
+    // §8: clusters need scoring even when there is nothing left to mirror.
+    it("triggers the job for a media-less fill that carries clusters", async () => {
+      queueKnownCompetitor();
+      dbState.returningRows.push([{ id: "cluster-1" }]);
+
+      await adminCaller.signals.ingestFill({
+        competitorPageId: "page-1",
+        source: "meta_ads_collector",
+        ads: [normalizedAd()],
+        clusters: [cluster()],
+      });
+
+      expect(triggerMock).toHaveBeenCalledTimes(1);
+      const [, payload] = triggerMock.mock.calls[0];
+      expect(payload).toMatchObject({ snapshotId: "snapshot-1", media: [] });
+      expect(dbState.inserts[0].values[0].pipelineStatus).toBe("received");
+    });
+
+    it("skips the job when the payload sends an empty cluster list", async () => {
+      queueKnownCompetitor();
+
+      await adminCaller.signals.ingestFill({
+        competitorPageId: "page-1",
+        source: "meta_ads_collector",
+        ads: [normalizedAd()],
+        clusters: [],
       });
 
       expect(triggerMock).not.toHaveBeenCalled();

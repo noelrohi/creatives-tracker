@@ -3,8 +3,13 @@ import { put } from "@vercel/blob";
 import { logger, metadata, tags, task } from "@trigger.dev/sdk";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
+import { scoreCompetitorClusters } from "@/lib/competitor-signals/score";
 import { fetchRemoteImage } from "@/lib/remote-image";
-import { competitorAds, intelSnapshots } from "@/schema/competitor-signals";
+import {
+  competitorAds,
+  copyClusters,
+  intelSnapshots,
+} from "@/schema/competitor-signals";
 
 const MEDIA_BATCH_SIZE = 10;
 
@@ -148,6 +153,77 @@ async function failSnapshot(snapshotId: string, error: unknown) {
       error: error instanceof Error ? error.message : String(error),
     })
     .where(eq(intelSnapshots.id, snapshotId));
+}
+
+/**
+ * §8 scoring stage: recompute every cluster's evidence score from stored
+ * inputs. Runs after mirroring so format breadth sees the mirrored media.
+ * A competitor with no clusters skips the stage entirely.
+ */
+async function scoreCompetitorSnapshot(input: {
+  organizationId: string;
+  competitorId: string;
+  snapshotId: string;
+}): Promise<{ scoredClusters: number }> {
+  const clusters = await db
+    .select({ id: copyClusters.id, verdict: copyClusters.verdict })
+    .from(copyClusters)
+    .where(
+      and(
+        eq(copyClusters.organizationId, input.organizationId),
+        eq(copyClusters.competitorId, input.competitorId),
+      ),
+    );
+
+  if (clusters.length === 0) return { scoredClusters: 0 };
+
+  await db
+    .update(intelSnapshots)
+    .set({ pipelineStatus: "scoring", error: null })
+    .where(eq(intelSnapshots.id, input.snapshotId));
+
+  metadata.set("phase", "scoring").set("step", "Scoring copy clusters");
+
+  const ads = await db
+    .select({
+      copyClusterId: competitorAds.copyClusterId,
+      startDate: competitorAds.startDate,
+      displayFormat: competitorAds.displayFormat,
+      linkUrl: competitorAds.linkUrl,
+      variants: competitorAds.variants,
+      mirroredImageUrl: competitorAds.mirroredImageUrl,
+      mirroredVideoUrl: competitorAds.mirroredVideoUrl,
+    })
+    .from(competitorAds)
+    .where(
+      and(
+        eq(competitorAds.organizationId, input.organizationId),
+        eq(competitorAds.competitorId, input.competitorId),
+        inArray(
+          competitorAds.copyClusterId,
+          clusters.map((cluster) => cluster.id),
+        ),
+      ),
+    );
+
+  const updates = scoreCompetitorClusters({ clusters, ads, now: new Date() });
+
+  for (const update of updates) {
+    await db
+      .update(copyClusters)
+      .set({
+        score: update.score,
+        tier: update.tier,
+        longevityPoints: update.longevityPoints,
+        variantPoints: update.variantPoints,
+        strategicPoints: update.strategicPoints,
+        formatPoints: update.formatPoints,
+        landingPoints: update.landingPoints,
+      })
+      .where(eq(copyClusters.id, update.clusterId));
+  }
+
+  return { scoredClusters: updates.length };
 }
 
 export const mirrorCompetitorMediaBatchTask = task({
@@ -330,7 +406,13 @@ export const mirrorCompetitorMediaTask = task({
           .where(eq(intelSnapshots.id, payload.snapshotId));
       }
 
-      // Phase 1 has no scoring stage: received → mirroring → complete.
+      // received → mirroring → scoring → complete (§6).
+      const { scoredClusters } = await scoreCompetitorSnapshot({
+        organizationId: payload.organizationId,
+        competitorId: payload.competitorId,
+        snapshotId: payload.snapshotId,
+      });
+
       await db
         .update(intelSnapshots)
         .set({ pipelineStatus: "complete", error: null })
@@ -341,12 +423,14 @@ export const mirrorCompetitorMediaTask = task({
         organizationId: payload.organizationId,
         competitorId: payload.competitorId,
         snapshotId: payload.snapshotId,
+        scoredClusters,
         ...totals,
       });
 
       return {
         ...totals,
-        summary: `Mirrored ${totals.assetsMirrored} assets across ${totals.mirroredAds} ads (${totals.failed} asset failures)`,
+        scoredClusters,
+        summary: `Mirrored ${totals.assetsMirrored} assets across ${totals.mirroredAds} ads (${totals.failed} asset failures), scored ${scoredClusters} clusters`,
       };
     } catch (error) {
       metadata.set("status", "failed");
