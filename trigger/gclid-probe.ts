@@ -1,4 +1,7 @@
+import { eq } from "drizzle-orm";
 import { metadata, tags, task } from "@trigger.dev/sdk";
+import { db } from "@/db";
+import { gclidProbeReports } from "@/schema/google-ads";
 import {
   failGclidProbeReport,
   runGclidProbe,
@@ -19,6 +22,10 @@ function assertExactProbePayload(value: unknown): asserts value is ProbePayload 
   }
 }
 
+function orgTag(organizationId: string) {
+  return `gclid-probe:org:${organizationId}`;
+}
+
 export const gclidProbeTask = task({
   id: "gclid-probe",
   retry: KLAVIYO_TASK_RETRY,
@@ -34,9 +41,16 @@ export const gclidProbeTask = task({
   },
   run: async (payload: ProbePayload) => {
     assertExactProbePayload(payload);
+    const [report] = await db
+      .select({ organizationId: gclidProbeReports.organizationId })
+      .from(gclidProbeReports)
+      .where(eq(gclidProbeReports.id, payload.probeReportId))
+      .limit(1);
+    if (!report) throw new Error("gclid probe report does not exist");
+    await tags.add(orgTag(report.organizationId));
     metadata.set("status", "scanning");
     const summary = await runGclidProbe({ probeReportId: payload.probeReportId });
-    await tags.add(`gclid-probe:orders:${summary.ordersScanned}`);
+    metadata.set("ordersScanned", summary.ordersScanned);
     metadata.set("status", "completed");
     return {
       ordersScanned: summary.ordersScanned,

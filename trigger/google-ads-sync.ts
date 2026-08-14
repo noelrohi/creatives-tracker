@@ -18,6 +18,7 @@ import {
   processGoogleAdsFactsBatch,
 } from "@/lib/google-ads/facts-runner";
 import {
+  connectionScope,
   failGoogleAdsSyncRun,
   resolveGoogleAdsSyncRun,
 } from "@/lib/google-ads/sync-store";
@@ -29,6 +30,10 @@ const GOOGLE_ADS_DISCOVERY_QUEUE = {
 };
 const GOOGLE_ADS_FACTS_QUEUE = {
   name: "google-ads-facts",
+  concurrencyLimit: 1,
+};
+const GOOGLE_ADS_NIGHTLY_QUEUE = {
+  name: "google-ads-nightly",
   concurrencyLimit: 1,
 };
 /** Nightly incremental re-fetches this many trailing days so restated conversions converge. */
@@ -143,7 +148,12 @@ export const googleAdsFactsBatchTask = task({
  */
 export const googleAdsNightlySchedule = schedules.task({
   id: "google-ads-nightly",
+  // 04:45 UTC, not each account's local night — the 30-day trailing window
+  // absorbs any lag between this run and an account's own local calendar day.
   cron: "45 4 * * *",
+  retry: KLAVIYO_TASK_RETRY,
+  maxDuration: 3_000,
+  queue: GOOGLE_ADS_NIGHTLY_QUEUE,
   run: async () => {
     const connections = await db
       .select()
@@ -154,26 +164,98 @@ export const googleAdsNightlySchedule = schedules.task({
           isNotNull(googleAdsConnections.backfillCompletedAt),
         ),
       );
-    let scheduled = 0;
+
+    // The pilot supports exactly one Google Ads connection per organization.
+    // prepareGoogleAdsFactsRun resolves the connection by organization
+    // (limit 1, no ORDER BY — see its own note), so a second connection for
+    // the same org would race that lookup: wrong-timezone windows on some
+    // nights, permanent skips on others. Dedupe defensively here instead of
+    // changing sync-store.ts (out of scope) and warn loudly if this pilot
+    // assumption is ever violated.
+    const byOrganization = new Map<string, (typeof connections)[number]>();
+    let duplicateConnections = 0;
     for (const connection of connections) {
-      const timezone = connection.timezone ?? "UTC";
-      const yesterday = addDays(accountDay(new Date(), timezone), -1);
+      if (byOrganization.has(connection.organizationId)) {
+        duplicateConnections += 1;
+        continue;
+      }
+      byOrganization.set(connection.organizationId, connection);
+    }
+    if (duplicateConnections > 0) {
+      logger.warn(
+        "Skipped duplicate Google Ads connections — pilot supports one connection per organization",
+        { duplicateConnections },
+      );
+    }
+
+    let scheduled = 0;
+    for (const connection of byOrganization.values()) {
+      // A ready connection always has a discovered timezone; substituting
+      // UTC here would silently shift the account-day window instead of
+      // surfacing the anomaly.
+      if (!connection.timezone) {
+        logger.warn("Skipped Google Ads nightly facts run — connection has no timezone", {
+          connectionId: connection.id,
+        });
+        continue;
+      }
+      const yesterday = addDays(accountDay(new Date(), connection.timezone), -1);
+
+      let run: Awaited<ReturnType<typeof prepareGoogleAdsFactsRun>>;
       try {
-        const run = await prepareGoogleAdsFactsRun({
+        run = await prepareGoogleAdsFactsRun({
           organizationId: connection.organizationId,
           windowFromDay: addDays(yesterday, -(INCREMENTAL_TRAILING_DAYS - 1)),
           windowToDay: yesterday,
         });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("already running")) {
+          // Benign: a prior night's (or manual) run is still in flight.
+          logger.info("Skipped Google Ads nightly facts run — already running", {
+            connectionId: connection.id,
+          });
+        } else {
+          logger.warn("Skipped Google Ads nightly facts run for connection", {
+            connectionId: connection.id,
+            error: message,
+          });
+        }
+        continue;
+      }
+
+      try {
+        // First-dispatch idempotency key: protects against a schedule-level
+        // retry double-triggering the batch task for a run that already got
+        // one dispatched successfully.
+        const idempotencyKey = await idempotencyKeys.create(
+          `google-ads-facts:first:${run.id}`,
+          { scope: "global" },
+        );
         await tasks.trigger<typeof googleAdsFactsBatchTask>(
           "google-ads-facts-batch",
           { syncRunId: run.id },
+          { idempotencyKey, idempotencyKeyTTL: "7d" },
         );
         scheduled += 1;
       } catch (error) {
-        // A facts run already in flight (or a degraded connection racing the
-        // read) skips this connection tonight rather than failing the batch.
-        logger.warn("Skipped Google Ads nightly facts run for connection", {
+        // The run row was created but dispatch itself failed — no task run
+        // ever starts, so onFailure never fires to close it out. Left alone
+        // the run stays "running" forever and the one-running-facts partial
+        // unique index wedges every future night for this connection; fail
+        // it here instead.
+        await failGoogleAdsSyncRun({
+          scope: connectionScope(connection),
+          syncRunId: run.id,
+          operation: "facts",
+          error: {
+            code: "trigger_dispatch_failed",
+            message: "Google Ads facts dispatch failed",
+          },
+        });
+        logger.warn("Google Ads nightly facts dispatch failed; run marked failed", {
           connectionId: connection.id,
+          syncRunId: run.id,
           error: error instanceof Error ? error.message : String(error),
         });
       }
