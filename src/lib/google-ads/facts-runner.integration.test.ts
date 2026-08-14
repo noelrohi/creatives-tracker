@@ -392,11 +392,14 @@ describeIfDb("Google Ads facts runner on PostgreSQL", () => {
     expect(countAfter.rows[0].count).toBe(countBefore.rows[0].count);
   });
 
-  it("slices a single chunk of 1100 facts into batches under the bind-param ceiling (e)", async () => {
+  it("slices a single chunk of 4000 facts, which would exceed the bind-param ceiling unsliced (e)", async () => {
     const connection = await insertReadyConnection("org-a", "store-a");
     const scope = store.connectionScope(connection);
     // A single-day window keeps the whole chunk in one page while still
     // exercising the 500-row insert slicing inside commitCampaignFactsChunk.
+    // 4000 rows x 17 params/row = 68,000 params, which wraps Postgres's
+    // int16 bind-param count (65,535) if sent as one unsliced INSERT — so
+    // this genuinely fails without the slicing fix, unlike a smaller count.
     const run = await store.createGoogleAdsSyncRun({
       scope,
       operation: "facts",
@@ -405,7 +408,7 @@ describeIfDb("Google Ads facts runner on PostgreSQL", () => {
       apiVersion: "v21",
     });
 
-    const rows = Array.from({ length: 1100 }, (_, index) =>
+    const rows = Array.from({ length: 4000 }, (_, index) =>
       factRow({ campaignId: String(index + 1), factDate: "2026-05-01" }),
     );
 
@@ -418,16 +421,54 @@ describeIfDb("Google Ads facts runner on PostgreSQL", () => {
     });
 
     expect(result.done).toBe(true);
-    expect(result.rowsRead).toBe(1100);
+    expect(result.rowsRead).toBe(4000);
 
     const facts = await testPool!.query(
       `SELECT count(*)::int AS count FROM google_ads_campaign_fact WHERE connection_id = $1`,
       [connection.id],
     );
-    expect(facts.rows[0].count).toBe(1100);
+    expect(facts.rows[0].count).toBe(4000);
 
     const { run: reloadedRun } = await store.resolveGoogleAdsSyncRun(run.id);
-    expect(reloadedRun.rowsUpserted).toBe(1100);
+    expect(reloadedRun.rowsUpserted).toBe(4000);
     expect(reloadedRun.status).toBe("completed");
+  });
+
+  it("rejects a chunk that exceeds the page cap and leaves the run untouched", async () => {
+    const connection = await insertReadyConnection("org-a", "store-a");
+    const scope = store.connectionScope(connection);
+    const run = await store.createGoogleAdsSyncRun({
+      scope,
+      operation: "facts",
+      windowFromDay: "2026-05-01",
+      windowToDay: "2026-05-14",
+      apiVersion: "v21",
+    });
+
+    // 21 pages, each pointing to another page, so the do/while loop would
+    // spin forever without the MAX_PAGES_PER_CHUNK guard.
+    const pages: GoogleAdsSearchPage[] = Array.from({ length: 21 }, (_, index) => ({
+      results: [factRow({ campaignId: String(index + 1), factDate: "2026-05-01" })],
+      nextPageToken: `p${index + 2}`,
+      apiVersion: "v21",
+    }));
+
+    await expect(
+      processGoogleAdsFactsBatch({
+        syncRunId: run.id,
+        provider: fakeProvider([]),
+        clientFactory: queuedClientFactory(pages),
+      }),
+    ).rejects.toThrow(/page cap/);
+
+    const { run: reloadedRun } = await store.resolveGoogleAdsSyncRun(run.id);
+    expect(reloadedRun.status).toBe("running");
+    expect(reloadedRun.checkpointDay).toBeNull();
+
+    const facts = await testPool!.query(
+      `SELECT count(*)::int AS count FROM google_ads_campaign_fact WHERE connection_id = $1`,
+      [connection.id],
+    );
+    expect(facts.rows[0].count).toBe(0);
   });
 });

@@ -89,6 +89,7 @@ export async function prepareGoogleAdsFactsRun(params: {
     if (code === "23505") {
       throw new Error(
         "A Google Ads facts sync is already running for this connection",
+        { cause: error },
       );
     }
     throw error;
