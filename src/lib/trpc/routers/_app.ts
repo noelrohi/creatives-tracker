@@ -22,6 +22,7 @@ import { klaviyoRouter } from "./klaviyo";
 import { landingPageRouter } from "./landing-page";
 import { creativeInsightsRouter } from "./creative-insights";
 import { orgSettingsRouter } from "./org-settings";
+import { signalsRouter } from "./signals";
 
 export const appRouter = router({
   adCreative: adCreativeRouter,
@@ -47,6 +48,7 @@ export const appRouter = router({
   landingPage: landingPageRouter,
   creativeInsights: creativeInsightsRouter,
   orgSettings: orgSettingsRouter,
+  signals: signalsRouter,
 });
 
 export type AppRouter = typeof appRouter;
