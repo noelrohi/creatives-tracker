@@ -305,6 +305,10 @@ export const signalsRouter = router({
             item.videoPreviewImageUrl !== null,
         );
 
+      // A media-less fill that carries clusters still needs the scoring stage
+      // (§6/§8) — only a fill with neither is already done at ingest.
+      const needsPipeline = media.length > 0 || Boolean(input.clusters?.length);
+
       const fill = await db.transaction(async (tx) => {
         const [competitor] = await tx
           .select({ id: competitors.id })
@@ -332,9 +336,9 @@ export const signalsRouter = router({
             competitorId: competitor.id,
             source: input.source,
             adCount: input.ads.length,
-            // Nothing to mirror means the pipeline is already done — the
-            // status must not sit at "received" forever.
-            pipelineStatus: media.length > 0 ? "received" : "complete",
+            // Nothing to mirror and nothing to score means the pipeline is
+            // already done — the status must not sit at "received" forever.
+            pipelineStatus: needsPipeline ? "received" : "complete",
             filledAt: now,
           })
           .returning({ id: intelSnapshots.id });
@@ -498,7 +502,7 @@ export const signalsRouter = router({
 
       // Fired only after the transaction commits — the job reads the ad rows
       // it is about to mirror, so it must not race uncommitted writes.
-      if (media.length > 0) {
+      if (needsPipeline) {
         try {
           await tasks.trigger<typeof mirrorCompetitorMediaTask>(
             "mirror-competitor-media",
