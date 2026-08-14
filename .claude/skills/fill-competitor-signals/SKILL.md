@@ -7,7 +7,7 @@ description: Fill the app with every tracked competitor's live Meta Ad Library a
 
 You are the harness. Collection and every LLM step run **here, on this machine** — the app never fetches the Ad Library and never calls an LLM for this feature (`docs/spec/competitor-signals-v1.md` §2). The server is the gatekeeper, the store, and the scorer; a fill is an authenticated push.
 
-Steps 1–7 below are the whole fill. Steps 8–9 (test-plan generation) are Phase 3 and are **not shipped** — see the end of this file.
+Steps 1–7 are the fill; steps 8–9 turn the ranked evidence into the standing test plan. A fill that stops after step 7 is complete and useful — the plan is a separate push and can be regenerated later without re-collecting.
 
 ## Competitors
 
@@ -212,7 +212,7 @@ Rules the server enforces:
 
 ## Step 7 — Poll
 
-**`signals.rankedSignals` ships with Phase 2 and may not exist yet.** Try it; if it 404s, skip the poll and tell the user to check the `/competitors` cards screen, whose last-fill line shows `pipelineStatus` per competitor.
+The same GET drives the poll and feeds step 8, so keep the last response around.
 
 ```bash
 curl -sS "$ADSOLUTE_URL/api/openapi/signals/rankedSignals" \
@@ -225,15 +225,88 @@ A fill with no media at all lands at `complete` immediately (nothing to mirror).
 
 ---
 
+## Step 8 — Generate the test plan
+
+**You do this**, once, after every posted fill reads `complete`. One pass over the **whole ranking** — not just the competitors you filled this run. `rankedSignals` already returns `signals` sorted by score descending; take the **top 6**, tier-agnostic, across all competitors. Tier is deliberately ignored: a young roster may hold no HIGH clusters at all, and the generator still needs inputs.
+
+Each of those clusters hands you: `label`, `angle`, `summary`, `adCount`, `score` and its five component points, `tier`, `verdictRationale` (the strategic read), `formatsObserved`, `landingFocusUrl`, `landingFocusShare`, `representativeCopy`, and the owning competitor. Put all of it in the prompt — the component breakdown is what lets a concept cite *why* a cluster is strong.
+
+Prompt contract:
+
+> You are drafting a creative test plan from competitor evidence.
+> Client positioning: <one paragraph — the client's product, market, and angle>.
+> Below are the top-ranked competitor copy clusters, each with its evidence: score components, strategic read, formats observed, landing-page focus, and representative copy.
+> Return **3 concepts**. Each concept: a `title`; an `angle` (exactly one of the seven values); the `audience` it targets; `evidenceClusterIds` naming the clusters it draws on; an `evidenceCitation` of 1–2 sentences pointing at what was actually observed — how long the ads have run, how many creatives, which formats — and never at performance you cannot see; a `measurementPlan` naming the decision metric and the horizon; a `claimGuardrail` **only** where a product claim carries real risk, otherwise `null`; and exactly **3 hooks**.
+> Then expand each concept's hooks into ad rows: every hook × `static` and `video` = 6 rows per concept, 18 in all.
+
+Output schema:
+
+```
+concepts[]: { title, angle, audience, evidenceClusterIds[], evidenceCitation,
+              measurementPlan, claimGuardrail | null, hooks[3],
+              ads[]: { hook, format: "static" | "video" } }
+```
+
+Three rules that are easy to get wrong:
+
+- **`angle` is hard-validated here**, unlike step 4. A plan concept's angle column is non-null, so an off-vocabulary value is a **400 on the whole push** — not a silent `null`. Use the seven `ANGLE_TYPES` values verbatim.
+- **Every `ads[].hook` must be one of that concept's `hooks`**, character for character. A hook that drifted while expanding is a 400.
+- **Never write budget guidance into any field.** The rule that scale and kill decisions follow measured CTR/CAC/ROAS in Adsolute — never evidence scores — is rendered by the app on every concept header, as a fixture the LLM cannot paraphrase away (§9). Repeating it in a citation or guardrail only dilutes it.
+
+`claimGuardrail` is for product-claim risk (what a mouthguard ad must not promise), nothing else. Most concepts should be `null`.
+
+## Step 9 — POST the test plan
+
+`POST $ADSOLUTE_URL/api/openapi/signals/ingestTestPlan` — **one POST for the whole plan**, Bearer key, `write` scope.
+
+```bash
+curl -sS -X POST "$ADSOLUTE_URL/api/openapi/signals/ingestTestPlan" \
+  -H "Authorization: Bearer $ADSOLUTE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d @test-plan.json
+```
+
+Payload (`test-plan.json`):
+
+```json
+{
+  "generatedSnapshotId": "<snapshotId of the newest fill in this run, or null>",
+  "concepts": [
+    {
+      "title": "Breathing proof, athlete-first",
+      "angle": "problem_solution",
+      "audience": "Strength athletes who plateau on conditioning",
+      "evidenceClusterIds": ["<clusterId>", "<clusterId>"],
+      "evidenceCitation": "AIRWAAV has run this breathing-performance claim for 105 days across 16 creatives in both image and video, all pointing at one product page.",
+      "measurementPlan": "Decide on CTR and CAC after 7 days or 1,000 clicks per ad, whichever lands first.",
+      "claimGuardrail": "No performance-gain percentages — the product is not cleared to promise measured output.",
+      "hooks": [
+        "Stop gasping mid-set.",
+        "Your conditioning isn't the problem.",
+        "The breath you're not taking."
+      ],
+      "ads": [
+        { "hook": "Stop gasping mid-set.", "format": "static" },
+        { "hook": "Stop gasping mid-set.", "format": "video" }
+      ]
+    }
+  ]
+}
+```
+
+Response: `{ "conceptCount": 3, "adCount": 18, "replacedAdCount": <n>, "keptConceptCount": <n> }`.
+
+Rules the server enforces:
+
+- **Regeneration replaces `proposed` only.** Ads the client has moved to `approved`, `testing`, `done`, or `rejected` survive, and so does the concept header above them. `replacedAdCount` is what got wiped; `keptConceptCount` is what was left alone. Human decisions are never trampled — which is also why a regenerated concept can sit alongside a surviving one with a similar title. That is expected in v1; concepts have no stable identity across generations.
+- **Unknown `angle` → 400**, **an `ads[].hook` outside its concept's `hooks` → 400**, **a `generatedSnapshotId` from another org → 404**.
+- `evidenceClusterIds` are stored as given and never validated — clusters are wiped and rebuilt on every fill, so those ids go stale by design. The `evidenceCitation` is what has to survive; write it to stand on its own.
+- Six concepts max, 24 ad rows per concept. The 3 × 3 × 2 shape is the client's default, not a server constraint.
+
+---
+
 ## Report
 
-At the end, tell the user per competitor: ads collected, distinct copies after dedup, clusters formed, verdict spread, `snapshotId`, and final `pipelineStatus`. Name anything skipped (canary stop, fallback source, poll unavailable).
+At the end, tell the user per competitor: ads collected, distinct copies after dedup, clusters formed, verdict spread, `snapshotId`, and final `pipelineStatus`. If you generated a plan, add the concept titles, the ad count, and how many existing rows were replaced versus kept. Name anything skipped (canary stop, fallback source, poll unavailable, plan not regenerated).
 
-## Not yet: steps 8–9 (Phase 3)
-
-Test-plan generation is **not shipped**. Once `signals.ingestTestPlan` exists, this skill gains:
-
-8. **Generate the plan** — one LLM call over the top ~6 ranked clusters by score (tier-agnostic, across all competitors) → 3 concepts × 3 hooks, expanded ×2 formats = 18 ad rows.
-9. **POST `signals.ingestTestPlan`** — replaces `proposed` ads only; `approved/testing/done/rejected` rows are never trampled.
-
-Do not hand-write test plans through this skill in the meantime. Also note what is deliberately absent from the app: there is **no in-app collect and no in-app re-cluster button** — both require this device-side run. Re-score is the only in-app action.
+Note what is deliberately absent from the app: there is **no in-app collect, no re-cluster, and no generate button** — all three require this device-side run. Re-score is the only in-app action, and moving a test-plan ad's status is the only in-app edit.

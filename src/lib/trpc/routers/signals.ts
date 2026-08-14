@@ -24,6 +24,7 @@ import {
 } from "@/schema/competitor-signals";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { orgProcedure, orgWriteProcedure, router } from "../init";
+import { signalsPlanProcedures } from "./signals.plan";
 import type {
   CompetitorMediaSource,
   mirrorCompetitorMediaTask,
@@ -154,7 +155,11 @@ function groupAdsByCluster<T extends { copyClusterId: string | null }>(
   return byCluster;
 }
 
+// The `signals.*` namespace stays flat (§5) as the router splits by domain —
+// the plan procedures spread in rather than nesting under a sub-router.
 export const signalsRouter = router({
+  ...signalsPlanProcedures,
+
   addCompetitor: orgWriteProcedure
     .input(z.object({ name: z.string().min(1), metaPageId: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {

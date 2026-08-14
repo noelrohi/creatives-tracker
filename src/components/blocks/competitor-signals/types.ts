@@ -9,3 +9,10 @@ export type ClusterTier = NonNullable<TopCluster["tier"]>;
 
 export type RankedSignal =
   RouterOutputs["signals"]["rankedSignals"]["signals"][number];
+
+export type TestPlanConcept =
+  RouterOutputs["signals"]["testPlan"]["concepts"][number];
+
+export type TestPlanAd = TestPlanConcept["ads"][number];
+
+export type TestPlanAdStatus = TestPlanAd["status"];
