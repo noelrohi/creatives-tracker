@@ -406,6 +406,16 @@ export const mirrorCompetitorMediaTask = task({
           .where(eq(intelSnapshots.id, payload.snapshotId));
       }
 
+      // A single broken URL is survivable, but mirroring nothing at all is a
+      // systemic failure — an expired token, a dead credential, every source
+      // URL past its expiry. Scoring on top of it silently understates format
+      // breadth and can misrank a whole board, so stop here instead.
+      if (payload.media.length > 0 && totals.mirroredAds === 0) {
+        throw new Error(
+          `Mirrored 0 of ${payload.media.length} ads with media. Check the blob credentials and whether the source URLs have expired.`,
+        );
+      }
+
       // received → mirroring → scoring → complete (§6).
       const { scoredClusters } = await scoreCompetitorSnapshot({
         organizationId: payload.organizationId,
