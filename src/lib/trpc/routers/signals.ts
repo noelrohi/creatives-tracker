@@ -3,16 +3,26 @@ import { tasks } from "@trigger.dev/sdk";
 import { and, asc, count, desc, eq, inArray, isNull, min, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
+import type { ScorableAdRow } from "@/lib/competitor-signals/score";
+import {
+  landingFocusShare,
+  resolveFormat,
+  scoreCompetitorClusters,
+  stripQuery,
+  toScoredAdInput,
+} from "@/lib/competitor-signals/score";
 import { normalizeAngle } from "@/lib/creative-tag-enrichment";
 import {
+  clusterTierEnum,
   clusterVerdictEnum,
   competitorAds,
   competitors,
   copyClusters,
+  intelPipelineStatusEnum,
   intelSnapshots,
   intelSourceEnum,
 } from "@/schema/competitor-signals";
-import { openApiMutationMeta } from "../openapi-meta";
+import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { orgProcedure, orgWriteProcedure, router } from "../init";
 import type {
   CompetitorMediaSource,
@@ -74,6 +84,74 @@ function normalizeVerdict(
   return (
     clusterVerdictEnum.enumValues.find((entry) => entry === normalized) ?? null
   );
+}
+
+/** Canonical order for the three resolved formats (§8) so output is stable. */
+const FORMAT_ORDER = ["image", "video", "carousel"] as const;
+
+/**
+ * The member-ad columns the evidence extras (§9) need: the scoring inputs plus
+ * the body text that becomes the cluster's representative copy.
+ */
+type EvidenceAdRow = ScorableAdRow & { bodyText: string };
+
+/**
+ * Evidence extras the plan generator gets per cluster (§9). Derived from the
+ * same rows and the same helpers the score uses — never re-derived by hand.
+ */
+function clusterEvidence(ads: EvidenceAdRow[]) {
+  const inputs = ads.map(toScoredAdInput);
+
+  const formats = new Set(
+    inputs.map(resolveFormat).filter((format) => format !== null),
+  );
+
+  // The modal landing page is the destination the cluster actually points at;
+  // stripQuery drops the tracking noise so variants of one URL collapse.
+  const counts = new Map<string, number>();
+  for (const input of inputs) {
+    const url = stripQuery(input.linkUrl);
+    if (!url) continue;
+    counts.set(url, (counts.get(url) ?? 0) + 1);
+  }
+  let landingFocusUrl: string | null = null;
+  let modalCount = 0;
+  for (const [url, value] of counts) {
+    if (value > modalCount) {
+      modalCount = value;
+      landingFocusUrl = url;
+    }
+  }
+
+  // Longest-running = earliest start date, the same evidence longevity scores.
+  const representative = ads.reduce<EvidenceAdRow | null>(
+    (oldest, ad) =>
+      !oldest || ad.startDate.getTime() < oldest.startDate.getTime()
+        ? ad
+        : oldest,
+    null,
+  );
+
+  return {
+    formatsObserved: FORMAT_ORDER.filter((format) => formats.has(format)),
+    landingFocusUrl,
+    landingFocusShare: landingFocusShare(inputs),
+    representativeCopy: representative?.bodyText ?? null,
+  };
+}
+
+/** Member ads keyed by cluster; ads with no cluster are dropped. */
+function groupAdsByCluster<T extends { copyClusterId: string | null }>(
+  ads: T[],
+): Map<string, T[]> {
+  const byCluster = new Map<string, T[]>();
+  for (const ad of ads) {
+    if (!ad.copyClusterId) continue;
+    const bucket = byCluster.get(ad.copyClusterId) ?? [];
+    bucket.push(ad);
+    byCluster.set(ad.copyClusterId, bucket);
+  }
+  return byCluster;
 }
 
 export const signalsRouter = router({
@@ -534,4 +612,270 @@ export const signalsRouter = router({
 
       return { snapshotId: fill.snapshotId, adCount: fill.adCount };
     }),
+
+  /**
+   * The harness read-back (§9/§11 step 7): the cross-fill, cross-competitor
+   * ranking plus each competitor's latest fill status, so one GET both drives
+   * the poll loop and feeds plan generation.
+   */
+  rankedSignals: orgProcedure
+    .meta(
+      openApiQueryMeta(
+        "signals",
+        "rankedSignals",
+        "Read the ranked competitor signals",
+        "Cross-competitor cluster ranking with evidence extras and per-competitor fill status.",
+      ),
+    )
+    .output(
+      z.object({
+        signals: z.array(
+          z.object({
+            id: z.string(),
+            label: z.string(),
+            angle: z.string().nullable(),
+            summary: z.string(),
+            adCount: z.number().int(),
+            score: z.number().nullable(),
+            tier: z.enum(clusterTierEnum.enumValues).nullable(),
+            longevityPoints: z.number().nullable(),
+            variantPoints: z.number().nullable(),
+            strategicPoints: z.number().nullable(),
+            formatPoints: z.number().nullable(),
+            landingPoints: z.number().nullable(),
+            verdict: z.enum(clusterVerdictEnum.enumValues).nullable(),
+            verdictRationale: z.string().nullable(),
+            competitor: z.object({
+              id: z.string(),
+              name: z.string(),
+              metaPageId: z.string(),
+            }),
+            formatsObserved: z.array(z.enum(FORMAT_ORDER)),
+            landingFocusUrl: z.string().nullable(),
+            landingFocusShare: z.number(),
+            representativeCopy: z.string().nullable(),
+          }),
+        ),
+        fills: z.array(
+          z.object({
+            competitorId: z.string(),
+            snapshotId: z.string(),
+            pipelineStatus: z.enum(intelPipelineStatusEnum.enumValues),
+            error: z.string().nullable(),
+            filledAt: z.date(),
+          }),
+        ),
+      }),
+    )
+    .query(async ({ ctx }) => {
+      const tracked = await db
+        .select({
+          id: competitors.id,
+          name: competitors.name,
+          metaPageId: competitors.metaPageId,
+        })
+        .from(competitors)
+        .where(
+          and(
+            eq(competitors.organizationId, ctx.organizationId),
+            eq(competitors.status, "active"),
+          ),
+        )
+        .orderBy(asc(competitors.name));
+
+      if (tracked.length === 0) return { signals: [], fills: [] };
+
+      const competitorIds = tracked.map((competitor) => competitor.id);
+
+      const [clusters, fills] = await Promise.all([
+        db
+          .select()
+          .from(copyClusters)
+          .where(
+            and(
+              eq(copyClusters.organizationId, ctx.organizationId),
+              inArray(copyClusters.competitorId, competitorIds),
+            ),
+          ),
+        db
+          .selectDistinctOn([intelSnapshots.competitorId], {
+            competitorId: intelSnapshots.competitorId,
+            snapshotId: intelSnapshots.id,
+            pipelineStatus: intelSnapshots.pipelineStatus,
+            error: intelSnapshots.error,
+            filledAt: intelSnapshots.filledAt,
+          })
+          .from(intelSnapshots)
+          .where(
+            and(
+              eq(intelSnapshots.organizationId, ctx.organizationId),
+              inArray(intelSnapshots.competitorId, competitorIds),
+            ),
+          )
+          .orderBy(
+            asc(intelSnapshots.competitorId),
+            desc(intelSnapshots.filledAt),
+          ),
+      ]);
+
+      const clusterIds = clusters.map((cluster) => cluster.id);
+      const ads: EvidenceAdRow[] = clusterIds.length
+        ? await db
+            .select({
+              copyClusterId: competitorAds.copyClusterId,
+              bodyText: competitorAds.bodyText,
+              startDate: competitorAds.startDate,
+              displayFormat: competitorAds.displayFormat,
+              linkUrl: competitorAds.linkUrl,
+              variants: competitorAds.variants,
+              mirroredImageUrl: competitorAds.mirroredImageUrl,
+              mirroredVideoUrl: competitorAds.mirroredVideoUrl,
+            })
+            .from(competitorAds)
+            .where(
+              and(
+                eq(competitorAds.organizationId, ctx.organizationId),
+                inArray(competitorAds.copyClusterId, clusterIds),
+              ),
+            )
+        : [];
+
+      const adsByCluster = groupAdsByCluster(ads);
+      const competitorById = new Map(
+        tracked.map((competitor) => [competitor.id, competitor]),
+      );
+
+      const signals = clusters
+        // An unscored cluster sorts last but is never dropped — the harness
+        // still needs to see it (and the poll loop to notice it exists).
+        .sort((a, b) => (b.score ?? -1) - (a.score ?? -1))
+        .flatMap((cluster) => {
+          const competitor = competitorById.get(cluster.competitorId);
+          if (!competitor) return [];
+
+          return [
+            {
+              id: cluster.id,
+              label: cluster.label,
+              angle: cluster.angle,
+              summary: cluster.summary,
+              adCount: cluster.adCount,
+              score: cluster.score,
+              tier: cluster.tier,
+              longevityPoints: cluster.longevityPoints,
+              variantPoints: cluster.variantPoints,
+              strategicPoints: cluster.strategicPoints,
+              formatPoints: cluster.formatPoints,
+              landingPoints: cluster.landingPoints,
+              verdict: cluster.verdict,
+              verdictRationale: cluster.verdictRationale,
+              competitor: {
+                id: competitor.id,
+                name: competitor.name,
+                metaPageId: competitor.metaPageId,
+              },
+              ...clusterEvidence(adsByCluster.get(cluster.id) ?? []),
+            },
+          ];
+        });
+
+      return { signals, fills };
+    }),
+
+  /**
+   * In-app rescore (§2): the score is a pure function over stored inputs, so
+   * this runs synchronously — no Trigger.dev, no re-cluster, no re-fill.
+   */
+  rescore: orgWriteProcedure.mutation(async ({ ctx }) => {
+    const tracked = await db
+      .select({ id: competitors.id })
+      .from(competitors)
+      .where(
+        and(
+          eq(competitors.organizationId, ctx.organizationId),
+          eq(competitors.status, "active"),
+        ),
+      );
+
+    if (tracked.length === 0) return { clustersRescored: 0 };
+
+    const competitorIds = tracked.map((competitor) => competitor.id);
+
+    const clusters = await db
+      .select({
+        id: copyClusters.id,
+        competitorId: copyClusters.competitorId,
+        verdict: copyClusters.verdict,
+      })
+      .from(copyClusters)
+      .where(
+        and(
+          eq(copyClusters.organizationId, ctx.organizationId),
+          inArray(copyClusters.competitorId, competitorIds),
+        ),
+      );
+
+    if (clusters.length === 0) return { clustersRescored: 0 };
+
+    const ads = await db
+      .select({
+        copyClusterId: competitorAds.copyClusterId,
+        startDate: competitorAds.startDate,
+        displayFormat: competitorAds.displayFormat,
+        linkUrl: competitorAds.linkUrl,
+        variants: competitorAds.variants,
+        mirroredImageUrl: competitorAds.mirroredImageUrl,
+        mirroredVideoUrl: competitorAds.mirroredVideoUrl,
+      })
+      .from(competitorAds)
+      .where(
+        and(
+          eq(competitorAds.organizationId, ctx.organizationId),
+          inArray(
+            competitorAds.copyClusterId,
+            clusters.map((cluster) => cluster.id),
+          ),
+        ),
+      );
+
+    const adsByCluster = groupAdsByCluster(ads);
+    const now = new Date();
+
+    // Scored per competitor (§8 is per-cluster, but the grouping keeps one
+    // competitor's ads from ever leaking into another's cluster).
+    const updates = competitorIds.flatMap((competitorId) => {
+      const own = clusters.filter(
+        (cluster) => cluster.competitorId === competitorId,
+      );
+      if (own.length === 0) return [];
+
+      return scoreCompetitorClusters({
+        clusters: own,
+        ads: own.flatMap((cluster) => adsByCluster.get(cluster.id) ?? []),
+        now,
+      });
+    });
+
+    for (const update of updates) {
+      await db
+        .update(copyClusters)
+        .set({
+          score: update.score,
+          tier: update.tier,
+          longevityPoints: update.longevityPoints,
+          variantPoints: update.variantPoints,
+          strategicPoints: update.strategicPoints,
+          formatPoints: update.formatPoints,
+          landingPoints: update.landingPoints,
+        })
+        .where(
+          and(
+            eq(copyClusters.id, update.clusterId),
+            eq(copyClusters.organizationId, ctx.organizationId),
+          ),
+        );
+    }
+
+    return { clustersRescored: updates.length };
+  }),
 });

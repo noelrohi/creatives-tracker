@@ -560,4 +560,241 @@ describe("signals router (competitor-signals v1 §4/§5, Phase 1)", () => {
       expect(insertsInto(copyClusters)).toHaveLength(0);
     });
   });
+
+  // §9/§11 step 7: the harness reads back the cross-competitor ranking plus
+  // the per-competitor fill status it polls on.
+  describe("rankedSignals", () => {
+    function clusterRow(overrides: Row = {}) {
+      return {
+        id: "cluster-1",
+        competitorId: "competitor-1",
+        label: "Sleep quality proof",
+        angle: "social_proof",
+        summary: "Reviews-led claims.",
+        adCount: 2,
+        score: 70,
+        tier: "high",
+        longevityPoints: 25,
+        variantPoints: 20,
+        strategicPoints: 15,
+        formatPoints: 5,
+        landingPoints: 5,
+        verdict: "high",
+        verdictRationale: "Longest-running cluster.",
+        ...overrides,
+      };
+    }
+
+    function adRow(overrides: Row = {}) {
+      return {
+        copyClusterId: "cluster-1",
+        bodyText: "Sleep better tonight",
+        startDate: new Date("2026-06-01"),
+        displayFormat: "IMAGE",
+        linkUrl: "https://acme.test/sleep?utm_source=fb",
+        variants: [],
+        mirroredImageUrl: null,
+        mirroredVideoUrl: null,
+        ...overrides,
+      };
+    }
+
+    /** Queue the four reads rankedSignals makes, in call order. */
+    function queueRanked(input: {
+      competitors?: Row[];
+      clusters?: Row[];
+      fills?: Row[];
+      ads?: Row[];
+    }) {
+      dbState.selectRows.push(
+        input.competitors ?? [
+          { id: "competitor-1", name: "Acme", metaPageId: "page-1" },
+        ],
+        input.clusters ?? [],
+        input.fills ?? [],
+        input.ads ?? [],
+      );
+    }
+
+    it("returns nothing when the org tracks no active competitor", async () => {
+      dbState.selectRows.push([]);
+
+      await expect(memberCaller.signals.rankedSignals()).resolves.toEqual({
+        signals: [],
+        fills: [],
+      });
+    });
+
+    it("sorts by score desc and keeps unscored clusters at the bottom", async () => {
+      queueRanked({
+        clusters: [
+          clusterRow({ id: "cluster-mid", score: 44, tier: "moderate" }),
+          clusterRow({ id: "cluster-unscored", score: null, tier: null }),
+          clusterRow({ id: "cluster-top", score: 70 }),
+        ],
+        ads: [],
+      });
+
+      const result = await memberCaller.signals.rankedSignals();
+
+      expect(result.signals.map((signal) => signal.id)).toEqual([
+        "cluster-top",
+        "cluster-mid",
+        "cluster-unscored",
+      ]);
+      expect(result.signals[2].score).toBeNull();
+    });
+
+    it("derives the §9 evidence extras from the member ads", async () => {
+      queueRanked({
+        clusters: [clusterRow({ adCount: 4 })],
+        ads: [
+          adRow(),
+          adRow({
+            startDate: new Date("2026-05-01"),
+            bodyText: "The oldest ad still running",
+            linkUrl: "https://acme.test/sleep#reviews",
+          }),
+          adRow({
+            displayFormat: "DCO",
+            mirroredVideoUrl: "https://cdn.test/a.mp4",
+            linkUrl: "https://acme.test/other",
+          }),
+          adRow({ displayFormat: "CAROUSEL", linkUrl: null }),
+        ],
+      });
+
+      const [signal] = (await memberCaller.signals.rankedSignals()).signals;
+
+      // DCO resolves to its underlying media, so all three formats show up.
+      expect(signal.formatsObserved).toEqual(["image", "video", "carousel"]);
+      // Query strings and fragments collapse into one modal destination.
+      expect(signal.landingFocusUrl).toBe("https://acme.test/sleep");
+      expect(signal.landingFocusShare).toBeCloseTo(0.5);
+      // Longest-running member = earliest start date.
+      expect(signal.representativeCopy).toBe("The oldest ad still running");
+      expect(signal.competitor).toEqual({
+        id: "competitor-1",
+        name: "Acme",
+        metaPageId: "page-1",
+      });
+    });
+
+    it("empties the evidence extras for a cluster with no member ads", async () => {
+      queueRanked({ clusters: [clusterRow()], ads: [] });
+
+      const [signal] = (await memberCaller.signals.rankedSignals()).signals;
+
+      expect(signal.formatsObserved).toEqual([]);
+      expect(signal.landingFocusUrl).toBeNull();
+      expect(signal.landingFocusShare).toBe(0);
+      expect(signal.representativeCopy).toBeNull();
+    });
+
+    it("returns the latest fill per competitor for the poll loop", async () => {
+      const filledAt = new Date("2026-08-14T09:00:00Z");
+      queueRanked({
+        fills: [
+          {
+            competitorId: "competitor-1",
+            snapshotId: "snapshot-9",
+            pipelineStatus: "complete",
+            error: null,
+            filledAt,
+          },
+        ],
+      });
+
+      const result = await memberCaller.signals.rankedSignals();
+
+      expect(result.fills).toEqual([
+        {
+          competitorId: "competitor-1",
+          snapshotId: "snapshot-9",
+          pipelineStatus: "complete",
+          error: null,
+          filledAt,
+        },
+      ]);
+    });
+
+    it("drops clusters whose competitor is not an active tracked competitor", async () => {
+      queueRanked({
+        clusters: [clusterRow(), clusterRow({ id: "c2", competitorId: "gone" })],
+      });
+
+      const result = await memberCaller.signals.rankedSignals();
+
+      expect(result.signals.map((signal) => signal.id)).toEqual(["cluster-1"]);
+    });
+  });
+
+  // §2: the score is a pure function over stored inputs, so rescore runs
+  // in-app and synchronously — no Trigger.dev.
+  describe("rescore", () => {
+    it("rejects a member", async () => {
+      await expect(memberCaller.signals.rescore()).rejects.toMatchObject({
+        code: "FORBIDDEN",
+      });
+    });
+
+    it("writes all seven score columns and returns the count", async () => {
+      dbState.selectRows.push(
+        [{ id: "competitor-1" }],
+        [
+          { id: "cluster-1", competitorId: "competitor-1", verdict: "high" },
+          { id: "cluster-2", competitorId: "competitor-1", verdict: null },
+        ],
+        [
+          {
+            copyClusterId: "cluster-1",
+            startDate: new Date("2026-06-01"),
+            displayFormat: "IMAGE",
+            linkUrl: "https://acme.test/sleep",
+            variants: [{}, {}],
+            mirroredImageUrl: "https://cdn.test/a.jpg",
+            mirroredVideoUrl: null,
+          },
+        ],
+      );
+
+      const result = await adminCaller.signals.rescore();
+
+      expect(result).toEqual({ clustersRescored: 2 });
+      expect(dbState.updates).toHaveLength(2);
+      expect(Object.keys(dbState.updates[0].set).sort()).toEqual([
+        "formatPoints",
+        "landingPoints",
+        "longevityPoints",
+        "score",
+        "strategicPoints",
+        "tier",
+        "variantPoints",
+      ]);
+      // Scored cluster: evidence + a high verdict; the memberless one is 0.
+      expect(dbState.updates[0].set.strategicPoints).toBe(15);
+      expect(dbState.updates[0].set.score).toBeGreaterThan(0);
+      expect(dbState.updates[1].set.score).toBe(0);
+      expect(dbState.updates[1].set.tier).toBe("watch");
+      expect(triggerMock).not.toHaveBeenCalled();
+    });
+
+    it("does nothing when the org has no active competitor", async () => {
+      dbState.selectRows.push([]);
+
+      await expect(adminCaller.signals.rescore()).resolves.toEqual({
+        clustersRescored: 0,
+      });
+      expect(dbState.updates).toHaveLength(0);
+    });
+
+    it("does nothing when no competitor has clusters", async () => {
+      dbState.selectRows.push([{ id: "competitor-1" }], []);
+
+      await expect(adminCaller.signals.rescore()).resolves.toEqual({
+        clustersRescored: 0,
+      });
+      expect(dbState.updates).toHaveLength(0);
+    });
+  });
 });
