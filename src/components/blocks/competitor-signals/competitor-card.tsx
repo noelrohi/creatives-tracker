@@ -18,6 +18,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { angleLabels } from "@/components/blocks/insights/insights-copy";
 import { NO_FILLS_NOTE, sourceLabel } from "./copy";
 import { ScoreBadge, TierBadge } from "./tier-badge";
 import type { Competitor } from "./types";
@@ -148,7 +149,7 @@ export function CompetitorCard({
                   </p>
                   {cluster.angle && (
                     <p className="truncate text-[11px] text-muted-foreground/70">
-                      {cluster.angle}
+                      {angleLabels[cluster.angle] ?? cluster.angle}
                     </p>
                   )}
                 </div>
