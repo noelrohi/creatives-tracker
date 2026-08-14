@@ -50,6 +50,7 @@ export const Eye = createSolarIcon("eye");
 export const FileSpreadsheet = createSolarIcon("file-text");
 export const FileText = createSolarIcon("document-text");
 export const FileVideo = createSolarIcon("video-frame");
+export const Flag = createSolarIcon("flag");
 export const ImageIcon = createSolarIcon("gallery");
 export const ImageOff = createSolarIcon("gallery-remove");
 export const ImagePlus = createSolarIcon("gallery-add");
