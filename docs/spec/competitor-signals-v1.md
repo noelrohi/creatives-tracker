@@ -55,7 +55,7 @@ Operator device (residential IP, Claude Code harness on subscription tokens)
 
 ---
 
-## 3. Data model — seven tables
+## 3. Data model — six tables
 
 Locked in [#151](https://github.com/noelrohi/creatives-tracker/issues/151) (five tables), amended by #152 (pipeline stages, scoring columns), extended by #154 (two test-plan tables). Conventions: text UUID PKs (`crypto.randomUUID()`), nullable un-FK'd `organizationId` pattern, `createdAt`/`updatedAt`, org-scoped uniques. Schema files under `src/schema/`, kept **fully separate from `ad`/`ad_creative`** — zero-spend competitor rows never touch spend queries.
 
@@ -80,7 +80,7 @@ Attaches **per competitor**; each pipeline run deletes and rebuilds that competi
 Per repo zod convention: every payload field required or `.nullable()` — never `.optional()`.
 
 ### Migration plan
-One migration: `bun run db:generate` after adding the seven schema files, `bun run db:migrate` to apply, `node scripts/check-migrations.mjs` before the PR. No changes to existing tables. Phases 2 and 3 (§12) add no further migrations — all columns land in this one migration even though the writing code ships later; empty scoring/plan columns are inert.
+One migration: `bun run db:generate` after adding the six tables' schema, `bun run db:migrate` to apply, `node scripts/check-migrations.mjs` before the PR. No changes to existing tables. Phases 2 and 3 (§12) add no further migrations — all columns land in this one migration even though the writing code ships later; empty scoring/plan columns are inert.
 
 ---
 
@@ -208,7 +208,7 @@ Exact prompt wording for steps 4, 5, 8 is authored at build time inside the skil
 
 ## 12. Phase plan — each phase independently shippable
 
-- **Phase 1 — Collect & browse.** The migration (§3, all seven tables), the `signals` router with `ingestFill` (accepting `clusters: null`), media mirroring pipeline (`received → mirroring → complete`), the feature flag + `/competitors` cards screen, runbook steps 1–3 + 6. Ships: tracked competitors with mirrored ad snapshots and last-fill visibility. Value: the raw Ad Library view the client has never had.
+- **Phase 1 — Collect & browse.** The migration (§3, all six tables), the `signals` router with `ingestFill` (accepting `clusters: null`), media mirroring pipeline (`received → mirroring → complete`), the feature flag + `/competitors` cards screen, runbook steps 1–3 + 6. Ships: tracked competitors with mirrored ad snapshots and last-fill visibility. Value: the raw Ad Library view the client has never had.
 - **Phase 2 — Cluster & score.** Clusters + verdicts in the fill payload (gatekeeper live), the scoring stage + `score.ts` with unit tests, `signals.rankedSignals`, the `/competitors/signals` ledger, in-app re-score, banner + tooltips, runbook steps 4–5 + 7. Ships: the ranked evidence view.
 - **Phase 3 — Recommend.** `signals.ingestTestPlan`, the `/competitors/test-plan` checklist with per-ad statuses, regeneration semantics, runbook steps 8–9. Ships: the standing test plan.
 
