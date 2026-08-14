@@ -64,7 +64,13 @@ export function GoogleAdsLab() {
   const [rangeDays, setRangeDays] = useState<RangeDays>(30);
 
   const health = useQuery(trpc.googleAds.health.queryOptions());
-  const probeReport = useQuery(trpc.googleAds.probeReport.queryOptions());
+  const probeReport = useQuery({
+    ...trpc.googleAds.probeReport.queryOptions(),
+    // A running probe finishes in the background; poll until it settles.
+    refetchInterval: (query) =>
+      query.state.data?.status === "running" ? 5_000 : false,
+  });
+  const probeRunning = probeReport.data?.status === "running";
   const connection = health.data?.connection ?? null;
 
   const toDay = isoToday();
@@ -225,6 +231,24 @@ export function GoogleAdsLab() {
         {probeReport.data.summary.byKind.wbraid} · gbraid{" "}
         {probeReport.data.summary.byKind.gbraid}
       </p>
+      {probeReport.data.summary.paramKeyFingerprints.length > 0 ? (
+        <p className="text-xs text-muted-foreground">
+          Query keys seen on stored last-visit URLs (top{" "}
+          {probeReport.data.summary.paramKeyFingerprints.length}):{" "}
+          {probeReport.data.summary.paramKeyFingerprints
+            .map(
+              (fingerprint) =>
+                `${fingerprint.hashed ? "•" : fingerprint.key} ×${fingerprint.count}`,
+            )
+            .join(" · ")}
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          No query parameters at all on stored last-visit URLs — journey
+          landing/referrer URLs are stored without query strings, so click IDs
+          cannot be observed from this data.
+        </p>
+      )}
     </div>
   ) : (
     <p className="text-muted-foreground">No probe report yet.</p>
@@ -317,10 +341,10 @@ export function GoogleAdsLab() {
           <Button
             size="sm"
             variant="outline"
-            disabled={runProbe.isPending}
+            disabled={runProbe.isPending || probeRunning}
             onClick={() => runProbe.mutate()}
           >
-            Run gclid probe
+            {probeRunning ? "Probe running…" : "Run gclid probe"}
           </Button>
           <Button
             size="sm"
