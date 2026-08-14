@@ -17,16 +17,42 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Extract query param KEYS from a raw query string (no leading "?"), values
+ * discarded. Only tokens containing "=" are accepted — a bare token like
+ * "Cj0KCQjw_RAW_VALUE" (no "=") is value-shaped, not a key, and must be
+ * dropped rather than surfaced via URLSearchParams (which would otherwise
+ * treat it as a key with an empty value, leaking raw values into paramKeys).
+ */
+function keysFromQueryString(query: string): string[] {
+  const keys: string[] = [];
+  for (const token of query.split("&")) {
+    if (!token) continue;
+    const eqIndex = token.indexOf("=");
+    if (eqIndex < 0) continue;
+    const rawKey = token.slice(0, eqIndex);
+    let key = rawKey;
+    try {
+      key = decodeURIComponent(rawKey);
+    } catch {
+      // Keep the raw (undecoded) key on malformed percent-encoding.
+    }
+    keys.push(key.toLowerCase());
+  }
+  return keys;
+}
+
 /** Extract query param keys from an absolute or relative URL, values discarded. */
 function queryKeys(url: string): string[] | null {
   try {
-    return [...new URL(url).searchParams.keys()];
+    const search = new URL(url).search;
+    return keysFromQueryString(search.startsWith("?") ? search.slice(1) : search);
   } catch {
     // Relative or otherwise non-absolute: fall back to the raw query string.
     const queryStart = url.indexOf("?");
     if (queryStart < 0) return [];
     try {
-      return [...new URLSearchParams(url.slice(queryStart + 1)).keys()];
+      return keysFromQueryString(url.slice(queryStart + 1));
     } catch {
       return null;
     }

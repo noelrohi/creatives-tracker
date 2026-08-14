@@ -61,4 +61,25 @@ describe("extractClickIdObservation", () => {
     expect(observation.kinds).toEqual([]);
     expect(observation.paramKeys).toEqual([]);
   });
+
+  it("drops a valueless query token instead of leaking it as a key", () => {
+    const observation = extractClickIdObservation(
+      journey("https://shop.example.com/?Cj0KCQjw_RAW_VALUE"),
+    );
+    expect(observation.paramKeys).toEqual([]);
+    expect(JSON.stringify(observation).toLowerCase()).not.toContain("cj0");
+  });
+
+  it("keeps a real key alongside a dropped bare token", () => {
+    const observation = extractClickIdObservation(journey("/x?bare_token&gclid=Cj0y"));
+    expect(observation.paramKeys).toContain("gclid");
+    expect(observation.paramKeys).not.toContain("bare_token");
+  });
+
+  it("URL-decodes a percent-encoded key", () => {
+    const observation = extractClickIdObservation(
+      journey("https://shop.example.com/?utm%5Fsource=x"),
+    );
+    expect(observation.paramKeys).toContain("utm_source");
+  });
 });
