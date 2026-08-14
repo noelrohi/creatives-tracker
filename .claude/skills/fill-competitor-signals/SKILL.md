@@ -80,9 +80,11 @@ Map raw → **NormalizedAd** (§4). One NormalizedAd per **archive ID**. Field n
 `title`, `endDate`, `ctaText`, `ctaType`, `linkDescription`, `collationId`, `collationCount`, `imageUrl`, `videoHdUrl`, `videoSdUrl`, `videoPreviewImageUrl`, `variants`.
 
 **`displayFormat` derivation.** MetaAdsCollector has no explicit format field — derive it:
-- more than one creative in the card → `DCO` (or `CAROUSEL` when the source labels it a carousel);
-- product-catalog ad → `DPA`;
+- every creative has an empty `body` and they share one description → **`DPA`** (a product-catalog feed, see below);
+- otherwise more than one creative in the card → `DCO` (or `CAROUSEL` when the source labels it a carousel);
 - otherwise a single creative with a video URL → `VIDEO`, with only an image → `IMAGE`.
+
+**Catalog ads carry no copy.** A product-catalog ad is a feed of products — six creatives, each a different product and landing page, every `body` empty, one shared brand description across all of them. Take the shared `description` (falling back to `title`) as `bodyText` so the ad survives normalization. Dropping it instead is the dangerous path: the ad is genuinely live, and a fill that omits it stamps `noLongerSeenAt` on the competitor's whole ad history. Shock Doctor's only live US ad is exactly this shape.
 
 **Primary + `variants[]` (never flatten, never explode).** 60/101 trial ads are DCO. Top-level copy/headline/media come from the **primary** creative; every additional creative becomes an entry in `variants[]`:
 `{ bodyText: string|null, title: string|null, linkUrl: string|null, media: object|null }`. `variants: []` or `null` when there are none.
@@ -90,6 +92,8 @@ Map raw → **NormalizedAd** (§4). One NormalizedAd per **archive ID**. Field n
 **Media URLs.** Pass the expiring signed `scontent.*` links through as-is — the server mirrors the primary creative's media immediately at ingest and never persists source URLs. Do not download or rewrite them here. Variant media is not mirrored in v1.
 
 Step 2 is done when every ad collected in step 1 has a NormalizedAd carrying all 22 keys — required fields populated, nullable fields explicit `null`.
+
+**The canary applies here too.** A fill is a full-snapshot replacement, so an ad dropped in normalization reads to the server as an ad that went dark. If step 2 yields fewer ads than step 1 collected, fix the mapping before posting — count them and compare, every run.
 
 ## Step 3 — Dedup
 
