@@ -173,6 +173,17 @@ export const competitorAds = pgTable(
     collationId: text("collation_id"),
     collationCount: integer("collation_count"),
     variants: jsonb("variants").$type<CompetitorAdVariant[]>().notNull(),
+    /**
+     * The media kinds this ad's creatives carry, resolved by the harness from
+     * the source creatives (§4). Format breadth scores from this rather than
+     * from the mirrored columns, so a cluster's score describes the competitor
+     * and not how much of their media we happened to copy. Empty on rows filled
+     * before the field existed — those fall back to the mirror.
+     */
+    mediaKinds: jsonb("media_kinds")
+      .$type<("image" | "video")[]>()
+      .notNull()
+      .default([]),
     raw: jsonb("raw").$type<Record<string, unknown>>().notNull(),
     mirroredImageUrl: text("mirrored_image_url"),
     mirroredVideoUrl: text("mirrored_video_url"),

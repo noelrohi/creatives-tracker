@@ -65,6 +65,10 @@ const normalizedAdSchema = z.object({
   videoSdUrl: z.string().nullable(),
   videoPreviewImageUrl: z.string().nullable(),
   variants: z.array(variantSchema).nullable(),
+  // What the ad's creatives actually carry, resolved device-side from the
+  // source creatives (§4). Nullable so a harness that predates the field still
+  // fills; those ads fall back to mirrored media for format breadth (§8).
+  mediaKinds: z.array(z.enum(["image", "video"])).nullable(),
 });
 
 // `angle` and `verdict` cross the boundary as free text: the harness is an LLM,
@@ -449,6 +453,7 @@ export const signalsRouter = router({
                 collationId: ad.collationId,
                 collationCount: ad.collationCount,
                 variants: ad.variants ?? [],
+                mediaKinds: ad.mediaKinds ?? [],
                 raw: (ad.raw ?? {}) as Record<string, unknown>,
                 firstSeenAt: now,
                 lastSeenAt: now,
@@ -473,6 +478,7 @@ export const signalsRouter = router({
                 collationId: sql`excluded.collation_id`,
                 collationCount: sql`excluded.collation_count`,
                 variants: sql`excluded.variants`,
+                mediaKinds: sql`excluded.media_kinds`,
                 raw: sql`excluded.raw`,
                 lastSeenAt: sql`excluded.last_seen_at`,
                 lastSnapshotId: sql`excluded.last_snapshot_id`,
@@ -733,6 +739,7 @@ export const signalsRouter = router({
               displayFormat: competitorAds.displayFormat,
               linkUrl: competitorAds.linkUrl,
               variants: competitorAds.variants,
+              mediaKinds: competitorAds.mediaKinds,
               mirroredImageUrl: competitorAds.mirroredImageUrl,
               mirroredVideoUrl: competitorAds.mirroredVideoUrl,
             })
@@ -829,6 +836,7 @@ export const signalsRouter = router({
         displayFormat: competitorAds.displayFormat,
         linkUrl: competitorAds.linkUrl,
         variants: competitorAds.variants,
+        mediaKinds: competitorAds.mediaKinds,
         mirroredImageUrl: competitorAds.mirroredImageUrl,
         mirroredVideoUrl: competitorAds.mirroredVideoUrl,
       })

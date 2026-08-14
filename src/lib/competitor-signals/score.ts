@@ -32,6 +32,11 @@ export type ScoredAdInput = {
   /** Length of `variants[]`; the primary creative is counted on top of this. */
   variantCount: number;
   displayFormat: string;
+  /**
+   * Whether the ad *carries* video/image — a fact about the competitor's
+   * creative, never about whether our mirror succeeded in copying it. Only
+   * container formats (DCO/DPA) consult these; see `resolveFormat`.
+   */
   hasVideo: boolean;
   hasImage: boolean;
   linkUrl: string | null;
@@ -187,6 +192,8 @@ export type ScorableAdRow = {
   displayFormat: string;
   linkUrl: string | null;
   variants: unknown[] | null;
+  /** Resolved by the harness from the source creatives; empty on legacy rows. */
+  mediaKinds: string[] | null;
   mirroredImageUrl: string | null;
   mirroredVideoUrl: string | null;
 };
@@ -204,6 +211,30 @@ export type ClusterScoreUpdate = {
 };
 
 export function toScoredAdInput(ad: ScorableAdRow): ScoredAdInput {
+  // Container formats resolve to their underlying media (§8), and that media is
+  // a fact about the competitor's creative — so it comes from `mediaKinds`,
+  // which the harness resolves from the source creatives at fill time.
+  //
+  // Scoring used to read the mirrored columns here, which made format breadth a
+  // function of how much media our mirror happened to copy: the same 120 ads
+  // scored 5 points higher in an org that had mirrored them on an earlier fill,
+  // and a newly tracked competitor would rank below an incumbent for a reason
+  // that has nothing to do with its advertising.
+  const kinds = ad.mediaKinds ?? [];
+
+  if (kinds.length > 0) {
+    return {
+      startDate: ad.startDate,
+      variantCount: ad.variants?.length ?? 0,
+      displayFormat: ad.displayFormat,
+      hasVideo: kinds.includes("video"),
+      hasImage: kinds.includes("image"),
+      linkUrl: ad.linkUrl,
+    };
+  }
+
+  // Rows filled before `mediaKinds` existed keep the old behaviour rather than
+  // silently losing their format points; the next fill replaces it.
   return {
     startDate: ad.startDate,
     variantCount: ad.variants?.length ?? 0,

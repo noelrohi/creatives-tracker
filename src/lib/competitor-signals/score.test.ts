@@ -273,6 +273,7 @@ describe("scoreCompetitorClusters", () => {
           displayFormat: "DCO",
           linkUrl: "https://acme.test/sleep?utm=1",
           variants: [{}, {}],
+          mediaKinds: [],
           mirroredImageUrl: "https://blob.test/a.jpg",
           mirroredVideoUrl: "https://blob.test/a.mp4",
         },
@@ -282,6 +283,7 @@ describe("scoreCompetitorClusters", () => {
           displayFormat: "IMAGE",
           linkUrl: "https://acme.test/guard",
           variants: null,
+          mediaKinds: [],
           mirroredImageUrl: "https://blob.test/b.jpg",
           mirroredVideoUrl: null,
         },
@@ -292,6 +294,7 @@ describe("scoreCompetitorClusters", () => {
           displayFormat: "IMAGE",
           linkUrl: "https://acme.test/loose",
           variants: null,
+          mediaKinds: [],
           mirroredImageUrl: null,
           mirroredVideoUrl: null,
         },
@@ -321,6 +324,88 @@ describe("scoreCompetitorClusters", () => {
       landingPoints: 10,
     });
     expect(updates[1].longevityPoints).toBeCloseTo(19.1, 1);
+  });
+
+  describe("container formats read the ad's own media, not the mirror", () => {
+    // The bug this covers, seen on real data: the same 120 ads scored 5 points
+    // higher in an org that had mirrored them on an earlier fill, because a DCO
+    // resolved its format from the mirrored columns. Format breadth has to
+    // describe the competitor, not our copy of their media.
+    // A catalog-style container carrying only image creatives. This collector
+    // returns no URL at all for images, so the mirror can never learn of them —
+    // `mediaKinds` is the only thing that knows.
+    const imageDco = (overrides: Record<string, unknown> = {}) => ({
+      copyClusterId: "cluster-1",
+      startDate: daysAgo(105),
+      displayFormat: "DCO",
+      linkUrl: "https://acme.test/sleep",
+      variants: [{ media: null }],
+      mediaKinds: ["image"],
+      mirroredImageUrl: null,
+      mirroredVideoUrl: null,
+      ...overrides,
+    });
+
+    const videoAd = {
+      copyClusterId: "cluster-1",
+      startDate: daysAgo(105),
+      displayFormat: "VIDEO",
+      linkUrl: "https://acme.test/sleep",
+      variants: null,
+      mediaKinds: ["video"],
+      mirroredImageUrl: null,
+      mirroredVideoUrl: "https://blob.test/v.mp4",
+    };
+
+    const formatPointsFor = (...rows: Record<string, unknown>[]) =>
+      scoreCompetitorClusters({
+        clusters: [{ id: "cluster-1", verdict: null }],
+        ads: rows as Parameters<typeof scoreCompetitorClusters>[0]["ads"],
+        now: NOW,
+      })[0].formatPoints;
+
+    it("counts an image container the mirror never saw", () => {
+      // Nothing mirrored at all, so the old code scored this cluster 5 (video
+      // only, from the video ad). The competitor is plainly running both.
+      expect(formatPointsFor(imageDco(), videoAd)).toBe(10);
+    });
+
+    it("scores the same ads identically whether or not they were mirrored", () => {
+      // The regression itself: an org that mirrored on an earlier fill must not
+      // out-score an org seeing the same ads for the first time.
+      expect(formatPointsFor(imageDco(), videoAd)).toBe(
+        formatPointsFor(
+          imageDco({
+            mirroredImageUrl: "https://blob.test/a.jpg",
+            mirroredVideoUrl: "https://blob.test/a.mp4",
+          }),
+          videoAd,
+        ),
+      );
+    });
+
+    it("lets mediaKinds override what the mirror happens to hold", () => {
+      // A mirrored video against an image-only ad: the ad wins.
+      expect(
+        formatPointsFor(
+          imageDco({ mirroredVideoUrl: "https://blob.test/a.mp4" }),
+          videoAd,
+        ),
+      ).toBe(10);
+    });
+
+    it("falls back to the mirror on rows filled before mediaKinds existed", () => {
+      // Legacy rows keep their old score rather than silently losing points;
+      // the next fill replaces them.
+      expect(
+        formatPointsFor(
+          imageDco({
+            mediaKinds: [],
+            mirroredVideoUrl: "https://blob.test/a.mp4",
+          }),
+        ),
+      ).toBe(5);
+    });
   });
 
   it("still emits an update for a cluster with no member ads", () => {

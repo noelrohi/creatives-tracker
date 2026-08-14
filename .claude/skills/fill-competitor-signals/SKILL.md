@@ -77,12 +77,16 @@ Map raw → **NormalizedAd** (§4). One NormalizedAd per **archive ID**. Field n
 | `raw` | any | the **verbatim** source payload for this ad |
 
 **Nullable** — send explicit `null`, never omit the key (repo convention: `.nullable()`, never `.optional()`):
-`title`, `endDate`, `ctaText`, `ctaType`, `linkDescription`, `collationId`, `collationCount`, `imageUrl`, `videoHdUrl`, `videoSdUrl`, `videoPreviewImageUrl`, `variants`.
+`title`, `endDate`, `ctaText`, `ctaType`, `linkDescription`, `collationId`, `collationCount`, `imageUrl`, `videoHdUrl`, `videoSdUrl`, `videoPreviewImageUrl`, `variants`, `mediaKinds`.
 
 **`displayFormat` derivation.** MetaAdsCollector has no explicit format field — derive it:
 - every creative has an empty `body` and they share one description → **`DPA`** (a product-catalog feed, see below);
 - otherwise more than one creative in the card → `DCO` (or `CAROUSEL` when the source labels it a carousel);
 - otherwise a single creative with a video URL → `VIDEO`, with only an image → `IMAGE`.
+
+**`mediaKinds` — the same judgement, kept.** While deriving `displayFormat` you decide, creative by creative, whether it is video or image. Send that: `mediaKinds` is the distinct set across **all** the ad's creatives, primary and variants, as `["image"]`, `["video"]`, or `["image","video"]`. A creative with any video URL is `video`; one without is `image`.
+
+This is what format breadth scores from (§8), and it must describe the competitor's creative — not our copy of it. Scoring used to fall back to the media the server had managed to mirror, which meant the same ads scored higher in an org that had mirrored them on an earlier fill, and a newly tracked competitor ranked below an incumbent for reasons that had nothing to do with its advertising. **Do not derive `mediaKinds` from whether a URL is present in the payload** — this collector returns no URL at all for image creatives, so URL-presence would report every image ad as having no media. Derive it from the same creative-shape rule you used for `displayFormat`. Send `null` only if you genuinely cannot tell.
 
 **Catalog ads carry no copy.** A product-catalog ad is a feed of products — six creatives, each a different product and landing page, every `body` empty, one shared brand description across all of them. Take the shared `description` (falling back to `title`) as `bodyText` so the ad survives normalization. Dropping it instead is the dangerous path: the ad is genuinely live, and a fill that omits it stamps `noLongerSeenAt` on the competitor's whole ad history. Shock Doctor's only live US ad is exactly this shape.
 
@@ -91,7 +95,7 @@ Map raw → **NormalizedAd** (§4). One NormalizedAd per **archive ID**. Field n
 
 **Media URLs.** Pass the expiring signed `scontent.*` links through as-is — the server mirrors the primary creative's media immediately at ingest and never persists source URLs. Do not download or rewrite them here. Variant media is not mirrored in v1.
 
-Step 2 is done when every ad collected in step 1 has a NormalizedAd carrying all 22 keys — required fields populated, nullable fields explicit `null`.
+Step 2 is done when every ad collected in step 1 has a NormalizedAd carrying all 23 keys — required fields populated, nullable fields explicit `null`.
 
 **The canary applies here too.** A fill is a full-snapshot replacement, so an ad dropped in normalization reads to the server as an ad that went dark. If step 2 yields fewer ads than step 1 collected, fix the mapping before posting — count them and compare, every run.
 
@@ -174,6 +178,7 @@ Payload (`fill-<name>.json`):
       "videoHdUrl": null,
       "videoSdUrl": null,
       "videoPreviewImageUrl": null,
+      "mediaKinds": ["image", "video"],
       "variants": [
         {
           "bodyText": "Stop gasping mid-set.",
