@@ -36,6 +36,8 @@ consentUrl.searchParams.set("access_type", "offline");
 consentUrl.searchParams.set("prompt", "consent");
 consentUrl.searchParams.set("state", state);
 
+let handled = false;
+
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", REDIRECT_URI);
   const code = url.searchParams.get("code");
@@ -43,29 +45,46 @@ const server = http.createServer(async (request, response) => {
     response.writeHead(400).end("Missing code or state mismatch.");
     return;
   }
+  if (handled) {
+    response.writeHead(200, { "content-type": "text/plain" });
+    response.end("Already processed.");
+    return;
+  }
+  handled = true;
+
   response.writeHead(200, { "content-type": "text/plain" });
   response.end("Consent received — return to the terminal. You can close this tab.");
   server.close();
 
-  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      code,
-      grant_type: "authorization_code",
-      redirect_uri: REDIRECT_URI,
-    }),
-  });
-  const payload = await tokenResponse.json();
-  if (!tokenResponse.ok || !payload.refresh_token) {
-    console.error("Token exchange failed:", tokenResponse.status, payload.error ?? "");
+  try {
+    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        code,
+        grant_type: "authorization_code",
+        redirect_uri: REDIRECT_URI,
+      }),
+    });
+    const payload = await tokenResponse.json();
+    if (!tokenResponse.ok || !payload.refresh_token) {
+      console.error(
+        "Token exchange failed:",
+        tokenResponse.status,
+        payload.error ?? "",
+        payload.error_description ?? "",
+      );
+      process.exit(1);
+    }
+    console.log("\nGOOGLE_ADS_REFRESH_TOKEN:\n");
+    console.log(payload.refresh_token);
+    console.log("\nPaste it into the server/worker environment. Never commit it.");
+  } catch (error) {
+    console.error(`Token exchange failed: ${error.message}`);
     process.exit(1);
   }
-  console.log("\nGOOGLE_ADS_REFRESH_TOKEN:\n");
-  console.log(payload.refresh_token);
-  console.log("\nPaste it into the server/worker environment. Never commit it.");
 });
 
 server.listen(PORT, "127.0.0.1", () => {
