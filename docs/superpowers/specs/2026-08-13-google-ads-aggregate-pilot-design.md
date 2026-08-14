@@ -90,6 +90,8 @@ Runs immediately and in parallel with everything else, since it consumes only st
   - Redacted parameter-shape fingerprints (key presence and coarse value shape only).
 - The report gates Phase 3's order-level question: high coverage → a click-ID evidence graph earns a spec; low coverage → the panel stays aggregate-only, with the report stating so in numbers.
 
+**Probe outcome (2026-08-14, Reviv, trailing 90 days):** 0 of 13,937 orders carry any click ID, and the fingerprint list is empty — a direct data sample confirmed that Shopify's `customerJourneySummary` strips query strings from `landingPage`/`referrerUrl` entirely (13,511 landing pages, 9,549 referrers, zero with a `?`; UTM values arrive only via the separate structured `utmParameters` field). Click IDs are therefore **unobservable from stored Shopify data regardless of Google auto-tagging settings**. Decision: Phase 3 is aggregate-only. Order-level Google evidence would require new capture at the storefront/checkout (e.g. a pixel or cart attribute persisting `gclid`), which is a separate future decision, not a Phase 3 panel prerequisite.
+
 ### Phase 1 — sandbox
 
 - Create the Google Cloud project and OAuth 2.0 client; run the one-time consent flow to mint a refresh token.
