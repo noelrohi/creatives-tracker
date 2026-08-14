@@ -1,6 +1,6 @@
 ---
 name: fill-competitor-signals
-description: Run one Competitor Signals fill (collect → normalize → dedup → cluster → verdicts → POST → poll) for every tracked competitor from the operator's machine. Use when the user asks to run a competitor-signals fill, refresh competitor ad data, or re-cluster a competitor's Ad Library snapshot.
+description: Fill the app with every tracked competitor's live Meta Ad Library ads, run from the operator's machine. Use when the user asks to refresh competitor ads or re-cluster a competitor.
 ---
 
 # Competitor Signals fill harness
@@ -51,11 +51,11 @@ meta-ads-collector \
   -o "raw-<name>.json"
 ```
 
-Flags (verify against `--help`): `-c/--country` ISO-3166 alpha-2, `-s/--status` `active|inactive|all`, `-n/--max-results`, `-o/--output` (required), `--page-url`, `--page-ids`, `--page-name`. The Python API equivalent is `MetaAdsCollector().collect_by_page_id("<metaPageId>", country="US")`.
+Confirm the flags against `meta-ads-collector --help` before the first run — the installed version is the authority.
 
 **Breakage canary (§11).** If a page *known to be active* (AIRWAAV) returns **zero ads**, or the collector errors on a Meta GraphQL shape change: **stop. Do not POST.** A zero-ad fill is valid at the API, but a known-active page returning zero is a collector break, and posting it would mark every live ad `noLongerSeenAt`. Report to the user, then either fix the collector or switch over (below). Shock Doctor returning 0–2 ads is *not* the canary — that page really is sparse.
 
-**Fallback switch-over.** Rerun collection through **ScrapeCreators** (`SCRAPECREATORS_API_KEY`, ~89 free credits), map its response to the same NormalizedAd shape, and POST with `source: "scrapecreators"`. Both sources return Meta's native snapshot shape, so steps 2–7 are byte-identical. If credits are near exhaustion, say so — that's the trigger to revisit paid vendors.
+**Fallback switch-over.** Rerun collection through **ScrapeCreators** (`SCRAPECREATORS_API_KEY`, on the remaining free credits), map its response to the same NormalizedAd shape, and POST with `source: "scrapecreators"`. Both sources return Meta's native snapshot shape, so steps 2–7 are byte-identical. If credits are near exhaustion, say so — that's the trigger to revisit paid vendors.
 
 ## Step 2 — Normalize
 
@@ -88,6 +88,8 @@ Map raw → **NormalizedAd** (§4). One NormalizedAd per **archive ID**. Field n
 `{ bodyText: string|null, title: string|null, linkUrl: string|null, media: object|null }`. `variants: []` or `null` when there are none.
 
 **Media URLs.** Pass the expiring signed `scontent.*` links through as-is — the server mirrors the primary creative's media immediately at ingest and never persists source URLs. Do not download or rewrite them here. Variant media is not mirrored in v1.
+
+Step 2 is done when every ad collected in step 1 has a NormalizedAd carrying all 22 keys — required fields populated, nullable fields explicit `null`.
 
 ## Step 3 — Dedup
 
@@ -124,7 +126,7 @@ Before moving on, verify: every archive ID from step 2 appears in exactly one cl
 Per cluster, still device-side:
 
 - `verdict` ∈ `high` | `medium` | `low` — the cluster's **relevance to the client's positioning**, not its quality.
-- `verdictRationale` — **1–3 sentences, written to be shown to the client**. This string is rendered verbatim as the "strategic read" on the signals screen. No hedging, no internal jargon, no mention of this workflow.
+- `verdictRationale` — **1–3 sentences, written to be shown to the client**. This string is rendered verbatim as the "strategic read" on the signals screen: write it in the client's own language, direct and committed, as if a strategist put it in a deck.
 
 An invalid verdict does not block the fill: the server nulls the rationale, contributes 0 to the strategic component (15 pts), and the UI flags "strategic read unavailable". Getting it right is worth 15/100 of the score.
 
