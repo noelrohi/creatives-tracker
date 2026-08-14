@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => {
     listGoogleAdsSyncRuns: vi.fn(),
     prepareGoogleAdsFactsRun: vi.fn(),
     prepareGclidProbeRun: vi.fn(),
+    resolvePilotProbeStore: vi.fn(),
     failGclidProbeReport: vi.fn(),
     listCampaignFactsSummary: vi.fn(),
     getGoogleBucketNetSales: vi.fn(),
@@ -53,6 +54,7 @@ vi.mock("@/lib/google-ads/facts-runner", () => ({
 }));
 vi.mock("@/lib/google-ads/gclid-probe", () => ({
   prepareGclidProbeRun: mocks.prepareGclidProbeRun,
+  resolvePilotProbeStore: mocks.resolvePilotProbeStore,
   failGclidProbeReport: mocks.failGclidProbeReport,
 }));
 vi.mock("@/lib/google-ads/queries", () => ({
@@ -136,10 +138,18 @@ beforeEach(() => {
     organizationId: "org-1",
     storeId: "store-1",
   });
+  mocks.resolvePilotProbeStore.mockResolvedValue({
+    id: "store-1",
+    organizationId: "org-1",
+    ianaTimezone: "America/New_York",
+  });
   mocks.failGoogleAdsSyncRun.mockResolvedValue(undefined);
   mocks.failGclidProbeReport.mockResolvedValue(undefined);
   mocks.listCampaignFactsSummary.mockResolvedValue([]);
-  mocks.getGoogleBucketNetSales.mockResolvedValue({ netSales: 0, orderCount: 0 });
+  mocks.getGoogleBucketNetSales.mockResolvedValue({
+    netSalesCents: 0,
+    orderCount: 0,
+  });
   mocks.getLatestGclidProbeReport.mockResolvedValue(null);
   mocks.idempotencyCreate.mockImplementation(async (key: string) => ({ key }));
   mocks.taskTrigger.mockResolvedValue({ id: "trigger-run-1" });
@@ -246,7 +256,7 @@ describe("googleAds router behavior", () => {
     expect(mocks.taskTrigger).not.toHaveBeenCalled();
   });
 
-  it("runProbe throws FORBIDDEN when the probe report belongs to a different org, without triggering a task", async () => {
+  it("runProbe throws FORBIDDEN when the probe report belongs to a different org, marks it failed, and never triggers a task", async () => {
     mocks.prepareGclidProbeRun.mockResolvedValue({
       id: "probe-1",
       organizationId: "org-2",
@@ -255,7 +265,98 @@ describe("googleAds router behavior", () => {
     await expect(sessionCaller("admin").runProbe()).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
+    expect(mocks.failGclidProbeReport).toHaveBeenCalledWith({
+      probeReportId: "probe-1",
+      code: "org_mismatch",
+      message: "Probe requested by a different organization",
+    });
     expect(mocks.taskTrigger).not.toHaveBeenCalled();
+  });
+
+  it("startFactsSync dispatches with the exact first-dispatch idempotency key under global scope", async () => {
+    await sessionCaller("admin").startFactsSync();
+    expect(mocks.idempotencyCreate).toHaveBeenCalledWith(
+      "google-ads-facts-batch:first:facts-run-1",
+      { scope: "global" },
+    );
+    expect(mocks.taskTrigger).toHaveBeenCalledWith(
+      "google-ads-facts-batch",
+      { syncRunId: "facts-run-1" },
+      expect.objectContaining({ idempotencyKeyTTL: "7d" }),
+    );
+  });
+
+  it("campaignFacts scopes the summary and reference queries to the connection's ids", async () => {
+    await sessionCaller("admin").campaignFacts({
+      fromDay: "2026-07-01",
+      toDay: "2026-07-30",
+    });
+    expect(mocks.listCampaignFactsSummary).toHaveBeenCalledWith({
+      connectionId: "connection-1",
+      fromDay: "2026-07-01",
+      toDay: "2026-07-30",
+    });
+    expect(mocks.getGoogleBucketNetSales).toHaveBeenCalledWith({
+      organizationId: "org-1",
+      storeId: "store-1",
+      fromDay: "2026-07-01",
+      toDay: "2026-07-30",
+    });
+  });
+
+  it("startDiscovery maps a concurrent (23505) run into CONFLICT", async () => {
+    mocks.createGoogleAdsSyncRun.mockRejectedValue(
+      Object.assign(new Error("duplicate key value violates unique constraint"), {
+        code: "23505",
+      }),
+    );
+    await expect(sessionCaller("admin").startDiscovery()).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "A Google Ads discovery run is already in progress",
+    });
+    expect(mocks.taskTrigger).not.toHaveBeenCalled();
+  });
+
+  it("startFactsSync maps an 'already running' prepare error into CONFLICT", async () => {
+    mocks.prepareGoogleAdsFactsRun.mockRejectedValue(
+      new Error("A Google Ads facts sync is already running for this connection"),
+    );
+    await expect(sessionCaller("admin").startFactsSync()).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "A Google Ads facts sync is already running for this connection",
+    });
+    expect(mocks.taskTrigger).not.toHaveBeenCalled();
+  });
+
+  it("probeReport resolves via the store binding even when no connection exists yet", async () => {
+    mocks.getPilotGoogleAdsConnectionForOrganization.mockResolvedValue(null);
+    mocks.getLatestGclidProbeReport.mockResolvedValue({ id: "report-1" });
+    const report = await sessionCaller("admin").probeReport();
+    expect(mocks.getLatestGclidProbeReport).toHaveBeenCalledWith({
+      organizationId: "org-1",
+      storeId: "store-1",
+    });
+    expect(report).toEqual({ id: "report-1" });
+  });
+
+  it("probeReport returns null (not FORBIDDEN) for a store bound to a different organization", async () => {
+    mocks.resolvePilotProbeStore.mockResolvedValue({
+      id: "store-1",
+      organizationId: "org-2",
+      ianaTimezone: "America/New_York",
+    });
+    const report = await sessionCaller("admin").probeReport();
+    expect(report).toBeNull();
+    expect(mocks.getLatestGclidProbeReport).not.toHaveBeenCalled();
+  });
+
+  it("probeReport falls back to the connection-based lookup when store resolution errors", async () => {
+    mocks.resolvePilotProbeStore.mockRejectedValue(new Error("env misconfigured"));
+    await sessionCaller("admin").probeReport();
+    expect(mocks.getLatestGclidProbeReport).toHaveBeenCalledWith({
+      organizationId: "org-1",
+      storeId: "store-1",
+    });
   });
 
   it("runProbe marks the report failed and rethrows when dispatch fails", async () => {

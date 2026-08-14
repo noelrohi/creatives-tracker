@@ -41,14 +41,23 @@ const FINGERPRINT_KEY_ALLOWLIST = new Set([
 
 export type ProbeReportRecord = typeof gclidProbeReports.$inferSelect;
 
+export type PilotProbeStore = {
+  id: string;
+  organizationId: string;
+  ianaTimezone: string | null;
+};
+
 /**
- * Creates the durable running report row for the trailing 90 store-days.
- * Store scope resolves server-side from the environment shop-domain binding.
+ * Resolves the pilot store directly from the provider's server-side
+ * shop-domain binding — no connection row required. Readers (e.g. the
+ * `probeReport` tRPC query) use this so a probe that ran before any Google
+ * Ads connection existed is still resolvable; `null` means either the
+ * binding's shop domain has no Shopify store yet, or the caller should treat
+ * probe lookup as unavailable.
  */
-export async function prepareGclidProbeRun(
+export async function resolvePilotProbeStore(
   provider: GoogleAdsCredentialProvider = new EnvironmentGoogleAdsCredentialProvider(),
-  now: Date = new Date(),
-): Promise<ProbeReportRecord> {
+): Promise<PilotProbeStore | null> {
   const binding = await provider.getPilotBinding();
   const [store] = await db
     .select({
@@ -59,6 +68,18 @@ export async function prepareGclidProbeRun(
     .from(shopifyStores)
     .where(eq(shopifyStores.shopDomain, binding.shopDomain))
     .limit(1);
+  return store ?? null;
+}
+
+/**
+ * Creates the durable running report row for the trailing 90 store-days.
+ * Store scope resolves server-side from the environment shop-domain binding.
+ */
+export async function prepareGclidProbeRun(
+  provider: GoogleAdsCredentialProvider = new EnvironmentGoogleAdsCredentialProvider(),
+  now: Date = new Date(),
+): Promise<ProbeReportRecord> {
+  const store = await resolvePilotProbeStore(provider);
   if (!store) throw new Error("Configured Google Ads shop domain has no Shopify store");
   // orderDay is a store-timezone day, so the window boundary must be computed
   // in that timezone too — UTC slicing would be off by one near midnight for

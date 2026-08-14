@@ -8,6 +8,7 @@ import { prepareGoogleAdsFactsRun } from "@/lib/google-ads/facts-runner";
 import {
   failGclidProbeReport,
   prepareGclidProbeRun,
+  resolvePilotProbeStore,
 } from "@/lib/google-ads/gclid-probe";
 import {
   getGoogleBucketNetSales,
@@ -41,16 +42,27 @@ async function requirePilotConnection(
   return connection;
 }
 
+/** Postgres unique_violation; same detection idiom as facts-runner.ts. */
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    String((error as { code: unknown }).code) === "23505"
+  );
+}
+
 /**
- * The initial-handoff key is taskId + syncRunId with explicit global scope,
- * matching the "first dispatch" idempotency key the nightly schedule uses
- * for facts (`google-ads-facts:first:${run.id}`) — a repeated browser call
- * for the same prepared run resolves the same child instead of double
- * dispatching. If the trigger call itself fails (definitively or
- * ambiguously), the run row must not stay "running" forever and wedge the
- * scope's one-running partial unique index, so it is terminally failed here
- * with the same `trigger_dispatch_failed` code the nightly schedule uses
- * when its own dispatch fails after the run row was already created.
+ * The initial-handoff key is `${taskId}:first:${syncRunId}` with explicit
+ * global scope (e.g. `google-ads-facts-batch:first:<id>`) — a repeated
+ * browser call for the same prepared run resolves the same child instead of
+ * double dispatching, the same idea behind the nightly schedule's own
+ * first-dispatch idempotency key for facts. If the trigger call itself
+ * fails (definitively or ambiguously), the run row must not stay "running"
+ * forever and wedge the scope's one-running partial unique index, so it is
+ * terminally failed here with the same `trigger_dispatch_failed` code the
+ * nightly schedule uses when its own dispatch fails after the run row was
+ * already created.
  */
 async function triggerGoogleAdsSyncRun(input: {
   scope: GoogleAdsScope;
@@ -113,13 +125,27 @@ export const googleAdsRouter = router({
   }),
 
   probeReport: orgAdminProcedure.query(async ({ ctx }) => {
+    // The probe is org/store-scoped and can run before any Google Ads
+    // connection exists, so resolve the store directly from the provider's
+    // shop-domain binding (mirroring prepareGclidProbeRun) rather than
+    // going through a connection row. Any provider/env resolution failure
+    // degrades to the connection-based lookup instead of failing this read.
+    let store: { id: string; organizationId: string } | null = null;
+    try {
+      store = await resolvePilotProbeStore();
+    } catch {
+      store = null;
+    }
+    if (store) {
+      if (store.organizationId !== ctx.organizationId) return null;
+      return getLatestGclidProbeReport({
+        organizationId: store.organizationId,
+        storeId: store.id,
+      });
+    }
     const connection = await getPilotGoogleAdsConnectionForOrganization(
       ctx.organizationId,
     );
-    // The probe is org/store-scoped and can run before any connection
-    // exists; resolve the store from the connection when present, else
-    // there is no report to show (the probe bootstrap creates the
-    // connection's store binding through the same env domain).
     if (!connection) return null;
     return getLatestGclidProbeReport({
       organizationId: connection.organizationId,
@@ -165,11 +191,22 @@ export const googleAdsRouter = router({
       });
     }
     const scope = connectionScope(connection);
-    const run = await createGoogleAdsSyncRun({
-      scope,
-      operation: "discovery",
-      apiVersion: GOOGLE_ADS_API_VERSION,
-    });
+    let run: Awaited<ReturnType<typeof createGoogleAdsSyncRun>>;
+    try {
+      run = await createGoogleAdsSyncRun({
+        scope,
+        operation: "discovery",
+        apiVersion: GOOGLE_ADS_API_VERSION,
+      });
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "A Google Ads discovery run is already in progress",
+        });
+      }
+      throw error;
+    }
     await triggerGoogleAdsSyncRun({
       scope,
       syncRunId: run.id,
@@ -192,11 +229,20 @@ export const googleAdsRouter = router({
       });
     }
     const yesterday = addDays(accountDay(new Date(), connection.timezone), -1);
-    const run = await prepareGoogleAdsFactsRun({
-      organizationId: ctx.organizationId,
-      windowFromDay: addDays(yesterday, -(BACKFILL_DAYS - 1)),
-      windowToDay: yesterday,
-    });
+    let run: Awaited<ReturnType<typeof prepareGoogleAdsFactsRun>>;
+    try {
+      run = await prepareGoogleAdsFactsRun({
+        organizationId: ctx.organizationId,
+        windowFromDay: addDays(yesterday, -(BACKFILL_DAYS - 1)),
+        windowToDay: yesterday,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("already running")) {
+        throw new TRPCError({ code: "CONFLICT", message });
+      }
+      throw error;
+    }
     await triggerGoogleAdsSyncRun({
       scope: {
         organizationId: run.organizationId,
@@ -214,8 +260,18 @@ export const googleAdsRouter = router({
     const report = await prepareGclidProbeRun();
     if (report.organizationId !== ctx.organizationId) {
       // The report row was minted for the configured store's org; an
-      // unrelated org's admin cannot claim it. The orphaned running row is
-      // visible to (and re-runnable by) the owning org's admins.
+      // unrelated org's admin cannot claim it. Terminally fail the row here
+      // so the owning org's "latest report" read never sees a permanently
+      // running orphan left behind by the rejected caller.
+      try {
+        await failGclidProbeReport({
+          probeReportId: report.id,
+          code: "org_mismatch",
+          message: "Probe requested by a different organization",
+        });
+      } catch {
+        // The reconciler covers a finalizer race; the safe error still returns.
+      }
       throw new TRPCError({
         code: "FORBIDDEN",
         message: "Google Ads pilot is configured for a different organization",

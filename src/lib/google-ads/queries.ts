@@ -2,8 +2,8 @@ import "server-only";
 
 import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { getBucketTotals } from "@/lib/attribution-queries";
 import { gclidProbeReports, googleAdsCampaignFacts } from "@/schema/google-ads";
-import { shopifyOrders } from "@/schema/shopify";
 
 export type CampaignFactsSummaryRow = {
   campaignId: string;
@@ -55,33 +55,42 @@ export async function listCampaignFactsSummary(params: {
   }));
 }
 
+export type GoogleBucketReference = {
+  /**
+   * Integer cents: gross Net sales minus refunds for the "google" bucket,
+   * matching `getBucketTotals`'s `BucketTotal.revenueCents` on the
+   * attribution page (refunds carry no bucket of their own — they inherit
+   * the order's, per attribution-queries.ts). Never a float.
+   */
+  netSalesCents: number;
+  orderCount: number;
+};
+
 /**
  * The captioned reference beside the "Google says" table: our google-bucket
- * Shopify Net sales over the same inclusive store-day range. Different
- * measurement system — the lab labels it as non-reconciling context.
+ * Shopify Net sales (gross minus refunds) over the same inclusive store-day
+ * range. Different measurement system from Google's own numbers — the lab
+ * labels it as non-reconciling context — but it must still agree with the
+ * "google" row on the attribution page, so this reuses `getBucketTotals`
+ * rather than re-deriving gross-only totals locally.
  */
 export async function getGoogleBucketNetSales(params: {
   organizationId: string;
   storeId: string;
   fromDay: string;
   toDay: string;
-}): Promise<{ netSales: number; orderCount: number }> {
-  const [row] = await db
-    .select({
-      netSales: sql<string>`coalesce(sum(${shopifyOrders.netSales}), 0)`,
-      orderCount: sql<string>`count(*)`,
-    })
-    .from(shopifyOrders)
-    .where(
-      and(
-        eq(shopifyOrders.organizationId, params.organizationId),
-        eq(shopifyOrders.storeId, params.storeId),
-        eq(shopifyOrders.bucket, "google"),
-        gte(shopifyOrders.orderDay, params.fromDay),
-        lte(shopifyOrders.orderDay, params.toDay),
-      ),
-    );
-  return { netSales: Number(row.netSales), orderCount: Number(row.orderCount) };
+}): Promise<GoogleBucketReference> {
+  const totals = await getBucketTotals({
+    organizationId: params.organizationId,
+    storeId: params.storeId,
+    dateFrom: params.fromDay,
+    dateTo: params.toDay,
+  });
+  const google = totals.buckets.find((bucket) => bucket.bucket === "google");
+  return {
+    netSalesCents: google?.revenueCents ?? 0,
+    orderCount: google?.orderCount ?? 0,
+  };
 }
 
 export async function getLatestGclidProbeReport(params: {
