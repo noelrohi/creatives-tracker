@@ -24,7 +24,7 @@ export type GclidProbeSummary = {
   byKind: Record<ClickIdKind, number>;
   /** Keyed by production bucket name; unbucketed orders land in "pending". */
   byBucket: Record<string, GclidProbeBucketCell>;
-  /** customerJourney null, not ready, or lastVisit absent. */
+  /** customerJourney null or lastVisit absent. */
   journeyMissing: number;
   /** URLs present but unparseable even by the query-string fallback. */
   parseFailures: number;

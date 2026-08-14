@@ -113,7 +113,9 @@ async function seedFiveOrders(): Promise<void> {
     id: "order-3",
     shopifyOrderId: "1003",
     orderDay: TO_DAY,
-    bucket: "organic",
+    // "organic_direct" is the real attribution_bucket enum member (there is
+    // no plain "organic" value) — assert a key that can actually occur.
+    bucket: "organic_direct",
     customerJourney: journey("https://shop.example.com/?wbraid=w1&gbraid=g1"),
   });
   await seedOrder({
@@ -184,7 +186,7 @@ describeIfDb("gclid probe on PostgreSQL", () => {
     expect(summary.byKind).toEqual({ gclid: 1, wbraid: 1, gbraid: 1 });
     expect(summary.byBucket).toEqual({
       google: { orders: 2, withClickId: 1 },
-      organic: { orders: 1, withClickId: 1 },
+      organic_direct: { orders: 1, withClickId: 1 },
       pending: { orders: 1, withClickId: 0 },
     });
     expect(summary.journeyMissing).toBe(1);
@@ -243,5 +245,49 @@ describeIfDb("gclid probe on PostgreSQL", () => {
     await expect(
       probe.prepareGclidProbeRun(fakeProvider("unknown.myshopify.com"), FIXED_NOW),
     ).rejects.toThrow(/no Shopify store/);
+  });
+
+  it("hashes an unrecognized param key and never persists it literally", async () => {
+    await seedOrder({
+      id: "order-secret",
+      shopifyOrderId: "2001",
+      orderDay: TO_DAY,
+      bucket: "google",
+      customerJourney: journey(
+        "https://shop.example.com/?secret_key=x&gclid=y",
+      ),
+    });
+
+    const report = await probe.prepareGclidProbeRun(
+      fakeProvider(SEEDED_SHOP_DOMAIN),
+      FIXED_NOW,
+    );
+    const summary = await probe.runGclidProbe({ probeReportId: report.id });
+
+    const hashedEntry = summary.paramKeyFingerprints.find((entry) => entry.hashed);
+    expect(hashedEntry).toBeDefined();
+    expect(hashedEntry!.key).toMatch(/^sha256:[0-9a-f]{12}$/);
+    expect(hashedEntry!.count).toBe(1);
+
+    const persisted = await reloadProbeReport(report.id);
+    expect(JSON.stringify(persisted.summary)).not.toContain("secret_key");
+  });
+
+  it("failGclidProbeReport on an already-completed report is a no-op", async () => {
+    const report = await probe.prepareGclidProbeRun(
+      fakeProvider(SEEDED_SHOP_DOMAIN),
+      FIXED_NOW,
+    );
+    await probe.runGclidProbe({ probeReportId: report.id });
+
+    await probe.failGclidProbeReport({
+      probeReportId: report.id,
+      code: "internal_error",
+      message: "should not apply",
+    });
+
+    const persisted = await reloadProbeReport(report.id);
+    expect(persisted.status).toBe("completed");
+    expect(persisted.errorCode).toBeNull();
   });
 });

@@ -10,7 +10,7 @@ import {
   EnvironmentGoogleAdsCredentialProvider,
   type GoogleAdsCredentialProvider,
 } from "@/lib/google-ads/credential-provider";
-import { addDays } from "@/lib/google-ads/facts";
+import { accountDay, addDays } from "@/lib/google-ads/facts";
 import type {
   ClickIdKind,
   GclidProbeParamFingerprint,
@@ -51,12 +51,19 @@ export async function prepareGclidProbeRun(
 ): Promise<ProbeReportRecord> {
   const binding = await provider.getPilotBinding();
   const [store] = await db
-    .select({ id: shopifyStores.id, organizationId: shopifyStores.organizationId })
+    .select({
+      id: shopifyStores.id,
+      organizationId: shopifyStores.organizationId,
+      ianaTimezone: shopifyStores.ianaTimezone,
+    })
     .from(shopifyStores)
     .where(eq(shopifyStores.shopDomain, binding.shopDomain))
     .limit(1);
   if (!store) throw new Error("Configured Google Ads shop domain has no Shopify store");
-  const toDay = now.toISOString().slice(0, 10);
+  // orderDay is a store-timezone day, so the window boundary must be computed
+  // in that timezone too — UTC slicing would be off by one near midnight for
+  // any store not on UTC.
+  const toDay = accountDay(now, store.ianaTimezone ?? "UTC");
   const fromDay = addDays(toDay, -(PROBE_WINDOW_DAYS - 1));
   const [report] = await db
     .insert(gclidProbeReports)
@@ -70,6 +77,15 @@ export async function prepareGclidProbeRun(
   return report;
 }
 
+/**
+ * `probeReportId` must be a server-generated id (minted by
+ * `prepareGclidProbeRun` and read back from the durable row) — never accept
+ * one supplied by a caller/browser. This function trusts the id to resolve
+ * the correct org/store scope with no separate authorization check, so a
+ * caller-supplied id would let one org fail (or, in `runGclidProbe`, read)
+ * another org's report: an IDOR. Routes must only ever pass ids they minted
+ * themselves in the same request chain.
+ */
 export async function failGclidProbeReport(params: {
   probeReportId: string;
   code: string;
@@ -108,7 +124,16 @@ function fingerprintKey(key: string): { key: string; hashed: boolean } {
   return { key: `sha256:${digest}`, hashed: true };
 }
 
-/** Scans the report's window and publishes the aggregate summary. */
+/**
+ * Scans the report's window and publishes the aggregate summary.
+ *
+ * `probeReportId` must be a server-generated id (minted by
+ * `prepareGclidProbeRun`) — never accept one supplied by a caller/browser.
+ * The report row is trusted as-is to resolve the org/store scope for the
+ * scan; a caller-supplied id would let one org read another org's report
+ * data via this function's return value: an IDOR. Routes must only ever
+ * pass ids they minted themselves in the same request chain.
+ */
 export async function runGclidProbe(params: {
   probeReportId: string;
 }): Promise<GclidProbeSummary> {
