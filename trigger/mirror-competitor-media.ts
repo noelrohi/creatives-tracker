@@ -191,6 +191,7 @@ async function scoreCompetitorSnapshot(input: {
       displayFormat: competitorAds.displayFormat,
       linkUrl: competitorAds.linkUrl,
       variants: competitorAds.variants,
+      mediaKinds: competitorAds.mediaKinds,
       mirroredImageUrl: competitorAds.mirroredImageUrl,
       mirroredVideoUrl: competitorAds.mirroredVideoUrl,
     })

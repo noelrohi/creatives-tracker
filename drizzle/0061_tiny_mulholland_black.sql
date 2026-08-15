@@ -1,0 +1,1 @@
+ALTER TABLE "competitor_ad" ADD COLUMN "media_kinds" jsonb DEFAULT '[]'::jsonb NOT NULL;

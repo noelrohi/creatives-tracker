@@ -131,6 +131,7 @@ function normalizedAd(overrides: Row = {}) {
     videoSdUrl: null,
     videoPreviewImageUrl: null,
     variants: null,
+    mediaKinds: null,
     ...overrides,
   };
 }
@@ -306,6 +307,40 @@ describe("signals router (competitor-signals v1 §4/§5, Phase 1)", () => {
           entry.set.noLongerSeenAt instanceof Date,
       );
       expect(absenceUpdate).toBeDefined();
+    });
+
+    it("stores the media kinds the harness resolved, and refreshes them on upsert", async () => {
+      queueKnownCompetitor();
+
+      await adminCaller.signals.ingestFill({
+        competitorPageId: "page-1",
+        source: "meta_ads_collector",
+        ads: [normalizedAd({ mediaKinds: ["image", "video"] })],
+        clusters: null,
+      });
+
+      const [adInsert] = insertsInto(competitorAds);
+      // Format breadth scores from this rather than from the mirrored columns,
+      // so it has to survive the boundary intact (§8).
+      expect(adInsert.values[0].mediaKinds).toEqual(["image", "video"]);
+      expect(JSON.stringify(adInsert.conflictSet?.mediaKinds)).toContain(
+        "media_kinds",
+      );
+    });
+
+    it("defaults media kinds to empty when the harness sends null", async () => {
+      queueKnownCompetitor();
+
+      await adminCaller.signals.ingestFill({
+        competitorPageId: "page-1",
+        source: "meta_ads_collector",
+        ads: [normalizedAd({ mediaKinds: null })],
+        clusters: null,
+      });
+
+      // Empty, not null: the column is notNull, and an empty list is what makes
+      // scoring fall back to the mirror for that row.
+      expect(insertsInto(competitorAds)[0].values[0].mediaKinds).toEqual([]);
     });
 
     it("is idempotent — the same payload upserts rather than duplicating", async () => {
@@ -593,6 +628,7 @@ describe("signals router (competitor-signals v1 §4/§5, Phase 1)", () => {
         displayFormat: "IMAGE",
         linkUrl: "https://acme.test/sleep?utm_source=fb",
         variants: [],
+        mediaKinds: [],
         mirroredImageUrl: null,
         mirroredVideoUrl: null,
         ...overrides,
@@ -752,6 +788,7 @@ describe("signals router (competitor-signals v1 §4/§5, Phase 1)", () => {
             displayFormat: "IMAGE",
             linkUrl: "https://acme.test/sleep",
             variants: [{}, {}],
+            mediaKinds: [],
             mirroredImageUrl: "https://cdn.test/a.jpg",
             mirroredVideoUrl: null,
           },
