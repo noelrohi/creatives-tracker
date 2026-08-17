@@ -83,11 +83,19 @@ async function triggerPreparedSyncRun(input: {
       { syncRunId: input.syncRunId },
       { idempotencyKey, idempotencyKeyTTL: "7d" },
     );
-  } catch {
+  } catch (error) {
     // Definitive or ambiguous handoff failure: terminally fail the exact
     // prepared row with the fixed code; an ambiguously delivered child then
     // observes a terminal row and performs no source write. The caught
-    // error never reaches persistence.
+    // error never reaches persistence — but its shape must reach the server
+    // log, or production handoff failures are undiagnosable.
+    console.error("klaviyo task handoff failed", {
+      taskId: input.taskId,
+      operation: input.operation,
+      name: error instanceof Error ? error.name : typeof error,
+      message: error instanceof Error ? error.message : String(error),
+      status: (error as { status?: number }).status ?? null,
+    });
     try {
       await failKlaviyoSyncRunAfterRetryExhaustion({
         scope: input.scope,
