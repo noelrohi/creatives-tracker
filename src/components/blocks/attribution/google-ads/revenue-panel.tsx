@@ -86,8 +86,11 @@ export function GoogleAdsRevenuePanel({
     ? `${formatCentsMoney(googleSays.conversionsValueCents, googleCurrency) ?? "—"}${currencySuffix}`
     : "—";
 
+  // Cents arithmetic across currencies is meaningless (PHP cents minus USD
+  // cents is not a PHP or USD figure) — the delta only makes sense when
+  // Google's currency matches the store's, same gate as ROAS below.
   const deltaCents =
-    googleSays && ourSide
+    googleSays && ourSide && sameCurrency
       ? googleSays.conversionsValueCents - ourSide.paidRevenueCents
       : null;
   const showDelta = deltaCents !== null && deltaCents > 0;
@@ -127,7 +130,7 @@ export function GoogleAdsRevenuePanel({
     googleSays && ourSide
       ? googleSays.conversions > 0 && ourSide.paidRevenueCents === 0
         ? copy.insight.untaggedPaid
-        : ourSide.paidRevenueCents > 0
+        : ourSide.paidRevenueCents > 0 && sameCurrency
           ? copy.insight.delta(
               formatCentsMoney(googleSays.conversionsValueCents, googleCurrency) ??
                 "—",

@@ -160,4 +160,97 @@ describe("GoogleAdsRevenuePanel", () => {
     expect(screen.getAllByText(/Google says/).length).toBeGreaterThan(0);
     expect(screen.getByText("Summer Sale")).toBeInTheDocument();
   });
+
+  it("guards ROAS and the delta when Google's currency differs from the store's", async () => {
+    // Store currency is USD (renderPanel default) but Google reports in PHP:
+    // cents-level arithmetic across currencies is meaningless, so ROAS and
+    // the "+X unconfirmed" delta must both fall back to "—"/hidden, and the
+    // insight strip's cross-currency delta message must not render either.
+    // paidRevenueCents > 0 so only the currency mismatch — not a zero paid
+    // total — is what suppresses the delta insight.
+    queryState.revenuePanelFn = () =>
+      Promise.resolve(
+        emptySummary({
+          connection: {
+            status: "ready",
+            lastFactsSyncedAt: new Date("2026-08-10T00:00:00Z"),
+            backfillCompletedAt: new Date("2026-08-01T00:00:00Z"),
+          },
+          googleCurrencyCode: "PHP",
+          ourSide: {
+            bucketRevenueCents: 150_000,
+            bucketOrders: 40,
+            feedRevenueCents: 50_000,
+            feedOrders: 15,
+            paidRevenueCents: 100_000,
+            paidOrders: 25,
+            paidByCampaign: [
+              { utmCampaign: "Summer Sale", revenueCents: 100_000, orders: 25 },
+            ],
+          },
+          googleSays: {
+            spendCents: 50_000,
+            conversions: 30,
+            conversionsValueCents: 2_500_000,
+            byCampaign: [
+              {
+                campaignId: "1",
+                campaignName: "Summer Sale",
+                spendCents: 50_000,
+                conversions: 30,
+                conversionsValueCents: 2_500_000,
+                matchedUtmCampaign: "Summer Sale",
+              },
+            ],
+          },
+        }),
+      );
+    renderPanel();
+    expect(await screen.findByTestId("google-says")).toHaveTextContent("PHP");
+    expect(screen.getByTestId("google-roas-claims")).toHaveTextContent("—");
+    expect(screen.getByTestId("google-roas-confirm")).toHaveTextContent("—");
+    expect(
+      screen.getByText(/mixed currencies — not comparable/),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("google-says-delta")).toBeNull();
+    expect(
+      screen.queryByText(/our paid-tagged revenue confirms/),
+    ).toBeNull();
+  });
+
+  it("shows the conv value with ROAS dashed out when Google spend is zero", async () => {
+    queryState.revenuePanelFn = () =>
+      Promise.resolve(
+        emptySummary({
+          connection: {
+            status: "ready",
+            lastFactsSyncedAt: new Date("2026-08-10T00:00:00Z"),
+            backfillCompletedAt: new Date("2026-08-01T00:00:00Z"),
+          },
+          googleCurrencyCode: "USD",
+          googleSays: {
+            spendCents: 0,
+            conversions: 5,
+            conversionsValueCents: 30_000,
+            byCampaign: [
+              {
+                campaignId: "1",
+                campaignName: "Brand",
+                spendCents: 0,
+                conversions: 5,
+                conversionsValueCents: 30_000,
+                matchedUtmCampaign: null,
+              },
+            ],
+          },
+        }),
+      );
+    renderPanel();
+    expect(await screen.findByTestId("google-says")).toHaveTextContent(
+      "$300.00",
+    );
+    expect(screen.getByTestId("google-roas-claims")).toHaveTextContent("—");
+    expect(screen.getByTestId("google-roas-confirm")).toHaveTextContent("—");
+    expect(screen.getByTestId("google-spend")).toHaveTextContent("$0.00");
+  });
 });
