@@ -46,6 +46,7 @@ import {
 import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role";
 import { KlaviyoLabLink } from "@/components/blocks/attribution/klaviyo/lab-link";
 import { GoogleAdsLabLink } from "@/components/blocks/attribution/google-ads/lab-link";
+import { GoogleAdsRevenuePanel } from "@/components/blocks/attribution/google-ads/revenue-panel";
 import { EmailRevenuePanel } from "@/components/blocks/attribution/klaviyo/email-revenue-panel";
 import type { AttributionBucket } from "@/lib/attribution-bucket";
 import { formatDateOnly } from "@/lib/date";
@@ -412,6 +413,16 @@ export default function AttributionPage() {
 
       {range ? (
         <EmailRevenuePanel
+          role={role}
+          dateFrom={range.dateFrom}
+          dateTo={range.dateTo}
+          currency={currency}
+          shopifyTotal={data?.total != null ? String(data.total) : null}
+        />
+      ) : null}
+
+      {range ? (
+        <GoogleAdsRevenuePanel
           role={role}
           dateFrom={range.dateFrom}
           dateTo={range.dateTo}

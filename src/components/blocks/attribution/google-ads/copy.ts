@@ -10,10 +10,13 @@ export const googleAdsRevenue = {
     spend: "Spend (Google)",
     says: "Google says",
     saysCaption: "their conversion value, sliced to this range",
+    saysUnconfirmed: (amount: string) => `+${amount} unconfirmed`,
     roasClaims: "Google claims",
     roasConfirm: "we confirm",
     mixedCurrency: "mixed currencies — not comparable",
   },
+  error: "Couldn’t load Google Ads revenue.",
+  retry: "Retry",
   table: {
     heading: "By campaign — Google says vs we confirm",
     oursOnly: "ours only (no matching Google campaign)",
