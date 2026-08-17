@@ -202,6 +202,11 @@ async function loadOurSide(scope: OurSideScope): Promise<OurSide> {
         .groupBy(shopifyOrders.lastClickUtmCampaign),
     ]);
 
+  // Per-group SQL sums arrive as decimal strings; `toCents` parses them
+  // without float drift. That parse is exact only because the ingest write
+  // path guarantees `net_sales`/`amount` never carry more than 2 decimal
+  // places (see `centsToAmount` in shopify-ingest.ts) — the same exposure
+  // `getBucketTotals`'s own identity check rests on.
   let feedGrossCents = 0;
   let feedOrders = 0;
   let paidGrossCents = 0;
@@ -228,12 +233,44 @@ async function loadOurSide(scope: OurSideScope): Promise<OurSide> {
     refundByCampaign.set(row.utmCampaign, toCents(row.refunded));
   }
 
-  const paidByCampaign: PaidCampaignSlice[] = campaignGrossRows.map((row) => ({
-    utmCampaign: row.utmCampaign,
-    revenueCents:
-      toCents(row.gross) - (refundByCampaign.get(row.utmCampaign) ?? 0),
-    orders: row.orderCount,
-  }));
+  const grossByCampaign = new Map<
+    string | null,
+    { gross: string; orderCount: number }
+  >();
+  for (const row of campaignGrossRows) {
+    grossByCampaign.set(row.utmCampaign, row);
+  }
+
+  // Union of campaigns seen via orders AND via refunds: a refund against an
+  // order outside the current window (paid, out-of-range parent day) still
+  // has no matching entry in campaignGrossRows, but its refund still nets
+  // against the paid total — so its campaign must still get a slice, or the
+  // slice list would under-account relative to paidRevenueCents.
+  const campaignKeys = new Set<string | null>([
+    ...grossByCampaign.keys(),
+    ...refundByCampaign.keys(),
+  ]);
+
+  const paidByCampaign: PaidCampaignSlice[] = Array.from(campaignKeys).map(
+    (utmCampaign) => {
+      const grossRow = grossByCampaign.get(utmCampaign);
+      return {
+        utmCampaign,
+        revenueCents:
+          (grossRow ? toCents(grossRow.gross) : 0) -
+          (refundByCampaign.get(utmCampaign) ?? 0),
+        orders: grossRow?.orderCount ?? 0,
+      };
+    },
+  );
+  // Deterministic order: highest revenue first, then campaign name; the
+  // null-campaign slice always sorts last.
+  paidByCampaign.sort((a, b) => {
+    if (b.revenueCents !== a.revenueCents) return b.revenueCents - a.revenueCents;
+    if (a.utmCampaign === null) return 1;
+    if (b.utmCampaign === null) return -1;
+    return a.utmCampaign.localeCompare(b.utmCampaign);
+  });
 
   return {
     bucketRevenueCents: googleBucket?.revenueCents ?? 0,

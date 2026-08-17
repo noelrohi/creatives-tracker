@@ -400,4 +400,95 @@ describeIfDb("google ads revenue panel on PostgreSQL", () => {
     expect(result.ourSide.feedRevenueCents).toBe(12500);
     expect(result.ourSide.paidRevenueCents).toBe(10000);
   });
+
+  it("accounts a refund against an out-of-range paid order as its own campaign slice", async () => {
+    await seedGoogleBucketOrders();
+    // Parent order's own day is outside the range — getBucketTotals still
+    // nets its refund (refund windowed by refund_day, independent of the
+    // order's day) against the "google" bucket, so the split must too.
+    await seedOrder({
+      id: "order-ghost-1",
+      netSales: "60.00",
+      bucket: "google",
+      lastClickUtmMedium: "cpc",
+      lastClickUtmCampaign: "ghost_only",
+      orderDay: OUT_OF_RANGE_DAY,
+    });
+    await seedRefund({
+      id: "refund-ghost-1",
+      orderId: "order-ghost-1",
+      amount: "15.00",
+    });
+
+    const result = await loadGoogleAdsRevenuePanel({
+      organizationId: ORG_ID,
+      storeId: STORE_ID,
+      dateFrom: RANGE_FROM,
+      dateTo: RANGE_TO,
+    });
+
+    // Feed slice untouched by the ghost order/refund.
+    expect(result.ourSide.feedRevenueCents).toBe(12500);
+    // Paid gross 100.00 (unchanged — the ghost order's own day is
+    // out-of-range) minus the ghost refund 15.00 = 85.00.
+    expect(result.ourSide.paidRevenueCents).toBe(8500);
+
+    expect(
+      result.ourSide.feedRevenueCents + result.ourSide.paidRevenueCents,
+    ).toBe(result.ourSide.bucketRevenueCents);
+    expect(result.ourSide.feedOrders + result.ourSide.paidOrders).toBe(
+      result.ourSide.bucketOrders,
+    );
+
+    const sliceSum = result.ourSide.paidByCampaign.reduce(
+      (total, slice) => total + slice.revenueCents,
+      0,
+    );
+    expect(sliceSum).toBe(result.ourSide.paidRevenueCents);
+
+    const ghostSlice = result.ourSide.paidByCampaign.find(
+      (slice) => slice.utmCampaign === "ghost_only",
+    );
+    expect(ghostSlice).toEqual({
+      utmCampaign: "ghost_only",
+      revenueCents: -1500,
+      orders: 0,
+    });
+
+    // Deterministic order: revenueCents descending, nulls last.
+    expect(result.ourSide.paidByCampaign).toEqual([
+      { utmCampaign: "brand_search", revenueCents: 8000, orders: 1 },
+      { utmCampaign: null, revenueCents: 2000, orders: 1 },
+      { utmCampaign: "ghost_only", revenueCents: -1500, orders: 0 },
+    ]);
+  });
+
+  it("classifies feed/paid by trimmed, case-insensitive medium, treating a null medium as paid", async () => {
+    await seedOrder({
+      id: "order-padded-feed",
+      netSales: "40.00",
+      bucket: "google",
+      lastClickUtmMedium: " PRODUCT_SYNC ",
+      lastClickUtmCampaign: null,
+    });
+    await seedOrder({
+      id: "order-null-medium",
+      netSales: "10.00",
+      bucket: "google",
+      lastClickUtmMedium: null,
+      lastClickUtmCampaign: null,
+    });
+
+    const result = await loadGoogleAdsRevenuePanel({
+      organizationId: ORG_ID,
+      storeId: STORE_ID,
+      dateFrom: RANGE_FROM,
+      dateTo: RANGE_TO,
+    });
+
+    expect(result.ourSide.feedRevenueCents).toBe(4000);
+    expect(result.ourSide.feedOrders).toBe(1);
+    expect(result.ourSide.paidRevenueCents).toBe(1000);
+    expect(result.ourSide.paidOrders).toBe(1);
+  });
 });
