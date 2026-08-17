@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { idempotencyKeys, tasks } from "@trigger.dev/sdk";
 import { router, orgAdminProcedure } from "../init";
+import { requireStore } from "./attribution.shared";
 import { GOOGLE_ADS_API_VERSION } from "@/lib/google-ads/client";
 import { accountDay, addDays } from "@/lib/google-ads/facts";
 import { prepareGoogleAdsFactsRun } from "@/lib/google-ads/facts-runner";
@@ -15,6 +16,7 @@ import {
   getLatestGclidProbeReport,
   listCampaignFactsSummary,
 } from "@/lib/google-ads/queries";
+import { loadGoogleAdsRevenuePanel } from "@/lib/google-ads/revenue-panel";
 import {
   connectionScope,
   createGoogleAdsSyncRun,
@@ -298,4 +300,19 @@ export const googleAdsRouter = router({
     }
     return { probeReportId: report.id };
   }),
+
+  revenuePanel: orgAdminProcedure
+    .input(z.object({ dateFrom: daySchema, dateTo: daySchema }))
+    .query(async ({ input, ctx }) => {
+      if (input.dateFrom > input.dateTo) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid day range" });
+      }
+      const store = await requireStore(ctx.organizationId);
+      return loadGoogleAdsRevenuePanel({
+        organizationId: ctx.organizationId,
+        storeId: store.id,
+        dateFrom: input.dateFrom,
+        dateTo: input.dateTo,
+      });
+    }),
 });

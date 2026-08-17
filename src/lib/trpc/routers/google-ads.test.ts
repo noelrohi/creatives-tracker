@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
+import { TRPCError } from "@trpc/server";
 
 const mocks = vi.hoisted(() => {
   const connection = {
@@ -31,6 +32,8 @@ const mocks = vi.hoisted(() => {
     getLatestGclidProbeReport: vi.fn(),
     idempotencyCreate: vi.fn(),
     taskTrigger: vi.fn(),
+    requireStore: vi.fn(),
+    loadGoogleAdsRevenuePanel: vi.fn(),
   };
 });
 
@@ -61,6 +64,12 @@ vi.mock("@/lib/google-ads/queries", () => ({
   listCampaignFactsSummary: mocks.listCampaignFactsSummary,
   getGoogleBucketNetSales: mocks.getGoogleBucketNetSales,
   getLatestGclidProbeReport: mocks.getLatestGclidProbeReport,
+}));
+vi.mock("@/lib/google-ads/revenue-panel", () => ({
+  loadGoogleAdsRevenuePanel: mocks.loadGoogleAdsRevenuePanel,
+}));
+vi.mock("./attribution.shared", () => ({
+  requireStore: mocks.requireStore,
 }));
 
 const { createCallerFactory } = await import("../init");
@@ -153,6 +162,24 @@ beforeEach(() => {
   mocks.getLatestGclidProbeReport.mockResolvedValue(null);
   mocks.idempotencyCreate.mockImplementation(async (key: string) => ({ key }));
   mocks.taskTrigger.mockResolvedValue({ id: "trigger-run-1" });
+  mocks.requireStore.mockResolvedValue({
+    id: "store-1",
+    organizationId: "org-1",
+  });
+  mocks.loadGoogleAdsRevenuePanel.mockResolvedValue({
+    connection: null,
+    googleCurrencyCode: null,
+    ourSide: {
+      bucketRevenueCents: 0,
+      bucketOrders: 0,
+      feedRevenueCents: 0,
+      feedOrders: 0,
+      paidRevenueCents: 0,
+      paidOrders: 0,
+      paidByCampaign: [],
+    },
+    googleSays: null,
+  });
 });
 
 const PROCEDURE_CALLS: Array<
@@ -168,6 +195,11 @@ const PROCEDURE_CALLS: Array<
   ["startDiscovery", (caller) => caller.startDiscovery()],
   ["startFactsSync", (caller) => caller.startFactsSync()],
   ["runProbe", (caller) => caller.runProbe()],
+  [
+    "revenuePanel",
+    (caller) =>
+      caller.revenuePanel({ dateFrom: "2026-07-01", dateTo: "2026-07-30" }),
+  ],
 ];
 
 describe("googleAds router RBAC", () => {
@@ -367,5 +399,62 @@ describe("googleAds router behavior", () => {
       code: "trigger_dispatch_failed",
       message: "gclid probe dispatch failed",
     });
+  });
+
+  it("revenuePanel rejects dateFrom > dateTo with BAD_REQUEST", async () => {
+    await expect(
+      sessionCaller("admin").revenuePanel({
+        dateFrom: "2026-07-30",
+        dateTo: "2026-07-01",
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(mocks.requireStore).not.toHaveBeenCalled();
+    expect(mocks.loadGoogleAdsRevenuePanel).not.toHaveBeenCalled();
+  });
+
+  it("revenuePanel propagates NOT_FOUND when no Shopify store is connected, without calling the loader", async () => {
+    mocks.requireStore.mockRejectedValue(
+      new TRPCError({
+        code: "NOT_FOUND",
+        message: "No Shopify store is connected for this organization",
+      }),
+    );
+    await expect(
+      sessionCaller("admin").revenuePanel({
+        dateFrom: "2026-07-01",
+        dateTo: "2026-07-30",
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(mocks.loadGoogleAdsRevenuePanel).not.toHaveBeenCalled();
+  });
+
+  it("revenuePanel loads the panel scoped to ctx's org and the resolved store, passing the dates through verbatim", async () => {
+    const summary = {
+      connection: { status: "ready", lastFactsSyncedAt: null, backfillCompletedAt: null },
+      googleCurrencyCode: "USD",
+      ourSide: {
+        bucketRevenueCents: 1000,
+        bucketOrders: 3,
+        feedRevenueCents: 200,
+        feedOrders: 1,
+        paidRevenueCents: 800,
+        paidOrders: 2,
+        paidByCampaign: [],
+      },
+      googleSays: null,
+    };
+    mocks.loadGoogleAdsRevenuePanel.mockResolvedValue(summary);
+    const result = await sessionCaller("admin").revenuePanel({
+      dateFrom: "2026-07-01",
+      dateTo: "2026-07-30",
+    });
+    expect(mocks.requireStore).toHaveBeenCalledWith("org-1");
+    expect(mocks.loadGoogleAdsRevenuePanel).toHaveBeenCalledWith({
+      organizationId: "org-1",
+      storeId: "store-1",
+      dateFrom: "2026-07-01",
+      dateTo: "2026-07-30",
+    });
+    expect(result).toEqual(summary);
   });
 });

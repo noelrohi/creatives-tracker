@@ -263,8 +263,8 @@ async function loadOurSide(scope: OurSideScope): Promise<OurSide> {
       };
     },
   );
-  // Deterministic order: highest revenue first, then campaign name; the
-  // null-campaign slice always sorts last.
+  // Deterministic order: highest revenue first; ties break by campaign name,
+  // with the null-campaign slice last.
   paidByCampaign.sort((a, b) => {
     if (b.revenueCents !== a.revenueCents) return b.revenueCents - a.revenueCents;
     if (a.utmCampaign === null) return 1;
