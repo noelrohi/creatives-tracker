@@ -7,7 +7,7 @@ import type { ResolvedGoogleAdsCredential } from "@/lib/google-ads/credential-pr
  * run. Verify against the current release during sandbox bring-up and bump
  * here only (sandbox runbook step 6).
  */
-export const GOOGLE_ADS_API_VERSION = "v21";
+export const GOOGLE_ADS_API_VERSION = "v22";
 
 const GOOGLE_ADS_ORIGIN = "https://googleads.googleapis.com";
 const OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";

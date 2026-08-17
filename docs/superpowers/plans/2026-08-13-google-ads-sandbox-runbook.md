@@ -46,7 +46,8 @@ environments. `GOOGLE_ADS_REVIV_SHOP_DOMAIN` must equal the Reviv store's
 Check the current Google Ads API version at
 https://developers.google.com/google-ads/api/docs/release-notes and set
 `GOOGLE_ADS_API_VERSION` in `src/lib/google-ads/client.ts` to the newest
-non-sunset version before first sync (the constant ships as "v21").
+non-sunset version before first sync (verified 2026-08-17: v21 is blocked
+with UNSUPPORTED_VERSION; the constant is now "v22").
 
 ## 7. End-to-end sandbox pass (definition of done for Phase 1)
 1. `bun run trigger:dev` + `bun dev`.
