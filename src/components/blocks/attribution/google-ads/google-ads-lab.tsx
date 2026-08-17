@@ -63,7 +63,15 @@ export function GoogleAdsLab() {
   const queryClient = useQueryClient();
   const [rangeDays, setRangeDays] = useState<RangeDays>(30);
 
-  const health = useQuery(trpc.googleAds.health.queryOptions());
+  const health = useQuery({
+    ...trpc.googleAds.health.queryOptions(),
+    // A queued run finishes in the background; poll until it settles so the
+    // action buttons re-enable on their own.
+    refetchInterval: (query) =>
+      query.state.data?.syncRuns.some((run) => run.status === "running")
+        ? 5_000
+        : false,
+  });
   const probeReport = useQuery({
     ...trpc.googleAds.probeReport.queryOptions(),
     // A running probe finishes in the background; poll until it settles.
@@ -117,6 +125,14 @@ export function GoogleAdsLab() {
 
   const latestRun = health.data?.syncRuns[0] ?? null;
   const latestRunFailed = latestRun?.status === "failed";
+  const discoveryRunning =
+    health.data?.syncRuns.some(
+      (run) => run.operation === "discovery" && run.status === "running",
+    ) ?? false;
+  const factsRunning =
+    health.data?.syncRuns.some(
+      (run) => run.operation === "facts" && run.status === "running",
+    ) ?? false;
 
   const connectionBody = health.isError ? (
     <LabPanelState
@@ -349,18 +365,22 @@ export function GoogleAdsLab() {
           <Button
             size="sm"
             variant="outline"
-            disabled={startDiscovery.isPending}
+            disabled={startDiscovery.isPending || discoveryRunning}
             onClick={() => startDiscovery.mutate()}
           >
-            Run discovery
+            {discoveryRunning ? "Discovery running…" : "Run discovery"}
           </Button>
           <Button
             size="sm"
             variant="outline"
-            disabled={startFactsSync.isPending || connection?.status !== "ready"}
+            disabled={
+              startFactsSync.isPending ||
+              factsRunning ||
+              connection?.status !== "ready"
+            }
             onClick={() => startFactsSync.mutate()}
           >
-            Sync facts
+            {factsRunning ? "Syncing facts…" : "Sync facts"}
           </Button>
         </div>
       </div>
