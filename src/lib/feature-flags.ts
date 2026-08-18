@@ -26,7 +26,7 @@ export const featureFlagDefs = [
   },
   {
     key: "competitorSignals",
-    label: "Competitor signals",
+    label: "Competitors",
     description:
       "Shows Competitor signals, where public Meta Ad Library activity is tracked per competitor.",
     badge: "Beta",
