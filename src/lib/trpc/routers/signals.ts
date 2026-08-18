@@ -32,6 +32,7 @@ import {
 } from "@/schema/competitor-signals";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { orgProcedure, orgWriteProcedure, router } from "../init";
+import { signalsFeedbackProcedures } from "./signals.feedback";
 import { signalsPlanProcedures } from "./signals.plan";
 import type {
   CompetitorMediaSource,
@@ -189,6 +190,7 @@ function groupAdsByCluster<T extends { copyClusterId: string | null }>(
 // the plan procedures spread in rather than nesting under a sub-router.
 export const signalsRouter = router({
   ...signalsPlanProcedures,
+  ...signalsFeedbackProcedures,
 
   addCompetitor: orgWriteProcedure
     .input(z.object({ name: z.string().min(1), metaPageId: z.string().min(1) }))

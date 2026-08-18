@@ -45,6 +45,9 @@ function makeConcept(overrides: Partial<Concept> = {}): Concept {
     measurementPlan: "Read CTR at 3 days, CAC at 7 days against the control set",
     claimGuardrail: "Never promise a performance gain in numbers",
     hooks: ["The mouthguard your coach already wears"],
+    hookCopy: null,
+    feedback: [],
+    comments: [],
     generatedAt: new Date("2026-08-01T00:00:00Z"),
     ads: [
       makeAd({ id: "ad1", sortOrder: 0 }),
