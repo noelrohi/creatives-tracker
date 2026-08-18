@@ -110,7 +110,7 @@
       "source": "triggerdotdev/skills",
       "sourceType": "github",
       "skillPath": "trigger-cost-savings/SKILL.md",
-      "computedHash": "4d41360e1f7544c1c28c4e097e72243bd8b88a9c8d91a37974a75f683c1bace1"
+      "computedHash": "ad30d5147201b25597913a669e7e87abee7356328b66838498a8342b214f6ec9"
     },
     "trigger-realtime": {
       "source": "triggerdotdev/skills",
@@ -122,7 +122,7 @@
       "source": "triggerdotdev/skills",
       "sourceType": "github",
       "skillPath": "trigger-tasks/SKILL.md",
-      "computedHash": "1f65ede75b8118f3b301ac41836b447808a6e188dbce44e2ed8cc161fb6a8b25"
+      "computedHash": "fc5371f0356358a13a07b8d5f72f7e537002d4b0c50f3d2dacd57d10a2163cfa"
     },
     "vercel-composition-patterns": {
       "source": "vercel-labs/agent-skills",
