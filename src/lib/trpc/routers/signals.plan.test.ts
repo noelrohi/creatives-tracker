@@ -28,6 +28,7 @@ const mockDb = {
     const chain: Row = {};
     Object.assign(chain, {
       from: vi.fn(() => chain),
+      innerJoin: vi.fn(() => chain),
       where: vi.fn(() => chain),
       orderBy: vi.fn(() => chain),
       groupBy: vi.fn(() => chain),
@@ -313,6 +314,86 @@ describe("signals plan router (competitor-signals v1 §9, Phase 3)", () => {
       );
     });
 
+    it("persists per-hook ad copy alongside the concept", async () => {
+      queueReplacePass({});
+
+      const hookCopy = HOOKS.map((hook) => ({
+        hook,
+        headline: `${hook} headline`,
+        description: "Molded in five minutes, stays put all round.",
+        cta: "Shop now",
+      }));
+
+      await adminCaller.signals.ingestTestPlan({
+        generatedSnapshotId: null,
+        concepts: [concept({ hookCopy })],
+      });
+
+      expect(insertsInto(testPlanConcepts)[0].values[0].hookCopy).toEqual(
+        hookCopy,
+      );
+    });
+
+    // Old plans predate the column, and a push may still leave it out.
+    it("accepts a null hookCopy", async () => {
+      queueReplacePass({});
+
+      await adminCaller.signals.ingestTestPlan({
+        generatedSnapshotId: null,
+        concepts: [concept({ hookCopy: null })],
+      });
+
+      expect(insertsInto(testPlanConcepts)[0].values[0].hookCopy).toBeNull();
+    });
+
+    // Same rule as `ads[].hook`: the copy is keyed by the hook text, so a
+    // drifted hook fails the whole push rather than rendering against nothing.
+    it("rejects hook copy on a hook the concept does not carry", async () => {
+      await expect(
+        adminCaller.signals.ingestTestPlan({
+          generatedSnapshotId: null,
+          concepts: [
+            concept({
+              hookCopy: [
+                {
+                  hook: "Hook Z",
+                  headline: "Drifted",
+                  description: "Never matched a hook.",
+                  cta: "Shop now",
+                },
+              ],
+            }),
+          ],
+        }),
+      ).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Hook Z"),
+      });
+      expect(dbState.inserts).toHaveLength(0);
+    });
+
+    // One entry per hook: a duplicate would make the screen render whichever
+    // entry it found first, so the push fails instead of storing the ambiguity.
+    it("rejects two hook copy entries for the same hook", async () => {
+      const entry = {
+        hook: "Hook A",
+        headline: "Written twice",
+        description: "The second entry would never render.",
+        cta: "Shop now",
+      };
+
+      await expect(
+        adminCaller.signals.ingestTestPlan({
+          generatedSnapshotId: null,
+          concepts: [concept({ hookCopy: [entry, entry] })],
+        }),
+      ).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("more than one hook copy entry"),
+      });
+      expect(dbState.inserts).toHaveLength(0);
+    });
+
     it("rejects an ad on a hook the concept does not carry", async () => {
       await expect(
         adminCaller.signals.ingestTestPlan({
@@ -346,6 +427,7 @@ describe("signals plan router (competitor-signals v1 §9, Phase 3)", () => {
             measurementPlan: "CTR at 7 days.",
             claimGuardrail: null,
             hooks: HOOKS,
+            hookCopy: null,
             generatedAt,
           },
           {
@@ -358,6 +440,7 @@ describe("signals plan router (competitor-signals v1 §9, Phase 3)", () => {
             measurementPlan: "CAC at 14 days.",
             claimGuardrail: "Never promise concussion protection.",
             hooks: HOOKS,
+            hookCopy: null,
             generatedAt,
           },
         ],
@@ -417,6 +500,101 @@ describe("signals plan router (competitor-signals v1 §9, Phase 3)", () => {
       );
     });
 
+    it("groups hook copy, feedback, and comments under their concept", async () => {
+      const generatedAt = new Date("2026-08-14T09:00:00Z");
+      const commentedAt = new Date("2026-08-15T10:00:00Z");
+      const hookCopy = [
+        {
+          hook: "Hook A",
+          headline: "Stays put all round",
+          description: "Molded in five minutes.",
+          cta: "Shop now",
+        },
+      ];
+
+      dbState.selectRows.push(
+        [
+          {
+            id: "concept-1",
+            title: "Fit that stays put",
+            angle: "problem_solution",
+            audience: "Wrestlers",
+            evidenceClusterIds: [],
+            evidenceCitation: "Longest-running cluster.",
+            measurementPlan: "CTR at 7 days.",
+            claimGuardrail: null,
+            hooks: HOOKS,
+            hookCopy,
+            generatedAt,
+          },
+          {
+            id: "concept-2",
+            title: "Proof from the mat",
+            angle: "social_proof",
+            audience: "Coaches",
+            evidenceClusterIds: [],
+            evidenceCitation: "Reviews-led claims.",
+            measurementPlan: "CAC at 14 days.",
+            claimGuardrail: null,
+            hooks: HOOKS,
+            hookCopy: null,
+            generatedAt,
+          },
+        ],
+        // ads
+        [],
+        // hook feedback — one grouped read for both concepts
+        [
+          {
+            conceptId: "concept-1",
+            hook: "Hook A",
+            rating: "down",
+            reasons: ["too_generic"],
+          },
+          {
+            conceptId: "concept-2",
+            hook: "Hook B",
+            rating: "up",
+            reasons: [],
+          },
+        ],
+        // comments, author name joined from the Better Auth user table
+        [
+          {
+            id: "comment-1",
+            conceptId: "concept-1",
+            authorName: "Ada",
+            createdAt: commentedAt,
+            text: "Lean harder on the fit claim.",
+            promotedRuleId: "rule-1",
+          },
+        ],
+      );
+
+      const result = await memberCaller.signals.testPlan();
+
+      // concepts, ads, feedback, comments — never a query per concept.
+      expect(mockDb.select).toHaveBeenCalledTimes(4);
+      expect(result.concepts[0].hookCopy).toEqual(hookCopy);
+      expect(result.concepts[0].feedback).toEqual([
+        { hook: "Hook A", rating: "down", reasons: ["too_generic"] },
+      ]);
+      expect(result.concepts[0].comments).toEqual([
+        {
+          id: "comment-1",
+          authorName: "Ada",
+          createdAt: commentedAt,
+          text: "Lean harder on the fit claim.",
+          promotedRuleId: "rule-1",
+        },
+      ]);
+      expect(result.concepts[1].hookCopy).toBeNull();
+      expect(result.concepts[1].feedback).toEqual([
+        { hook: "Hook B", rating: "up", reasons: [] },
+      ]);
+      expect(result.concepts[1].comments).toEqual([]);
+    });
+
     it("returns nothing and skips the ad read when there is no plan", async () => {
       dbState.selectRows.push([]);
 
@@ -439,6 +617,7 @@ describe("signals plan router (competitor-signals v1 §9, Phase 3)", () => {
             measurementPlan: "CTR at 7 days.",
             claimGuardrail: null,
             hooks: HOOKS,
+            hookCopy: null,
             generatedAt: new Date("2026-08-14T09:00:00Z"),
           },
         ],
