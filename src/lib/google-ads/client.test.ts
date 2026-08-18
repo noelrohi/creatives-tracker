@@ -308,6 +308,23 @@ describe("GoogleAdsClient", () => {
     expect(page.nextPageToken).toBeNull();
   });
 
+  it("retries a token endpoint 5xx and succeeds when it recovers", async () => {
+    let tokenAttempts = 0;
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      if (String(input).includes("oauth2")) {
+        tokenAttempts += 1;
+        if (tokenAttempts < 3) return jsonResponse(500, { error: "server_error" });
+        return tokenResponse();
+      }
+      return jsonResponse(200, { results: [] });
+    }) as typeof fetch;
+
+    const client = makeClient(fetchImpl);
+    const page = await client.search({ query: "SELECT campaign.id FROM campaign" });
+    expect(page.results).toEqual([]);
+    expect(tokenAttempts).toBe(3);
+  });
+
   it("treats a token endpoint rejection as terminal", async () => {
     const fetchImpl = (async () =>
       jsonResponse(400, { error: "invalid_grant" })) as typeof fetch;

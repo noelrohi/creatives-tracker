@@ -156,15 +156,17 @@ export class GoogleAdsClient {
     });
     if (!response.ok) {
       discardResponseBody(response);
-      // invalid_grant / invalid_client are configuration failures; retrying
-      // cannot fix them and 5xx from the token endpoint is rare enough to
-      // surface rather than mask. Transport-level failures (network errors,
-      // timeouts) never reach here — #fetchWithTimeout throws a retryable
-      // GoogleAdsApiError for those before a response exists.
+      // 4xx (invalid_grant / invalid_client) are configuration failures;
+      // retrying cannot fix them. 5xx/429/408 are provider-side and retry
+      // with backoff like any other transport-class failure — the search
+      // loop's per-attempt token acquisition consumes attempts for these.
+      // Transport-level failures (network errors, timeouts) never reach
+      // here — #fetchWithTimeout throws a retryable GoogleAdsApiError
+      // for those before a response exists.
       throw new GoogleAdsApiError(
         "Google Ads OAuth token refresh was rejected",
         response.status,
-        false,
+        isRetryableStatus(response.status),
       );
     }
     const payload = await readJson(response, "Google Ads OAuth token response was malformed");
