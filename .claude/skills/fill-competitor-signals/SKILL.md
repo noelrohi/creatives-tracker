@@ -291,7 +291,7 @@ Prompt contract:
 > Client positioning: <one paragraph — the client's product, market, and angle>.
 > Below are the top-ranked competitor copy clusters, each with its evidence: score components, strategic read, formats observed, landing-page focus, and representative copy.
 > Return **3 concepts**. Each concept: a `title`; an `angle` (exactly one of the seven values); the `audience` it targets; `evidenceClusterIds` naming the clusters it draws on; an `evidenceCitation` of 1–2 sentences pointing at what was actually observed — how long the ads have run, how many creatives, which formats — and never at performance you cannot see; a `measurementPlan` naming the decision metric and the horizon; a `claimGuardrail` **only** where a product claim carries real risk, otherwise `null`; and exactly **3 hooks**.
-> Then expand each concept's hooks into ad rows: every hook × `static` and `video` = 6 rows per concept, 18 in all. Write the ad copy once per hook, not once per row: a `headline`, a `description`, and a `cta` that both formats share.
+> Then expand each concept's hooks into ad rows: one `static` row per hook = 3 rows per concept, 9 in all. Write the ad copy once per hook: a `headline`, a `description`, and a `cta`.
 > Standing rule, always in force: **Never claim to diagnose, treat, or cure a condition — describe the product mechanism and subjective experience only.**
 > Plan rules the client has set — every one applies to every concept: <one line per `rules[].text`, in the order returned>.
 > Feedback on the plan you are replacing. Down-rated hooks and what was wrong with them: <hook — the reason slugs, translated>. Up-rated hooks: <hook>. Comments: <`authorName`: `text`>.
@@ -371,14 +371,15 @@ Payload (`test-plan.json`):
       ],
       "ads": [
         { "hook": "Stop gasping mid-set.", "format": "static" },
-        { "hook": "Stop gasping mid-set.", "format": "video" }
+        { "hook": "Your conditioning isn't the problem.", "format": "static" },
+        { "hook": "The breath you're not taking.", "format": "static" }
       ]
     }
   ]
 }
 ```
 
-Response: `{ "conceptCount": 3, "adCount": 18, "replacedAdCount": <n>, "keptConceptCount": <n> }`.
+Response: `{ "conceptCount": 3, "adCount": 9, "replacedAdCount": <n>, "keptConceptCount": <n> }`.
 
 Rules the server enforces:
 
@@ -386,7 +387,7 @@ Rules the server enforces:
 - **Unknown `angle` → 400**, **an `ads[].hook` outside its concept's `hooks` → 400**, **a `hookCopy[].hook` outside its concept's `hooks` → 400**, **a `generatedSnapshotId` from another org → 404**.
 - `hookCopy` may be `null` — plans generated before per-hook copy existed carry none, and the UI degrades to a hook-only row. Send it populated anyway: a run of this skill has no reason to omit it.
 - `evidenceClusterIds` are stored as given and never validated — clusters are wiped and rebuilt on every fill, so those ids go stale by design. The `evidenceCitation` is what has to survive; write it to stand on its own.
-- Six concepts max, 24 ad rows per concept. The 3 × 3 × 2 shape is the client's default, not a server constraint.
+- Six concepts max, 24 ad rows per concept. The 3 × 3 static-only shape is the client's default, not a server constraint. **`video` rows are deliberately absent for now**: a video row is only actionable once it carries a competitor-transcript-backed UGC brief, and transcript capture has not shipped. When it does, the wave goes back to every hook × `static` and `video`.
 
 ---
 

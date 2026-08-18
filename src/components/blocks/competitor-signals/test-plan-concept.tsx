@@ -86,6 +86,18 @@ function InspiredBy({ inspiration }: { inspiration: Concept["inspiration"] }) {
   );
 }
 
+/**
+ * Field name for one line of the ad-copy block — the Meta ad anatomy made
+ * explicit, since the hook (primary text) sits above unlabeled.
+ */
+function CopyFieldLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="w-20 shrink-0 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/65">
+      {children}
+    </span>
+  );
+}
+
 /** A comment author, on the same initials helper the competitor cards use. */
 function Avatar({ name }: { name: string }) {
   return (
@@ -204,18 +216,25 @@ function HookRow({
 
       {/* Old plans predate per-hook copy, so the strip simply is not there. */}
       {copy && (
-        <div className="mt-1.5 flex flex-wrap items-start gap-3 pl-7">
-          <div className="min-w-0 flex-1">
-            <p className="text-[13px] font-semibold leading-snug">
+        <div className="mt-2 flex flex-col gap-1 pl-7">
+          <div className="flex items-baseline gap-2.5">
+            <CopyFieldLabel>Headline</CopyFieldLabel>
+            <p className="min-w-0 text-[13px] font-semibold leading-snug">
               {copy.headline}
             </p>
-            <p className="text-xs leading-relaxed text-muted-foreground">
+          </div>
+          <div className="flex items-baseline gap-2.5">
+            <CopyFieldLabel>Description</CopyFieldLabel>
+            <p className="min-w-0 text-xs leading-relaxed text-muted-foreground">
               {copy.description}
             </p>
           </div>
-          <Badge variant="outline" className="shrink-0 font-normal">
-            {copy.cta}
-          </Badge>
+          <div className="flex items-center gap-2.5">
+            <CopyFieldLabel>CTA</CopyFieldLabel>
+            <Badge variant="outline" className="font-normal">
+              {copy.cta}
+            </Badge>
+          </div>
         </div>
       )}
 
