@@ -5,12 +5,19 @@ import { z } from "zod";
 import { db } from "@/db";
 import type { ScorableAdRow } from "@/lib/competitor-signals/score";
 import {
+  creativeCount,
   landingFocusShare,
   resolveFormat,
   scoreCompetitorClusters,
   stripQuery,
   toScoredAdInput,
 } from "@/lib/competitor-signals/score";
+import {
+  adIsVideo,
+  adThumbnailUrl,
+  previewAdSchema,
+  toPreviewAd,
+} from "@/lib/competitor-signals/preview-ads";
 import { extractRawPrimaryMedia } from "@/lib/competitor-signals/raw-media";
 import { normalizeAngle } from "@/lib/creative-tag-enrichment";
 import {
@@ -35,6 +42,10 @@ import type {
 // keeps a mega-advertiser from making fills and mirroring unbounded.
 const MAX_ADS_PER_FILL = 200;
 const MAX_TOP_CLUSTERS = 3;
+// Thumbnails shown inline on cards and in the evidence panel; the full grid
+// lives on the competitor page.
+const MAX_CARD_PREVIEWS = 4;
+const MAX_SIGNAL_PREVIEWS = 5;
 
 const variantSchema = z.object({
   bodyText: z.string().nullable(),
@@ -97,9 +108,14 @@ const FORMAT_ORDER = ["image", "video", "carousel"] as const;
 
 /**
  * The member-ad columns the evidence extras (§9) need: the scoring inputs plus
- * the body text that becomes the cluster's representative copy.
+ * the body text that becomes the cluster's representative copy, and the
+ * identity/media columns the evidence panel's ad previews render from.
  */
-type EvidenceAdRow = ScorableAdRow & { bodyText: string };
+type EvidenceAdRow = ScorableAdRow & {
+  bodyText: string;
+  archiveId: string;
+  mirroredPreviewUrl: string | null;
+};
 
 /**
  * Evidence extras the plan generator gets per cluster (§9). Derived from the
@@ -142,7 +158,16 @@ function clusterEvidence(ads: EvidenceAdRow[]) {
     formatsObserved: FORMAT_ORDER.filter((format) => formats.has(format)),
     landingFocusUrl,
     landingFocusShare: landingFocusShare(inputs),
+    // Total creatives (primary + variants[] per ad) — the same count variant
+    // multiplication scores, so the Variations meter and its bar agree.
+    creativeCount: creativeCount(inputs),
     representativeCopy: representative?.bodyText ?? null,
+    oldestStartDate: representative?.startDate ?? null,
+    // Longest-running first, mirroring the competitor ad grid's default sort.
+    previewAds: [...ads]
+      .sort((a, b) => a.startDate.getTime() - b.startDate.getTime())
+      .flatMap((ad) => toPreviewAd(ad) ?? [])
+      .slice(0, MAX_SIGNAL_PREVIEWS),
   };
 }
 
@@ -224,7 +249,8 @@ export const signalsRouter = router({
 
   /** Card data for /competitors (§10, Phase 1). */
   listCompetitors: orgProcedure.query(async ({ ctx }) => {
-    const [tracked, adStats, clusters, lastFills] = await Promise.all([
+    const [tracked, adStats, clusters, lastFills, liveAds, successfulFills] =
+      await Promise.all([
       db
         .select()
         .from(competitors)
@@ -257,6 +283,7 @@ export const signalsRouter = router({
           angle: copyClusters.angle,
           tier: copyClusters.tier,
           score: copyClusters.score,
+          adCount: copyClusters.adCount,
         })
         .from(copyClusters)
         .where(eq(copyClusters.organizationId, ctx.organizationId)),
@@ -277,6 +304,45 @@ export const signalsRouter = router({
           asc(intelSnapshots.competitorId),
           desc(intelSnapshots.filledAt),
         ),
+      // Live ads, longest-running first: the card's creative strip and each
+      // cluster's "N days" line derive from these rows.
+      db
+        .select({
+          competitorId: competitorAds.competitorId,
+          copyClusterId: competitorAds.copyClusterId,
+          archiveId: competitorAds.archiveId,
+          startDate: competitorAds.startDate,
+          mediaKinds: competitorAds.mediaKinds,
+          mirroredPreviewUrl: competitorAds.mirroredPreviewUrl,
+          mirroredImageUrl: competitorAds.mirroredImageUrl,
+          mirroredVideoUrl: competitorAds.mirroredVideoUrl,
+        })
+        .from(competitorAds)
+        .where(
+          and(
+            eq(competitorAds.organizationId, ctx.organizationId),
+            isNull(competitorAds.noLongerSeenAt),
+          ),
+        )
+        .orderBy(asc(competitorAds.startDate)),
+      // When the latest fill failed, the card still names the date the data on
+      // it actually comes from.
+      db
+        .selectDistinctOn([intelSnapshots.competitorId], {
+          competitorId: intelSnapshots.competitorId,
+          filledAt: intelSnapshots.filledAt,
+        })
+        .from(intelSnapshots)
+        .where(
+          and(
+            eq(intelSnapshots.organizationId, ctx.organizationId),
+            eq(intelSnapshots.pipelineStatus, "complete"),
+          ),
+        )
+        .orderBy(
+          asc(intelSnapshots.competitorId),
+          desc(intelSnapshots.filledAt),
+        ),
     ]);
 
     const statsByCompetitor = new Map(
@@ -285,11 +351,25 @@ export const signalsRouter = router({
     const fillByCompetitor = new Map(
       lastFills.map((row) => [row.competitorId, row]),
     );
+    const successByCompetitor = new Map(
+      successfulFills.map((row) => [row.competitorId, row.filledAt]),
+    );
     const clustersByCompetitor = new Map<string, typeof clusters>();
     for (const cluster of clusters) {
       const bucket = clustersByCompetitor.get(cluster.competitorId) ?? [];
       bucket.push(cluster);
       clustersByCompetitor.set(cluster.competitorId, bucket);
+    }
+    const liveAdsByCompetitor = new Map<string, typeof liveAds>();
+    const clusterOldestStart = new Map<string, Date>();
+    for (const ad of liveAds) {
+      const bucket = liveAdsByCompetitor.get(ad.competitorId) ?? [];
+      bucket.push(ad);
+      liveAdsByCompetitor.set(ad.competitorId, bucket);
+      // Rows arrive startDate-ascending, so the first ad per cluster wins.
+      if (ad.copyClusterId && !clusterOldestStart.has(ad.copyClusterId)) {
+        clusterOldestStart.set(ad.copyClusterId, ad.startDate);
+      }
     }
 
     return {
@@ -297,6 +377,10 @@ export const signalsRouter = router({
         const stats = statsByCompetitor.get(competitor.id);
         const ownClusters = clustersByCompetitor.get(competitor.id) ?? [];
         const lastFill = fillByCompetitor.get(competitor.id);
+        const ownAds = liveAdsByCompetitor.get(competitor.id) ?? [];
+        const recentAds = ownAds
+          .flatMap((ad) => toPreviewAd(ad) ?? [])
+          .slice(0, MAX_CARD_PREVIEWS);
 
         return {
           id: competitor.id,
@@ -305,6 +389,7 @@ export const signalsRouter = router({
           activeAdCount: stats?.activeAdCount ?? 0,
           oldestStartDate: stats?.oldestStartDate ?? null,
           clusterCount: ownClusters.length,
+          recentAds,
           // Unscored clusters sort last — a fill that hasn't been scored yet
           // shouldn't outrank a scored one.
           topClusters: [...ownClusters]
@@ -316,6 +401,8 @@ export const signalsRouter = router({
               angle: cluster.angle,
               tier: cluster.tier,
               score: cluster.score,
+              adCount: cluster.adCount,
+              oldestStartDate: clusterOldestStart.get(cluster.id) ?? null,
             })),
           lastFill: lastFill
             ? {
@@ -326,10 +413,115 @@ export const signalsRouter = router({
                 error: lastFill.error,
               }
             : null,
+          lastSuccessfulFillAt: successByCompetitor.get(competitor.id) ?? null,
         };
       }),
     };
   }),
+
+  /**
+   * The competitor ad grid (/competitors/[competitorId]): every ad still
+   * active as of the last fill, with its mirrored creative, longest-running
+   * first. Filters and sorting are client-side — a fill caps at 200 ads, so
+   * the whole set ships at once.
+   */
+  listCompetitorAds: orgProcedure
+    .input(z.object({ competitorId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      const [competitor] = await db
+        .select({
+          id: competitors.id,
+          name: competitors.name,
+          metaPageId: competitors.metaPageId,
+        })
+        .from(competitors)
+        .where(
+          and(
+            eq(competitors.id, input.competitorId),
+            eq(competitors.organizationId, ctx.organizationId),
+            eq(competitors.status, "active"),
+          ),
+        )
+        .limit(1);
+
+      if (!competitor) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Competitor not found",
+        });
+      }
+
+      const [ads, clusters, fills] = await Promise.all([
+        db
+          .select({
+            id: competitorAds.id,
+            archiveId: competitorAds.archiveId,
+            startDate: competitorAds.startDate,
+            displayFormat: competitorAds.displayFormat,
+            copyClusterId: competitorAds.copyClusterId,
+            mediaKinds: competitorAds.mediaKinds,
+            mirroredPreviewUrl: competitorAds.mirroredPreviewUrl,
+            mirroredImageUrl: competitorAds.mirroredImageUrl,
+            mirroredVideoUrl: competitorAds.mirroredVideoUrl,
+          })
+          .from(competitorAds)
+          .where(
+            and(
+              eq(competitorAds.organizationId, ctx.organizationId),
+              eq(competitorAds.competitorId, input.competitorId),
+              isNull(competitorAds.noLongerSeenAt),
+            ),
+          )
+          .orderBy(asc(competitorAds.startDate)),
+        db
+          .select({ id: copyClusters.id, label: copyClusters.label })
+          .from(copyClusters)
+          .where(
+            and(
+              eq(copyClusters.organizationId, ctx.organizationId),
+              eq(copyClusters.competitorId, input.competitorId),
+            ),
+          ),
+        db
+          .selectDistinctOn([intelSnapshots.competitorId], {
+            competitorId: intelSnapshots.competitorId,
+            filledAt: intelSnapshots.filledAt,
+          })
+          .from(intelSnapshots)
+          .where(
+            and(
+              eq(intelSnapshots.organizationId, ctx.organizationId),
+              eq(intelSnapshots.competitorId, input.competitorId),
+            ),
+          )
+          .orderBy(
+            asc(intelSnapshots.competitorId),
+            desc(intelSnapshots.filledAt),
+          ),
+      ]);
+
+      const clusterLabelById = new Map(
+        clusters.map((cluster) => [cluster.id, cluster.label]),
+      );
+
+      return {
+        competitor,
+        updatedAt: fills[0]?.filledAt ?? null,
+        ads: ads.map((ad) => ({
+          id: ad.id,
+          archiveId: ad.archiveId,
+          startDate: ad.startDate,
+          displayFormat: ad.displayFormat,
+          mediaKinds: ad.mediaKinds,
+          thumbnailUrl: adThumbnailUrl(ad),
+          isVideo: adIsVideo(ad),
+          videoUrl: ad.mirroredVideoUrl,
+          theme: ad.copyClusterId
+            ? (clusterLabelById.get(ad.copyClusterId) ?? null)
+            : null,
+        })),
+      };
+    }),
 
   /**
    * The fill push (§4/§5): one POST per competitor page carrying the full
@@ -679,7 +871,10 @@ export const signalsRouter = router({
             formatsObserved: z.array(z.enum(FORMAT_ORDER)),
             landingFocusUrl: z.string().nullable(),
             landingFocusShare: z.number(),
+            creativeCount: z.number().int(),
             representativeCopy: z.string().nullable(),
+            oldestStartDate: z.date().nullable(),
+            previewAds: z.array(previewAdSchema),
           }),
         ),
         fills: z.array(
@@ -749,6 +944,7 @@ export const signalsRouter = router({
         ? await db
             .select({
               copyClusterId: competitorAds.copyClusterId,
+              archiveId: competitorAds.archiveId,
               bodyText: competitorAds.bodyText,
               startDate: competitorAds.startDate,
               displayFormat: competitorAds.displayFormat,
@@ -757,6 +953,7 @@ export const signalsRouter = router({
               mediaKinds: competitorAds.mediaKinds,
               mirroredImageUrl: competitorAds.mirroredImageUrl,
               mirroredVideoUrl: competitorAds.mirroredVideoUrl,
+              mirroredPreviewUrl: competitorAds.mirroredPreviewUrl,
             })
             .from(competitorAds)
             .where(
