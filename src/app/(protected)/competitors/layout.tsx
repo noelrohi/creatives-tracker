@@ -21,9 +21,13 @@ export default function CompetitorsLayout({
     <div className="flex flex-col gap-4">
       <nav className="flex w-fit items-center gap-1 rounded-full border bg-muted/40 p-1">
         {tabs.map((tab) => {
+          // The Competitors tab owns every /competitors route the other tabs
+          // don't claim — including the per-competitor ad grid.
           const isActive =
             tab.href === "/competitors"
-              ? pathname === "/competitors"
+              ? tabs
+                  .slice(1)
+                  .every((other) => !pathname.startsWith(other.href))
               : pathname.startsWith(tab.href);
 
           return (
