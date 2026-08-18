@@ -1,6 +1,6 @@
 {
-  "id": "95c31d2e-685f-436d-8ac3-b07f97c0c6a4",
-  "prevId": "0302ab63-b4a6-4397-8a04-3d584e261af8",
+  "id": "4e944116-31a9-44bd-ac95-246610974213",
+  "prevId": "95c31d2e-685f-436d-8ac3-b07f97c0c6a4",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2094,6 +2094,13 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": true
+        },
+        "media_kinds": {
+          "name": "media_kinds",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
         },
         "raw": {
           "name": "raw",

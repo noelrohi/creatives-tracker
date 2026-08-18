@@ -25,6 +25,16 @@ export const featureFlagDefs = [
     group: "analyze",
   },
   {
+    key: "competitorSignals",
+    label: "Competitors",
+    description:
+      "Shows Competitor signals, where public Meta Ad Library activity is tracked per competitor.",
+    badge: "Beta",
+    href: "/competitors",
+    icon: "solar:radar-2-linear",
+    group: "analyze",
+  },
+  {
     key: "imageStudio",
     label: "Image Studio",
     description:
