@@ -77,6 +77,8 @@ export function GoogleAdsRevenuePanel({
     googleCurrencyCode === null || googleCurrencyCode === currency;
   const mixedCurrency = googleSays !== null && !sameCurrency;
   const currencySuffix = mixedCurrency ? ` ${googleCurrencyCode}` : "";
+  /** Mirror suffix for our Shopify-side figures so both currencies are explicit. */
+  const storeCurrencySuffix = mixedCurrency ? ` ${currency}` : "";
 
   const spendDisplay = googleSays
     ? `${formatCentsMoney(googleSays.spendCents, googleCurrency) ?? "—"}${currencySuffix}`
@@ -117,13 +119,13 @@ export function GoogleAdsRevenuePanel({
     ? widthPercent(ourSide.paidRevenueCents, shopifyTotalCents)
     : 0;
   const feedDisplay = ourSide
-    ? (formatCentsMoney(ourSide.feedRevenueCents, currency) ?? "—")
+    ? `${formatCentsMoney(ourSide.feedRevenueCents, currency) ?? "—"}${storeCurrencySuffix}`
     : "—";
   const paidDisplay = ourSide
-    ? (formatCentsMoney(ourSide.paidRevenueCents, currency) ?? "—")
+    ? `${formatCentsMoney(ourSide.paidRevenueCents, currency) ?? "—"}${storeCurrencySuffix}`
     : "—";
   const bucketDisplay = ourSide
-    ? (formatCentsMoney(ourSide.bucketRevenueCents, currency) ?? "—")
+    ? `${formatCentsMoney(ourSide.bucketRevenueCents, currency) ?? "—"}${storeCurrencySuffix}`
     : "—";
 
   const insightText =
@@ -137,7 +139,9 @@ export function GoogleAdsRevenuePanel({
               formatCentsMoney(ourSide.paidRevenueCents, currency) ?? "—",
             )
           : null
-      : null;
+      : // Spec composition item 5: the awaiting/no-range reading is the
+        // insight strip's third case, not a bare paragraph.
+        (noDataCaption ?? null);
 
   return (
     <section className="rounded-md border border-border bg-card px-3 py-3 sm:px-4">
@@ -286,9 +290,7 @@ export function GoogleAdsRevenuePanel({
               currency={currency}
               googleCurrency={googleCurrency}
             />
-          ) : (
-            <p className="text-[11px] text-muted-foreground">{noDataCaption}</p>
-          )}
+          ) : null}
           {insightText !== null ? (
             <div className="rounded-md border border-dashed border-amber-600/40 bg-amber-600/5 px-3 py-2 text-[11px]">
               {insightText}

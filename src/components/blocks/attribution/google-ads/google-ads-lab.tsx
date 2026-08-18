@@ -10,6 +10,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
@@ -324,6 +325,47 @@ export function GoogleAdsLab() {
               </TableRow>
             ))}
           </TableBody>
+          <TableFooter>
+            <TableRow>
+              <TableCell className="font-medium">Total</TableCell>
+              <TableCell>
+                {formatMoney(
+                  facts.data.campaigns.reduce(
+                    (total, campaign) => total + campaign.costMicros,
+                    0,
+                  ) / 1_000_000,
+                  currency,
+                ) ?? "—"}
+              </TableCell>
+              <TableCell>
+                {facts.data.campaigns.reduce(
+                  (total, campaign) => total + campaign.impressions,
+                  0,
+                )}
+              </TableCell>
+              <TableCell>
+                {facts.data.campaigns.reduce(
+                  (total, campaign) => total + campaign.clicks,
+                  0,
+                )}
+              </TableCell>
+              <TableCell>
+                {facts.data.campaigns.reduce(
+                  (total, campaign) => total + campaign.conversions,
+                  0,
+                )}
+              </TableCell>
+              <TableCell>
+                {formatMoney(
+                  facts.data.campaigns.reduce(
+                    (total, campaign) => total + campaign.conversionsValue,
+                    0,
+                  ),
+                  currency,
+                ) ?? "—"}
+              </TableCell>
+            </TableRow>
+          </TableFooter>
         </Table>
       </div>
       <p className="mt-2 text-xs text-muted-foreground">

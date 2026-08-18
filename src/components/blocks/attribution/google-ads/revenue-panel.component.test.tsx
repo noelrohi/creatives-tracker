@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RevenuePanelSummary } from "@/lib/google-ads/revenue-panel";
+import { googleAdsRevenue } from "./copy";
 import { GoogleAdsRevenuePanel } from "./revenue-panel";
 
 const queryState = vi.hoisted(() => ({
@@ -213,6 +214,52 @@ describe("GoogleAdsRevenuePanel", () => {
       screen.getByText(/mixed currencies — not comparable/),
     ).toBeInTheDocument();
     expect(screen.queryByTestId("google-says-delta")).toBeNull();
+    expect(
+      screen.queryByText(/our paid-tagged revenue confirms/),
+    ).toBeNull();
+  });
+
+  it("shows the untagged-paid insight when Google reports conversions but paid is zero", async () => {
+    queryState.revenuePanelFn = () =>
+      Promise.resolve(
+        emptySummary({
+          connection: {
+            status: "ready",
+            lastFactsSyncedAt: new Date("2026-08-10T00:00:00Z"),
+            backfillCompletedAt: new Date("2026-08-01T00:00:00Z"),
+          },
+          googleCurrencyCode: "USD",
+          ourSide: {
+            bucketRevenueCents: 72_010,
+            bucketOrders: 9,
+            feedRevenueCents: 72_010,
+            feedOrders: 9,
+            paidRevenueCents: 0,
+            paidOrders: 0,
+            paidByCampaign: [],
+          },
+          googleSays: {
+            spendCents: 124_000,
+            conversions: 18,
+            conversionsValueCents: 210_600,
+            byCampaign: [
+              {
+                campaignId: "1",
+                campaignName: "PMax",
+                spendCents: 124_000,
+                conversions: 18,
+                conversionsValueCents: 210_600,
+                matchedUtmCampaign: null,
+              },
+            ],
+          },
+        }),
+      );
+    renderPanel();
+    expect(
+      await screen.findByText(googleAdsRevenue.insight.untaggedPaid),
+    ).toBeInTheDocument();
+    // And the delta reading must not render alongside it.
     expect(
       screen.queryByText(/our paid-tagged revenue confirms/),
     ).toBeNull();
