@@ -93,6 +93,31 @@ const SAFE_LEASE_ERROR = {
 } as const;
 
 export const KLAVIYO_RUN_STALE_AFTER_MS = 20 * 60 * 1000;
+const KLAVIYO_PAGE_STATEMENT_CHUNK_SIZE = 1_000;
+
+function chunkRows<T>(rows: readonly T[]): T[][] {
+  const chunks: T[][] = [];
+  for (
+    let index = 0;
+    index < rows.length;
+    index += KLAVIYO_PAGE_STATEMENT_CHUNK_SIZE
+  ) {
+    chunks.push(rows.slice(index, index + KLAVIYO_PAGE_STATEMENT_CHUNK_SIZE));
+  }
+  return chunks;
+}
+
+function tupleKey(...parts: string[]): string {
+  return JSON.stringify(parts);
+}
+
+export function dedupeKlaviyoEventsLastWins(
+  events: readonly NormalizedKlaviyoEvent[],
+): NormalizedKlaviyoEvent[] {
+  const byExternalEventId = new Map<string, NormalizedKlaviyoEvent>();
+  for (const event of events) byExternalEventId.set(event.externalEventId, event);
+  return [...byExternalEventId.values()];
+}
 
 export function sameCheckpoint(
   left: KlaviyoEventCheckpoint | null,
@@ -1152,6 +1177,7 @@ export async function commitKlaviyoEventPage(input: {
   if (!Number.isInteger(input.rowsRead) || input.rowsRead < 0) {
     throw new Error("Klaviyo page row count is invalid");
   }
+  const events = dedupeKlaviyoEventsLastWins(input.events);
 
   // Store→connection→run lock order: a suppression hit may close
   // Shopify-order incident results, so the store lock comes first.
@@ -1234,7 +1260,7 @@ export async function commitKlaviyoEventPage(input: {
       if (!expectedMetricRowId) {
         throw new Error("Klaviyo event checkpoint metric binding is unavailable");
       }
-      for (const event of input.events) {
+      for (const event of events) {
         if (
           event.metricKind !== expectedMetricKind ||
           event.metricId !== expectedMetricRowId
@@ -1260,13 +1286,13 @@ export async function commitKlaviyoEventPage(input: {
             eq(klaviyoMetrics.canonicalKind, expectedMetricKind),
           ),
         );
-      if (input.events.length > 0) {
+      if (events.length > 0) {
         if (journeyMetrics.length !== 1) {
           throw new Error(
             "Klaviyo journey metric binding is unavailable or ambiguous",
           );
         }
-        for (const event of input.events) {
+        for (const event of events) {
           if (
             event.metricKind !== expectedMetricKind ||
             event.metricId !== journeyMetrics[0].metricRowId
@@ -1289,7 +1315,7 @@ export async function commitKlaviyoEventPage(input: {
       })
       .from(klaviyoConnections)
       .where(scopePredicate(input.scope));
-    const identityBearing = input.events.some(
+    const identityBearing = events.some(
       (event) =>
         event.identityDigests.length > 0 ||
         event.erasureSuppressionCandidates.length > 0,
@@ -1350,97 +1376,117 @@ export async function commitKlaviyoEventPage(input: {
     let updated = 0;
     let suppressedCount = 0;
     const pageCommittedAt = new Date();
-    for (const event of input.events) {
-      if (event.erasureSuppressionCandidates.length > 0) {
-        const [suppressionHit] = await tx
-          .select({ id: identityErasureSuppressions.id })
-          .from(identityErasureSuppressions)
-          .where(
-            and(
-              eq(
-                identityErasureSuppressions.organizationId,
-                input.scope.organizationId,
-              ),
-              eq(identityErasureSuppressions.storeId, input.scope.storeId),
-              or(
-                ...event.erasureSuppressionCandidates.map((candidate) =>
-                  and(
-                    eq(identityErasureSuppressions.kind, candidate.kind),
-                    eq(identityErasureSuppressions.keyVersion, candidate.keyVersion),
-                    eq(identityErasureSuppressions.digest, candidate.digest),
+
+    const suppressionByTuple = new Map<string, string>();
+    const suppressionCandidates = events.flatMap(
+      (event) => event.erasureSuppressionCandidates,
+    );
+    for (const candidateChunk of chunkRows(suppressionCandidates)) {
+      const hits = await tx
+        .select({
+          id: identityErasureSuppressions.id,
+          kind: identityErasureSuppressions.kind,
+          keyVersion: identityErasureSuppressions.keyVersion,
+          digest: identityErasureSuppressions.digest,
+        })
+        .from(identityErasureSuppressions)
+        .where(
+          and(
+            eq(
+              identityErasureSuppressions.organizationId,
+              input.scope.organizationId,
+            ),
+            eq(identityErasureSuppressions.storeId, input.scope.storeId),
+            or(
+              ...candidateChunk.map((candidate) =>
+                and(
+                  eq(identityErasureSuppressions.kind, candidate.kind),
+                  eq(
+                    identityErasureSuppressions.keyVersion,
+                    candidate.keyVersion,
                   ),
+                  eq(identityErasureSuppressions.digest, candidate.digest),
                 ),
               ),
             ),
-          )
-          .limit(1);
-        if (suppressionHit) {
-          const [existingSuppressed] = await tx
-            .select({ id: klaviyoEvents.id })
-            .from(klaviyoEvents)
-            .where(
-              and(
-                eq(klaviyoEvents.organizationId, input.scope.organizationId),
-                eq(klaviyoEvents.storeId, input.scope.storeId),
-                eq(klaviyoEvents.connectionId, input.scope.connectionId),
-                eq(klaviyoEvents.externalEventId, event.externalEventId),
-              ),
-            )
-            .limit(1);
-          if (existingSuppressed) {
-            await eraseSuppressedKlaviyoEventEvidence({
-              scope: input.scope,
-              eventId: existingSuppressed.id,
-              suppressionId: suppressionHit.id,
-              tx,
-            });
-          }
-          // Only a safe counter survives; no event, product, profile ID,
-          // digest, or observation is written for a suppressed subject.
-          suppressedCount += 1;
-          continue;
-        }
+          ),
+        );
+      for (const hit of hits) {
+        suppressionByTuple.set(
+          tupleKey(hit.kind, hit.keyVersion, hit.digest),
+          hit.id,
+        );
       }
-      const [existing] = await tx
-        .select({ id: klaviyoEvents.id, checksum: klaviyoEvents.sourceChecksum })
+    }
+
+    const existingByExternalEventId = new Map<
+      string,
+      { id: string; checksum: string }
+    >();
+    for (const externalEventIdChunk of chunkRows(
+      events.map((event) => event.externalEventId),
+    )) {
+      const existingRows = await tx
+        .select({
+          id: klaviyoEvents.id,
+          externalEventId: klaviyoEvents.externalEventId,
+          checksum: klaviyoEvents.sourceChecksum,
+        })
         .from(klaviyoEvents)
         .where(
           and(
             eq(klaviyoEvents.organizationId, input.scope.organizationId),
             eq(klaviyoEvents.storeId, input.scope.storeId),
             eq(klaviyoEvents.connectionId, input.scope.connectionId),
-            eq(klaviyoEvents.externalEventId, event.externalEventId),
+            inArray(klaviyoEvents.externalEventId, externalEventIdChunk),
+          ),
+        );
+      for (const row of existingRows) {
+        existingByExternalEventId.set(row.externalEventId, row);
+      }
+    }
+
+    const persistableEvents: NormalizedKlaviyoEvent[] = [];
+    for (const event of events) {
+      const suppressionId = event.erasureSuppressionCandidates
+        .map((candidate) =>
+          suppressionByTuple.get(
+            tupleKey(candidate.kind, candidate.keyVersion, candidate.digest),
           ),
         )
-        .limit(1);
+        .find((id): id is string => id !== undefined);
+      if (suppressionId === undefined) {
+        persistableEvents.push(event);
+        continue;
+      }
 
-      const [stored] = await tx
+      const existingSuppressed = existingByExternalEventId.get(
+        event.externalEventId,
+      );
+      if (existingSuppressed) {
+        await eraseSuppressedKlaviyoEventEvidence({
+          scope: input.scope,
+          eventId: existingSuppressed.id,
+          suppressionId,
+          tx,
+        });
+      }
+      // Only a safe counter survives; no event, product, profile ID,
+      // digest, or observation is written for a suppressed subject.
+      suppressedCount += 1;
+    }
+
+    const storedEventIdByExternalEventId = new Map<string, string>();
+    for (const eventChunk of chunkRows(persistableEvents)) {
+      const storedRows = await tx
         .insert(klaviyoEvents)
-        .values({
-          organizationId: input.scope.organizationId,
-          storeId: input.scope.storeId,
-          connectionId: input.scope.connectionId,
-          metricId: event.metricId,
-          externalEventId: event.externalEventId,
-          eventUuid: event.eventUuid,
-          occurredAt: event.occurredAt,
-          profileId: event.profileId,
-          explicitOrderIdCandidate: event.explicitOrderIdCandidate,
-          providerUniqueIdCandidate: event.providerUniqueIdCandidate,
-          providerValue: event.providerValue,
-          providerCurrency: event.providerCurrency,
-          attributionRelationshipIds: event.attributionRelationshipIds,
-          redactedProperties: event.evidence.values,
-          keyTypeFingerprint: event.evidence.fingerprint,
-          warnings: event.evidence.warnings,
-          productEvidenceCompleteness: event.productEvidenceCompleteness,
-          sourceChecksum: event.sourceChecksum,
-          apiRevision: event.apiRevision,
-        })
-        .onConflictDoUpdate({
-          target: [klaviyoEvents.connectionId, klaviyoEvents.externalEventId],
-          set: {
+        .values(
+          eventChunk.map((event) => ({
+            organizationId: input.scope.organizationId,
+            storeId: input.scope.storeId,
+            connectionId: input.scope.connectionId,
             metricId: event.metricId,
+            externalEventId: event.externalEventId,
             eventUuid: event.eventUuid,
             occurredAt: event.occurredAt,
             profileId: event.profileId,
@@ -1455,52 +1501,99 @@ export async function commitKlaviyoEventPage(input: {
             productEvidenceCompleteness: event.productEvidenceCompleteness,
             sourceChecksum: event.sourceChecksum,
             apiRevision: event.apiRevision,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [klaviyoEvents.connectionId, klaviyoEvents.externalEventId],
+          set: {
+            metricId: sql`excluded.metric_id`,
+            eventUuid: sql`excluded.event_uuid`,
+            occurredAt: sql`excluded.occurred_at`,
+            profileId: sql`excluded.profile_id`,
+            explicitOrderIdCandidate: sql`excluded.explicit_order_id_candidate`,
+            providerUniqueIdCandidate: sql`excluded.provider_unique_id_candidate`,
+            providerValue: sql`excluded.provider_value`,
+            providerCurrency: sql`excluded.provider_currency`,
+            attributionRelationshipIds: sql`excluded.attribution_relationship_ids`,
+            redactedProperties: sql`excluded.redacted_properties`,
+            keyTypeFingerprint: sql`excluded.key_type_fingerprint`,
+            warnings: sql`excluded.warnings`,
+            productEvidenceCompleteness: sql`excluded.product_evidence_completeness`,
+            sourceChecksum: sql`excluded.source_checksum`,
+            apiRevision: sql`excluded.api_revision`,
             fetchedAt: pageCommittedAt,
             updatedAt: pageCommittedAt,
           },
         })
-        .returning({ id: klaviyoEvents.id });
-
-      if (event.productEvidenceCompleteness === "complete") {
-        await tx
-          .delete(klaviyoEventProducts)
-          .where(
-            and(
-              eq(klaviyoEventProducts.organizationId, input.scope.organizationId),
-              eq(klaviyoEventProducts.storeId, input.scope.storeId),
-              eq(klaviyoEventProducts.connectionId, input.scope.connectionId),
-              eq(klaviyoEventProducts.eventId, stored.id),
-            ),
-          );
-        if (event.products.length > 0) {
-          await tx.insert(klaviyoEventProducts).values(
-            event.products.map((product) => ({
-              organizationId: input.scope.organizationId,
-              storeId: input.scope.storeId,
-              connectionId: input.scope.connectionId,
-              eventId: stored.id,
-              sourceOrdinal: product.sourceOrdinal,
-              productId: product.productId,
-              variantId: product.variantId,
-              sku: product.sku,
-              productName: product.productName,
-              variantName: product.variantName,
-              quantity: product.quantity,
-            })),
-          );
-        }
+        .returning({
+          id: klaviyoEvents.id,
+          externalEventId: klaviyoEvents.externalEventId,
+        });
+      for (const row of storedRows) {
+        storedEventIdByExternalEventId.set(row.externalEventId, row.id);
       }
+    }
 
-      const observation = await tx
+    for (const event of persistableEvents) {
+      const existing = existingByExternalEventId.get(event.externalEventId);
+      if (!existing) inserted += 1;
+      else if (existing.checksum !== event.sourceChecksum) updated += 1;
+    }
+
+    const completeProductEvents = persistableEvents.filter(
+      (event) => event.productEvidenceCompleteness === "complete",
+    );
+    for (const eventIdChunk of chunkRows(
+      completeProductEvents.map((event) =>
+        storedEventIdByExternalEventId.get(event.externalEventId)!,
+      ),
+    )) {
+      await tx
+        .delete(klaviyoEventProducts)
+        .where(
+          and(
+            eq(klaviyoEventProducts.organizationId, input.scope.organizationId),
+            eq(klaviyoEventProducts.storeId, input.scope.storeId),
+            eq(klaviyoEventProducts.connectionId, input.scope.connectionId),
+            inArray(klaviyoEventProducts.eventId, eventIdChunk),
+          ),
+        );
+    }
+    const productRows = completeProductEvents.flatMap((event) => {
+      const eventId = storedEventIdByExternalEventId.get(
+        event.externalEventId,
+      )!;
+      return event.products.map((product) => ({
+        organizationId: input.scope.organizationId,
+        storeId: input.scope.storeId,
+        connectionId: input.scope.connectionId,
+        eventId,
+        sourceOrdinal: product.sourceOrdinal,
+        productId: product.productId,
+        variantId: product.variantId,
+        sku: product.sku,
+        productName: product.productName,
+        variantName: product.variantName,
+        quantity: product.quantity,
+      }));
+    });
+    for (const productChunk of chunkRows(productRows)) {
+      await tx.insert(klaviyoEventProducts).values(productChunk);
+    }
+
+    const eventObservationRows = persistableEvents.map((event) => ({
+      organizationId: input.scope.organizationId,
+      storeId: input.scope.storeId,
+      connectionId: input.scope.connectionId,
+      syncRunId: input.syncRunId,
+      eventId: storedEventIdByExternalEventId.get(event.externalEventId)!,
+      observedSourceChecksum: event.sourceChecksum,
+    }));
+    const insertedObservationEventIds = new Set<string>();
+    for (const observationChunk of chunkRows(eventObservationRows)) {
+      const insertedObservations = await tx
         .insert(klaviyoEventRunObservations)
-        .values({
-          organizationId: input.scope.organizationId,
-          storeId: input.scope.storeId,
-          connectionId: input.scope.connectionId,
-          syncRunId: input.syncRunId,
-          eventId: stored.id,
-          observedSourceChecksum: event.sourceChecksum,
-        })
+        .values(observationChunk)
         .onConflictDoNothing({
           target: [
             klaviyoEventRunObservations.connectionId,
@@ -1508,129 +1601,250 @@ export async function commitKlaviyoEventPage(input: {
             klaviyoEventRunObservations.eventId,
           ],
         })
-        .returning({ checksum: klaviyoEventRunObservations.observedSourceChecksum });
-      if (observation.length === 0) {
-        const [prior] = await tx
-          .select({ checksum: klaviyoEventRunObservations.observedSourceChecksum })
-          .from(klaviyoEventRunObservations)
+        .returning({ eventId: klaviyoEventRunObservations.eventId });
+      for (const observation of insertedObservations) {
+        insertedObservationEventIds.add(observation.eventId);
+      }
+    }
+    const replayedObservationRows = eventObservationRows.filter(
+      (row) => !insertedObservationEventIds.has(row.eventId),
+    );
+    const priorObservationChecksumByEventId = new Map<string, string>();
+    for (const eventIdChunk of chunkRows(
+      replayedObservationRows.map((row) => row.eventId),
+    )) {
+      const priorObservations = await tx
+        .select({
+          eventId: klaviyoEventRunObservations.eventId,
+          checksum: klaviyoEventRunObservations.observedSourceChecksum,
+        })
+        .from(klaviyoEventRunObservations)
+        .where(
+          and(
+            eq(
+              klaviyoEventRunObservations.organizationId,
+              input.scope.organizationId,
+            ),
+            eq(klaviyoEventRunObservations.storeId, input.scope.storeId),
+            eq(
+              klaviyoEventRunObservations.connectionId,
+              input.scope.connectionId,
+            ),
+            eq(klaviyoEventRunObservations.syncRunId, input.syncRunId),
+            inArray(klaviyoEventRunObservations.eventId, eventIdChunk),
+          ),
+        );
+      for (const observation of priorObservations) {
+        priorObservationChecksumByEventId.set(
+          observation.eventId,
+          observation.checksum,
+        );
+      }
+    }
+    for (const observation of replayedObservationRows) {
+      if (
+        priorObservationChecksumByEventId.get(observation.eventId) !==
+        observation.observedSourceChecksum
+      ) {
+        throw new Error("Klaviyo run observation changed during replay");
+      }
+    }
+
+    if (gate?.currentVersion) {
+      const desiredIdentityRows = persistableEvents.flatMap((event) => {
+        const eventId = storedEventIdByExternalEventId.get(
+          event.externalEventId,
+        )!;
+        const digestByVersion = new Map(
+          event.identityDigests.map((entry) => [
+            entry.keyVersion,
+            entry.digest,
+          ]),
+        );
+        return authorizedVersions.flatMap((keyVersion) => {
+          const digest = digestByVersion.get(keyVersion);
+          return digest === undefined ? [] : [{ eventId, keyVersion, digest }];
+        });
+      });
+      const identityEventIds = [
+        ...new Set(desiredIdentityRows.map((row) => row.eventId)),
+      ];
+      const existingIdentityByPair = new Map<
+        string,
+        { id: string; digest: string }
+      >();
+      for (const eventIdChunk of chunkRows(identityEventIds)) {
+        const existingIdentityRows = await tx
+          .select({
+            id: sourceIdentityHmacs.id,
+            eventId: sourceIdentityHmacs.klaviyoEventId,
+            keyVersion: sourceIdentityHmacs.keyVersion,
+            digest: sourceIdentityHmacs.digest,
+          })
+          .from(sourceIdentityHmacs)
           .where(
             and(
-              eq(klaviyoEventRunObservations.organizationId, input.scope.organizationId),
-              eq(klaviyoEventRunObservations.storeId, input.scope.storeId),
-              eq(klaviyoEventRunObservations.connectionId, input.scope.connectionId),
-              eq(klaviyoEventRunObservations.syncRunId, input.syncRunId),
-              eq(klaviyoEventRunObservations.eventId, stored.id),
+              eq(
+                sourceIdentityHmacs.organizationId,
+                input.scope.organizationId,
+              ),
+              eq(sourceIdentityHmacs.storeId, input.scope.storeId),
+              eq(
+                sourceIdentityHmacs.klaviyoConnectionId,
+                input.scope.connectionId,
+              ),
+              inArray(sourceIdentityHmacs.klaviyoEventId, eventIdChunk),
+              inArray(sourceIdentityHmacs.keyVersion, authorizedVersions),
             ),
           );
-        if (prior?.checksum !== event.sourceChecksum) {
-          throw new Error("Klaviyo run observation changed during replay");
+        for (const row of existingIdentityRows) {
+          if (row.eventId === null) continue;
+          existingIdentityByPair.set(
+            tupleKey(row.eventId, row.keyVersion),
+            row,
+          );
         }
       }
 
-      if (event.identityDigests.length > 0 && gate?.currentVersion) {
-        const digestByVersion = new Map(
-          event.identityDigests.map((entry) => [entry.keyVersion, entry.digest]),
-        );
-        let currentRowId: string | null = null;
-        for (const version of authorizedVersions) {
-          const digest = digestByVersion.get(version);
-          if (digest === undefined) continue;
-          const [existingRow] = await tx
-            .select({
-              id: sourceIdentityHmacs.id,
-              digest: sourceIdentityHmacs.digest,
-            })
-            .from(sourceIdentityHmacs)
-            .where(
-              and(
-                eq(sourceIdentityHmacs.organizationId, input.scope.organizationId),
-                eq(sourceIdentityHmacs.storeId, input.scope.storeId),
-                eq(sourceIdentityHmacs.klaviyoConnectionId, input.scope.connectionId),
-                eq(sourceIdentityHmacs.klaviyoEventId, stored.id),
-                eq(sourceIdentityHmacs.keyVersion, version),
-              ),
-            );
-          let rowId: string;
-          if (existingRow && existingRow.digest === digest) {
-            // Identical digest replay reuses the immutable row ID.
-            rowId = existingRow.id;
-          } else {
-            if (existingRow) {
-              // Changed digest replaces the row so dependent identity
-              // observations cascade before the fresh link.
-              await tx
-                .delete(sourceIdentityHmacs)
-                .where(eq(sourceIdentityHmacs.id, existingRow.id));
-            }
-            const [insertedRow] = await tx
-              .insert(sourceIdentityHmacs)
-              .values({
-                organizationId: input.scope.organizationId,
-                storeId: input.scope.storeId,
-                sourceKind: "klaviyo_event",
-                klaviyoConnectionId: input.scope.connectionId,
-                klaviyoEventId: stored.id,
-                keyVersion: version,
-                digest,
-                rotationState: "active",
-              })
-              .returning({ id: sourceIdentityHmacs.id });
-            rowId = insertedRow.id;
-          }
-          if (version === gate.currentVersion) currentRowId = rowId;
+      const identityRowIdByPair = new Map<string, string>();
+      const identityRowsToReplace: typeof desiredIdentityRows = [];
+      const identityRowIdsToDelete: string[] = [];
+      for (const desired of desiredIdentityRows) {
+        const key = tupleKey(desired.eventId, desired.keyVersion);
+        const existing = existingIdentityByPair.get(key);
+        if (existing?.digest === desired.digest) {
+          identityRowIdByPair.set(key, existing.id);
+        } else {
+          identityRowsToReplace.push(desired);
+          if (existing) identityRowIdsToDelete.push(existing.id);
         }
-        if (currentRowId !== null) {
-          const linked = await tx
-            .insert(klaviyoEventRunIdentityObservations)
-            .values({
+      }
+      for (const idChunk of chunkRows(identityRowIdsToDelete)) {
+        await tx
+          .delete(sourceIdentityHmacs)
+          .where(inArray(sourceIdentityHmacs.id, idChunk));
+      }
+      for (const identityChunk of chunkRows(identityRowsToReplace)) {
+        const insertedIdentityRows = await tx
+          .insert(sourceIdentityHmacs)
+          .values(
+            identityChunk.map((row) => ({
               organizationId: input.scope.organizationId,
               storeId: input.scope.storeId,
-              connectionId: input.scope.connectionId,
-              syncRunId: input.syncRunId,
-              eventId: stored.id,
-              identityHmacId: currentRowId,
-            })
-            .onConflictDoNothing({
-              target: [
-                klaviyoEventRunIdentityObservations.connectionId,
-                klaviyoEventRunIdentityObservations.syncRunId,
-                klaviyoEventRunIdentityObservations.eventId,
-              ],
-            })
-            .returning({
-              identityHmacId: klaviyoEventRunIdentityObservations.identityHmacId,
-            });
-          if (linked.length === 0) {
-            const [prior] = await tx
-              .select({
-                identityHmacId:
-                  klaviyoEventRunIdentityObservations.identityHmacId,
-              })
-              .from(klaviyoEventRunIdentityObservations)
-              .where(
-                and(
-                  eq(
-                    klaviyoEventRunIdentityObservations.connectionId,
-                    input.scope.connectionId,
-                  ),
-                  eq(
-                    klaviyoEventRunIdentityObservations.syncRunId,
-                    input.syncRunId,
-                  ),
-                  eq(klaviyoEventRunIdentityObservations.eventId, stored.id),
-                ),
-              );
-            if (prior?.identityHmacId !== currentRowId) {
-              throw new Error(
-                "Klaviyo run identity observation changed during replay",
-              );
-            }
-          }
+              sourceKind: "klaviyo_event" as const,
+              klaviyoConnectionId: input.scope.connectionId,
+              klaviyoEventId: row.eventId,
+              keyVersion: row.keyVersion,
+              digest: row.digest,
+              rotationState: "active" as const,
+            })),
+          )
+          .returning({
+            id: sourceIdentityHmacs.id,
+            eventId: sourceIdentityHmacs.klaviyoEventId,
+            keyVersion: sourceIdentityHmacs.keyVersion,
+          });
+        for (const row of insertedIdentityRows) {
+          if (row.eventId === null) continue;
+          identityRowIdByPair.set(
+            tupleKey(row.eventId, row.keyVersion),
+            row.id,
+          );
         }
       }
 
-      if (!existing) inserted += 1;
-      else if (existing.checksum !== event.sourceChecksum) updated += 1;
+      const identityObservationRows = desiredIdentityRows.flatMap((row) => {
+        if (row.keyVersion !== gate.currentVersion) return [];
+        const identityHmacId = identityRowIdByPair.get(
+          tupleKey(row.eventId, row.keyVersion),
+        );
+        if (identityHmacId === undefined) {
+          throw new Error("Klaviyo identity row was not resolved after persistence");
+        }
+        return [
+          {
+            organizationId: input.scope.organizationId,
+            storeId: input.scope.storeId,
+            connectionId: input.scope.connectionId,
+            syncRunId: input.syncRunId,
+            eventId: row.eventId,
+            identityHmacId,
+          },
+        ];
+      });
+      const insertedIdentityObservationEventIds = new Set<string>();
+      for (const observationChunk of chunkRows(identityObservationRows)) {
+        const insertedIdentityObservations = await tx
+          .insert(klaviyoEventRunIdentityObservations)
+          .values(observationChunk)
+          .onConflictDoNothing({
+            target: [
+              klaviyoEventRunIdentityObservations.connectionId,
+              klaviyoEventRunIdentityObservations.syncRunId,
+              klaviyoEventRunIdentityObservations.eventId,
+            ],
+          })
+          .returning({
+            eventId: klaviyoEventRunIdentityObservations.eventId,
+          });
+        for (const observation of insertedIdentityObservations) {
+          insertedIdentityObservationEventIds.add(observation.eventId);
+        }
+      }
+      const replayedIdentityObservations = identityObservationRows.filter(
+        (row) => !insertedIdentityObservationEventIds.has(row.eventId),
+      );
+      const priorIdentityHmacIdByEventId = new Map<string, string>();
+      for (const eventIdChunk of chunkRows(
+        replayedIdentityObservations.map((row) => row.eventId),
+      )) {
+        const priorIdentityObservations = await tx
+          .select({
+            eventId: klaviyoEventRunIdentityObservations.eventId,
+            identityHmacId: klaviyoEventRunIdentityObservations.identityHmacId,
+          })
+          .from(klaviyoEventRunIdentityObservations)
+          .where(
+            and(
+              eq(
+                klaviyoEventRunIdentityObservations.organizationId,
+                input.scope.organizationId,
+              ),
+              eq(
+                klaviyoEventRunIdentityObservations.storeId,
+                input.scope.storeId,
+              ),
+              eq(
+                klaviyoEventRunIdentityObservations.connectionId,
+                input.scope.connectionId,
+              ),
+              eq(
+                klaviyoEventRunIdentityObservations.syncRunId,
+                input.syncRunId,
+              ),
+              inArray(
+                klaviyoEventRunIdentityObservations.eventId,
+                eventIdChunk,
+              ),
+            ),
+          );
+        for (const observation of priorIdentityObservations) {
+          priorIdentityHmacIdByEventId.set(
+            observation.eventId,
+            observation.identityHmacId,
+          );
+        }
+      }
+      for (const observation of replayedIdentityObservations) {
+        if (
+          priorIdentityHmacIdByEventId.get(observation.eventId) !==
+          observation.identityHmacId
+        ) {
+          throw new Error(
+            "Klaviyo run identity observation changed during replay",
+          );
+        }
+      }
     }
 
     const advanced = await tx

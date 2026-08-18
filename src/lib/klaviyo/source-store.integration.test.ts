@@ -688,6 +688,70 @@ describeIfDb("Klaviyo source store on PostgreSQL", () => {
     });
   });
 
+  it("persists only the last duplicate external event occurrence", async () => {
+    await seedRun({ id: "run-page-dedupe" });
+    const result = await store.commitKlaviyoEventPage({
+      scope,
+      syncRunId: "run-page-dedupe",
+      sourceContract: contract,
+      expectedCheckpoint: checkpoint0,
+      nextCheckpoint: null,
+      events: [
+        eventFixture({ sourceChecksum: "checksum-first", providerValue: "10.00" }),
+        eventFixture({ sourceChecksum: "checksum-last", providerValue: "20.00" }),
+      ],
+      rowsRead: 2,
+    });
+    expect(result).toEqual({
+      committed: true,
+      inserted: 1,
+      updated: 0,
+      suppressed: 0,
+    });
+    const stored = await testPool!.query(
+      `SELECT e.source_checksum, e.provider_value, r.observed_source_checksum
+         FROM klaviyo_event e
+         JOIN klaviyo_event_run_observation r ON r.event_id = e.id`,
+    );
+    expect(stored.rows).toEqual([{
+      source_checksum: "checksum-last",
+      provider_value: "20.00",
+      observed_source_checksum: "checksum-last",
+    }]);
+  });
+
+  it("chunks pages larger than one thousand rows", async () => {
+    await seedRun({ id: "run-page-chunking" });
+    const events = Array.from({ length: 1_001 }, (_, index) =>
+      eventFixture({
+        externalEventId: `chunk-event-${index}`,
+        eventUuid: `chunk-uuid-${index}`,
+        profileId: null,
+        sourceChecksum: `chunk-checksum-${index}`,
+      }),
+    );
+    await expect(store.commitKlaviyoEventPage({
+      scope,
+      syncRunId: "run-page-chunking",
+      sourceContract: contract,
+      expectedCheckpoint: checkpoint0,
+      nextCheckpoint: null,
+      events,
+      rowsRead: events.length,
+    })).resolves.toMatchObject({ committed: true, inserted: 1_001 });
+    const counts = await testPool!.query(
+      `SELECT
+         (SELECT count(*)::int FROM klaviyo_event) AS events,
+         (SELECT count(*)::int FROM klaviyo_event_product) AS products,
+         (SELECT count(*)::int FROM klaviyo_event_run_observation) AS observations`,
+    );
+    expect(counts.rows[0]).toEqual({
+      events: 1_001,
+      products: 1_001,
+      observations: 1_001,
+    });
+  });
+
   it("initializes run heartbeat and renews it in the page checkpoint transaction", async () => {
     const started = await store.startKlaviyoSyncRun({
       scope,

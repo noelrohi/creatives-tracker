@@ -384,6 +384,57 @@ describeIfDb("Klaviyo privacy match closure on PostgreSQL", () => {
     expect(JSON.stringify(digests.rows)).not.toContain("subject@example.com");
   });
 
+  it("replaces changed identity digests after cascading the old run observation", async () => {
+    await store.initializeIdentityWriteGate({ scope, keyring, suppressionKey });
+    const event = identityEvent("event-changed-digest", "subject@example.com");
+    const next = { ...checkpoint0, cursor: "cursor-2", page: 1 };
+    await store.commitKlaviyoEventPage({
+      scope,
+      syncRunId: "run-events",
+      sourceContract: contract,
+      expectedCheckpoint: checkpoint0,
+      nextCheckpoint: next,
+      events: [event],
+      rowsRead: 1,
+    });
+    const before = await testPool!.query(
+      `SELECT h.id, o.identity_hmac_id
+         FROM source_identity_hmac h
+         JOIN klaviyo_event_run_identity_observation o
+           ON o.identity_hmac_id = h.id
+        WHERE h.source_kind = 'klaviyo_event'`,
+    );
+    expect(before.rows).toHaveLength(1);
+
+    const changed = {
+      ...event,
+      identityDigests: event.identityDigests.map((digest) => ({
+        ...digest,
+        digest: `${digest.digest}-changed`,
+      })),
+    };
+    await store.commitKlaviyoEventPage({
+      scope,
+      syncRunId: "run-events",
+      sourceContract: contract,
+      expectedCheckpoint: next,
+      nextCheckpoint: null,
+      events: [changed],
+      rowsRead: 1,
+    });
+
+    const after = await testPool!.query(
+      `SELECT h.id, o.identity_hmac_id
+         FROM source_identity_hmac h
+         JOIN klaviyo_event_run_identity_observation o
+           ON o.identity_hmac_id = h.id
+        WHERE h.source_kind = 'klaviyo_event'`,
+    );
+    expect(after.rows).toHaveLength(1);
+    expect(after.rows[0].id).not.toBe(before.rows[0].id);
+    expect(after.rows[0].identity_hmac_id).toBe(after.rows[0].id);
+  });
+
   it("suppresses a tombstoned subject, closes incident order results, and recounts", async () => {
     await store.initializeIdentityWriteGate({ scope, keyring, suppressionKey });
     const event = identityEvent("event-erase", "subject@example.com");
