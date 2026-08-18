@@ -36,7 +36,7 @@ export function ScoreDial({
           {rounded ?? EM_DASH}
         </span>
         <span className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
-          Score
+          {rounded === null ? "Score" : "of 100"}
         </span>
       </div>
     </div>

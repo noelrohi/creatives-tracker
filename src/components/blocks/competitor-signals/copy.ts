@@ -2,7 +2,7 @@ import { angleLabels } from "@/components/blocks/insights/insights-copy";
 
 /** The honesty guardrail (§10): every score or tier badge repeats it. */
 export const EVIDENCE_NOTE =
-  "Scores reflect observable evidence — longevity, variants — not measured ad performance.";
+  "Strength measures how long and widely a message has run — not how it performed.";
 
 /** Collection runs device-side, so an empty card points at the operator. */
 export const NO_FILLS_NOTE =
@@ -10,7 +10,7 @@ export const NO_FILLS_NOTE =
 
 /** A cluster whose verdict never validated (§8): strategic scores 0, flagged. */
 export const NO_VERDICT_NOTE =
-  "The fill's strategic verdict didn't validate — strategic contributes 0 until the next fill.";
+  "The last update couldn't assess this message — relevance counts 0 until the next one.";
 
 /** Ledger empty state — clusters only ever arrive with a fill. */
 export const NO_CLUSTERS_NOTE =
@@ -22,7 +22,7 @@ export const NO_COMPETITORS_NOTE =
 
 /** The §9 budget-routing rule, app-rendered on every concept header. */
 export const BUDGET_ROUTING_NOTE =
-  "Scale and kill decisions follow measured CTR, CAC and ROAS in Adsolute — never these evidence scores.";
+  "Scale and kill decisions follow measured CTR, CAC, and ROAS in Adsolute — never these evidence scores.";
 
 /** Test-plan empty state — a plan only ever arrives with a generation. */
 export const NO_TEST_PLAN_NOTE =
@@ -40,11 +40,3 @@ export function angleLabel(angle: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-const SOURCE_LABELS: Record<string, string> = {
-  meta_ads_collector: "MetaAdsCollector",
-  scrapecreators: "ScrapeCreators",
-};
-
-export function sourceLabel(source: string): string {
-  return SOURCE_LABELS[source] ?? source;
-}

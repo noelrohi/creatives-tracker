@@ -14,9 +14,9 @@ const TIER_COLOR_VARS: Record<ClusterTier, string> = {
 };
 
 export const tierLabels: Record<ClusterTier, string> = {
-  high: "High",
-  moderate: "Moderate",
-  watch: "Watch",
+  high: "Strong signal",
+  moderate: "Promising",
+  watch: "Early",
 };
 
 export function tierColor(tier: ClusterTier): string {

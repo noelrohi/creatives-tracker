@@ -55,8 +55,7 @@ export default function SignalsPage() {
         <div>
           <h1 className="text-lg font-semibold">Signals</h1>
           <p className="text-sm text-muted-foreground">
-            Copy clusters ranked by observable evidence across tracked
-            competitors.
+            The messages competitors keep paying to run.
           </p>
         </div>
         {signals.length > 0 && (
@@ -66,7 +65,7 @@ export default function SignalsPage() {
             disabled={rescoreMutation.isPending}
             onClick={() => rescoreMutation.mutate()}
           >
-            {rescoreMutation.isPending ? "Scoring…" : "Re-score"}
+            {rescoreMutation.isPending ? "Checking…" : "Re-check scores"}
           </Button>
         )}
       </div>
@@ -91,7 +90,7 @@ export default function SignalsPage() {
         </div>
       ) : (
         <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
-          <div className="rounded-xl border">
+          <div className="overflow-hidden rounded-xl border">
             <SignalsLedger
               signals={signals}
               selectedId={selected?.id ?? null}
