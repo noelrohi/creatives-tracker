@@ -46,6 +46,7 @@ function makeConcept(overrides: Partial<Concept> = {}): Concept {
     claimGuardrail: "Never promise a performance gain in numbers",
     hooks: ["The mouthguard your coach already wears"],
     generatedAt: new Date("2026-08-01T00:00:00Z"),
+    inspiration: null,
     ads: [
       makeAd({ id: "ad1", sortOrder: 0 }),
       makeAd({ id: "ad2", hook: "Your coach wore one first", format: "video", status: "approved", sortOrder: 1 }),

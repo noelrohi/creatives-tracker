@@ -23,7 +23,10 @@ function makeSignal(overrides: Partial<RankedSignal> = {}): RankedSignal {
     formatsObserved: ["image", "video"],
     landingFocusUrl: "https://airwaav.com/products/performance-mouthpiece",
     landingFocusShare: 0.57,
+    creativeCount: 16,
     representativeCopy: "Every rep counts.",
+    oldestStartDate: null,
+    previewAds: [],
     ...overrides,
   };
 }

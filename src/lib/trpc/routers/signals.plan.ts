@@ -2,9 +2,16 @@ import { TRPCError, type TRPCRouterRecord } from "@trpc/server";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
+import {
+  previewAdSchema,
+  toPreviewAd,
+} from "@/lib/competitor-signals/preview-ads";
 import { ANGLE_TYPES } from "@/lib/creative-taxonomy";
 import { normalizeAngle } from "@/lib/creative-tag-enrichment";
 import {
+  competitorAds,
+  competitors,
+  copyClusters,
   intelSnapshots,
   testPlanAdStatusEnum,
   testPlanAds,
@@ -47,6 +54,23 @@ const planAdOutputSchema = z.object({
   sortOrder: z.number().int(),
 });
 
+/**
+ * The competitor ads a concept was written from, resolved from its evidence
+ * cluster ids. Those ids are provenance and expected to dangle after a re-fill
+ * (§3), so the whole block is nullable — the screen hides the strip.
+ */
+const planInspirationSchema = z
+  .object({
+    clusterLabel: z.string(),
+    competitorId: z.string(),
+    competitorName: z.string(),
+    metaPageId: z.string(),
+    adCount: z.number().int(),
+    oldestStartDate: z.date().nullable(),
+    previewAds: z.array(previewAdSchema),
+  })
+  .nullable();
+
 const planConceptOutputSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -59,6 +83,7 @@ const planConceptOutputSchema = z.object({
   hooks: z.array(z.string()),
   generatedAt: z.date(),
   ads: z.array(planAdOutputSchema),
+  inspiration: planInspirationSchema,
 });
 
 export const signalsPlanProcedures = {
@@ -297,10 +322,117 @@ export const signalsPlanProcedures = {
         adsByConcept.set(ad.conceptId, bucket);
       }
 
+      // Resolve the evidence clusters that still exist into the "inspired by"
+      // strip. Missing ids degrade silently — they dangle by design (§3).
+      const evidenceIds = [
+        ...new Set(concepts.flatMap((concept) => concept.evidenceClusterIds)),
+      ];
+      const liveClusters = evidenceIds.length
+        ? await db
+            .select({
+              id: copyClusters.id,
+              label: copyClusters.label,
+              competitorId: copyClusters.competitorId,
+              adCount: copyClusters.adCount,
+              score: copyClusters.score,
+            })
+            .from(copyClusters)
+            .where(
+              and(
+                eq(copyClusters.organizationId, ctx.organizationId),
+                inArray(copyClusters.id, evidenceIds),
+              ),
+            )
+        : [];
+
+      const [clusterCompetitors, clusterAds] = liveClusters.length
+        ? await Promise.all([
+            db
+              .select({
+                id: competitors.id,
+                name: competitors.name,
+                metaPageId: competitors.metaPageId,
+              })
+              .from(competitors)
+              .where(
+                and(
+                  eq(competitors.organizationId, ctx.organizationId),
+                  inArray(competitors.id, [
+                    ...new Set(
+                      liveClusters.map((cluster) => cluster.competitorId),
+                    ),
+                  ]),
+                ),
+              ),
+            db
+              .select({
+                copyClusterId: competitorAds.copyClusterId,
+                archiveId: competitorAds.archiveId,
+                startDate: competitorAds.startDate,
+                mediaKinds: competitorAds.mediaKinds,
+                mirroredPreviewUrl: competitorAds.mirroredPreviewUrl,
+                mirroredImageUrl: competitorAds.mirroredImageUrl,
+                mirroredVideoUrl: competitorAds.mirroredVideoUrl,
+              })
+              .from(competitorAds)
+              .where(
+                and(
+                  eq(competitorAds.organizationId, ctx.organizationId),
+                  inArray(
+                    competitorAds.copyClusterId,
+                    liveClusters.map((cluster) => cluster.id),
+                  ),
+                ),
+              )
+              .orderBy(asc(competitorAds.startDate)),
+          ])
+        : [[], []];
+
+      const competitorById = new Map(
+        clusterCompetitors.map((competitor) => [competitor.id, competitor]),
+      );
+      const adsByCluster = new Map<string, typeof clusterAds>();
+      for (const ad of clusterAds) {
+        if (!ad.copyClusterId) continue;
+        const bucket = adsByCluster.get(ad.copyClusterId) ?? [];
+        bucket.push(ad);
+        adsByCluster.set(ad.copyClusterId, bucket);
+      }
+
+      const clusterById = new Map(
+        liveClusters.map((cluster) => [cluster.id, cluster]),
+      );
+
+      type PlanInspiration = z.infer<typeof planInspirationSchema>;
+      function inspirationFor(conceptClusterIds: string[]): PlanInspiration {
+        // The strongest still-live evidence cluster fronts the strip.
+        const resolved = conceptClusterIds
+          .flatMap((id) => clusterById.get(id) ?? [])
+          .sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
+        const cluster = resolved[0];
+        if (!cluster) return null;
+        const competitor = competitorById.get(cluster.competitorId);
+        if (!competitor) return null;
+
+        const memberAds = adsByCluster.get(cluster.id) ?? [];
+        return {
+          clusterLabel: cluster.label,
+          competitorId: competitor.id,
+          competitorName: competitor.name,
+          metaPageId: competitor.metaPageId,
+          adCount: cluster.adCount,
+          oldestStartDate: memberAds[0]?.startDate ?? null,
+          previewAds: memberAds
+            .flatMap((ad) => toPreviewAd(ad) ?? [])
+            .slice(0, 3),
+        };
+      }
+
       return {
         concepts: concepts.map((concept) => ({
           ...concept,
           ads: adsByConcept.get(concept.id) ?? [],
+          inspiration: inspirationFor(concept.evidenceClusterIds),
         })),
       };
     }),

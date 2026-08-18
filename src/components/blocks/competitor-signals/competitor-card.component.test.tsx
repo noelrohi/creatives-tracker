@@ -12,8 +12,10 @@ function makeCompetitor(overrides: Partial<Competitor> = {}): Competitor {
     activeAdCount: 0,
     oldestStartDate: null,
     clusterCount: 0,
+    recentAds: [],
     topClusters: [],
     lastFill: null,
+    lastSuccessfulFillAt: null,
     ...overrides,
   };
 }
@@ -53,6 +55,8 @@ describe("CompetitorCard", () => {
               angle: "social_proof",
               tier: "high",
               score: 82,
+              adCount: 12,
+              oldestStartDate: oldest,
             },
             {
               id: "cl2",
@@ -60,6 +64,8 @@ describe("CompetitorCard", () => {
               angle: null,
               tier: null,
               score: null,
+              adCount: 3,
+              oldestStartDate: null,
             },
           ],
           lastFill: {
