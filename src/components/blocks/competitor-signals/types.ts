@@ -20,3 +20,5 @@ export type TestPlanConcept =
 export type TestPlanAd = TestPlanConcept["ads"][number];
 
 export type TestPlanAdStatus = TestPlanAd["status"];
+
+export type PlanRule = RouterOutputs["signals"]["planRules"]["rules"][number];

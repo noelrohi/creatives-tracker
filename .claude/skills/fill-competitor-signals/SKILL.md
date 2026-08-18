@@ -238,26 +238,83 @@ A fill with no media at all lands at `complete` immediately (nothing to mirror).
 
 Each of those clusters hands you: `label`, `angle`, `summary`, `adCount`, `score` and its five component points, `tier`, `verdictRationale` (the strategic read), `formatsObserved`, `landingFocusUrl`, `landingFocusShare`, `representativeCopy`, and the owning competitor. Put all of it in the prompt — the component breakdown is what lets a concept cite *why* a cluster is strong.
 
+**Read the feedback loop before you generate.** The plan is not a fresh draft each run — the client rates hooks, comments on concepts, and sets standing rules, and all of it is input here.
+
+```bash
+curl -sS "$ADSOLUTE_URL/api/openapi/signals/planFeedback" \
+  -H "Authorization: Bearer $ADSOLUTE_API_KEY"
+```
+
+`read` scope, same exposure as `rankedSignals`. One call returns both halves of the loop:
+
+```json
+{
+  "rules": [
+    { "text": "Lead with the athlete, not the product.", "source": "feedback", "attributionName": "Dana" }
+  ],
+  "concepts": [
+    {
+      "title": "Breathing proof, athlete-first",
+      "hooks": ["Stop gasping mid-set.", "Your conditioning isn't the problem."],
+      "feedback": [
+        { "hook": "Stop gasping mid-set.", "rating": "down", "reasons": ["too_generic", "weak_cta"] },
+        { "hook": "Your conditioning isn't the problem.", "rating": "up", "reasons": [] }
+      ],
+      "comments": [
+        { "authorName": "Dana", "text": "Every concept sounds like a supplement ad.", "createdAt": "2026-08-14T09:12:00.000Z" }
+      ]
+    }
+  ]
+}
+```
+
+- `rules` are the org's **active** rules only, oldest first. `source` is `feedback` (promoted from a comment) or `manual`; `attributionName` is who it came from, snapshotted at creation. Both are context for you — never echo them into a concept field.
+- The built-in guardrail rule is **deliberately absent** from this response. You carry it (below), so a wiped rules table or an empty org can never silently drop the compliance rule.
+- `feedback` and `comments` hang off the *current* plan's concepts and cascade-delete with them. What you read here informs exactly the next plan and nothing after it — read it now, before you push, because the push is what destroys it.
+- `rating` is org-shared and last-writer-wins (a tracking sheet, not an approval system, §9). A hook with no entry was simply never rated — that is not a down-vote.
+- `reasons` are slugs, and carry meaning **only** on a `down` rating; the server clears them when a rating leaves `down`. Translate them yourself — the API never sends labels:
+
+| slug | means |
+|---|---|
+| `too_generic` | The hook could front any brand in the category — nothing in it is ours |
+| `off_brand_voice` | The claim may be fine, the register is not |
+| `wrong_claim_risk` | It promises something the product is not cleared to promise |
+| `weak_angle` | The angle does not follow from the evidence it cites |
+| `weak_cta` | The ask is vague or missing |
+| `overlaps_live_ad` | We are already running this — testing it again buys nothing |
+
+If the call 404s or the org has never had a plan, generate without it and say so in the report — the built-in rule still applies, because it lives here and not in the database.
+
 Prompt contract:
 
 > You are drafting a creative test plan from competitor evidence.
 > Client positioning: <one paragraph — the client's product, market, and angle>.
 > Below are the top-ranked competitor copy clusters, each with its evidence: score components, strategic read, formats observed, landing-page focus, and representative copy.
 > Return **3 concepts**. Each concept: a `title`; an `angle` (exactly one of the seven values); the `audience` it targets; `evidenceClusterIds` naming the clusters it draws on; an `evidenceCitation` of 1–2 sentences pointing at what was actually observed — how long the ads have run, how many creatives, which formats — and never at performance you cannot see; a `measurementPlan` naming the decision metric and the horizon; a `claimGuardrail` **only** where a product claim carries real risk, otherwise `null`; and exactly **3 hooks**.
-> Then expand each concept's hooks into ad rows: every hook × `static` and `video` = 6 rows per concept, 18 in all.
+> Then expand each concept's hooks into ad rows: one `static` row per hook = 3 rows per concept, 9 in all. Write the ad copy once per hook: a `headline`, a `description`, and a `cta`.
+> Standing rule, always in force: **Never claim to diagnose, treat, or cure a condition — describe the product mechanism and subjective experience only.**
+> Plan rules the client has set — every one applies to every concept: <one line per `rules[].text`, in the order returned>.
+> Feedback on the plan you are replacing. Down-rated hooks and what was wrong with them: <hook — the reason slugs, translated>. Up-rated hooks: <hook>. Comments: <`authorName`: `text`>.
+> The new concepts must address that feedback: do not re-propose a down-rated hook or repeat the failing its reasons name, and carry forward what the up-rated hooks got right.
+
+The guardrail line is a **verbatim fixture**, not a paraphrase — copy it character for character. The same string lives in `src/lib/competitor-signals/plan-feedback.ts` as `BUILT_IN_PLAN_RULE`, where the app renders it pinned at the top of the rules card; the two must never drift, so any edit to one is an edit to both. It is carried here rather than fetched precisely so an empty or wiped rules table cannot drop it.
+
+The rules and the feedback are *instructions*, not evidence. They shape what you write; they never become an `evidenceCitation`, and attribution names never appear in any field.
 
 Output schema:
 
 ```
 concepts[]: { title, angle, audience, evidenceClusterIds[], evidenceCitation,
               measurementPlan, claimGuardrail | null, hooks[3],
+              hookCopy[]: { hook, headline, description, cta },
               ads[]: { hook, format: "static" | "video" } }
 ```
 
-Three rules that are easy to get wrong:
+Four rules that are easy to get wrong:
 
 - **`angle` is hard-validated here**, unlike step 4. A plan concept's angle column is non-null, so an off-vocabulary value is a **400 on the whole push** — not a silent `null`. Use the seven `ANGLE_TYPES` values verbatim.
 - **Every `ads[].hook` must be one of that concept's `hooks`**, character for character. A hook that drifted while expanding is a 400.
+- **`hookCopy` is keyed by hook, and the key is validated exactly like `ads[].hook`** — one entry per hook, its `hook` one of that concept's `hooks` character for character. A hook that drifted while writing the copy is a **400 on the whole push**, not a dropped entry. Write the hook list first, then copy from it; never retype it.
 - **Never write budget guidance into any field.** The rule that scale and kill decisions follow measured CTR/CAC/ROAS in Adsolute — never evidence scores — is rendered by the app on every concept header, as a fixture the LLM cannot paraphrase away (§9). Repeating it in a citation or guardrail only dilutes it.
 
 `claimGuardrail` is for product-claim risk (what a mouthguard ad must not promise), nothing else. Most concepts should be `null`.
@@ -292,28 +349,50 @@ Payload (`test-plan.json`):
         "Your conditioning isn't the problem.",
         "The breath you're not taking."
       ],
+      "hookCopy": [
+        {
+          "hook": "Stop gasping mid-set.",
+          "headline": "Breathe through the last rep",
+          "description": "An athlete-fitted mouthpiece that opens the airway while you train.",
+          "cta": "Shop now"
+        },
+        {
+          "hook": "Your conditioning isn't the problem.",
+          "headline": "It's how you're breathing",
+          "description": "Fix the airway first — the conditioning work you already do starts landing.",
+          "cta": "Learn more"
+        },
+        {
+          "hook": "The breath you're not taking.",
+          "headline": "The rep you leave behind",
+          "description": "Athletes describe an easier last set within a week of training in it.",
+          "cta": "Shop now"
+        }
+      ],
       "ads": [
         { "hook": "Stop gasping mid-set.", "format": "static" },
-        { "hook": "Stop gasping mid-set.", "format": "video" }
+        { "hook": "Your conditioning isn't the problem.", "format": "static" },
+        { "hook": "The breath you're not taking.", "format": "static" }
       ]
     }
   ]
 }
 ```
 
-Response: `{ "conceptCount": 3, "adCount": 18, "replacedAdCount": <n>, "keptConceptCount": <n> }`.
+Response: `{ "conceptCount": 3, "adCount": 9, "replacedAdCount": <n>, "keptConceptCount": <n> }`.
 
 Rules the server enforces:
 
 - **Regeneration replaces `proposed` only.** Ads the client has moved to `approved`, `testing`, `done`, or `rejected` survive, and so does the concept header above them. `replacedAdCount` is what got wiped; `keptConceptCount` is what was left alone. Human decisions are never trampled — which is also why a regenerated concept can sit alongside a surviving one with a similar title. That is expected in v1; concepts have no stable identity across generations.
-- **Unknown `angle` → 400**, **an `ads[].hook` outside its concept's `hooks` → 400**, **a `generatedSnapshotId` from another org → 404**.
+- **Unknown `angle` → 400**, **an `ads[].hook` outside its concept's `hooks` → 400**, **a `hookCopy[].hook` outside its concept's `hooks` → 400**, **a `generatedSnapshotId` from another org → 404**.
+- `hookCopy` may be `null` — plans generated before per-hook copy existed carry none, and the UI degrades to a hook-only row. Send it populated anyway: a run of this skill has no reason to omit it.
 - `evidenceClusterIds` are stored as given and never validated — clusters are wiped and rebuilt on every fill, so those ids go stale by design. The `evidenceCitation` is what has to survive; write it to stand on its own.
-- Six concepts max, 24 ad rows per concept. The 3 × 3 × 2 shape is the client's default, not a server constraint.
+- Six concepts max, 24 ad rows per concept. The 3 × 3 static-only shape is the client's default, not a server constraint. **`video` rows are deliberately absent for now**: a video row is only actionable once it carries a competitor-transcript-backed UGC brief, and transcript capture has not shipped. When it does, the wave goes back to every hook × `static` and `video`.
 
 ---
 
 ## Report
 
-At the end, tell the user per competitor: ads collected, distinct copies after dedup, clusters formed, verdict spread, `snapshotId`, and final `pipelineStatus`. If you generated a plan, add the concept titles, the ad count, and how many existing rows were replaced versus kept. Name anything skipped (canary stop, fallback source, poll unavailable, plan not regenerated).
+At the end, tell the user per competitor: ads collected, distinct copies after dedup, clusters formed, verdict spread, `snapshotId`, and final `pipelineStatus`. If you generated a plan, add the concept titles, the ad count, and how many existing rows were replaced versus kept — plus what fed it: how many active plan rules applied, which hooks were down-rated and how the new concepts address each one, which up-rated hooks were carried forward, and how many comments were read. The client cannot see the prompt, so this report is the only evidence their feedback was consumed rather than quietly dropped. Name anything skipped (canary stop, fallback source, poll unavailable, plan not regenerated, `planFeedback` unavailable).
 
-Note what is deliberately absent from the app: there is **no in-app collect, no re-cluster, and no generate button** — all three require this device-side run. Re-score is the only in-app action, and moving a test-plan ad's status is the only in-app edit.
+Note what is deliberately absent from the app: there is **no in-app collect, no re-cluster, and no generate button** — all three require this device-side run. Re-score is the only in-app action; the in-app edits are moving a test-plan ad's status, rating hooks, commenting, and keeping plan rules — all of which land back here on the next run.
