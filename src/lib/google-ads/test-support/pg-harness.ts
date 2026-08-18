@@ -65,7 +65,7 @@ export const FIXTURE_DDL = [
  * (e.g. 0061) only needs to be added once for every suite that uses this
  * harness.
  */
-export const MIGRATION_FILES = ["0060_serious_mimic.sql"];
+export const MIGRATION_FILES = ["0062_overconfident_thunderbird.sql"];
 
 /** Creates the (possibly null, when no DATABASE_URL is configured) test pool/db pair for one suite's ephemeral database. */
 export function createTestDatabaseHandle(database: string): {
