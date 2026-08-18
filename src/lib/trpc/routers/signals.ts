@@ -11,6 +11,7 @@ import {
   stripQuery,
   toScoredAdInput,
 } from "@/lib/competitor-signals/score";
+import { extractRawPrimaryMedia } from "@/lib/competitor-signals/raw-media";
 import { normalizeAngle } from "@/lib/creative-tag-enrichment";
 import {
   clusterTierEnum,
@@ -375,15 +376,29 @@ export const signalsRouter = router({
       const now = new Date();
 
       // Source URLs are expiring signed CDN links (§4) — they ride in the job
-      // payload and are never persisted.
+      // payload and are never persisted. A harness that missed the primary
+      // creative's media (card-based ads keep it in raw cards, not top-level)
+      // sends all four as null; recover them from the verbatim raw payload
+      // rather than leaving the ad with nothing to mirror.
       const media: CompetitorMediaSource[] = input.ads
-        .map((ad) => ({
-          archiveId: ad.archiveId,
-          imageUrl: ad.imageUrl,
-          videoHdUrl: ad.videoHdUrl,
-          videoSdUrl: ad.videoSdUrl,
-          videoPreviewImageUrl: ad.videoPreviewImageUrl,
-        }))
+        .map((ad) => {
+          const hasTopLevelMedia =
+            ad.imageUrl !== null ||
+            ad.videoHdUrl !== null ||
+            ad.videoSdUrl !== null ||
+            ad.videoPreviewImageUrl !== null;
+          const fallback = hasTopLevelMedia
+            ? null
+            : extractRawPrimaryMedia(ad.raw);
+          return {
+            archiveId: ad.archiveId,
+            imageUrl: ad.imageUrl ?? fallback?.imageUrl ?? null,
+            videoHdUrl: ad.videoHdUrl ?? fallback?.videoHdUrl ?? null,
+            videoSdUrl: ad.videoSdUrl ?? fallback?.videoSdUrl ?? null,
+            videoPreviewImageUrl:
+              ad.videoPreviewImageUrl ?? fallback?.videoPreviewImageUrl ?? null,
+          };
+        })
         .filter(
           (item) =>
             item.imageUrl !== null ||
