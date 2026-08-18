@@ -82,7 +82,7 @@ export function CompetitorCard({
   const hiddenAdCount = competitor.activeAdCount - competitor.recentAds.length;
 
   return (
-    <Card>
+    <Card className="h-full">
       <CardHeader>
         <div className="flex items-start gap-3">
           <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-[13px] font-bold text-muted-foreground">
@@ -114,7 +114,7 @@ export function CompetitorCard({
         </CardAction>
       </CardHeader>
 
-      <CardContent className="flex flex-col gap-4">
+      <CardContent className="flex flex-1 flex-col gap-4">
         {competitor.recentAds.length > 0 && (
           <AdPreviewStrip
             ads={competitor.recentAds}
