@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { NO_TEST_PLAN_NOTE } from "@/components/blocks/competitor-signals/copy";
 import { EvidenceBanner } from "@/components/blocks/competitor-signals/evidence-banner";
+import { PlanRulesCard } from "@/components/blocks/competitor-signals/plan-rules-card";
 import { TestPlanConcept } from "@/components/blocks/competitor-signals/test-plan-concept";
 import { useBreadcrumbs } from "@/components/breadcrumbs";
 import { Target } from "@/components/icons";
@@ -18,6 +19,7 @@ export default function TestPlanPage() {
   ]);
 
   const plan = useQuery(trpc.signals.testPlan.queryOptions());
+  const rules = useQuery(trpc.signals.planRules.queryOptions());
 
   // Concepts and their ads arrive ordered by the router; the screen never
   // re-sorts them.
@@ -56,6 +58,14 @@ export default function TestPlanPage() {
             <TestPlanConcept key={concept.id} concept={concept} />
           ))}
         </div>
+      )}
+
+      {/* Rules outlive any one plan, so the card stands even before a plan
+       * has ever been pushed. */}
+      {rules.isLoading ? (
+        <Skeleton className="h-40 rounded-xl" />
+      ) : (
+        <PlanRulesCard rules={rules.data?.rules ?? []} />
       )}
     </div>
   );
