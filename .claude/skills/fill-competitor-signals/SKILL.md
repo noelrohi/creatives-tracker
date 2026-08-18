@@ -95,6 +95,8 @@ This is what format breadth scores from (§8), and it must describe the competit
 
 **Media URLs.** Pass the expiring signed `scontent.*` links through as-is — the server mirrors the primary creative's media immediately at ingest and never persists source URLs. Do not download or rewrite them here. Variant media is not mirrored in v1.
 
+Where they live in the source: single-creative ads keep them in `raw_data.images[]` / `raw_data.videos[]`, but **card-based ads (DCO/carousel) keep them in `raw_data.cards[]`** (`original_image_url` / `resized_image_url` / `video_*_url` per card) — take the primary creative's from the first card. The server also recovers them from `raw` when all four top-level URLs are null (`src/lib/competitor-signals/raw-media.ts`), but send them explicitly; the fallback is a safety net, not the contract.
+
 Step 2 is done when every ad collected in step 1 has a NormalizedAd carrying all 23 keys — required fields populated, nullable fields explicit `null`.
 
 **The canary applies here too.** A fill is a full-snapshot replacement, so an ad dropped in normalization reads to the server as an ad that went dark. If step 2 yields fewer ads than step 1 collected, fix the mapping before posting — count them and compare, every run.
