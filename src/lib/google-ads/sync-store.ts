@@ -229,13 +229,20 @@ export async function commitCampaignFactsChunk(params: {
   });
 }
 
-export async function completeGoogleAdsSyncRun(params: {
-  scope: GoogleAdsScope;
-  syncRunId: string;
-  operation: "discovery" | "facts";
-}): Promise<void> {
+export async function completeGoogleAdsSyncRun(
+  params: {
+    scope: GoogleAdsScope;
+    syncRunId: string;
+    operation: "discovery" | "facts";
+  },
+  /**
+   * Optional transaction executor so a caller can make run completion
+   * atomic with its own writes (drizzle nests this as a savepoint).
+   */
+  executor: Pick<typeof db, "transaction"> = db,
+): Promise<void> {
   const now = new Date();
-  await db.transaction(async (tx) => {
+  await executor.transaction(async (tx) => {
     const completed = await tx
       .update(googleAdsSyncRuns)
       .set({ status: "completed", finishedAt: now })

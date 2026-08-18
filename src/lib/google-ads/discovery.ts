@@ -191,21 +191,29 @@ export async function runGoogleAdsDiscovery(params: {
     });
   }
 
-  await db
-    .update(googleAdsConnections)
-    .set({
-      googleCustomerId: evaluation.customer.googleCustomerId,
-      descriptiveName: evaluation.customer.descriptiveName,
-      currencyCode: evaluation.customer.currencyCode,
-      timezone: evaluation.customer.timezone,
-      status: "ready",
-      lastDiscoverySyncedAt: new Date(),
-    })
-    .where(eq(googleAdsConnections.id, scope.connectionId));
-  await completeGoogleAdsSyncRun({
-    scope,
-    syncRunId: params.syncRunId,
-    operation: "discovery",
+  // Ready flip and run completion commit atomically: a crash between the
+  // two writes could otherwise leave a ready connection with a permanently
+  // running discovery run wedging the one-running partial unique index.
+  await db.transaction(async (tx) => {
+    await tx
+      .update(googleAdsConnections)
+      .set({
+        googleCustomerId: evaluation.customer.googleCustomerId,
+        descriptiveName: evaluation.customer.descriptiveName,
+        currencyCode: evaluation.customer.currencyCode,
+        timezone: evaluation.customer.timezone,
+        status: "ready",
+        lastDiscoverySyncedAt: new Date(),
+      })
+      .where(eq(googleAdsConnections.id, scope.connectionId));
+    await completeGoogleAdsSyncRun(
+      {
+        scope,
+        syncRunId: params.syncRunId,
+        operation: "discovery",
+      },
+      tx,
+    );
   });
   return { status: "ready" };
 }
