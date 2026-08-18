@@ -1,7 +1,14 @@
 "use client";
 
-import { differenceInCalendarDays, formatDistanceToNow } from "date-fns";
-import { Archive, MoreHorizontal, TriangleAlert } from "@/components/icons";
+import { format, formatDistanceToNow } from "date-fns";
+import Link from "next/link";
+import {
+  Archive,
+  ArrowRight,
+  ExternalLink,
+  MoreHorizontal,
+  TriangleAlert,
+} from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -18,19 +25,14 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { angleLabels } from "@/components/blocks/insights/insights-copy";
-import { NO_FILLS_NOTE, sourceLabel } from "./copy";
-import { ScoreBadge, TierBadge } from "./tier-badge";
+import { adLibraryPageUrl } from "./ad-library";
+import { AdPreviewStrip } from "./ad-preview-strip";
+import { NO_FILLS_NOTE } from "./copy";
+import { daysSince, initials } from "./display";
+import { TierBadge } from "./tier-badge";
 import type { Competitor } from "./types";
 
 const EM_DASH = "—";
-
-/** "105d" — the age of the longest-running ad still live on the page. */
-function oldestAdAge(oldestStartDate: Date | null): string {
-  if (!oldestStartDate) return EM_DASH;
-  const days = differenceInCalendarDays(new Date(), oldestStartDate);
-  return days >= 0 ? `${days}d` : EM_DASH;
-}
 
 function StatTile({ label, value }: { label: string; value: string }) {
   return (
@@ -44,39 +46,26 @@ function StatTile({ label, value }: { label: string; value: string }) {
 }
 
 /**
- * The last fill run is the card's only freshness signal — collection happens on
- * the operator's device, so there is nothing here to press.
+ * The header meta line: when the data was last refreshed, in plain words. A
+ * failed run points at the last successful one — that is the date the numbers
+ * on the card actually describe.
  */
-function LastFillLine({ lastFill }: { lastFill: Competitor["lastFill"] }) {
-  if (!lastFill) {
-    return (
-      <p className="text-[13px] text-muted-foreground/60">{NO_FILLS_NOTE}</p>
-    );
+function updatedLine(competitor: Competitor): string | null {
+  const { lastFill, lastSuccessfulFillAt, activeAdCount } = competitor;
+  if (!lastFill) return null;
+
+  if (lastFill.pipelineStatus === "failed") {
+    if (lastSuccessfulFillAt) {
+      return `Updated ${format(lastSuccessfulFillAt, "MMM d")} · ${activeAdCount} ads`;
+    }
+    // No complete fill yet, but a partial one may still have left ads behind.
+    return activeAdCount > 0
+      ? `Last update failed · ${activeAdCount} ${activeAdCount === 1 ? "ad" : "ads"}`
+      : "Last update failed";
   }
 
   const when = formatDistanceToNow(lastFill.filledAt, { addSuffix: true });
-
-  if (lastFill.pipelineStatus === "failed") {
-    return (
-      <div
-        className="flex items-start gap-2 text-[13px]"
-        style={{ color: "var(--attr-critical)" }}
-      >
-        <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-        <span>
-          Last fill {when} failed
-          {lastFill.error ? ` — ${lastFill.error}` : null}
-        </span>
-      </div>
-    );
-  }
-
-  return (
-    <p className="text-[13px] text-muted-foreground">
-      Last filled {when} · {lastFill.adCount}{" "}
-      {lastFill.adCount === 1 ? "ad" : "ads"} · {sourceLabel(lastFill.source)}
-    </p>
-  );
+  return `Updated ${when} · ${activeAdCount} ${activeAdCount === 1 ? "ad" : "ads"}`;
 }
 
 export function CompetitorCard({
@@ -88,11 +77,24 @@ export function CompetitorCard({
   onArchive: (competitorId: string) => void;
   archiveDisabled: boolean;
 }) {
+  const oldestDays = daysSince(competitor.oldestStartDate);
+  const failed = competitor.lastFill?.pipelineStatus === "failed";
+  const hiddenAdCount = competitor.activeAdCount - competitor.recentAds.length;
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{competitor.name}</CardTitle>
-        <CardDescription>Meta page {competitor.metaPageId}</CardDescription>
+        <div className="flex items-start gap-3">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-[13px] font-bold text-muted-foreground">
+            {initials(competitor.name)}
+          </div>
+          <div className="min-w-0">
+            <CardTitle>{competitor.name}</CardTitle>
+            <CardDescription>
+              {updatedLine(competitor) ?? NO_FILLS_NOTE}
+            </CardDescription>
+          </div>
+        </div>
         <CardAction>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -113,6 +115,15 @@ export function CompetitorCard({
       </CardHeader>
 
       <CardContent className="flex flex-col gap-4">
+        {competitor.recentAds.length > 0 && (
+          <AdPreviewStrip
+            ads={competitor.recentAds}
+            alt={`${competitor.name} ad`}
+            hiddenCount={hiddenAdCount}
+            thumbClassName="h-[95px] w-[76px] rounded-lg"
+          />
+        )}
+
         <div className="grid grid-cols-3 gap-2">
           <StatTile
             label="Active ads"
@@ -123,48 +134,86 @@ export function CompetitorCard({
             }
           />
           <StatTile
-            label="Clusters"
+            label="Longest running"
+            value={oldestDays === null ? EM_DASH : `${oldestDays} days`}
+          />
+          <StatTile
+            label="Ad themes"
             value={
               competitor.clusterCount > 0
                 ? String(competitor.clusterCount)
                 : EM_DASH
             }
           />
-          <StatTile
-            label="Oldest ad"
-            value={oldestAdAge(competitor.oldestStartDate)}
-          />
         </div>
 
         {competitor.topClusters.length > 0 && (
-          <ul className="flex flex-col gap-2">
-            {competitor.topClusters.map((cluster) => (
-              <li
-                key={cluster.id}
-                className="flex items-center justify-between gap-3"
-              >
-                <div className="min-w-0">
-                  <p className="truncate text-[13px] font-medium">
-                    {cluster.label}
-                  </p>
-                  {cluster.angle && (
-                    <p className="truncate text-[11px] text-muted-foreground/70">
-                      {angleLabels[cluster.angle] ?? cluster.angle}
+          <ul className="flex flex-col gap-2.5">
+            {competitor.topClusters.map((cluster) => {
+              const clusterDays = daysSince(cluster.oldestStartDate);
+              return (
+                <li
+                  key={cluster.id}
+                  className="flex items-center justify-between gap-3"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-[13px] font-medium">
+                      {cluster.label}
                     </p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {clusterDays !== null && `${clusterDays} days · `}
+                      {cluster.adCount} {cluster.adCount === 1 ? "ad" : "ads"}
+                    </p>
+                  </div>
+                  {cluster.tier && (
+                    <div className="shrink-0">
+                      <TierBadge tier={cluster.tier} />
+                    </div>
                   )}
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  {cluster.score !== null && <ScoreBadge score={cluster.score} />}
-                  {cluster.tier && <TierBadge tier={cluster.tier} />}
-                </div>
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ul>
+        )}
+
+        {failed && competitor.lastFill && (
+          <div
+            className="flex items-start gap-2 text-[13px]"
+            style={{ color: "var(--attr-critical)" }}
+          >
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+            <span>
+              Update failed{" "}
+              {formatDistanceToNow(competitor.lastFill.filledAt, {
+                addSuffix: true,
+              })}
+              {competitor.lastFill.error && ` — ${competitor.lastFill.error}`}
+              {competitor.lastSuccessfulFillAt
+                ? ` — showing ${format(competitor.lastSuccessfulFillAt, "MMM d")} data.`
+                : "."}
+            </span>
+          </div>
         )}
       </CardContent>
 
-      <CardFooter>
-        <LastFillLine lastFill={competitor.lastFill} />
+      <CardFooter className="justify-between gap-3">
+        <Button variant="outline" size="sm" asChild>
+          <Link href={`/competitors/${competitor.id}`}>
+            {competitor.activeAdCount > 0
+              ? `View all ${competitor.activeAdCount} ads`
+              : "View ads"}{" "}
+            <ArrowRight className="size-3.5" />
+          </Link>
+        </Button>
+        <Button variant="ghost" size="sm" asChild>
+          <a
+            href={adLibraryPageUrl(competitor.metaPageId)}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Meta Ad Library <ExternalLink className="size-3.5" />
+          </a>
+        </Button>
       </CardFooter>
     </Card>
   );

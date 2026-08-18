@@ -28,8 +28,7 @@ export default function TestPlanPage() {
       <div>
         <h1 className="text-lg font-semibold">Test plan</h1>
         <p className="text-sm text-muted-foreground">
-          Concepts drawn from the top-ranked signals, with every ad tracked to a
-          status.
+          Ad ideas drawn from the strongest signals.
         </p>
       </div>
 

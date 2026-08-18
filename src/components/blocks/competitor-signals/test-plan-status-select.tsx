@@ -14,8 +14,8 @@ import type { TestPlanAdStatus } from "./types";
 
 /**
  * The four steps plus the terminal veto (§9), in the order an ad walks them.
- * Status is carried by its label alone — the checklist is a tracking sheet, and
- * colouring five neutral steps would only invent an urgency the data lacks.
+ * Plain labels, no colour: the steps are neutral bookkeeping, and colouring
+ * them would only invent an urgency the data lacks.
  */
 const STATUS_ORDER = [
   "proposed",

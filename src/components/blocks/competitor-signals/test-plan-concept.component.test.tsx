@@ -46,12 +46,12 @@ function makeConcept(overrides: Partial<Concept> = {}): Concept {
     claimGuardrail: "Never promise a performance gain in numbers",
     hooks: ["The mouthguard your coach already wears"],
     generatedAt: new Date("2026-08-01T00:00:00Z"),
-    inspiration: null,
     ads: [
       makeAd({ id: "ad1", sortOrder: 0 }),
       makeAd({ id: "ad2", hook: "Your coach wore one first", format: "video", status: "approved", sortOrder: 1 }),
       makeAd({ id: "ad3", hook: "What the bench never told you", format: "static", status: "rejected", sortOrder: 2 }),
     ],
+    inspiration: null,
     ...overrides,
   };
 }
@@ -74,6 +74,7 @@ describe("TestPlanConcept", () => {
 
     expect(screen.getByText("Coaches vouch first")).toBeVisible();
     expect(screen.getByText("Social proof")).toBeVisible();
+    expect(screen.getByText("Why this test")).toBeVisible();
     expect(
       screen.getByText("Strength athletes who already train with a coach"),
     ).toBeVisible();
@@ -81,6 +82,43 @@ describe("TestPlanConcept", () => {
       screen.getByText(/Coach endorsement \(AIRWAAV, score 70\)/),
     ).toBeVisible();
     expect(screen.getByText(/Read CTR at 3 days/)).toBeVisible();
+  });
+
+  it("shows the competitor ads a concept was written from when they resolve", () => {
+    renderConcept(
+      makeConcept({
+        inspiration: {
+          clusterLabel: "Coach endorsement",
+          competitorId: "c1",
+          competitorName: "AIRWAAV",
+          metaPageId: "123456789",
+          adCount: 7,
+          oldestStartDate: null,
+          previewAds: [
+            {
+              archiveId: "a1",
+              thumbnailUrl: "https://blob.test/a1.jpg",
+              isVideo: false,
+              videoUrl: null,
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(screen.getByText("Inspired by 7 AIRWAAV ads")).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: /View in Ad Library/ }),
+    ).toHaveAttribute(
+      "href",
+      "https://www.facebook.com/ads/library/?view_all_page_id=123456789",
+    );
+  });
+
+  it("hides the inspiration strip when the evidence clusters no longer resolve", () => {
+    renderConcept(makeConcept({ inspiration: null }));
+
+    expect(screen.queryByText(/Inspired by/)).toBeNull();
   });
 
   it("renders one row per ad, each with its format and its status", () => {
@@ -92,7 +130,7 @@ describe("TestPlanConcept", () => {
     ).toBeVisible();
     expect(screen.getByText("Your coach wore one first")).toBeVisible();
     expect(screen.getByText("What the bench never told you")).toBeVisible();
-    expect(screen.getAllByText("Static")).toHaveLength(2);
+    expect(screen.getAllByText("Image")).toHaveLength(2);
     expect(screen.getByText("Video")).toBeVisible();
     expect(screen.getByText("Proposed")).toBeVisible();
     expect(screen.getByText("Approved")).toBeVisible();
@@ -104,7 +142,7 @@ describe("TestPlanConcept", () => {
 
     expect(
       screen.getByText(
-        /Scale and kill decisions follow measured CTR, CAC and ROAS in Adsolute/,
+        /Scale and kill decisions follow measured CTR, CAC, and ROAS in Adsolute/,
       ),
     ).toBeVisible();
   });
@@ -112,7 +150,7 @@ describe("TestPlanConcept", () => {
   it("keeps the boilerplate even on a concept carrying no guardrail", () => {
     renderConcept(makeConcept({ claimGuardrail: null }));
 
-    expect(screen.queryByText("Claim guardrail")).toBeNull();
+    expect(screen.queryByText("Copy guardrail")).toBeNull();
     expect(
       screen.getByText(/never these evidence scores/),
     ).toBeVisible();
@@ -121,7 +159,7 @@ describe("TestPlanConcept", () => {
   it("marks the guardrail as a constraint when the generator returned one", () => {
     renderConcept(makeConcept());
 
-    expect(screen.getByText("Claim guardrail")).toBeVisible();
+    expect(screen.getByText("Copy guardrail")).toBeVisible();
     expect(
       screen.getByText(/Never promise a performance gain in numbers/),
     ).toBeVisible();

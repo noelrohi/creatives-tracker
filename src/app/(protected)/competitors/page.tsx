@@ -41,7 +41,7 @@ export default function CompetitorsPage() {
         <div>
           <h1 className="text-lg font-semibold">Competitors</h1>
           <p className="text-sm text-muted-foreground">
-            Public Meta Ad Library activity per tracked competitor.
+            What each tracked brand is running on Meta.
           </p>
         </div>
         {items.length > 0 && (
