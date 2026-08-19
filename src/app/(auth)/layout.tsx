@@ -21,6 +21,10 @@ const taglines: Record<string, { heading: string; sub: string }> = {
     heading: "Connect an\napplication",
     sub: "Review what it can access before you approve.",
   },
+  "/select-workspace": {
+    heading: "Pick your\nworkspace",
+    sub: "The connection is scoped to one workspace.",
+  },
 };
 
 export default function AuthLayout({

@@ -18,6 +18,16 @@ const baseUrl = (
 // audience-bound to this URL, so it must match what /api/mcp advertises.
 export const mcpResource = `${baseUrl}/api/mcp`;
 
+async function defaultOrganizationId(userId: string) {
+  const [membership] = await db
+    .select({ organizationId: authSchema.member.organizationId })
+    .from(authSchema.member)
+    .where(eq(authSchema.member.userId, userId))
+    .orderBy(asc(authSchema.member.createdAt))
+    .limit(1);
+  return membership?.organizationId ?? null;
+}
+
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
     provider: "pg",
@@ -28,20 +38,12 @@ export const auth = betterAuth({
     session: {
       create: {
         before: async (session) => {
-          const [membership] = await db
-            .select({ organizationId: authSchema.member.organizationId })
-            .from(authSchema.member)
-            .where(eq(authSchema.member.userId, session.userId))
-            .orderBy(asc(authSchema.member.createdAt))
-            .limit(1);
-
           return {
             data: {
               ...session,
               activeOrganizationId:
                 session.activeOrganizationId ??
-                membership?.organizationId ??
-                null,
+                (await defaultOrganizationId(session.userId)),
             },
           };
         },
@@ -57,6 +59,29 @@ export const auth = betterAuth({
       loginPage: "/sign-in",
       consentPage: "/consent",
       resource: mcpResource,
+      // Multi-org users pick the workspace an MCP token is scoped to; the
+      // choice is stored as the consent/token referenceId and surfaced to
+      // the resource server as an organization_id claim.
+      postLogin: {
+        page: "/select-workspace",
+        shouldRedirect: async ({ user }) => {
+          const memberships = await db
+            .select({ organizationId: authSchema.member.organizationId })
+            .from(authSchema.member)
+            .where(eq(authSchema.member.userId, user.id))
+            .limit(2);
+          return memberships.length > 1;
+        },
+        consentReferenceId: async ({ user, session }) => {
+          const activeOrganizationId = session.activeOrganizationId;
+          if (typeof activeOrganizationId === "string") {
+            return activeOrganizationId;
+          }
+          return (await defaultOrganizationId(user.id)) ?? undefined;
+        },
+      },
+      customAccessTokenClaims: ({ referenceId }) =>
+        referenceId ? { organization_id: referenceId } : {},
     }),
     cimd({
       fetchClientMetadataResource,

@@ -103,22 +103,35 @@ export async function createContext(options?: ContextOptions) {
   };
 }
 
-// Context for MCP requests: the access token identifies a user, and the org
-// is resolved the same way the session-create hook picks a default — oldest
+// Context for MCP requests: the access token identifies a user, and its
+// organization_id claim (picked during the OAuth flow) selects the org. A
+// claimed org counts only while the user is still a member; without a claim,
+// fall back to the same default the session-create hook uses — oldest
 // membership first. MCP acts as the user, so orgRole gates writes like a
 // session would.
-export async function createMcpContext(userId: string) {
-  const [membership] = await db
-    .select({ organizationId: member.organizationId })
-    .from(member)
-    .where(eq(member.userId, userId))
-    .orderBy(asc(member.createdAt))
-    .limit(1);
+export async function createMcpContext(
+  userId: string,
+  claimedOrganizationId?: string | null,
+) {
+  let organizationId = claimedOrganizationId ?? null;
 
-  const organizationId = membership?.organizationId ?? null;
+  if (!organizationId) {
+    const [membership] = await db
+      .select({ organizationId: member.organizationId })
+      .from(member)
+      .where(eq(member.userId, userId))
+      .orderBy(asc(member.createdAt))
+      .limit(1);
+    organizationId = membership?.organizationId ?? null;
+  }
+
   const orgRole = organizationId
     ? await getOrganizationRole(userId, organizationId)
     : null;
+
+  if (!orgRole) {
+    organizationId = null;
+  }
 
   return {
     session: null,

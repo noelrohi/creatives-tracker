@@ -41,7 +41,13 @@ const handler = createMcpHandler(
       // the safe answer if that ever breaks.
       return server;
     }
-    const caller = createCaller(await createMcpContext(userId));
+    const organizationId = ctx.authInfo?.extra?.organizationId;
+    const caller = createCaller(
+      await createMcpContext(
+        userId,
+        typeof organizationId === "string" ? organizationId : null,
+      ),
+    );
 
     server.registerTool(
       "list_campaigns",
@@ -111,7 +117,10 @@ export const POST = requireMcpAuth(
             ? accessTokenClaims.scope.split(" ")
             : [],
         expiresAt: accessTokenClaims.exp,
-        extra: { userId: accessTokenClaims.sub },
+        extra: {
+          userId: accessTokenClaims.sub,
+          organizationId: accessTokenClaims.organization_id,
+        },
       },
     }),
   { resource: mcpResource },
