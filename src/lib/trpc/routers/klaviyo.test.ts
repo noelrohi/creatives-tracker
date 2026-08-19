@@ -313,6 +313,7 @@ const PROCEDURE_CALLS: Array<[string, (caller: ReturnType<typeof sessionCaller>)
       caller.unmatchedEvents({ dateFrom: "2026-07-01", dateTo: "2026-07-30" }),
   ],
   ["recomputeMatches", (caller) => caller.recomputeMatches({ dateFrom: "2026-07-01", dateTo: "2026-07-31" })],
+  ["startIncrementalPass", (caller) => caller.startIncrementalPass()],
   [
     "matchInvocationStatus",
     (caller) => caller.matchInvocationStatus({ triggerRunId: "run" }),
@@ -746,6 +747,32 @@ describe("claims, journey, inspector, and report procedures", () => {
       { syncRunId: "report-run-1" },
       { idempotencyKey: "key-1", idempotencyKeyTTL: "7d" },
     );
+  });
+
+  it("startIncrementalPass hands the supervisor an org-scoped payload under a reusable key", async () => {
+    mocks.idempotencyCreate.mockResolvedValue("key-incremental");
+    mocks.taskTrigger.mockResolvedValue({ id: "trigger-run-9" });
+    const caller = sessionCaller("admin");
+    const result = await caller.startIncrementalPass();
+    expect(result).toEqual({ triggerRunId: "trigger-run-9" });
+    expect(mocks.idempotencyCreate).toHaveBeenCalledWith(
+      "klaviyo:incremental:manual:org-1",
+      { scope: "global" },
+    );
+    expect(mocks.taskTrigger).toHaveBeenCalledWith(
+      "klaviyo-incremental",
+      { organizationId: "org-1" },
+      { idempotencyKey: "key-incremental", idempotencyKeyTTL: "15m" },
+    );
+  });
+
+  it("startIncrementalPass maps a handoff failure to the fixed safe error", async () => {
+    mocks.idempotencyCreate.mockResolvedValue("key-incremental");
+    mocks.taskTrigger.mockRejectedValue(new Error("api down"));
+    const caller = sessionCaller("admin");
+    await expect(caller.startIncrementalPass()).rejects.toMatchObject({
+      message: "Klaviyo incremental pass could not start",
+    });
   });
 
   it("short-circuits an all-fresh refresh without any trigger", async () => {

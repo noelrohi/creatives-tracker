@@ -622,6 +622,41 @@ export const klaviyoRouter = router({
     };
   }),
 
+  /**
+   * Full incremental pass via the supervisor: evidence → source sync →
+   * matching → enrichment, back-to-back. The Lab offers this when bare
+   * recompute is rejected for stale Shopify evidence — on a live store the
+   * hourly ingest stales any evidence run within the hour, so only the
+   * chained pass can publish mid-day.
+   */
+  startIncrementalPass: orgAdminProcedure.mutation(async ({ ctx }) => {
+    await requirePilotConnection(ctx.organizationId);
+    try {
+      // Repeat clicks inside the TTL resolve to the same supervisor run;
+      // the supervisor's own leases guard everything below it.
+      const idempotencyKey = await idempotencyKeys.create(
+        `klaviyo:incremental:manual:${ctx.organizationId}`,
+        { scope: "global" },
+      );
+      const handle = await tasks.trigger(
+        "klaviyo-incremental",
+        { organizationId: ctx.organizationId },
+        { idempotencyKey, idempotencyKeyTTL: "15m" },
+      );
+      return { triggerRunId: handle.id };
+    } catch (error) {
+      console.error("klaviyo incremental pass handoff failed", {
+        name: error instanceof Error ? error.name : typeof error,
+        message: error instanceof Error ? error.message : String(error),
+        status: (error as { status?: number }).status ?? null,
+      });
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "Klaviyo incremental pass could not start",
+      });
+    }
+  }),
+
   matchInvocationStatus: orgAdminProcedure
     .input(z.object({ triggerRunId: resourceIdSchema }))
     .query(async ({ input, ctx }) => {
