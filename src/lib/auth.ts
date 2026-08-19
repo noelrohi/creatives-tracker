@@ -82,6 +82,15 @@ export const auth = betterAuth({
       },
       customAccessTokenClaims: ({ referenceId }) =>
         referenceId ? { organization_id: referenceId } : {},
+      // CIMD needs a public HTTPS client_id URL, which local MCP clients
+      // (Inspector, Claude Code) can't provide — let them use dynamic client
+      // registration outside production.
+      ...(process.env.NODE_ENV !== "production"
+        ? {
+            allowDynamicClientRegistration: true,
+            allowUnauthenticatedClientRegistration: true,
+          }
+        : {}),
     }),
     cimd({
       fetchClientMetadataResource,
