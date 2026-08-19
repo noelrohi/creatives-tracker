@@ -10,7 +10,9 @@ import { db } from "@/db";
 import * as authSchema from "@/schema/auth";
 import * as oauthSchema from "@/schema/oauth";
 
-const baseUrl = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
+const baseUrl = (
+  process.env.BETTER_AUTH_URL ?? "http://localhost:3000"
+).replace(/\/+$/, "");
 
 // Canonical identifier of the MCP protected resource. Access tokens are
 // audience-bound to this URL, so it must match what /api/mcp advertises.
