@@ -17,6 +17,10 @@ const taglines: Record<string, { heading: string; sub: string }> = {
     heading: "You've been\ninvited",
     sub: "Join your team's workspace.",
   },
+  "/consent": {
+    heading: "Connect an\napplication",
+    sub: "Review what it can access before you approve.",
+  },
 };
 
 export default function AuthLayout({
