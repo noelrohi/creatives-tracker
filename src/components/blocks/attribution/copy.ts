@@ -54,10 +54,10 @@ export type Severity = "critical" | "warning";
 
 export const page = {
   /**
-   * The nav label and breadcrumb keep the product name the sidebar decision
-   * fixed verbatim; everything below the top bar is plain voice.
+   * The nav label and breadcrumb: this view is now the dashboard at `/`, so
+   * both read "Dashboard"; everything below the top bar is plain voice.
    */
-  navLabel: "Attribution",
+  navLabel: "Dashboard",
   title: "Where your sales came from",
   /**
    * Comparison lines. They sit on their own line under the figure they belong
@@ -280,19 +280,6 @@ export const metaCheck = {
  */
 export const campaigns = {
   title: "Campaign by campaign",
-  /**
-   * The worst payback first, because that is the row worth acting on. Named so
-   * the fold does not have to be opened to know which campaign to look at.
-   */
-  summary: (worstName: string, back: string, campaignCount: number) =>
-    `${worstName} gives back ${back} per $1 · ${formatCount(campaignCount)} ${
-      campaignCount === 1 ? "campaign" : "campaigns"
-    }`,
-  /** Spend with nothing behind it is the sharpest version of the same list. */
-  summaryNoBack: (worstName: string, spent: string, campaignCount: number) =>
-    `${worstName} spent ${spent} with no orders behind it · ${formatCount(
-      campaignCount,
-    )} ${campaignCount === 1 ? "campaign" : "campaigns"}`,
   columns: {
     campaign: "Campaign",
     spent: "Spent",
@@ -378,7 +365,6 @@ export const bucketHelp: Partial<Record<AttributionBucket, string>> = {
 
 export const howWeCount = {
   trigger: "How we count",
-  summary: "Net sales, days, refunds, too new to place",
   entries: (timeZone: string) => [
     { term: "Net sales", body: glossary.netSales },
     { term: bucketLabels.unattributed, body: glossary.unattributed },
@@ -394,8 +380,8 @@ export const howWeCount = {
 };
 
 /**
- * The three folds under the ledger. Each summary carries its own answer, so on
- * a quiet morning none of them has to be opened.
+ * The two folds under the ledger. Each summary carries its own answer, so on
+ * a quiet morning neither has to be opened.
  */
 export const folds = {
   attention: "Needs your attention",
@@ -407,21 +393,6 @@ export const folds = {
   // thing a third time on the same screen.
   attentionFrozen: "paused while numbers are frozen",
   attentionFirstLoad: "checks start after the first load",
-  meta: metaCheck.title,
-  metaSummary: (
-    metaSays: string | null,
-    confirm: string,
-    back: string | null,
-  ) =>
-    [
-      metaSays ? `Meta says ${metaSays}` : null,
-      `we confirm ${confirm}`,
-      back ? `${back} back per $1` : null,
-    ]
-      .filter((part): part is string => part !== null)
-      .join(" · "),
-  metaSummaryNoData: "no data yet",
-  how: "How we count",
   howSummary: "Net sales, days, refunds, too new to place",
 };
 

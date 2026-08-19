@@ -24,9 +24,8 @@ export function NoDataChip({ className }: { className?: string }) {
 }
 
 /**
- * The body of the "Meta check" fold. The card chrome and the heading are gone —
- * the fold row above provides both, and its summary already carries the two
- * figures — so this is the detail you get when you ask for it.
+ * The body of the Meta drawer's revenue panel (`MetaRevenuePanel`), which
+ * supplies its own heading — this component starts straight at the figures.
  *
  * This is the one place on the screen where "Meta says" is printed, which is why
  * its footnote sits directly underneath.

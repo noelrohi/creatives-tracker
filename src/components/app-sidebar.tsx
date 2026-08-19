@@ -53,6 +53,7 @@ const dashboardSubItems: Array<{
   badge?: string;
 }> = [
   { label: "Dashboard", href: "/", icon: "solar:widget-5-linear" },
+  { label: "Meta", href: "/meta", icon: "solar:cursor-square-linear" },
   { label: "MER", href: "/mer", icon: "solar:graph-up-linear" },
 ];
 

@@ -387,9 +387,9 @@ export function GoogleAdsLab() {
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="flex items-center gap-3">
           <Button asChild size="sm" variant="ghost">
-            <Link href="/attribution">
+            <Link href="/">
               <ArrowLeft className="size-4" />
-              Attribution
+              Dashboard
             </Link>
           </Button>
           <h1 className="flex items-center gap-2 text-[15px] font-semibold tracking-tight">

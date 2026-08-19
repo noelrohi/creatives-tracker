@@ -340,11 +340,11 @@ export function KlaviyoPlayground() {
     <div className="space-y-4 overflow-x-hidden p-6">
       <div className="flex items-center gap-3">
         <Link
-          href="/attribution"
+          href="/"
           className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="size-4" />
-          Attribution
+          Dashboard
         </Link>
       </div>
       <div>

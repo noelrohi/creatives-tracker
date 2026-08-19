@@ -8,14 +8,15 @@ import { campaigns as copy } from "./copy";
 import { formatMoneyExact } from "./format";
 import { NoDataChip } from "./meta-check-card";
 
-export type CampaignLedgerData = RouterOutputs["attribution"]["campaignLedger"];
+type CampaignLedgerData = RouterOutputs["attribution"]["campaignLedger"];
 type CampaignRow = CampaignLedgerData["campaigns"][number];
 
 /**
- * The body of the "Campaign by campaign" fold: one row per campaign, worst
- * payback first, because the decision this screen exists for is which campaign
- * to cut. The unresolved row sits at the bottom so the rows above it plus that
- * one still add up to the Meta ads total in the ledger.
+ * The campaign table inside the Meta drawer's revenue panel, under the
+ * "Campaign by campaign" heading MetaRevenuePanel supplies: one row per
+ * campaign, worst payback first, because the decision this screen exists for
+ * is which campaign to cut. The unresolved row sits at the bottom so the rows
+ * above it plus that one still add up to the Meta ads total in the ledger.
  *
  * On a phone the table scrolls inside its own container — the page itself never
  * moves sideways.

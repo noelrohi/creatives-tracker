@@ -63,7 +63,7 @@ export function merRangeUrl(params: { dateFrom: string; dateTo: string }): strin
 }
 
 /**
- * The orders behind one channel on one day: the attribution screen itself,
+ * The orders behind one channel on one day: the dashboard screen itself,
  * with its range set to that day and the channel's order panel already open.
  * Every parameter here is one the screen reads back out of the URL.
  */
@@ -78,7 +78,7 @@ export function bucketOrdersUrl(params: {
     to: params.dateTo ?? params.dateFrom,
     bucket: params.bucket,
   });
-  return `/attribution?${query.toString()}`;
+  return `/?${query.toString()}`;
 }
 
 /**
