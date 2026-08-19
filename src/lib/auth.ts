@@ -1,12 +1,28 @@
+import { cimd } from "@better-auth/cimd";
+import { fetchClientMetadataResource } from "@better-auth/cimd/node";
+import { mcp } from "@better-auth/mcp";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { organization } from "better-auth/plugins";
+import { jwt } from "better-auth/plugins/jwt";
 import { asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import * as authSchema from "@/schema/auth";
+import * as oauthSchema from "@/schema/oauth";
+
+const baseUrl = (
+  process.env.BETTER_AUTH_URL ?? "http://localhost:3000"
+).replace(/\/+$/, "");
+
+// Canonical identifier of the MCP protected resource. Access tokens are
+// audience-bound to this URL, so it must match what /api/mcp advertises.
+export const mcpResource = `${baseUrl}/api/mcp`;
 
 export const auth = betterAuth({
-  database: drizzleAdapter(db, { provider: "pg", schema: authSchema }),
+  database: drizzleAdapter(db, {
+    provider: "pg",
+    schema: { ...authSchema, ...oauthSchema },
+  }),
   emailAndPassword: { enabled: true },
   databaseHooks: {
     session: {
@@ -35,6 +51,16 @@ export const auth = betterAuth({
   plugins: [
     organization({
       allowUserToCreateOrganization: true,
+    }),
+    jwt(),
+    mcp({
+      loginPage: "/sign-in",
+      consentPage: "/consent",
+      resource: mcpResource,
+    }),
+    cimd({
+      fetchClientMetadataResource,
+      metadataProfile: "mcp-2026-07-28",
     }),
   ],
 });
