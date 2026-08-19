@@ -1,3 +1,5 @@
+import { featureFlagDefs } from "@/lib/feature-flags";
+
 export const ORG_ROLE_VALUES = ["owner", "admin", "member"] as const;
 
 export type OrgRole = (typeof ORG_ROLE_VALUES)[number];
@@ -12,6 +14,19 @@ export function isPrivilegedOrgRole(
   return role === "owner" || role === "admin";
 }
 
+/**
+ * Read-only surfaces members may reach. Flag-gated views live here too: the
+ * sidebar shows them to every role once the org enables the flag, so leaving
+ * them out makes the nav item bounce straight back to "/".
+ */
+const MEMBER_PATH_PREFIXES = [
+  "/creatives",
+  "/teams",
+  "/mer",
+  "/campaigns",
+  ...featureFlagDefs.map((def) => def.href),
+];
+
 export function canAccessMemberPath(
   role: OrgRole | null | undefined,
   pathname: string,
@@ -22,8 +37,8 @@ export function canAccessMemberPath(
 
   return (
     pathname === "/" ||
-    pathname.startsWith("/creatives") ||
-    pathname.startsWith("/teams") ||
-    pathname.startsWith("/mer")
+    MEMBER_PATH_PREFIXES.some(
+      (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+    )
   );
 }
