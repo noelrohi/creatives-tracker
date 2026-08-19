@@ -237,6 +237,7 @@ describe("assertExactClaimReplayCheckpoint", () => {
     claimReplayId: "graph-1",
     sourceRunId: "source-run-1",
     matchRunId: "match-run-1",
+    lookbackCutoff: "2026-08-05T00:00:00.000Z",
     phase: "missing",
     afterOccurredAt: null,
     afterEventRowId: null,
@@ -257,6 +258,15 @@ describe("assertExactClaimReplayCheckpoint", () => {
     ).toThrow("malformed");
     expect(() =>
       assertExactClaimReplayCheckpoint({ ...checkpoint, stage: "running" }),
+    ).toThrow("malformed");
+    expect(() =>
+      assertExactClaimReplayCheckpoint({ ...checkpoint, lookbackCutoff: null }),
+    ).toThrow("malformed");
+    expect(() =>
+      assertExactClaimReplayCheckpoint({
+        ...checkpoint,
+        lookbackCutoff: "not a timestamp",
+      }),
     ).toThrow("malformed");
   });
 });
