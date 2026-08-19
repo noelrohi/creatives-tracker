@@ -1,5 +1,4 @@
 import { cimd } from "@better-auth/cimd";
-import { fetchClientMetadataResource } from "@better-auth/cimd/node";
 import { mcp } from "@better-auth/mcp";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
@@ -7,6 +6,7 @@ import { organization } from "better-auth/plugins";
 import { jwt } from "better-auth/plugins/jwt";
 import { asc, eq } from "drizzle-orm";
 import { db } from "@/db";
+import { fetchClientMetadataResource } from "@/lib/cimd-fetch";
 import * as authSchema from "@/schema/auth";
 import * as oauthSchema from "@/schema/oauth";
 
