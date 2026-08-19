@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { bucketColor } from "@/components/blocks/attribution/colors";
 import { formatCentsMoney } from "@/components/blocks/attribution/format";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { isPrivilegedOrgRole } from "@/lib/organization-access";
 import { toCents } from "@/lib/money";
@@ -146,8 +147,11 @@ export function GoogleAdsRevenuePanel({
   return (
     <section className="rounded-md border border-border bg-card px-3 py-3 sm:px-4">
       <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 className="text-[13px] font-semibold tracking-tight">
+        <h2 className="flex items-center gap-1.5 text-[13px] font-semibold tracking-tight">
           {copy.title}
+          <Badge variant="outline" className="px-1.5 py-0 text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
+            Beta
+          </Badge>
         </h2>
         {freshnessCaption !== null ? (
           <span className="text-[10px] text-muted-foreground/70">

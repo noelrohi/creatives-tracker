@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
 import { AlertCircle, ArrowLeft } from "@/components/icons";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -391,8 +392,11 @@ export function GoogleAdsLab() {
               Attribution
             </Link>
           </Button>
-          <h1 className="text-[15px] font-semibold tracking-tight">
+          <h1 className="flex items-center gap-2 text-[15px] font-semibold tracking-tight">
             Google Ads Lab
+            <Badge variant="outline" className="px-1.5 py-0 text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
+              Beta
+            </Badge>
           </h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
