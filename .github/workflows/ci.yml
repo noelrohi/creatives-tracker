@@ -11,17 +11,20 @@ concurrency:
   # be allowed to finish.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Job count is a cost lever, not just a layout choice: GitHub rounds every job
+# up to a whole minute individually, so a 5s job bills the same as a 55s one.
+# The short checks are grouped into `static` for that reason, and the unit
+# suite is split only two ways.
+
 jobs:
-  lint:
-    name: Lint
+  static:
+    name: Static checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
 
-      # --concurrency=auto fans linting across every core (ESLint >= 9.34);
-      # --cache skips files whose content hasn't changed since the last run.
       - name: Restore ESLint cache
         uses: actions/cache@v4
         with:
@@ -29,32 +32,37 @@ jobs:
           key: eslint-${{ runner.os }}-${{ github.sha }}
           restore-keys: eslint-${{ runner.os }}-
 
+      # --concurrency=auto fans linting across every core (ESLint >= 9.34);
+      # --cache skips files unchanged since the last run.
       - name: Lint
         run: bun run lint --concurrency=auto --cache
 
-  typecheck:
-    name: Typecheck
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup
       - name: Typecheck
         run: bun run typecheck
 
+      # Only needs `git show <base>:drizzle/meta/_journal.json`, which a shallow
+      # fetch of the base ref satisfies — no full history required.
+      - name: Migration guard
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
+        run: |
+          git fetch origin ${{ github.base_ref }} --depth=1 --quiet
+          node scripts/check-migrations.mjs
+
   test:
-    name: Unit tests (${{ matrix.shard }}/3)
+    name: Unit tests (${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
       - name: Unit tests
-        run: bun run test --shard=${{ matrix.shard }}/3
+        run: bun run test --shard=${{ matrix.shard }}/2
 
   components:
     name: Component tests
@@ -65,25 +73,6 @@ jobs:
       - uses: ./.github/actions/setup
       - name: Component tests
         run: bun run test:components
-
-  migrations:
-    name: Migration guard
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      # The guard reads the base branch's journal via `git show`, so it needs
-      # more than the default single-commit checkout.
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: ./.github/actions/setup
-      - name: Migration guard
-        env:
-          BASE_REF: origin/${{ github.base_ref }}
-        run: |
-          git fetch origin ${{ github.base_ref }} --quiet
-          node scripts/check-migrations.mjs
 
   build:
     name: Build
@@ -107,25 +96,10 @@ jobs:
       - name: Build
         run: bun run build
 
-  # Single required status check: point branch protection at this one job so
-  # the shard matrix can grow or shrink without editing repo settings.
-  ci:
-    name: CI
-    if: always()
-    needs: [lint, typecheck, test, components, migrations, build]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Verify all checks passed
-        run: |
-          if echo '${{ toJSON(needs) }}' | grep -q '"result": *"\(failure\|cancelled\)"'; then
-            echo "One or more checks failed."
-            exit 1
-          fi
-
   trigger-deploy:
     name: Deploy Trigger.dev production
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [lint, typecheck, test, components]
+    needs: [static, test, components]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -139,7 +113,7 @@ jobs:
   deploy:
     name: Deploy production
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [lint, typecheck, test, components]
+    needs: [static, test, components]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
