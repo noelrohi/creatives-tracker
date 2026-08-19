@@ -1,7 +1,8 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { authClient } from "@/lib/auth-client";
 import { listOrganizations } from "@/lib/organization-client";
@@ -14,17 +15,12 @@ function SelectWorkspaceForm() {
   const searchParams = useSearchParams();
   const clientId = searchParams.get("client_id");
 
-  const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null);
   const [submittingId, setSubmittingId] = useState<string | null>(null);
 
-  useEffect(() => {
-    listOrganizations()
-      .then(setWorkspaces)
-      .catch(() => {
-        toast.error("Failed to load workspaces");
-        setWorkspaces([]);
-      });
-  }, []);
+  const workspacesQuery = useQuery<Workspace[]>({
+    queryKey: ["oauth-select-workspace"],
+    queryFn: listOrganizations,
+  });
 
   async function choose(workspace: Workspace) {
     setSubmittingId(workspace.id);
@@ -73,17 +69,28 @@ function SelectWorkspaceForm() {
         </p>
       </div>
 
-      {workspaces === null ? (
+      {workspacesQuery.isPending ? (
         <div className="flex justify-center py-8">
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
         </div>
-      ) : workspaces.length === 0 ? (
+      ) : workspacesQuery.isError ? (
+        <p className="text-sm text-destructive">
+          Failed to load your workspaces.{" "}
+          <button
+            type="button"
+            onClick={() => workspacesQuery.refetch()}
+            className="underline underline-offset-4"
+          >
+            Try again
+          </button>
+        </p>
+      ) : workspacesQuery.data.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           You are not a member of any workspace yet.
         </p>
       ) : (
         <div className="flex flex-col gap-3">
-          {workspaces.map((workspace) => (
+          {workspacesQuery.data.map((workspace) => (
             <Button
               key={workspace.id}
               onClick={() => choose(workspace)}

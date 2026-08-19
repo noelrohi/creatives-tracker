@@ -1,7 +1,8 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { authClient } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
@@ -19,18 +20,22 @@ function ConsentForm() {
   const clientId = searchParams.get("client_id");
   const scopes = (searchParams.get("scope") ?? "").split(" ").filter(Boolean);
 
-  const [clientName, setClientName] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<"accept" | "deny" | null>(null);
 
-  useEffect(() => {
-    if (!clientId) {
-      return;
-    }
-    authClient.oauth2
-      .publicClient({ query: { client_id: clientId } })
-      .then(({ data }) => setClientName(data?.client_name ?? null))
-      .catch(() => setClientName(null));
-  }, [clientId]);
+  const clientQuery = useQuery({
+    queryKey: ["oauth-public-client", clientId],
+    enabled: clientId !== null,
+    queryFn: async () => {
+      const { data, error } = await authClient.oauth2.publicClient({
+        query: { client_id: clientId! },
+      });
+      if (error || !data) {
+        throw new Error(error?.message ?? "Failed to load client");
+      }
+      return data;
+    },
+  });
+  const clientName = clientQuery.data?.client_name ?? null;
 
   async function decide(accept: boolean) {
     setSubmitting(accept ? "accept" : "deny");
@@ -79,13 +84,28 @@ function ConsentForm() {
         </ul>
       )}
 
+      {clientQuery.isError && (
+        <p className="mb-4 text-sm text-destructive">
+          Could not verify the requesting application.{" "}
+          <button
+            type="button"
+            onClick={() => clientQuery.refetch()}
+            className="underline underline-offset-4"
+          >
+            Try again
+          </button>
+        </p>
+      )}
+
       <div className="flex flex-col gap-3">
+        {/* Approving is gated on knowing who is asking: no consent while
+            the client lookup is loading or failed. */}
         <Button
           onClick={() => decide(true)}
-          disabled={submitting !== null}
+          disabled={submitting !== null || !clientQuery.isSuccess}
           className="w-full"
         >
-          {submitting === "accept" && (
+          {(submitting === "accept" || clientQuery.isPending) && (
             <Loader2 className="size-4 animate-spin" />
           )}
           Approve

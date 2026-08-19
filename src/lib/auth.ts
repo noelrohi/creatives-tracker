@@ -5,7 +5,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { createAuthMiddleware } from "better-auth/api";
 import { organization } from "better-auth/plugins";
 import { jwt } from "better-auth/plugins/jwt";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { fetchClientMetadataResource } from "@/lib/cimd-fetch";
 import * as authSchema from "@/schema/auth";
@@ -113,9 +113,23 @@ export const auth = betterAuth({
           return memberships.length > 1;
         },
         consentReferenceId: async ({ user, session }) => {
+          // The session's active org can be stale (membership since
+          // revoked); only stamp it into the token while it still holds.
           const activeOrganizationId = session.activeOrganizationId;
           if (typeof activeOrganizationId === "string") {
-            return activeOrganizationId;
+            const [membership] = await db
+              .select({ id: authSchema.member.id })
+              .from(authSchema.member)
+              .where(
+                and(
+                  eq(authSchema.member.userId, user.id),
+                  eq(authSchema.member.organizationId, activeOrganizationId),
+                ),
+              )
+              .limit(1);
+            if (membership) {
+              return activeOrganizationId;
+            }
           }
           return (await defaultOrganizationId(user.id)) ?? undefined;
         },

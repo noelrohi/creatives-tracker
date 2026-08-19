@@ -85,21 +85,40 @@ export const fetchClientMetadataResource = async (
         },
       },
       (response) => {
-        const status = response.statusCode ?? 500;
-        const body =
-          webRequest.method === "HEAD" || BODY_FORBIDDEN_STATUSES.has(status)
-            ? null
-            : (Readable.toWeb(response) as ReadableStream);
-        resolve(
-          new Response(body, {
-            headers: toResponseHeaders(response.headers),
-            status,
-            statusText: response.statusMessage,
-          }),
-        );
+        // Guard the Response constructor: a hostile endpoint can send a
+        // status outside 200-599, which would otherwise throw out of this
+        // callback as an uncaught exception instead of rejecting.
+        try {
+          const status = response.statusCode ?? 500;
+          const body =
+            webRequest.method === "HEAD" || BODY_FORBIDDEN_STATUSES.has(status)
+              ? null
+              : (Readable.toWeb(response) as ReadableStream);
+          resolve(
+            new Response(body, {
+              headers: toResponseHeaders(response.headers),
+              status,
+              statusText: response.statusMessage,
+            }),
+          );
+        } catch (error) {
+          response.destroy();
+          reject(error);
+        }
       },
     );
     req.once("error", reject);
+    // A 101 goes to "upgrade" instead of the response callback, and an
+    // early "close" fires neither — both would leave the promise pending
+    // forever on a client-controlled endpoint. Rejecting after a normal
+    // resolve is a no-op, so the close handler is safe unconditionally.
+    req.once("upgrade", (_response, socket) => {
+      socket.destroy();
+      reject(new TypeError("metadata endpoint answered with a protocol upgrade"));
+    });
+    req.once("close", () => {
+      reject(new TypeError("metadata request closed without a response"));
+    });
     req.end();
   });
 };
