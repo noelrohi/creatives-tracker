@@ -265,6 +265,8 @@ export const metaCheck = {
     } still too new to place, so this can still move.`,
   footnote:
     'Meta counts a sale when someone buys within 7 days of clicking or 1 day of seeing one of its ads, so "Meta says" always reads higher than what we can match to a real order. A steady gap is normal — the daily checks watch for it widening.',
+  error: "The Meta check didn't load.",
+  retry: "Try again",
 };
 
 /* ------------------------------------------------------------------ */
