@@ -18,6 +18,7 @@ import {
 import { centsToAmount } from "@/lib/money";
 import { deriveDayInTimezone } from "@/lib/shopify-ingest";
 import { orgProcedure, router } from "../init";
+import { openApiQueryMeta } from "../openapi-meta";
 import {
   dateRangeSchema,
   dateRangeShape,
@@ -27,9 +28,125 @@ import {
 
 const bucketSchema = z.enum(ATTRIBUTION_BUCKETS);
 
+// Output schemas exist for the OpenAPI surface (the generator requires a typed
+// response) and must mirror the resolver returns exactly — these procedures
+// also serve the web UI, and output parsing strips anything undeclared.
+const rangeSchema = z.object({ dateFrom: z.string(), dateTo: z.string() });
+
+const connectorHealthSchema = z.object({
+  lastSuccessAt: z.date().nullable(),
+  stale: z.boolean(),
+});
+
+const syncHealthSchema = z.object({
+  shopify: connectorHealthSchema,
+  meta: connectorHealthSchema,
+});
+
+const overviewOutputSchema = z.object({
+  store: z.object({
+    id: z.string(),
+    shopDomain: z.string(),
+    ianaTimezone: z.string(),
+    currency: z.string().nullable(),
+    todayInStoreTz: z.string(),
+  }),
+  range: rangeSchema,
+  buckets: z.array(
+    z.object({
+      bucket: bucketSchema,
+      revenue: z.string(),
+      orderCount: z.number(),
+    }),
+  ),
+  pending: z.object({ count: z.number(), revenue: z.string() }),
+  total: z.string(),
+  identity: z.object({
+    sumOfBuckets: z.string(),
+    actual: z.string(),
+    difference: z.string(),
+    matches: z.boolean(),
+  }),
+  syncHealth: syncHealthSchema,
+});
+
+const metaCheckOutputSchema = z.object({
+  range: rangeSchema,
+  claims: z.object({
+    claimed: z.string().nullable(),
+    claimed7dClick: z.string().nullable(),
+    claimed1dView: z.string().nullable(),
+    labeledRowShare: z.number(),
+  }),
+  spend: z.string(),
+  verifiedRevenue: z.string(),
+  verifiedOrderCount: z.number(),
+  verificationPendingCount: z.number(),
+  verifiedRoas: z.number().nullable(),
+  roasTarget: z.number(),
+});
+
+const campaignLedgerOutputSchema = z.object({
+  range: rangeSchema,
+  campaigns: z.array(
+    z.object({
+      campaignId: z.string(),
+      name: z.string(),
+      spend: z.string().nullable(),
+      claimed: z.string().nullable(),
+      confirmedRevenue: z.string(),
+      orderCount: z.number(),
+      roas: z.number().nullable(),
+    }),
+  ),
+  unresolved: z
+    .object({
+      confirmedRevenue: z.string(),
+      orderCount: z.number(),
+      spend: z.string().nullable(),
+      claimed: z.string().nullable(),
+    })
+    .nullable(),
+  roasTarget: z.number(),
+});
+
+const dailySeriesOutputSchema = z.object({
+  range: rangeSchema,
+  days: z.array(
+    z.object({
+      day: z.string(),
+      buckets: z.record(bucketSchema, z.string()),
+      pendingNet: z.string(),
+      totalNet: z.string(),
+    }),
+  ),
+});
+
+const syncStatusOutputSchema = z.object({
+  run: z
+    .object({
+      phase: z.string(),
+      result: z.string().nullable(),
+      requestedAt: z.date(),
+      finishedAt: z.date().nullable(),
+      ordersSynced: z.number().nullable(),
+      meta: z.record(z.string(), z.unknown()).nullable(),
+    })
+    .nullable(),
+});
+
 export const attributionRouter = router({
   overview: orgProcedure
+    .meta(
+      openApiQueryMeta(
+        "attribution",
+        "overview",
+        "Verified revenue overview",
+        "Shopify-verified net revenue for a day range, split by attribution bucket (meta, google, klaviyo, …), with the store's timezone/currency, pending-order totals, and connector sync health.",
+      ),
+    )
     .input(dateRangeSchema)
+    .output(overviewOutputSchema)
     .query(async ({ input, ctx }) => {
       const store = await requireStore(ctx.organizationId);
 
@@ -76,7 +193,16 @@ export const attributionRouter = router({
     }),
 
   metaCheck: orgProcedure
+    .meta(
+      openApiQueryMeta(
+        "attribution",
+        "metaCheck",
+        "Meta claimed vs verified revenue",
+        "For a day range: Meta ad spend, what Meta claims it drove (null when unlabeled — not $0), Shopify-verified revenue and orders, the verified ROAS, and the org's ROAS target.",
+      ),
+    )
     .input(dateRangeSchema)
+    .output(metaCheckOutputSchema)
     .query(async ({ input, ctx }) => {
       const store = await requireStore(ctx.organizationId);
 
@@ -132,7 +258,16 @@ export const attributionRouter = router({
    * already stamped — it widens nothing.
    */
   campaignLedger: orgProcedure
+    .meta(
+      openApiQueryMeta(
+        "attribution",
+        "campaignLedger",
+        "Per-campaign spend and verified revenue",
+        "The same day range cut by campaign: spend, Meta's claim, Shopify-confirmed revenue, order count, and ROAS per campaign, plus an unresolved row for spend/orders no campaign could be named for.",
+      ),
+    )
     .input(dateRangeSchema)
+    .output(campaignLedgerOutputSchema)
     .query(async ({ input, ctx }) => {
       const store = await requireStore(ctx.organizationId);
 
@@ -183,7 +318,16 @@ export const attributionRouter = router({
     }),
 
   dailySeries: orgProcedure
+    .meta(
+      openApiQueryMeta(
+        "attribution",
+        "dailySeries",
+        "Daily verified revenue series",
+        "Per-day Shopify-verified net revenue for a day range, split by attribution bucket, with pending and total per day.",
+      ),
+    )
     .input(dateRangeSchema)
+    .output(dailySeriesOutputSchema)
     .query(async ({ input, ctx }) => {
       const store = await requireStore(ctx.organizationId);
 
@@ -242,7 +386,17 @@ export const attributionRouter = router({
    * polls this while a backfill is in flight, so it reports the run as-is —
    * `result` is "running" until the run finishes.
    */
-  syncStatus: orgProcedure.query(async ({ ctx }) => {
+  syncStatus: orgProcedure
+    .meta(
+      openApiQueryMeta(
+        "attribution",
+        "syncStatus",
+        "Latest Shopify sync run",
+        "The newest shopify_sync_run for the org's store, as-is — result is \"running\" until the run finishes.",
+      ),
+    )
+    .output(syncStatusOutputSchema)
+    .query(async ({ ctx }) => {
     const store = await requireStore(ctx.organizationId);
 
     const [run] = await db

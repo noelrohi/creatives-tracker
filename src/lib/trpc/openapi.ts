@@ -47,6 +47,19 @@ const TAG_METADATA: Record<string, { name: string; description: string }> = {
     description:
       "Image Studio: swipe file, weekly suggestions, generation queue, and library curation",
   },
+  performanceSummary: {
+    name: "Performance Summary",
+    description: "Long-term monthly ad performance trends",
+  },
+  attribution: {
+    name: "Attribution",
+    description:
+      "Shopify-verified revenue attribution, Meta claimed-vs-verified reconciliation, and sync health",
+  },
+  findings: {
+    name: "Findings",
+    description: "Automated data-quality and performance findings",
+  },
 };
 
 function getResponseSchema(
