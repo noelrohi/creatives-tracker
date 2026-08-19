@@ -13,8 +13,12 @@ concurrency:
 
 # Job count is a cost lever, not just a layout choice: GitHub rounds every job
 # up to a whole minute individually, so a 5s job bills the same as a 55s one.
-# The short checks are grouped into `static` for that reason, and the unit
-# suite is split only two ways.
+# The short checks are grouped into `static` for that reason.
+#
+# Splitting only pays where it shortens the critical path. On a PR that path is
+# `build` (~124s); the unit suite runs ~119s including setup, so sharding it
+# bought no wall clock there and cost a billed minute per extra shard. Keep it
+# as one job until it outgrows the build.
 
 jobs:
   static:
@@ -51,18 +55,14 @@ jobs:
           node scripts/check-migrations.mjs
 
   test:
-    name: Unit tests (${{ matrix.shard }}/2)
+    name: Unit tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2]
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
       - name: Unit tests
-        run: bun run test --shard=${{ matrix.shard }}/2
+        run: bun run test
 
   components:
     name: Component tests
