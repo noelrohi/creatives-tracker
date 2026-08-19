@@ -7,7 +7,7 @@ Two people ship this repo, mostly through agents. The rules below exist so PRs m
 - **Small, focused PRs.** One reviewable change per PR. A multi-week feature is a sequence of PRs merged incrementally (skeleton → data layer → UI → polish), not one drop at the end. If a PR grows past ~500 changed lines of hand-reviewable code, split it.
 - **Merge within ~24h.** A PR that can't merge within a day is too big or too contentious — split it or discuss it first. This is what keeps stacks shallow: stacking is fine, but only ever one PR deep, because the base merges quickly.
 - **CI must be green** (lint, unit tests, component tests, build, migration guard). CI is the trust gate — reviewers review intent and design, not whether the code runs.
-- **Fill in the PR template.** Screenshots for UI changes, video for interactions.
+- **Fill in the PR template.** Screenshots for UI changes, video for interactions. Images can only be uploaded through the GitHub web editor, so this is a two-step flow: paste the screenshots into the PR body yourself, then have the agent format the pasted `user-attachments` URLs into a captioned before/after table.
 - Non-trivial features: share the plan (issue or doc) before writing the code, so direction is agreed on before there's a diff to argue about.
 
 ## Database migrations

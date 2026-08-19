@@ -4,7 +4,8 @@
 
 ## Screenshots / video
 
-<!-- Required for UI changes: before/after screenshots, video for interactions. Delete if not UI. -->
+<!-- Required for UI changes: before/after screenshots, video for interactions. Delete if not UI.
+     Paste images here in the web editor; the agent formats them into a table afterwards. -->
 
 ## Checklist
 
