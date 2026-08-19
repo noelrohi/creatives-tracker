@@ -19,6 +19,7 @@ import { studioRouter } from "./studio";
 import { attributionRouter } from "./attribution";
 import { findingsRouter } from "./findings";
 import { klaviyoRouter } from "./klaviyo";
+import { googleAdsRouter } from "./google-ads";
 import { landingPageRouter } from "./landing-page";
 import { creativeInsightsRouter } from "./creative-insights";
 import { orgSettingsRouter } from "./org-settings";
@@ -45,6 +46,7 @@ export const appRouter = router({
   attribution: attributionRouter,
   findings: findingsRouter,
   klaviyo: klaviyoRouter,
+  googleAds: googleAdsRouter,
   landingPage: landingPageRouter,
   creativeInsights: creativeInsightsRouter,
   orgSettings: orgSettingsRouter,
