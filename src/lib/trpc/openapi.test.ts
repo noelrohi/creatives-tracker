@@ -113,6 +113,15 @@ const EXPECTED_PROCEDURES = {
   apiKey: ["list", "create", "revoke", "delete"],
   team: ["list", "getById", "create", "update", "delete"],
   signals: ["ingestFill", "rankedSignals", "ingestTestPlan", "planFeedback"],
+  performanceSummary: ["monthlyOverview"],
+  attribution: [
+    "overview",
+    "metaCheck",
+    "campaignLedger",
+    "dailySeries",
+    "syncStatus",
+  ],
+  findings: ["list", "checks"],
 } as const;
 
 const EXPECTED_PATHS = Object.entries(EXPECTED_PROCEDURES)
@@ -226,8 +235,8 @@ describe("OpenAPI app inventory", () => {
     ({ path }) => !path.startsWith("/api/openapi/studio/"),
   );
 
-  it("contains exactly the expected 81 non-studio paths", () => {
-    expect(nonStudioOperations).toHaveLength(81);
+  it("contains exactly the expected 89 non-studio paths", () => {
+    expect(nonStudioOperations).toHaveLength(89);
     expect(
       Object.keys(document.paths)
         .filter((path) => !path.startsWith("/api/openapi/studio/"))

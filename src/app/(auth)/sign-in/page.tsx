@@ -31,13 +31,22 @@ export default function SignInPage() {
   });
 
   async function onSubmit(data: SignInValues) {
-    const { error } = await authClient.signIn.email({
+    const { data: signInData, error } = await authClient.signIn.email({
       email: data.email,
       password: data.password,
     });
 
     if (error) {
       toast.error(error.message ?? "Sign in failed");
+      return;
+    }
+
+    // During an OAuth authorization flow (MCP clients), the server resumes
+    // the flow after sign-in and responds with a redirect target instead.
+    const oauthRedirect =
+      signInData && "url" in signInData ? signInData.url : null;
+    if (oauthRedirect) {
+      window.location.assign(oauthRedirect);
       return;
     }
 

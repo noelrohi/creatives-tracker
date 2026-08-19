@@ -32,7 +32,8 @@ export const config = {
      * - api routes (tRPC, auth, upload, etc.)
      * - _next/static, _next/image (Next.js internals)
      * - favicon.ico, robots.txt, etc.
+     * - .well-known (OAuth/MCP discovery metadata must stay public)
      */
-    "/((?!api|_next/static|_next/image|favicon.ico|robots.txt).*)",
+    "/((?!api|_next/static|_next/image|favicon.ico|robots.txt|\\.well-known).*)",
   ],
 };

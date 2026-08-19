@@ -9,6 +9,7 @@ import {
 } from "@/lib/klaviyo/credential-provider";
 import {
   CLAIM_BATCH_SOFT_DEADLINE_MS,
+  CLAIM_REPLAY_LOOKBACK_DAYS,
   MAX_CLAIM_CONVERSIONS_PER_BATCH,
   MAX_CLAIM_REMOTE_CALLS_PER_BATCH,
   MAX_FAILED_CLAIM_RETRIES_PER_GRAPH,
@@ -59,11 +60,17 @@ function initialCheckpoint(input: {
   claimReplayId: string;
   sourceRunId: string;
   matchRunId: string;
+  now: Date;
 }): ClaimReplayCheckpoint {
   return {
     claimReplayId: input.claimReplayId,
     sourceRunId: input.sourceRunId,
     matchRunId: input.matchRunId,
+    // Computed exactly once from the same instant that stamps startedAt and
+    // persisted so every batch and resume shares one deterministic cutoff.
+    lookbackCutoff: new Date(
+      input.now.getTime() - CLAIM_REPLAY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString(),
     phase: "missing",
     afterOccurredAt: null,
     afterEventRowId: null,
@@ -190,6 +197,10 @@ export async function startOrResumeClaimReplay(input: {
     ) {
       return { kind: "no_work" as const, matchRunId: input.matchRunId };
     }
+    // Integrity guard for the truly-zero-anchors case only. A publication
+    // whose anchors all fall outside the replay scope (old and already
+    // covered) still starts and lets the first batch conclude success with
+    // zero conversions.
     const [anchors] = await tx
       .select({ count: sql<number>`count(*)::int` })
       .from(klaviyoEventMatchResults)
@@ -215,6 +226,7 @@ export async function startOrResumeClaimReplay(input: {
         claimReplayId,
         sourceRunId: input.sourceRunId,
         matchRunId: input.matchRunId,
+        now,
       }) as unknown as Record<string, never>,
       status: "running",
       heartbeatAt: now,
@@ -317,6 +329,19 @@ async function selectNextConversion(
           (${checkpoint.afterOccurredAt}::timestamp, ${checkpoint.afterEventRowId})`;
 
   if (checkpoint.phase === "missing") {
+    // An anchor is in scope when its conversion is recent (occurred on or
+    // after the persisted lookback cutoff) or has never been successfully
+    // covered: no complete replay state for it anywhere on this connection.
+    // Old, already-covered conversions keep their existing claims untouched.
+    const inScopePredicate = sql`(
+      ${klaviyoEvents.occurredAt} >= ${checkpoint.lookbackCutoff}::timestamp
+      or not exists (
+        select 1
+          from klaviyo_claim_replay_state covered
+         where covered.connection_id = ${scope.connectionId}
+           and covered.conversion_event_id = ${klaviyoEventMatchResults.eventId}
+           and covered.status = 'complete'
+      ))`;
     const [row] = await tx
       .select({ eventId: klaviyoEventMatchResults.eventId })
       .from(klaviyoEventMatchResults)
@@ -345,6 +370,7 @@ async function selectNextConversion(
           eq(klaviyoEventMatchResults.connectionId, scope.connectionId),
           isNull(klaviyoEventMatchResults.supersededAt),
           cursorPredicate,
+          inScopePredicate,
           sql`(${klaviyoClaimReplayStates.id} is null
             or ${klaviyoClaimReplayStates.sourceChecksum} <> ${klaviyoEvents.sourceChecksum})`,
         ),

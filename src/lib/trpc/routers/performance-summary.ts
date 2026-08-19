@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { desc, eq } from "drizzle-orm";
 import { router, orgProcedure } from "../init";
+import { openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { performanceMonthlySummaries } from "@/schema/performance-monthly-summary";
 
@@ -42,7 +43,14 @@ export const performanceSummaryRouter = router({
   // The long-term monthly trend read path: it keeps working after retention
   // deletes base rows older than 180 days.
   monthlyOverview: orgProcedure
-    // No openapi meta: the OpenAPI path inventory is a pinned contract.
+    .meta(
+      openApiQueryMeta(
+        "performanceSummary",
+        "monthlyOverview",
+        "Monthly ad performance overview",
+        "Monthly spend, purchase value, ROAS, CPA, and CTR per calendar month, newest first. Survives base-row retention, so it is the long-term trend read path.",
+      ),
+    )
     .input(
       z
         .object({ months: z.number().int().min(1).max(60).default(24) })

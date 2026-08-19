@@ -257,6 +257,17 @@ export function KlaviyoPlayground() {
       },
     }),
   );
+  const startIncrementalPass = useMutation(
+    trpc.klaviyo.startIncrementalPass.mutationOptions({
+      onSuccess: () => {
+        toast.success(
+          "Incremental pass started: evidence → sync → match (~25 min)",
+        );
+        invalidateEvidence();
+      },
+      onError: onActionError("Incremental pass could not start"),
+    }),
+  );
   const recomputeMatches = useMutation(
     trpc.klaviyo.recomputeMatches.mutationOptions({
       // The pre-request instant travels through the mutation context so the
@@ -277,7 +288,26 @@ export function KlaviyoPlayground() {
           at: context?.queuedAt ?? clickInstant(),
         });
       },
-      onError: onActionError("Recompute could not start"),
+      onError: (error) => {
+        // Stale Shopify evidence is the routine mid-day failure on a live
+        // store (hourly ingest mutates orders); bare recompute can never
+        // succeed then — offer the chained pass that can.
+        if (
+          error instanceof Error &&
+          error.message.includes("no_acceptable_evidence_run")
+        ) {
+          toast.error("Shopify evidence is stale — orders changed since the last evidence pass.", {
+            description: "Run the full pass: evidence → sync → match (~25 min).",
+            duration: 15_000,
+            action: {
+              label: "Run full pass",
+              onClick: () => startIncrementalPass.mutate(),
+            },
+          });
+          return;
+        }
+        onActionError("Recompute could not start")(error);
+      },
     }),
   );
   const refreshReports = useMutation(

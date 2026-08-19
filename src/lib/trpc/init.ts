@@ -1,10 +1,13 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import { headers } from "next/headers";
+import { asc, eq } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { authenticateApiKey, getBearerToken } from "@/lib/api-keys";
 import { isPrivilegedOrgRole } from "@/lib/organization-access";
 import { getOrganizationRole } from "@/lib/server/organization-role";
+import { db } from "@/db";
+import { member } from "@/schema/auth";
 import type { OpenApiMeta } from "./openapi-meta";
 
 type ContextOptions = {
@@ -100,14 +103,62 @@ export async function createContext(options?: ContextOptions) {
   };
 }
 
-type Context = Awaited<ReturnType<typeof createContext>>;
+// Context for MCP requests: the access token identifies a user, and its
+// organization_id claim (picked during the OAuth flow) selects the org. A
+// claimed org counts only while the user is still a member; without a claim,
+// fall back to the same default the session-create hook uses — oldest
+// membership first. MCP acts as the user, so orgRole gates writes like a
+// session would.
+export async function createMcpContext(
+  userId: string,
+  claimedOrganizationId?: string | null,
+) {
+  let organizationId = claimedOrganizationId ?? null;
+
+  if (!organizationId) {
+    const [membership] = await db
+      .select({ organizationId: member.organizationId })
+      .from(member)
+      .where(eq(member.userId, userId))
+      .orderBy(asc(member.createdAt))
+      .limit(1);
+    organizationId = membership?.organizationId ?? null;
+  }
+
+  const orgRole = organizationId
+    ? await getOrganizationRole(userId, organizationId)
+    : null;
+
+  if (!orgRole) {
+    organizationId = null;
+  }
+
+  return {
+    session: null,
+    principalType: "mcp" as const,
+    userId,
+    organizationId,
+    orgRole,
+    apiKeyId: null,
+    apiKeyScopes: [] as string[],
+  };
+}
+
+type Context =
+  | Awaited<ReturnType<typeof createContext>>
+  | Awaited<ReturnType<typeof createMcpContext>>;
 
 const t = initTRPC.context<Context>().meta<OpenApiMeta>().create({
   transformer: superjson,
 });
 
 const isAuthenticated = t.middleware(async ({ ctx, next }) => {
-  if (!ctx.session && !ctx.apiKeyId && ctx.principalType !== "worker") {
+  if (
+    !ctx.session &&
+    !ctx.apiKeyId &&
+    ctx.principalType !== "worker" &&
+    ctx.principalType !== "mcp"
+  ) {
     throw new TRPCError({ code: "UNAUTHORIZED" });
   }
   return next({
@@ -143,7 +194,12 @@ function requireApiKeyScope(
 }
 
 const hasOrganization = t.middleware(async ({ ctx, next }) => {
-  if (!ctx.session && !ctx.apiKeyId && ctx.principalType !== "worker") {
+  if (
+    !ctx.session &&
+    !ctx.apiKeyId &&
+    ctx.principalType !== "worker" &&
+    ctx.principalType !== "mcp"
+  ) {
     throw new TRPCError({ code: "UNAUTHORIZED" });
   }
   if (!ctx.organizationId) {
@@ -170,7 +226,12 @@ const hasOrganization = t.middleware(async ({ ctx, next }) => {
 });
 
 const hasWriteAccess = t.middleware(async ({ ctx, next }) => {
-  if (!ctx.session && !ctx.apiKeyId && ctx.principalType !== "worker") {
+  if (
+    !ctx.session &&
+    !ctx.apiKeyId &&
+    ctx.principalType !== "worker" &&
+    ctx.principalType !== "mcp"
+  ) {
     throw new TRPCError({ code: "UNAUTHORIZED" });
   }
   if (!ctx.organizationId) {

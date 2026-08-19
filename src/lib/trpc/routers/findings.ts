@@ -4,18 +4,52 @@ import { and, desc, eq, gt, isNotNull, isNull, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import {
-  FINDING_TYPES,
   getTodaysChecks,
   mutedUntilFrom,
   type FindingType,
 } from "@/lib/findings";
-import { findingMutes, findings } from "@/schema/finding";
+import {
+  findingMutes,
+  findingResolutionEnum,
+  findingTypeEnum,
+  findings,
+} from "@/schema/finding";
 import { orgProcedure, orgWriteProcedure, router } from "../init";
+import { openApiQueryMeta } from "../openapi-meta";
 import { requireStore } from "./attribution.shared";
 import type { metaSyncTask } from "../../../../trigger/meta-sync";
 import type { shopifyIncrementalTask } from "../../../../trigger/shopify-sync";
 
-const findingTypeSchema = z.enum(FINDING_TYPES);
+// Derived from the pg enums, never hand-copied: these schemas are enforced at
+// runtime on every response, so a literal list that drifts from the DB enum turns
+// a new finding type into a 500 instead of a row.
+const findingTypeSchema = z.enum(findingTypeEnum.enumValues);
+
+// Output schemas exist for the OpenAPI surface (the generator requires a typed
+// response) and must mirror the resolver returns exactly — these procedures
+// also serve the web UI, and output parsing strips anything undeclared.
+const findingListItemSchema = z.object({
+  id: z.string().nullable(),
+  type: findingTypeSchema,
+  firedAt: z.date().nullable(),
+  periodStart: z.string().nullable(),
+  periodEnd: z.string().nullable(),
+  payload: z.record(z.string(), z.unknown()).nullable(),
+  resolvedAt: z.date().nullable(),
+  resolution: z.enum(findingResolutionEnum.enumValues).nullable(),
+  mutedUntil: z.date().nullable(),
+});
+
+const listOutputSchema = z.object({ items: z.array(findingListItemSchema) });
+
+const checksOutputSchema = z.object({
+  checks: z.array(
+    z.object({
+      type: findingTypeSchema,
+      status: z.enum(["ok", "needs_look", "waiting_for_data"]),
+    }),
+  ),
+});
 
 type FindingRow = typeof findings.$inferSelect;
 
@@ -67,7 +101,16 @@ async function activeMutes(organizationId: string, now: Date) {
 
 export const findingsRouter = router({
   list: orgProcedure
+    .meta(
+      openApiQueryMeta(
+        "findings",
+        "list",
+        "List findings",
+        "Automated data-quality and performance findings for the org, filtered by status: open (unresolved, unmuted), handled (resolved), or snoozed (muted types).",
+      ),
+    )
     .input(z.object({ status: z.enum(["open", "handled", "snoozed"]) }))
+    .output(listOutputSchema)
     .query(async ({ input, ctx }): Promise<{ items: FindingListItem[] }> => {
       const now = new Date();
       const mutes = await activeMutes(ctx.organizationId, now);
@@ -131,7 +174,17 @@ export const findingsRouter = router({
       return { items: rows.map((row) => toItem(row)) };
     }),
 
-  checks: orgProcedure.query(async ({ ctx }) => {
+  checks: orgProcedure
+    .meta(
+      openApiQueryMeta(
+        "findings",
+        "checks",
+        "Today's finding checks",
+        "Each finding rule with its current status: ok, needs_look (an open finding fired), or waiting_for_data (sync too stale to judge).",
+      ),
+    )
+    .output(checksOutputSchema)
+    .query(async ({ ctx }) => {
     const store = await requireStore(ctx.organizationId);
     const checks = await getTodaysChecks({
       organizationId: ctx.organizationId,

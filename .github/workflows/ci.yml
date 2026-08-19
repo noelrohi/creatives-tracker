@@ -2,48 +2,93 @@ name: CI
 
 on:
   pull_request:
+    # `ready_for_review` is NOT in the default set (opened/synchronize/reopened).
+    # Without it, a draft PR skipped by the guards below would never get a CI run
+    # when it is marked ready — it would sit green-by-absence until the next push.
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseded PR pushes are worth cancelling; a main push is a deploy and must
+  # be allowed to finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Job count is a cost lever, not just a layout choice: GitHub rounds every job
+# up to a whole minute individually, so a 5s job bills the same as a 55s one.
+# The short checks are grouped into `static` for that reason.
+#
+# Splitting only pays where it shortens the critical path. On a PR that path is
+# `build` (~124s); the unit suite runs ~119s including setup, so sharding it
+# bought no wall clock there and cost a billed minute per extra shard. Keep it
+# as one job until it outgrows the build.
+
+# Draft PRs skip CI entirely: work in draft, mark ready when you want the run.
+# The guard must be written as "not a PR, OR a non-draft PR" — on a push event
+# `github.event.pull_request` is null, and `null == false` is false in GitHub
+# expressions, so a bare `draft == false` would skip every job on main.
 
 jobs:
-  checks:
-    name: Lint, tests & migrations
+  static:
+    name: Static checks
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
 
-      - uses: oven-sh/setup-bun@v2
+      - name: Restore ESLint cache
+        uses: actions/cache@v4
         with:
-          bun-version: latest
+          path: .eslintcache
+          key: eslint-${{ runner.os }}-${{ github.sha }}
+          restore-keys: eslint-${{ runner.os }}-
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
+      # --concurrency=auto fans linting across every core (ESLint >= 9.34);
+      # --cache skips files unchanged since the last run.
       - name: Lint
-        run: bun run lint
+        run: bun run lint --concurrency=auto --cache
 
-      - name: Unit tests
-        run: bun run test
+      - name: Typecheck
+        run: bun run typecheck
 
-      - name: Component tests
-        run: bun run test:components
-
+      # Only needs `git show <base>:drizzle/meta/_journal.json`, which a shallow
+      # fetch of the base ref satisfies — no full history required.
       - name: Migration guard
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: origin/${{ github.base_ref }}
         run: |
-          git fetch origin ${{ github.base_ref }} --quiet
+          git fetch origin ${{ github.base_ref }} --depth=1 --quiet
           node scripts/check-migrations.mjs
+
+  test:
+    name: Unit tests
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Unit tests
+        run: bun run test
+
+  components:
+    name: Component tests
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Component tests
+        run: bun run test:components
 
   build:
     name: Build
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -51,13 +96,14 @@ jobs:
       DATABASE_URL: postgres://ci:ci@localhost:5432/ci
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
 
-      - uses: oven-sh/setup-bun@v2
+      - name: Restore Next.js build cache
+        uses: actions/cache@v4
         with:
-          bun-version: latest
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+          path: .next/cache
+          key: next-${{ runner.os }}-${{ hashFiles('bun.lock') }}-${{ github.sha }}
+          restore-keys: next-${{ runner.os }}-${{ hashFiles('bun.lock') }}-
 
       - name: Build
         run: bun run build
@@ -65,28 +111,21 @@ jobs:
   trigger-deploy:
     name: Deploy Trigger.dev production
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: checks
+    needs: [static, test, components]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       TRIGGER_ACCESS_TOKEN: ${{ secrets.TRIGGER_ACCESS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
+      - uses: ./.github/actions/setup
       - name: Deploy Trigger.dev production
         run: bun run trigger:deploy -- --env prod
 
   deploy:
     name: Deploy production
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: checks
+    needs: [static, test, components]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -95,13 +134,7 @@ jobs:
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+      - uses: ./.github/actions/setup
 
       - name: Pull Vercel production configuration
         run: bunx vercel pull --yes --environment=production
