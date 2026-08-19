@@ -601,16 +601,29 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
   });
 
   it("is idempotent across a full replay of an already-complete graph", async () => {
+    // A conversion inside the lookback window: its second-graph skip must
+    // travel the checksum-equality path, not the age bound.
+    await seedExtraConversionEvent(
+      "event-recent",
+      "external-event-recent",
+      new Date(Date.now() - 2 * DAY_MS),
+    );
     const { matchRunId } = await publishMatchWorld();
     const claimReplayId = await startGraph(matchRunId);
-    const dependencies = {
-      createClient: () => fakeClaimClient(),
+    const dependenciesFor = (client: ReturnType<typeof fakeClaimClient>) => ({
+      createClient: () => client,
       credentialProvider: fakeCredentialProvider,
       verifyWriterReadiness: gateOpen,
-    };
-    await repository.processClaimBatch({ scope, claimReplayId }, dependencies);
-    // A second graph replays the same conversions: unchanged checksums are
-    // skipped in phase missing, both bounded retry phases stay empty.
+    });
+    const firstClient = fakeClaimClient();
+    const first = await repository.processClaimBatch(
+      { scope, claimReplayId },
+      dependenciesFor(firstClient),
+    );
+    expect(first).toMatchObject({ outcome: "done", processed: 2 });
+    // A second graph replays the same conversions: the old conversion is
+    // skipped by the age bound, the recent one by its unchanged checksum in
+    // phase missing, and both bounded retry phases stay empty.
     const secondStart = await repository.startOrResumeClaimReplay({
       scope,
       sourceRunId: "source-run-a",
@@ -619,15 +632,17 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
     });
     expect(secondStart.kind).toBe("started");
     if (secondStart.kind !== "started") throw new Error("unreachable");
+    const secondClient = fakeClaimClient();
     const second = await repository.processClaimBatch(
       { scope, claimReplayId: secondStart.claimReplayId },
-      dependencies,
+      dependenciesFor(secondClient),
     );
     expect(second).toMatchObject({ outcome: "done", processed: 0 });
+    expect(secondClient.getEventById).not.toHaveBeenCalled();
     const claims = await testPool!.query(
       `SELECT count(*)::int AS count FROM klaviyo_attribution_claim`,
     );
-    expect(claims.rows[0].count).toBe(1);
+    expect(claims.rows[0].count).toBe(2);
     const order = await testPool!.query(
       `SELECT claim_count FROM klaviyo_order_match_result WHERE run_id = $1`,
       [matchRunId],
@@ -779,6 +794,27 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
           WHERE conversion_event_id = 'event-recent'`,
       );
       expect(recentClaims.rows[0].count).toBe(1);
+    });
+
+    it("completes success with zero conversions when every anchor is old and covered", async () => {
+      const { matchRunId } = await publishMatchWorld();
+      await insertCoverageState({
+        conversionEventId: "event-a",
+        status: "complete",
+        matchRunId,
+      });
+      const claimReplayId = await startGraph(matchRunId);
+      const client = fakeClaimClient();
+      const result = await repository.processClaimBatch(
+        { scope, claimReplayId },
+        dependenciesFor(client),
+      );
+      expect(result).toMatchObject({ outcome: "done", processed: 0 });
+      expect(client.getEventById).not.toHaveBeenCalled();
+      const graph = await graphRow(claimReplayId);
+      expect(graph.status).toBe("success");
+      expect(graph.conversions_complete).toBe(0);
+      expect(graph.conversions_incomplete).toBe(0);
     });
 
     it("persists the lookback cutoff in the checkpoint across batch resume", async () => {
