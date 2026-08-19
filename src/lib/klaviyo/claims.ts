@@ -292,6 +292,7 @@ export type ClaimReplayCheckpoint = {
   claimReplayId: string;
   sourceRunId: string;
   matchRunId: string;
+  lookbackCutoff: string;
   phase: "missing" | "incomplete_retry" | "failed_retry";
   afterOccurredAt: string | null;
   afterEventRowId: string | null;
@@ -303,6 +304,11 @@ export type ClaimReplayCheckpoint = {
 };
 
 export const MAX_CLAIM_CONVERSIONS_PER_BATCH = 5;
+// Klaviyo attribution for a conversion is immutable once its attribution
+// windows close; 14 days is a conservative bound on that closure. Anchors
+// older than the lookback are replayed only while the connection has no
+// complete replay state for them (never successfully covered).
+export const CLAIM_REPLAY_LOOKBACK_DAYS = 14;
 export const MAX_CLAIM_REMOTE_CALLS_PER_BATCH = 25;
 export const MAX_REFERENCED_EVENT_FETCHES_PER_CONVERSION = 10;
 export const CLAIM_BATCH_SOFT_DEADLINE_MS = 480_000;
@@ -318,6 +324,8 @@ export function assertExactClaimReplayCheckpoint(
     typeof checkpoint.claimReplayId !== "string" ||
     typeof checkpoint.sourceRunId !== "string" ||
     typeof checkpoint.matchRunId !== "string" ||
+    typeof checkpoint.lookbackCutoff !== "string" ||
+    Number.isNaN(Date.parse(checkpoint.lookbackCutoff)) ||
     !["missing", "incomplete_retry", "failed_retry"].includes(
       checkpoint.phase as string,
     ) ||
@@ -332,7 +340,7 @@ export function assertExactClaimReplayCheckpoint(
     (checkpoint.attemptingOccurredAt !== null &&
       typeof checkpoint.attemptingOccurredAt !== "string") ||
     !["idle", "fetching", "handoff"].includes(checkpoint.stage as string) ||
-    Object.keys(checkpoint).length !== 11
+    Object.keys(checkpoint).length !== 12
   ) {
     throw new Error("Klaviyo claim replay checkpoint is malformed");
   }

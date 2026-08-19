@@ -485,6 +485,11 @@ export const klaviyoClaimReplayStates = pgTable(
       table.matchRunId,
       table.status,
     ),
+    // Supports the claim replay's connection-wide coverage probe: is there
+    // any complete state for this conversion, regardless of run scope.
+    index("klaviyo_claim_replay_state_coverage_idx")
+      .on(table.connectionId, table.conversionEventId)
+      .where(sql`${table.status} = 'complete'`),
   ],
 );
 
