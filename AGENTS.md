@@ -5,6 +5,7 @@
 - **Dev server:** `bun dev` (port 3000)
 - **Build:** `bun run build`
 - **Lint:** `bun run lint` (ESLint)
+- **Typecheck:** `bun run typecheck` (`tsc --noEmit`)
 - **Test:** `bun run test` (Vitest; `bun run test:watch` for watch mode). Not `bun test` — that invokes Bun's own runner and ignores `vitest.config.ts`
 - **Component tests:** `bun run test:components` (Vitest with `vitest.components.config.ts`)
 - **DB generate:** `bun run db:generate`
