@@ -1,14 +1,38 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  dedupeKlaviyoEventsLastWins,
   ensurePilotConnection,
   safeSyncError,
   sameCheckpoint,
   summarizeCheckpoint,
   type ProbePersistence,
 } from "@/lib/klaviyo/source-store";
-import { orderCoreSourceContract } from "@/lib/klaviyo/types";
+import {
+  orderCoreSourceContract,
+  type NormalizedKlaviyoEvent,
+} from "@/lib/klaviyo/types";
 
 describe("Klaviyo source store helpers", () => {
+  it("deduplicates page events by external ID with the last occurrence winning", () => {
+    const first = {
+      externalEventId: "duplicate",
+      sourceChecksum: "first",
+    } as NormalizedKlaviyoEvent;
+    const distinct = {
+      externalEventId: "distinct",
+      sourceChecksum: "only",
+    } as NormalizedKlaviyoEvent;
+    const last = {
+      externalEventId: "duplicate",
+      sourceChecksum: "last",
+    } as NormalizedKlaviyoEvent;
+
+    expect(dedupeKlaviyoEventsLastWins([first, distinct, last])).toEqual([
+      last,
+      distinct,
+    ]);
+  });
+
   it("compares opaque checkpoints exactly", () => {
     expect(
       sameCheckpoint(

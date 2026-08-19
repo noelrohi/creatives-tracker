@@ -1,5 +1,6 @@
 import { relations } from "drizzle-orm";
 import {
+  boolean,
   doublePrecision,
   index,
   integer,
@@ -10,6 +11,7 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { user } from "./auth";
 
 export const competitorStatusEnum = pgEnum("competitor_status", [
   "active",
@@ -52,6 +54,16 @@ export const testPlanAdStatusEnum = pgEnum("test_plan_ad_status", [
   "testing",
   "done",
   "rejected",
+]);
+
+export const testPlanHookRatingEnum = pgEnum("test_plan_hook_rating", [
+  "up",
+  "down",
+]);
+
+export const planRuleSourceEnum = pgEnum("plan_rule_source", [
+  "feedback",
+  "manual",
 ]);
 
 type CompetitorAdVariant = {
@@ -225,6 +237,13 @@ export const testPlanConcepts = pgTable(
     measurementPlan: text("measurement_plan").notNull(),
     claimGuardrail: text("claim_guardrail"),
     hooks: jsonb("hooks").$type<string[]>().notNull(),
+    /**
+     * Per-hook ad copy, one entry per hook in `hooks`. Nullable: concepts
+     * generated before the field existed degrade to a hook-only row.
+     */
+    hookCopy: jsonb("hook_copy").$type<
+      { hook: string; headline: string; description: string; cta: string }[]
+    >(),
     generatedSnapshotId: text("generated_snapshot_id").references(
       () => intelSnapshots.id,
       { onDelete: "set null" },
@@ -253,6 +272,74 @@ export const testPlanAds = pgTable(
   },
   (table) => [
     index("test_plan_ad_organization_id_idx").on(table.organizationId),
+  ],
+);
+
+export const planRules = pgTable(
+  "plan_rule",
+  {
+    id: id(),
+    organizationId: text("organization_id"),
+    text: text("text").notNull(),
+    source: planRuleSourceEnum("source").notNull(),
+    active: boolean("active").notNull().default(true),
+    /**
+     * Snapshotted at creation — the comment author for promoted rules, the
+     * creator for manual ones. Snapshot because comments cascade-delete.
+     */
+    attributionName: text("attribution_name").notNull(),
+    createdByUserId: text("created_by_user_id")
+      .notNull()
+      .references(() => user.id),
+    ...timestamps,
+  },
+  (table) => [index("plan_rule_organization_id_idx").on(table.organizationId)],
+);
+
+export const testPlanHookFeedback = pgTable(
+  "test_plan_hook_feedback",
+  {
+    id: id(),
+    organizationId: text("organization_id"),
+    conceptId: text("concept_id")
+      .notNull()
+      .references(() => testPlanConcepts.id, { onDelete: "cascade" }),
+    hook: text("hook").notNull(),
+    rating: testPlanHookRatingEnum("rating").notNull(),
+    /** Reason slugs from `HOOK_FEEDBACK_REASONS`; meaningful only while down. */
+    reasons: jsonb("reasons").$type<string[]>().notNull().default([]),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("test_plan_hook_feedback_concept_id_hook_uidx").on(
+      table.conceptId,
+      table.hook,
+    ),
+    index("test_plan_hook_feedback_organization_id_idx").on(
+      table.organizationId,
+    ),
+  ],
+);
+
+export const testPlanComments = pgTable(
+  "test_plan_comment",
+  {
+    id: id(),
+    organizationId: text("organization_id"),
+    conceptId: text("concept_id")
+      .notNull()
+      .references(() => testPlanConcepts.id, { onDelete: "cascade" }),
+    authorUserId: text("author_user_id")
+      .notNull()
+      .references(() => user.id),
+    text: text("text").notNull(),
+    promotedRuleId: text("promoted_rule_id").references(() => planRules.id, {
+      onDelete: "set null",
+    }),
+    ...timestamps,
+  },
+  (table) => [
+    index("test_plan_comment_organization_id_idx").on(table.organizationId),
   ],
 );
 
@@ -313,6 +400,8 @@ export const testPlanConceptRelations = relations(
       references: [intelSnapshots.id],
     }),
     ads: many(testPlanAds),
+    feedback: many(testPlanHookFeedback),
+    comments: many(testPlanComments),
   }),
 );
 
@@ -321,4 +410,40 @@ export const testPlanAdRelations = relations(testPlanAds, ({ one }) => ({
     fields: [testPlanAds.conceptId],
     references: [testPlanConcepts.id],
   }),
+}));
+
+export const testPlanHookFeedbackRelations = relations(
+  testPlanHookFeedback,
+  ({ one }) => ({
+    concept: one(testPlanConcepts, {
+      fields: [testPlanHookFeedback.conceptId],
+      references: [testPlanConcepts.id],
+    }),
+  }),
+);
+
+export const testPlanCommentRelations = relations(
+  testPlanComments,
+  ({ one }) => ({
+    concept: one(testPlanConcepts, {
+      fields: [testPlanComments.conceptId],
+      references: [testPlanConcepts.id],
+    }),
+    author: one(user, {
+      fields: [testPlanComments.authorUserId],
+      references: [user.id],
+    }),
+    promotedRule: one(planRules, {
+      fields: [testPlanComments.promotedRuleId],
+      references: [planRules.id],
+    }),
+  }),
+);
+
+export const planRuleRelations = relations(planRules, ({ one, many }) => ({
+  createdBy: one(user, {
+    fields: [planRules.createdByUserId],
+    references: [user.id],
+  }),
+  promotedFromComments: many(testPlanComments),
 }));

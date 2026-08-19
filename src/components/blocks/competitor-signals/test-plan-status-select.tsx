@@ -2,6 +2,7 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { ImageIcon, Video } from "@/components/icons";
 import {
   Select,
   SelectContent,
@@ -10,7 +11,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useTRPC } from "@/lib/trpc/client";
-import type { TestPlanAdStatus } from "./types";
+import { TEST_PLAN_FORMAT_LABELS } from "./display";
+import type { TestPlanAd, TestPlanAdStatus } from "./types";
 
 /**
  * The four steps plus the terminal veto (§9), in the order an ad walks them.
@@ -34,18 +36,15 @@ const STATUS_LABELS: Record<(typeof STATUS_ORDER)[number], string> = {
 };
 
 /**
- * The only mutable thing on the screen: one ad's status, moved by any org
- * member. The write settles inside the mutation, so the plan is simply
- * refetched on success.
+ * The same control everywhere it appears, worn as a chip on a hook row: the
+ * format icon carries which ad row is being moved, so the label never has to
+ * repeat "Image"/"Video". The write settles inside the mutation, so the plan is
+ * simply refetched on success.
  */
-export function TestPlanStatusSelect({
-  adId,
-  hook,
-  status,
+export function TestPlanFormatStatusSelect({
+  ad,
 }: {
-  adId: string;
-  hook: string;
-  status: TestPlanAdStatus;
+  ad: Pick<TestPlanAd, "id" | "hook" | "format" | "status">;
 }) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
@@ -60,16 +59,23 @@ export function TestPlanStatusSelect({
       onError: (error) => toast.error(error.message),
     }),
   );
+  const formatLabel = TEST_PLAN_FORMAT_LABELS[ad.format] ?? ad.format;
+  const FormatIcon = ad.format === "video" ? Video : ImageIcon;
 
   return (
     <Select
-      value={status}
+      value={ad.status}
       disabled={setStatus.isPending}
       onValueChange={(next) =>
-        setStatus.mutate({ adId, status: next as TestPlanAdStatus })
+        setStatus.mutate({ adId: ad.id, status: next as TestPlanAdStatus })
       }
     >
-      <SelectTrigger size="sm" className="w-28" aria-label={`Status — ${hook}`}>
+      <SelectTrigger
+        size="sm"
+        className="h-6 gap-1 rounded-full px-2 text-xs font-medium"
+        aria-label={`${formatLabel} status — ${ad.hook}`}
+      >
+        <FormatIcon className="size-3.5 text-muted-foreground" />
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

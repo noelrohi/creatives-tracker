@@ -19,6 +19,12 @@ import {
   testPlanFormatEnum,
 } from "@/schema/competitor-signals";
 import { openApiMutationMeta } from "../openapi-meta";
+import {
+  hookFeedbackSchema,
+  planCommentSchema,
+  readComments,
+  readHookFeedback,
+} from "./signals.feedback";
 import { orgProcedure, orgWriteProcedure } from "../init";
 
 // §9: 3 concepts × 3 hooks × 2 formats is the default wave, but the shape is
@@ -32,6 +38,14 @@ const planAdSchema = z.object({
   format: z.enum(testPlanFormatEnum.enumValues),
 });
 
+/** Per-hook ad copy (§ "Data model"): one entry per hook, or nothing at all. */
+const planHookCopySchema = z.object({
+  hook: z.string(),
+  headline: z.string(),
+  description: z.string(),
+  cta: z.string(),
+});
+
 const planConceptSchema = z.object({
   title: z.string().min(1),
   // Free text across the boundary — the harness is an LLM, so the server
@@ -43,6 +57,9 @@ const planConceptSchema = z.object({
   measurementPlan: z.string(),
   claimGuardrail: z.string().nullable(),
   hooks: z.array(z.string()).min(1).max(MAX_HOOKS_PER_CONCEPT),
+  // Old plans predate per-hook copy, so the column is nullable and a push may
+  // leave it out entirely — the screen degrades to a hook-only row.
+  hookCopy: z.array(planHookCopySchema).nullable().default(null),
   ads: z.array(planAdSchema).min(1).max(MAX_ADS_PER_CONCEPT),
 });
 
@@ -81,8 +98,11 @@ const planConceptOutputSchema = z.object({
   measurementPlan: z.string(),
   claimGuardrail: z.string().nullable(),
   hooks: z.array(z.string()),
+  hookCopy: z.array(planHookCopySchema).nullable(),
   generatedAt: z.date(),
   ads: z.array(planAdOutputSchema),
+  feedback: z.array(hookFeedbackSchema),
+  comments: z.array(planCommentSchema),
   inspiration: planInspirationSchema,
 });
 
@@ -140,6 +160,26 @@ export const signalsPlanProcedures = {
               message: `Concept "${concept.title}" has an ad on hook "${ad.hook}", which is not one of its hooks`,
             });
           }
+        }
+
+        // Per-hook copy is keyed by the hook text character for character; a
+        // drifted hook would render against nothing, and a hook carrying two
+        // entries would render an arbitrary one — both fail the push.
+        const copiedHooks = new Set<string>();
+        for (const copy of concept.hookCopy ?? []) {
+          if (!hooks.has(copy.hook)) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Concept "${concept.title}" has hook copy for "${copy.hook}", which is not one of its hooks`,
+            });
+          }
+          if (copiedHooks.has(copy.hook)) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Concept "${concept.title}" has more than one hook copy entry for "${copy.hook}"`,
+            });
+          }
+          copiedHooks.add(copy.hook);
         }
 
         return { ...concept, angle };
@@ -225,6 +265,7 @@ export const signalsPlanProcedures = {
               measurementPlan: concept.measurementPlan,
               claimGuardrail: concept.claimGuardrail,
               hooks: concept.hooks,
+              hookCopy: concept.hookCopy,
               generatedSnapshotId: input.generatedSnapshotId,
               generatedAt: now,
             })),
@@ -272,6 +313,7 @@ export const signalsPlanProcedures = {
           measurementPlan: testPlanConcepts.measurementPlan,
           claimGuardrail: testPlanConcepts.claimGuardrail,
           hooks: testPlanConcepts.hooks,
+          hookCopy: testPlanConcepts.hookCopy,
           generatedAt: testPlanConcepts.generatedAt,
         })
         .from(testPlanConcepts)
@@ -321,6 +363,14 @@ export const signalsPlanProcedures = {
         });
         adsByConcept.set(ad.conceptId, bucket);
       }
+
+      // One more grouped read per feedback table — same rule as the ads read:
+      // never a query per concept.
+      const conceptIds = concepts.map((concept) => concept.id);
+      const [feedbackByConcept, commentsByConcept] = await Promise.all([
+        readHookFeedback(conceptIds, ctx.organizationId),
+        readComments(conceptIds, ctx.organizationId),
+      ]);
 
       // Resolve the evidence clusters that still exist into the "inspired by"
       // strip. Missing ids degrade silently — they dangle by design (§3).
@@ -432,6 +482,8 @@ export const signalsPlanProcedures = {
         concepts: concepts.map((concept) => ({
           ...concept,
           ads: adsByConcept.get(concept.id) ?? [],
+          feedback: feedbackByConcept.get(concept.id) ?? [],
+          comments: commentsByConcept.get(concept.id) ?? [],
           inspiration: inspirationFor(concept.evidenceClusterIds),
         })),
       };
