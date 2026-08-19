@@ -36,12 +36,13 @@ import { SliceLedger } from "@/components/blocks/insights/slice-ledger";
 import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role";
 import { SLICE_DIMENSIONS } from "@/lib/creative-insights-shared";
 import { formatDateOnly } from "@/lib/date";
+import { isPrivilegedOrgRole } from "@/lib/organization-access";
 import { useTRPC } from "@/lib/trpc/client";
 
 export default function CreativeInsightsPage() {
   const trpc = useTRPC();
   const { role } = useActiveOrganizationRole();
-  const canAct = role !== "member";
+  const canAct = isPrivilegedOrgRole(role);
 
   useBreadcrumbs([{ label: copy.navLabel }]);
 

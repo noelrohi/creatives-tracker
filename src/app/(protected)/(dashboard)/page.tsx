@@ -46,6 +46,7 @@ import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role"
 import { SourceDrawer } from "@/components/blocks/attribution/source-drawer";
 import type { AttributionBucket } from "@/lib/attribution-bucket";
 import { formatDateOnly } from "@/lib/date";
+import { isPrivilegedOrgRole } from "@/lib/organization-access";
 import { useTRPC } from "@/lib/trpc/client";
 
 const BACKFILL_DAYS = 90;
@@ -69,7 +70,7 @@ function readSyncRunProgress(
 export default function DashboardPage() {
   const trpc = useTRPC();
   const { role } = useActiveOrganizationRole();
-  const canAct = role !== "member";
+  const canAct = isPrivilegedOrgRole(role);
 
   useBreadcrumbs([{ label: copy.navLabel }]);
 
