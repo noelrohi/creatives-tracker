@@ -30,7 +30,8 @@ Done when: every slice is green on its own, **and** the top slice's tree is byte
 
 - One commit per slice; follow the repo's commit conventions and trailer.
 - Push all branches, then create PRs bottom-up: the bottom PR targets the default branch, each PR above targets the branch below it — `gh pr create --base <branch-below>`.
-- Fill the repo's PR template for real: honest checklist (CI "pending" until it runs), screenshots section for UI changes (a `TODO(@user)` placeholder if you cannot capture them — say so), and a stack note naming merge order and the base PR.
+- Fill the repo's PR template for real: honest checklist (CI "pending" until it runs) and a stack note naming merge order and the base PR.
+- Screenshots: you cannot upload images to GitHub — no attachments API exists, the web editor is the only path. For UI changes, leave the section as `TODO(@user): paste screenshots here` and tell the user the PR is waiting on them. Once they have pasted, re-read the body and rewrite the raw `user-attachments` URLs into a captioned before/after table (see #188 for the shape).
 - Disclose judgment calls the diff makes silently (renames, scope adjacent to the ask) in the body — reviewers review intent.
 - Repurposing an existing PR as one slice: force-push its branch, retarget and rewrite via REST (`gh api -X PATCH repos/{owner}/{repo}/pulls/{n} -f base=… -f title=… -f body=…`). Prefer REST here — `gh pr edit` currently trips a GraphQL projectCards deprecation and silently applies nothing.
 
