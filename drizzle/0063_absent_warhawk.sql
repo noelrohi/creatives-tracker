@@ -1,1 +1,0 @@
-CREATE INDEX "klaviyo_claim_replay_state_coverage_idx" ON "klaviyo_claim_replay_state" USING btree ("connection_id","conversion_event_id") WHERE "klaviyo_claim_replay_state"."status" = 'complete';

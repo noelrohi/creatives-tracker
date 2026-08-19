@@ -50,8 +50,8 @@ The key constraint is that Google support must match the current pipeline's assu
    - `getGoogleAdsCustomer(refreshToken, customerId)` helper
 3. Add env vars to `.env`:
    ```
-   GOOGLE_ADS_CLIENT_ID=
-   GOOGLE_ADS_CLIENT_SECRET=
+   GOOGLE_ADS_OAUTH_CLIENT_ID=
+   GOOGLE_ADS_OAUTH_CLIENT_SECRET=
    GOOGLE_ADS_DEVELOPER_TOKEN=
    GOOGLE_ADS_LOGIN_CUSTOMER_ID=
    ```

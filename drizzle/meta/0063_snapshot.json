@@ -1,5 +1,5 @@
 {
-  "id": "a0753000-7376-4ee3-93dc-aaa394da973a",
+  "id": "e0be1d94-a44d-4e21-91ff-904e55fac0a2",
   "prevId": "a2c87da7-a49b-4f22-abc8-bbfcb52b167f",
   "version": "7",
   "dialect": "postgresql",
@@ -3457,6 +3457,716 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.gclid_probe_report": {
+      "name": "gclid_probe_report",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "shopify_store_id": {
+          "name": "shopify_store_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "window_from_day": {
+          "name": "window_from_day",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "window_to_day": {
+          "name": "window_to_day",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'running'"
+        },
+        "orders_scanned": {
+          "name": "orders_scanned",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "summary": {
+          "name": "summary",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "checksum": {
+          "name": "checksum",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error_code": {
+          "name": "error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error_message": {
+          "name": "error_message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "gclid_probe_report_store_idx": {
+          "name": "gclid_probe_report_store_idx",
+          "columns": [
+            {
+              "expression": "shopify_store_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "gclid_probe_report_org_store_fk": {
+          "name": "gclid_probe_report_org_store_fk",
+          "tableFrom": "gclid_probe_report",
+          "tableTo": "shopify_store",
+          "columnsFrom": [
+            "organization_id",
+            "shopify_store_id"
+          ],
+          "columnsTo": [
+            "organization_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "gclid_probe_report_status_check": {
+          "name": "gclid_probe_report_status_check",
+          "value": "\"gclid_probe_report\".\"status\" in ('running', 'completed', 'failed')"
+        },
+        "gclid_probe_report_window_check": {
+          "name": "gclid_probe_report_window_check",
+          "value": "\"gclid_probe_report\".\"window_from_day\" <= \"gclid_probe_report\".\"window_to_day\""
+        },
+        "gclid_probe_report_completed_shape_check": {
+          "name": "gclid_probe_report_completed_shape_check",
+          "value": "(\"gclid_probe_report\".\"status\" <> 'completed') or (\"gclid_probe_report\".\"summary\" is not null and \"gclid_probe_report\".\"checksum\" is not null)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.google_ads_campaign_fact": {
+      "name": "google_ads_campaign_fact",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "shopify_store_id": {
+          "name": "shopify_store_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "connection_id": {
+          "name": "connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "campaign_id": {
+          "name": "campaign_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "campaign_name": {
+          "name": "campaign_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "campaign_status": {
+          "name": "campaign_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "channel_type": {
+          "name": "channel_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fact_date": {
+          "name": "fact_date",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cost_micros": {
+          "name": "cost_micros",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "impressions": {
+          "name": "impressions",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "clicks": {
+          "name": "clicks",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "conversions": {
+          "name": "conversions",
+          "type": "numeric",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "conversions_value": {
+          "name": "conversions_value",
+          "type": "numeric",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "currency_code": {
+          "name": "currency_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "api_version": {
+          "name": "api_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fetched_at": {
+          "name": "fetched_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "google_ads_campaign_fact_date_idx": {
+          "name": "google_ads_campaign_fact_date_idx",
+          "columns": [
+            {
+              "expression": "connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "fact_date",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "google_ads_campaign_fact_scope_fk": {
+          "name": "google_ads_campaign_fact_scope_fk",
+          "tableFrom": "google_ads_campaign_fact",
+          "tableTo": "google_ads_connection",
+          "columnsFrom": [
+            "organization_id",
+            "shopify_store_id",
+            "connection_id"
+          ],
+          "columnsTo": [
+            "organization_id",
+            "shopify_store_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "google_ads_campaign_fact_day_uniq": {
+          "name": "google_ads_campaign_fact_day_uniq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "connection_id",
+            "campaign_id",
+            "fact_date"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "google_ads_campaign_fact_nonnegative_check": {
+          "name": "google_ads_campaign_fact_nonnegative_check",
+          "value": "\"google_ads_campaign_fact\".\"cost_micros\" >= 0 and \"google_ads_campaign_fact\".\"impressions\" >= 0 and \"google_ads_campaign_fact\".\"clicks\" >= 0 and \"google_ads_campaign_fact\".\"conversions\" >= 0 and \"google_ads_campaign_fact\".\"conversions_value\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.google_ads_connection": {
+      "name": "google_ads_connection",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "shopify_store_id": {
+          "name": "shopify_store_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "google_customer_id": {
+          "name": "google_customer_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "descriptive_name": {
+          "name": "descriptive_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "currency_code": {
+          "name": "currency_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "timezone": {
+          "name": "timezone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "authentication_mode": {
+          "name": "authentication_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'environment'"
+        },
+        "credential_reference": {
+          "name": "credential_reference",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'reviv_environment'"
+        },
+        "last_discovery_synced_at": {
+          "name": "last_discovery_synced_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_facts_synced_at": {
+          "name": "last_facts_synced_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "backfill_completed_at": {
+          "name": "backfill_completed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "google_ads_connection_active_customer_uidx": {
+          "name": "google_ads_connection_active_customer_uidx",
+          "columns": [
+            {
+              "expression": "google_customer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"google_ads_connection\".\"google_customer_id\" is not null and \"google_ads_connection\".\"status\" <> 'disabled'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "google_ads_connection_organization_id_organization_id_fk": {
+          "name": "google_ads_connection_organization_id_organization_id_fk",
+          "tableFrom": "google_ads_connection",
+          "tableTo": "organization",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "google_ads_connection_org_store_fk": {
+          "name": "google_ads_connection_org_store_fk",
+          "tableFrom": "google_ads_connection",
+          "tableTo": "shopify_store",
+          "columnsFrom": [
+            "organization_id",
+            "shopify_store_id"
+          ],
+          "columnsTo": [
+            "organization_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "google_ads_connection_org_store_uniq": {
+          "name": "google_ads_connection_org_store_uniq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "organization_id",
+            "shopify_store_id"
+          ]
+        },
+        "google_ads_connection_scope_id_uniq": {
+          "name": "google_ads_connection_scope_id_uniq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "organization_id",
+            "shopify_store_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "google_ads_connection_status_check": {
+          "name": "google_ads_connection_status_check",
+          "value": "\"google_ads_connection\".\"status\" in ('pending', 'ready', 'degraded', 'disabled')"
+        },
+        "google_ads_connection_auth_mode_check": {
+          "name": "google_ads_connection_auth_mode_check",
+          "value": "\"google_ads_connection\".\"authentication_mode\" = 'environment'"
+        },
+        "google_ads_connection_credential_ref_check": {
+          "name": "google_ads_connection_credential_ref_check",
+          "value": "\"google_ads_connection\".\"credential_reference\" = 'reviv_environment'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.google_ads_sync_run": {
+      "name": "google_ads_sync_run",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "shopify_store_id": {
+          "name": "shopify_store_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "connection_id": {
+          "name": "connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "operation": {
+          "name": "operation",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "window_from_day": {
+          "name": "window_from_day",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "window_to_day": {
+          "name": "window_to_day",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "checkpoint_day": {
+          "name": "checkpoint_day",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'running'"
+        },
+        "rows_read": {
+          "name": "rows_read",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "rows_upserted": {
+          "name": "rows_upserted",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "failure_count": {
+          "name": "failure_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "error_code": {
+          "name": "error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error_message": {
+          "name": "error_message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "api_version": {
+          "name": "api_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "google_ads_sync_run_connection_idx": {
+          "name": "google_ads_sync_run_connection_idx",
+          "columns": [
+            {
+              "expression": "connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "started_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "google_ads_sync_run_one_running_discovery_uidx": {
+          "name": "google_ads_sync_run_one_running_discovery_uidx",
+          "columns": [
+            {
+              "expression": "connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"google_ads_sync_run\".\"operation\" = 'discovery' and \"google_ads_sync_run\".\"status\" = 'running'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "google_ads_sync_run_one_running_facts_uidx": {
+          "name": "google_ads_sync_run_one_running_facts_uidx",
+          "columns": [
+            {
+              "expression": "connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"google_ads_sync_run\".\"operation\" = 'facts' and \"google_ads_sync_run\".\"status\" = 'running'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "google_ads_sync_run_scope_fk": {
+          "name": "google_ads_sync_run_scope_fk",
+          "tableFrom": "google_ads_sync_run",
+          "tableTo": "google_ads_connection",
+          "columnsFrom": [
+            "organization_id",
+            "shopify_store_id",
+            "connection_id"
+          ],
+          "columnsTo": [
+            "organization_id",
+            "shopify_store_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "google_ads_sync_run_operation_check": {
+          "name": "google_ads_sync_run_operation_check",
+          "value": "\"google_ads_sync_run\".\"operation\" in ('discovery', 'facts')"
+        },
+        "google_ads_sync_run_status_check": {
+          "name": "google_ads_sync_run_status_check",
+          "value": "\"google_ads_sync_run\".\"status\" in ('running', 'completed', 'failed')"
+        },
+        "google_ads_sync_run_window_check": {
+          "name": "google_ads_sync_run_window_check",
+          "value": "(\"google_ads_sync_run\".\"operation\" = 'discovery' and \"google_ads_sync_run\".\"window_from_day\" is null and \"google_ads_sync_run\".\"window_to_day\" is null)\n        or (\"google_ads_sync_run\".\"operation\" = 'facts' and \"google_ads_sync_run\".\"window_from_day\" is not null and \"google_ads_sync_run\".\"window_to_day\" is not null\n          and \"google_ads_sync_run\".\"window_from_day\" <= \"google_ads_sync_run\".\"window_to_day\")"
+        },
+        "google_ads_sync_run_counters_check": {
+          "name": "google_ads_sync_run_counters_check",
+          "value": "\"google_ads_sync_run\".\"rows_read\" >= 0 and \"google_ads_sync_run\".\"rows_upserted\" >= 0 and \"google_ads_sync_run\".\"failure_count\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.identity_matching_key_binding": {
       "name": "identity_matching_key_binding",
       "schema": "",
@@ -4313,28 +5023,6 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "klaviyo_claim_replay_state_coverage_idx": {
-          "name": "klaviyo_claim_replay_state_coverage_idx",
-          "columns": [
-            {
-              "expression": "connection_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "conversion_event_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"klaviyo_claim_replay_state\".\"status\" = 'complete'",
           "concurrently": false,
           "method": "btree",
           "with": {}

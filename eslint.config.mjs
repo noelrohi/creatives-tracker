@@ -27,6 +27,8 @@ const eslintConfig = defineConfig([
     // conventions, not ours — linting them only ever reports someone else's
     // house style back at us.
     ".agents/skills/**",
+    // Bun's project-local dependency cache — vendored third-party code.
+    ".bun/**",
     // Default ignores of eslint-config-next:
     ".claude/worktrees/**",
     ".next/**",
