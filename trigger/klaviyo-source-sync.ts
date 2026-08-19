@@ -17,10 +17,10 @@ const KLAVIYO_EVENTS_QUEUE = {
   name: "klaviyo-events",
   concurrencyLimit: 1,
 };
-// Two pages keeps the worst case (4 aborted attempts + full 429 waits per
-// page ≈ 5 min) far inside the batch task's maxDuration; total volume only
-// adds self-chained batches, never per-batch duration.
-const MAX_PAGES_PER_BATCH = 2;
+// The client's 30s per-request abort bounds worst-case page cost, so six
+// pages fit the batch task's maxDuration of 1_800 with headroom; total
+// volume only adds self-chained batches, never per-batch duration.
+const MAX_PAGES_PER_BATCH = 6;
 
 type SourceBatchPayload = { syncRunId: string };
 
