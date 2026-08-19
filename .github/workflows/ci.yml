@@ -7,34 +7,78 @@ on:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseded PR pushes are worth cancelling; a main push is a deploy and must
+  # be allowed to finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  checks:
-    name: Lint, tests & migrations
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      # --concurrency=auto fans linting across every core (ESLint >= 9.34);
+      # --cache skips files whose content hasn't changed since the last run.
+      - name: Restore ESLint cache
+        uses: actions/cache@v4
+        with:
+          path: .eslintcache
+          key: eslint-${{ runner.os }}-${{ github.sha }}
+          restore-keys: eslint-${{ runner.os }}-
+
+      - name: Lint
+        run: bun run lint --concurrency=auto --cache
+
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Typecheck
+        run: bun run typecheck
+
+  test:
+    name: Unit tests (${{ matrix.shard }}/3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Unit tests
+        run: bun run test --shard=${{ matrix.shard }}/3
+
+  components:
+    name: Component tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Lint
-        run: bun run lint
-
-      - name: Unit tests
-        run: bun run test
-
+      - uses: ./.github/actions/setup
       - name: Component tests
         run: bun run test:components
 
+  migrations:
+    name: Migration guard
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The guard reads the base branch's journal via `git show`, so it needs
+      # more than the default single-commit checkout.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
       - name: Migration guard
-        if: github.event_name == 'pull_request'
         env:
           BASE_REF: origin/${{ github.base_ref }}
         run: |
@@ -51,42 +95,51 @@ jobs:
       DATABASE_URL: postgres://ci:ci@localhost:5432/ci
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
 
-      - uses: oven-sh/setup-bun@v2
+      - name: Restore Next.js build cache
+        uses: actions/cache@v4
         with:
-          bun-version: latest
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+          path: .next/cache
+          key: next-${{ runner.os }}-${{ hashFiles('bun.lock') }}-${{ github.sha }}
+          restore-keys: next-${{ runner.os }}-${{ hashFiles('bun.lock') }}-
 
       - name: Build
         run: bun run build
 
+  # Single required status check: point branch protection at this one job so
+  # the shard matrix can grow or shrink without editing repo settings.
+  ci:
+    name: CI
+    if: always()
+    needs: [lint, typecheck, test, components, migrations, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all checks passed
+        run: |
+          if echo '${{ toJSON(needs) }}' | grep -q '"result": *"\(failure\|cancelled\)"'; then
+            echo "One or more checks failed."
+            exit 1
+          fi
+
   trigger-deploy:
     name: Deploy Trigger.dev production
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: checks
+    needs: [lint, typecheck, test, components]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       TRIGGER_ACCESS_TOKEN: ${{ secrets.TRIGGER_ACCESS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
+      - uses: ./.github/actions/setup
       - name: Deploy Trigger.dev production
         run: bun run trigger:deploy -- --env prod
 
   deploy:
     name: Deploy production
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: checks
+    needs: [lint, typecheck, test, components]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -95,13 +148,7 @@ jobs:
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
+      - uses: ./.github/actions/setup
 
       - name: Pull Vercel production configuration
         run: bunx vercel pull --yes --environment=production

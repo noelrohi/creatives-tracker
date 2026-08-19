@@ -46,3 +46,6 @@ next-env.d.ts
 .lavish
 .claude/worktrees/
 .bun/
+
+# eslint
+.eslintcache
