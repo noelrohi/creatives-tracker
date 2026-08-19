@@ -1,7 +1,11 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isPrivilegedOrgRole } from "./organization-access";
+import { featureFlagDefs } from "./feature-flags";
+import {
+  canAccessMemberPath,
+  isPrivilegedOrgRole,
+} from "./organization-access";
 
 describe("isPrivilegedOrgRole", () => {
   it.each([
@@ -24,9 +28,8 @@ describe.each([
 
     expect(source).toContain("const canAct = isPrivilegedOrgRole(role);");
     expect(source).not.toContain('const canAct = role !== "member";');
-import { describe, expect, it } from "vitest";
-import { featureFlagDefs } from "./feature-flags";
-import { canAccessMemberPath } from "./organization-access";
+  });
+});
 
 describe("canAccessMemberPath", () => {
   it("lets members reach every flag-gated route the sidebar shows them", () => {
