@@ -2,6 +2,7 @@ import { cimd } from "@better-auth/cimd";
 import { mcp } from "@better-auth/mcp";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { createAuthMiddleware } from "better-auth/api";
 import { organization } from "better-auth/plugins";
 import { jwt } from "better-auth/plugins/jwt";
 import { asc, eq } from "drizzle-orm";
@@ -17,6 +18,24 @@ const baseUrl = (
 // Canonical identifier of the MCP protected resource. Access tokens are
 // audience-bound to this URL, so it must match what /api/mcp advertises.
 export const mcpResource = `${baseUrl}/api/mcp`;
+
+// RFC 8252 loopback port variance covers only IP literals, so Better Auth
+// rejects `http://localhost:<random-port>/callback` even when the client
+// registered `http://127.0.0.1/callback`. Claude Code (and other native MCP
+// clients) redirect to localhost, so normalize it to 127.0.0.1 before
+// validation. Must apply to every endpoint that receives redirect_uri, or
+// the token exchange would compare a rewritten value against a raw one.
+function normalizeLoopbackRedirectUri(value: unknown) {
+  if (typeof value !== "string") return value;
+  try {
+    const url = new URL(value);
+    if (url.protocol === "http:" && url.hostname === "localhost") {
+      url.hostname = "127.0.0.1";
+      return url.toString();
+    }
+  } catch {}
+  return value;
+}
 
 async function defaultOrganizationId(userId: string) {
   const [membership] = await db
@@ -34,6 +53,27 @@ export const auth = betterAuth({
     schema: { ...authSchema, ...oauthSchema },
   }),
   emailAndPassword: { enabled: true },
+  hooks: {
+    before: createAuthMiddleware(async (ctx) => {
+      if (!ctx.path.startsWith("/oauth2/")) {
+        return;
+      }
+      if (ctx.query?.redirect_uri) {
+        ctx.query.redirect_uri = normalizeLoopbackRedirectUri(
+          ctx.query.redirect_uri,
+        );
+      }
+      if (
+        ctx.body &&
+        typeof ctx.body === "object" &&
+        "redirect_uri" in ctx.body
+      ) {
+        ctx.body.redirect_uri = normalizeLoopbackRedirectUri(
+          ctx.body.redirect_uri,
+        );
+      }
+    }),
+  },
   databaseHooks: {
     session: {
       create: {
