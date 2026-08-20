@@ -1,9 +1,67 @@
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { sql } from "drizzle-orm";
+import { Pool } from "pg";
+
+/**
+ * The grouped-by-day reads at the bottom of this file run against real rows,
+ * so this suite carries a throwaway Postgres alongside its pure tests —
+ * the same pattern findings.checks.test.ts uses. Everything above that
+ * `describe` is pure and untouched by the mock.
+ */
+function resolveConnectionString(): string | null {
+  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+  try {
+    const envFile = readFileSync(path.resolve(process.cwd(), ".env"), "utf8");
+    const match = envFile.match(/^\s*DATABASE_URL\s*=\s*"?([^"\n]+)"?/m);
+    return match ? match[1].trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+const baseConnectionString = resolveConnectionString();
+const TEST_DATABASE = "adsolute_attribution_grouped_test";
+
+function withDatabase(connectionString: string, database: string): string {
+  const url = new URL(connectionString);
+  url.pathname = `/${database}`;
+  return url.toString();
+}
+
+const testPool = baseConnectionString
+  ? new Pool({
+      connectionString: withDatabase(baseConnectionString, TEST_DATABASE),
+    })
+  : null;
+const testDb = testPool ? drizzle(testPool) : null;
+
+vi.mock("@/db", () => ({
+  get db() {
+    return testDb;
+  },
+}));
+
 import {
   CLAIMED_WINDOWS_EXPRESSION,
   computeRoas,
   decodeOrderCursor,
+  EMPTY_META_VERIFIED,
   encodeOrderCursor,
+  getMetaClaims,
+  getMetaClaimsByDay,
+  getMetaVerified,
+  getMetaVerifiedByDay,
   identityMatches,
   isConnectorStale,
   labeledClaimCents,
@@ -535,5 +593,483 @@ describe("sortCampaignLedger", () => {
       "No spend, big",
       "No spend, small",
     ]);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Grouped-by-day reads (DB-backed)                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * `getMetaClaimsByDay` / `getMetaVerifiedByDay` exist to replace a per-day
+ * loop, so the property worth pinning is not "the numbers look right" but
+ * "the grouped path and the per-day path give the same answer, day for day".
+ * The per-day functions are the oracle here: every case below seeds rows, then
+ * compares the two paths for every day in the window.
+ *
+ * The cases that made this worth its own suite are the ones a hand-written
+ * grouped `sum()` gets wrong: a day Meta has not reported (`spendRowCount` 0,
+ * so a claim is unknown rather than $0), and a day with rows whose window
+ * columns are null (§7.2's null-not-zero rule).
+ */
+const GROUPED_FIXTURE_DDL = [
+  `CREATE TYPE "attribution_bucket" AS ENUM (
+     'meta', 'google', 'klaviyo', 'tiktok', 'ai',
+     'organic_direct', 'unattributed', 'untracked'
+   )`,
+  `CREATE TABLE performance_log (
+     id text PRIMARY KEY,
+     ad_id text NOT NULL,
+     organization_id text,
+     spend numeric,
+     purchase_value numeric,
+     purchase_value_7d_click numeric,
+     purchase_value_1d_view numeric,
+     country text,
+     platform text,
+     placement text,
+     device text,
+     age text,
+     gender text,
+     date_start date NOT NULL,
+     date_end date NOT NULL,
+     created_at timestamp NOT NULL DEFAULT now()
+   )`,
+  `CREATE TABLE shopify_order (
+     id text PRIMARY KEY,
+     organization_id text NOT NULL,
+     store_id text NOT NULL,
+     shopify_order_id text NOT NULL,
+     order_created_at timestamp NOT NULL DEFAULT now(),
+     order_day date NOT NULL,
+     net_sales numeric NOT NULL,
+     bucket "attribution_bucket",
+     meta_verified boolean NOT NULL DEFAULT false,
+     verification_pending boolean NOT NULL DEFAULT false,
+     created_at timestamp NOT NULL DEFAULT now()
+   )`,
+  `CREATE TABLE shopify_refund (
+     id text PRIMARY KEY,
+     organization_id text NOT NULL,
+     store_id text NOT NULL,
+     order_id text NOT NULL,
+     shopify_refund_id text NOT NULL,
+     refund_day date NOT NULL,
+     amount numeric NOT NULL,
+     kind text NOT NULL DEFAULT 'refund',
+     created_at timestamp NOT NULL DEFAULT now()
+   )`,
+];
+
+const describeWithDb = testDb ? describe : describe.skip;
+
+describeWithDb("grouped-by-day reads agree with the per-day reads", () => {
+  const ORG = "org_grouped_test";
+  const STORE = "store_grouped_test";
+
+  /** Seven days, the window `findings/checks` asks for. */
+  const DAYS = [
+    "2026-08-10",
+    "2026-08-11",
+    "2026-08-12",
+    "2026-08-13",
+    "2026-08-14",
+    "2026-08-15",
+    "2026-08-16",
+  ];
+  const DATE_FROM = DAYS[0];
+  const DATE_TO = DAYS[DAYS.length - 1];
+
+  let rowSeq = 0;
+  function nextId(prefix: string) {
+    rowSeq += 1;
+    return `${prefix}-${rowSeq}`;
+  }
+
+  /**
+   * A Meta row. `claimed7dClick`/`claimed1dView` left null is a row that
+   * predates the window labels — it still counts toward `spendRowCount`.
+   */
+  async function metaRow(params: {
+    day: string;
+    spend: string;
+    claimed7dClick?: string;
+    claimed1dView?: string;
+    organizationId?: string;
+    /** Any breakdown column set makes the row a non-base row. */
+    country?: string;
+  }) {
+    await testDb?.execute(sql`
+      INSERT INTO performance_log (
+        id, ad_id, organization_id, spend,
+        purchase_value_7d_click, purchase_value_1d_view, country,
+        date_start, date_end
+      ) VALUES (
+        ${nextId("pl")}, 'ad-1', ${params.organizationId ?? ORG}, ${params.spend},
+        ${params.claimed7dClick ?? null}, ${params.claimed1dView ?? null},
+        ${params.country ?? null}, ${params.day}, ${params.day}
+      )
+    `);
+  }
+
+  async function order(params: {
+    id: string;
+    day: string;
+    netSales: string;
+    bucket?: string | null;
+    metaVerified?: boolean;
+    verificationPending?: boolean;
+    storeId?: string;
+    organizationId?: string;
+  }) {
+    await testDb?.execute(sql`
+      INSERT INTO shopify_order (
+        id, organization_id, store_id, shopify_order_id, order_day,
+        net_sales, bucket, meta_verified, verification_pending
+      ) VALUES (
+        ${params.id}, ${params.organizationId ?? ORG}, ${params.storeId ?? STORE},
+        ${params.id}, ${params.day}, ${params.netSales},
+        ${(params.bucket ?? "meta") as string}::"attribution_bucket",
+        ${params.metaVerified ?? true}, ${params.verificationPending ?? false}
+      )
+    `);
+  }
+
+  /** Refunds book on their own day, which is the point of the second query. */
+  async function refund(params: {
+    orderId: string;
+    day: string;
+    amount: string;
+  }) {
+    const id = nextId("refund");
+    await testDb?.execute(sql`
+      INSERT INTO shopify_refund (
+        id, organization_id, store_id, order_id, shopify_refund_id,
+        refund_day, amount
+      ) VALUES (
+        ${id}, ${ORG}, ${STORE}, ${params.orderId}, ${id},
+        ${params.day}, ${params.amount}
+      )
+    `);
+  }
+
+  /** What the loop this replaced computed: one pair of reads per day. */
+  async function perDay(day: string) {
+    const [claims, verified] = await Promise.all([
+      getMetaClaims({ organizationId: ORG, dateFrom: day, dateTo: day }),
+      getMetaVerified({
+        organizationId: ORG,
+        storeId: STORE,
+        dateFrom: day,
+        dateTo: day,
+      }),
+    ]);
+    return { claims, verified };
+  }
+
+  /** The grouped path, read the way `getClaimVerifiedSeries` reads it. */
+  async function grouped(day: string) {
+    const [claimsByDay, verifiedByDay] = await Promise.all([
+      getMetaClaimsByDay({
+        organizationId: ORG,
+        dateFrom: DATE_FROM,
+        dateTo: DATE_TO,
+      }),
+      getMetaVerifiedByDay({
+        organizationId: ORG,
+        storeId: STORE,
+        dateFrom: DATE_FROM,
+        dateTo: DATE_TO,
+      }),
+    ]);
+    return {
+      claims: claimsByDay.get(day) ?? metaClaimsFromRow(undefined),
+      verified: verifiedByDay.get(day) ?? EMPTY_META_VERIFIED,
+    };
+  }
+
+  /** Every day in the window, both paths, compared whole. */
+  async function expectAgreementAcrossWindow() {
+    for (const day of DAYS) {
+      const [loop, batch] = await Promise.all([perDay(day), grouped(day)]);
+      expect(batch.claims, `claims on ${day}`).toEqual(loop.claims);
+      expect(batch.verified, `verified on ${day}`).toEqual(loop.verified);
+    }
+  }
+
+  beforeAll(async () => {
+    if (!baseConnectionString || !testDb) return;
+    const adminPool = new Pool({ connectionString: baseConnectionString });
+    adminPool.on("error", () => {});
+    testPool?.on("error", () => {});
+    await adminPool.query(`DROP DATABASE IF EXISTS ${TEST_DATABASE} WITH (FORCE)`);
+    await adminPool.query(`CREATE DATABASE ${TEST_DATABASE}`);
+    await adminPool.end();
+
+    for (const statement of GROUPED_FIXTURE_DDL) {
+      await testDb.execute(sql.raw(statement));
+    }
+  });
+
+  afterAll(async () => {
+    await testPool?.end();
+  });
+
+  beforeEach(async () => {
+    if (!testDb) return;
+    rowSeq = 0;
+    for (const table of ["shopify_refund", "shopify_order", "performance_log"]) {
+      await testDb.execute(sql.raw(`DELETE FROM ${table}`));
+    }
+  });
+
+  it("agrees day for day on an ordinary day", async () => {
+    await metaRow({
+      day: "2026-08-10",
+      spend: "100.00",
+      claimed7dClick: "250.00",
+      claimed1dView: "50.00",
+    });
+    await order({ id: "o-1", day: "2026-08-10", netSales: "300.00" });
+
+    const { claims, verified } = await grouped("2026-08-10");
+
+    expect(claims.claimedCents).toBe(30_000);
+    expect(claims.spendCents).toBe(10_000);
+    expect(claims.spendRowCount).toBe(1);
+    expect(verified.verifiedRevenueCents).toBe(30_000);
+    await expectAgreementAcrossWindow();
+  });
+
+  /**
+   * The distinction the whole thing hangs on: a day Meta has never reported.
+   * `spendCents` sums to 0 either way, and only `spendRowCount` says which —
+   * `getClaimVerifiedSeries` turns a 0 count into a null `spendCents`, so a
+   * grouped read that invented a zero row would silently claim Meta reported.
+   */
+  it("leaves a day with no Meta rows absent, not zeroed", async () => {
+    await metaRow({
+      day: "2026-08-10",
+      spend: "100.00",
+      claimed7dClick: "250.00",
+    });
+    // 2026-08-11 gets orders but no Meta row at all.
+    await order({ id: "o-2", day: "2026-08-11", netSales: "40.00" });
+
+    const claimsByDay = await getMetaClaimsByDay({
+      organizationId: ORG,
+      dateFrom: DATE_FROM,
+      dateTo: DATE_TO,
+    });
+
+    expect(claimsByDay.has("2026-08-11")).toBe(false);
+
+    const missing = await perDay("2026-08-11");
+    expect(missing.claims.spendRowCount).toBe(0);
+    expect(missing.claims.claimedCents).toBeNull();
+    expect(missing.claims.spendCents).toBe(0);
+    // …and the fallback the caller reads it through says exactly that.
+    expect(metaClaimsFromRow(undefined)).toEqual(missing.claims);
+
+    await expectAgreementAcrossWindow();
+  });
+
+  /**
+   * Rows present, window columns null: a claim is unknown, never $0, but the
+   * day is still one Meta reported — spend and the row count are real.
+   */
+  it("keeps the null-not-zero rule on a day whose claims are unlabeled", async () => {
+    await metaRow({ day: "2026-08-12", spend: "80.00" });
+    await metaRow({ day: "2026-08-12", spend: "20.00" });
+    await order({ id: "o-3", day: "2026-08-12", netSales: "10.00" });
+
+    const { claims } = await grouped("2026-08-12");
+
+    expect(claims.claimedCents).toBeNull();
+    expect(claims.claimed7dClickCents).toBeNull();
+    expect(claims.claimed1dViewCents).toBeNull();
+    expect(claims.spendCents).toBe(10_000);
+    expect(claims.spendRowCount).toBe(2);
+    expect(claims.labeledRowShare).toBe(0);
+
+    await expectAgreementAcrossWindow();
+  });
+
+  /** A partly-labeled day: the share is what tells a reader how answerable it is. */
+  it("agrees on labeledRowShare when only some rows carry windows", async () => {
+    await metaRow({ day: "2026-08-13", spend: "10.00", claimed7dClick: "5.00" });
+    await metaRow({ day: "2026-08-13", spend: "10.00" });
+    await metaRow({ day: "2026-08-13", spend: "10.00" });
+
+    const { claims } = await grouped("2026-08-13");
+
+    expect(claims.claimedCents).toBe(500);
+    expect(claims.spendRowCount).toBe(3);
+    expect(claims.labeledRowShare).toBeCloseTo(1 / 3);
+
+    await expectAgreementAcrossWindow();
+  });
+
+  /** Breakdown rows double-count; both paths must drop them the same way. */
+  it("drops non-base rows on both paths", async () => {
+    await metaRow({ day: "2026-08-14", spend: "50.00", claimed7dClick: "70.00" });
+    await metaRow({
+      day: "2026-08-14",
+      spend: "50.00",
+      claimed7dClick: "70.00",
+      country: "US",
+    });
+
+    const { claims } = await grouped("2026-08-14");
+
+    expect(claims.spendRowCount).toBe(1);
+    expect(claims.spendCents).toBe(5_000);
+    expect(claims.claimedCents).toBe(7_000);
+
+    await expectAgreementAcrossWindow();
+  });
+
+  /**
+   * A refund books on the day it was issued, not the day the order was — the
+   * reason the verified side needs two groupings rather than one join.
+   */
+  it("books a refund on its own day, like the per-day read", async () => {
+    await order({ id: "o-4", day: "2026-08-10", netSales: "500.00" });
+    await refund({ orderId: "o-4", day: "2026-08-15", amount: "120.00" });
+
+    const day10 = await grouped("2026-08-10");
+    const day15 = await grouped("2026-08-15");
+
+    expect(day10.verified.verifiedRevenueCents).toBe(50_000);
+    expect(day10.verified.verifiedOrderCount).toBe(1);
+    expect(day15.verified.verifiedRevenueCents).toBe(-12_000);
+    expect(day15.verified.verifiedOrderCount).toBe(0);
+
+    await expectAgreementAcrossWindow();
+  });
+
+  /** Only Meta-bucket, meta_verified orders count; pending is its own tally. */
+  it("agrees on the verified/pending split within one day", async () => {
+    await order({ id: "o-5", day: "2026-08-16", netSales: "100.00" });
+    await order({
+      id: "o-6",
+      day: "2026-08-16",
+      netSales: "70.00",
+      metaVerified: false,
+    });
+    await order({
+      id: "o-7",
+      day: "2026-08-16",
+      netSales: "30.00",
+      bucket: "google",
+    });
+    await order({
+      id: "o-8",
+      day: "2026-08-16",
+      netSales: "25.00",
+      bucket: null,
+      metaVerified: false,
+      verificationPending: true,
+    });
+
+    const { verified } = await grouped("2026-08-16");
+
+    expect(verified.verifiedRevenueCents).toBe(10_000);
+    expect(verified.verifiedOrderCount).toBe(1);
+    expect(verified.verificationPendingCount).toBe(1);
+
+    await expectAgreementAcrossWindow();
+  });
+
+  /** Rows outside the org, the store, or the range belong to neither path. */
+  it("agrees while other orgs, stores and days are in the table", async () => {
+    await metaRow({ day: "2026-08-10", spend: "10.00", claimed7dClick: "20.00" });
+    await metaRow({
+      day: "2026-08-10",
+      spend: "999.00",
+      claimed7dClick: "999.00",
+      organizationId: "org_other",
+    });
+    await metaRow({ day: "2026-08-09", spend: "999.00", claimed7dClick: "999.00" });
+    await metaRow({ day: "2026-08-17", spend: "999.00", claimed7dClick: "999.00" });
+
+    await order({ id: "o-9", day: "2026-08-10", netSales: "15.00" });
+    await order({
+      id: "o-10",
+      day: "2026-08-10",
+      netSales: "999.00",
+      storeId: "store_other",
+    });
+    await order({
+      id: "o-11",
+      day: "2026-08-10",
+      netSales: "999.00",
+      organizationId: "org_other",
+    });
+    await order({ id: "o-12", day: "2026-08-09", netSales: "999.00" });
+
+    const { claims, verified } = await grouped("2026-08-10");
+
+    expect(claims.spendCents).toBe(1_000);
+    expect(claims.claimedCents).toBe(2_000);
+    expect(verified.verifiedRevenueCents).toBe(1_500);
+
+    await expectAgreementAcrossWindow();
+  });
+
+  /**
+   * The whole window at once, with every shape mixed: this is the assertion the
+   * issue asked for — the two paths compared day for day on one seeding.
+   */
+  it("agrees across a full seven-day window of mixed days", async () => {
+    // Ordinary day.
+    await metaRow({
+      day: "2026-08-10",
+      spend: "100.00",
+      claimed7dClick: "180.00",
+      claimed1dView: "20.00",
+    });
+    await order({ id: "w-1", day: "2026-08-10", netSales: "150.00" });
+
+    // Rows, no labels.
+    await metaRow({ day: "2026-08-11", spend: "60.00" });
+    await order({ id: "w-2", day: "2026-08-11", netSales: "10.00" });
+
+    // No Meta rows, orders only.
+    await order({ id: "w-3", day: "2026-08-12", netSales: "90.00" });
+
+    // Meta reported a genuine zero-spend day: rows exist, spend is 0.
+    await metaRow({ day: "2026-08-13", spend: "0", claimed7dClick: "0" });
+
+    // Meta rows, no orders at all.
+    await metaRow({
+      day: "2026-08-14",
+      spend: "40.00",
+      claimed1dView: "12.00",
+    });
+
+    // Refund only, against an order from the start of the window.
+    await refund({ orderId: "w-1", day: "2026-08-15", amount: "25.00" });
+
+    // Pending-only day: nothing verified, one order awaiting a verdict.
+    await order({
+      id: "w-4",
+      day: "2026-08-16",
+      netSales: "45.00",
+      bucket: null,
+      metaVerified: false,
+      verificationPending: true,
+    });
+
+    await expectAgreementAcrossWindow();
+
+    // And the two days that read identically through `spendCents` alone are
+    // still told apart by the row count the series depends on.
+    const reportedZero = await grouped("2026-08-13");
+    const notReported = await grouped("2026-08-12");
+    expect(reportedZero.claims.spendCents).toBe(0);
+    expect(notReported.claims.spendCents).toBe(0);
+    expect(reportedZero.claims.spendRowCount).toBe(1);
+    expect(notReported.claims.spendRowCount).toBe(0);
   });
 });

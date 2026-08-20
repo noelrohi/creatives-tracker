@@ -561,6 +561,53 @@ export function metaClaimsFromRow(
   };
 }
 
+/**
+ * One row per day over the same range, for callers that need a series rather
+ * than a total: the per-day loop it replaces issued a query per day.
+ *
+ * Same predicate, same expressions, and every row goes through
+ * `metaClaimsFromRow` — the null-not-zero rule (§7.2) and the `spendRowCount`
+ * that separates "Meta reported zero" from "Meta has not reported" live in one
+ * place, so the grouped and per-day paths cannot drift apart.
+ *
+ * Days Meta has no row for are absent from the map rather than present as a
+ * zero: that is the same distinction `spendRowCount` draws, and a caller
+ * reading a missing day through `metaClaimsFromRow(undefined)` gets exactly
+ * what `getMetaClaims` returns for an empty day.
+ */
+export async function getMetaClaimsByDay(params: {
+  organizationId: string;
+} & DateRange): Promise<Map<string, MetaClaims>> {
+  const rows = await db
+    .select({
+      day: performanceLogs.dateStart,
+      claimed: CLAIMED_WINDOWS_EXPRESSION,
+      claimed7dClick: sql<
+        string | null
+      >`sum(${performanceLogs.purchaseValue7dClick})`,
+      claimed1dView: sql<
+        string | null
+      >`sum(${performanceLogs.purchaseValue1dView})`,
+      spend: sql<string>`coalesce(sum(${performanceLogs.spend}), 0)`,
+      totalRows: sql<number>`count(*)::int`,
+      labeledRows: sql<number>`count(*) filter (
+        where ${performanceLogs.purchaseValue7dClick} is not null
+           or ${performanceLogs.purchaseValue1dView} is not null
+      )::int`,
+    })
+    .from(performanceLogs)
+    .where(
+      and(
+        eq(performanceLogs.organizationId, params.organizationId),
+        between(performanceLogs.dateStart, params.dateFrom, params.dateTo),
+        baseRowsOnly(),
+      ),
+    )
+    .groupBy(performanceLogs.dateStart);
+
+  return new Map(rows.map((row) => [row.day, metaClaimsFromRow(row)]));
+}
+
 export async function getMetaVerified(scope: StoreScope): Promise<MetaVerified> {
   const metaVerifiedOrders = and(
     orderRangeWhere(scope),
@@ -605,6 +652,81 @@ export async function getMetaVerified(scope: StoreScope): Promise<MetaVerified> 
     verifiedOrderCount: orderRow?.orderCount ?? 0,
     verificationPendingCount: pendingRow?.pendingCount ?? 0,
   };
+}
+
+/** What `getMetaVerified` answers for a day nothing landed on. */
+export const EMPTY_META_VERIFIED: MetaVerified = Object.freeze({
+  verifiedRevenueCents: 0,
+  verifiedOrderCount: 0,
+  verificationPendingCount: 0,
+});
+
+/**
+ * `getMetaVerified` per day, in two queries instead of three per day. The
+ * split mirrors the per-day function exactly: orders (and the pending count)
+ * group on `order_day`, refunds group on `refund_day`, and a day's verified
+ * revenue is its gross minus the refunds booked that day — so a refund lands on
+ * the day it was issued, not the day the order was.
+ *
+ * Days with nothing on either side are absent; read them through
+ * {@link EMPTY_META_VERIFIED}, which is what the per-day function returns for
+ * an empty range.
+ */
+export async function getMetaVerifiedByDay(
+  scope: StoreScope,
+): Promise<Map<string, MetaVerified>> {
+  const isMetaVerified = sql`${shopifyOrders.bucket} = 'meta'
+    and ${shopifyOrders.metaVerified}`;
+
+  const [orderRows, refundRows] = await Promise.all([
+    db
+      .select({
+        day: shopifyOrders.orderDay,
+        gross: sql<string>`coalesce(
+          sum(${shopifyOrders.netSales}) filter (where ${isMetaVerified}), 0
+        )`,
+        orderCount: sql<number>`count(*) filter (where ${isMetaVerified})::int`,
+        pendingCount: sql<number>`count(*) filter (
+          where ${shopifyOrders.verificationPending}
+        )::int`,
+      })
+      .from(shopifyOrders)
+      .where(orderRangeWhere(scope))
+      .groupBy(shopifyOrders.orderDay),
+
+    db
+      .select({
+        day: shopifyRefunds.refundDay,
+        refunded: sql<string>`coalesce(sum(${shopifyRefunds.amount}), 0)`,
+      })
+      .from(shopifyRefunds)
+      .innerJoin(shopifyOrders, eq(shopifyOrders.id, shopifyRefunds.orderId))
+      .where(and(refundRangeWhere(scope), isMetaVerified))
+      .groupBy(shopifyRefunds.refundDay),
+  ]);
+
+  const byDay = new Map<string, MetaVerified>();
+
+  function entryFor(day: string) {
+    const existing = byDay.get(day);
+    if (existing) return existing;
+    const created: MetaVerified = { ...EMPTY_META_VERIFIED };
+    byDay.set(day, created);
+    return created;
+  }
+
+  for (const row of orderRows) {
+    const entry = entryFor(row.day);
+    entry.verifiedRevenueCents += toCents(row.gross);
+    entry.verifiedOrderCount = row.orderCount;
+    entry.verificationPendingCount = row.pendingCount;
+  }
+
+  for (const row of refundRows) {
+    entryFor(row.day).verifiedRevenueCents -= toCents(row.refunded);
+  }
+
+  return byDay;
 }
 
 /* ------------------------------------------------------------------ */
