@@ -1245,6 +1245,14 @@ export const adCreativeRouter = router({
       const topPerformers = topResult.rows as (CreativeRow & { running_days: number })[];
 
       const topIds = topPerformers.map((r) => r.id);
+      // Note the coupling `limit` introduces: this exclusion list is as long as
+      // Top Performers, so a smaller limit excludes fewer creatives and a
+      // profitable concept can appear in both leaderboards. Top and Bottom read
+      // their own rows and are unaffected. Left as is — "the ones that didn't
+      // crack the top list you were shown" is the honest reading of a capped
+      // response, and pinning the exclusion at ten would make a limit=3 caller
+      // pay for a query whose extra rows it never sees.
+      //
       // Surviving creatives: long-running profitable concepts that didn't crack
       // the Top Performers top-10. Same display-vs-qualify split — metrics
       // aggregate all ads (matches Meta) but the creative only qualifies if at
