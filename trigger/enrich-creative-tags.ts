@@ -17,7 +17,7 @@ import {
   resolveFunnelStageVerdicts,
   type CreativeTagModelOutput,
 } from "@/lib/creative-tag-enrichment";
-import { isVideoFile } from "@/lib/studio-assets";
+import { resolveCreativeImageUrl } from "@/lib/creative-asset-repair";
 import { adCreatives } from "@/schema/ad-creative";
 import { adSets } from "@/schema/ad-set";
 import { ads } from "@/schema/ad";
@@ -114,6 +114,18 @@ function requireModelConfiguration() {
   }
 }
 
+/**
+ * The image is fetched by the model provider, not by us, so a failure comes
+ * back as a generic API error naming the download. Anything else is a real
+ * model failure and must keep propagating.
+ */
+function isImageFetchError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /downloading file|upstream status code|invalid_image_url|timeout while downloading/i.test(
+    message,
+  );
+}
+
 function boundedLimit(value: number | undefined, fallback: number, max: number) {
   return Math.max(1, Math.min(value ?? fallback, max));
 }
@@ -188,6 +200,8 @@ async function processCreativeBatch(params: {
       adsStamped: 0,
       failed: 0,
       rejectedValues: 0,
+      imagesRepaired: 0,
+      imagesUnavailable: 0,
       nextCursor: null,
     };
   }
@@ -212,6 +226,8 @@ async function processCreativeBatch(params: {
   let updated = 0;
   let failed = 0;
   let rejectedValues = 0;
+  let imagesRepaired = 0;
+  let imagesUnavailable = 0;
 
   for (const [index, creative] of candidates.entries()) {
     metadata
@@ -236,13 +252,26 @@ async function processCreativeBatch(params: {
             adName: context?.adName ?? null,
             format: creative.format,
           });
-          const imageUrl =
-            creative.assetUrl && !isVideoFile(creative.assetUrl)
-              ? creative.assetUrl
-              : null;
+          metadata.set("itemStep", "Resolving creative image");
+          const image = await resolveCreativeImageUrl({
+            organizationId: params.organizationId,
+            creativeId: creative.id,
+            assetUrl: creative.assetUrl,
+          });
+          if (image.repaired) imagesRepaired += 1;
+          if (image.outcome === "unreachable") {
+            imagesUnavailable += 1;
+            // Copy alone still yields usable tags, and tagging the row keeps it
+            // from being re-picked — and re-failing — on every later run.
+            logger.warn("Creative image unavailable; tagging from copy only", {
+              creativeId: creative.id,
+              creativeName: creative.name,
+              assetUrl: creative.assetUrl,
+            });
+          }
+          const imageUrl = image.url;
 
-          metadata.set("itemStep", "Calling Luna");
-          const result = await logger.trace("Call Luna", () =>
+          const callModel = (withImage: string | null) =>
             generateObject({
               model: openai(TAG_MODEL),
               schema: creativeTagSchema,
@@ -250,16 +279,35 @@ async function processCreativeBatch(params: {
               messages: [
                 {
                   role: "user",
-                  content: imageUrl
+                  content: withImage
                     ? [
                         { type: "text" as const, text: userText },
-                        { type: "image" as const, image: imageUrl },
+                        { type: "image" as const, image: withImage },
                       ]
                     : [{ type: "text" as const, text: userText }],
                 },
               ],
-            }),
-          );
+            });
+
+          metadata.set("itemStep", "Calling Luna");
+          const result = await logger.trace("Call Luna", async () => {
+            try {
+              return await callModel(imageUrl);
+            } catch (error) {
+              // The model fetches the image URL itself, so a host that serves us
+              // can still refuse it. Falling back to copy beats losing the
+              // creative to a permanently retried failure.
+              if (!imageUrl || !isImageFetchError(error)) throw error;
+              imagesUnavailable += 1;
+              logger.warn("Model could not fetch the creative image; tagging from copy only", {
+                creativeId: creative.id,
+                creativeName: creative.name,
+                imageUrl,
+                error: error instanceof Error ? error.message : String(error),
+              });
+              return callModel(null);
+            }
+          });
 
           metadata.set("itemStep", "Validating and writing tags");
           await logger.trace("Validate and write tags", async () => {
@@ -318,6 +366,8 @@ async function processCreativeBatch(params: {
     adsStamped: 0,
     failed,
     rejectedValues,
+    imagesRepaired,
+    imagesUnavailable,
     nextCursor: candidates.at(-1)?.id ?? null,
   };
 }
@@ -355,6 +405,8 @@ async function processAdSetBatch(params: {
       adsStamped: 0,
       failed: 0,
       rejectedValues: 0,
+      imagesRepaired: 0,
+      imagesUnavailable: 0,
       nextCursor: null,
     };
   }
@@ -446,6 +498,8 @@ async function processAdSetBatch(params: {
       adsStamped,
       failed: 0,
       rejectedValues: rejected.length,
+      imagesRepaired: 0,
+      imagesUnavailable: 0,
       nextCursor: candidates.at(-1)?.id ?? null,
     };
   } catch (error) {
@@ -460,6 +514,8 @@ async function processAdSetBatch(params: {
       adsStamped: 0,
       failed: candidates.length,
       rejectedValues: 0,
+      imagesRepaired: 0,
+      imagesUnavailable: 0,
       nextCursor: candidates.at(-1)?.id ?? null,
     };
   }
@@ -499,7 +555,14 @@ export const enrichCreativeTagsTask = task({
       CREATIVE_BATCH_SIZE,
     );
     const adSetLimit = boundedLimit(payload.adSetLimit, AD_SET_BATCH_SIZE, AD_SET_BATCH_SIZE);
-    const creatives = { processed: 0, updated: 0, failed: 0, rejectedValues: 0 };
+    const creatives = {
+      processed: 0,
+      updated: 0,
+      failed: 0,
+      rejectedValues: 0,
+      imagesRepaired: 0,
+      imagesUnavailable: 0,
+    };
     const adSetResult = { processed: 0, adsStamped: 0, failed: 0, rejectedValues: 0 };
 
     if (!payload.skipCreatives) {
@@ -528,6 +591,8 @@ export const enrichCreativeTagsTask = task({
         creatives.updated += result.output.updated ?? 0;
         creatives.failed += result.output.failed;
         creatives.rejectedValues += result.output.rejectedValues;
+        creatives.imagesRepaired += result.output.imagesRepaired ?? 0;
+        creatives.imagesUnavailable += result.output.imagesUnavailable ?? 0;
         if (!result.output.nextCursor) break;
         afterId = result.output.nextCursor;
       }
@@ -572,7 +637,15 @@ export const enrichCreativeTagsTask = task({
     return {
       creatives,
       adSets: adSetResult,
-      summary: `Tagged ${creatives.updated} creatives and stamped ${adSetResult.adsStamped} ads with a funnel-stage attempt`,
+      summary: [
+        `Tagged ${creatives.updated} creatives and stamped ${adSetResult.adsStamped} ads with a funnel-stage attempt`,
+        creatives.imagesRepaired > 0
+          ? `; repaired ${creatives.imagesRepaired} expired image URLs`
+          : "",
+        creatives.imagesUnavailable > 0
+          ? `; ${creatives.imagesUnavailable} tagged from copy only (image unavailable)`
+          : "",
+      ].join(""),
     };
   },
 });
