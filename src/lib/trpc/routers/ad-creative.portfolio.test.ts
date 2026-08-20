@@ -82,9 +82,18 @@ const FIXTURE_DDL = [
      asset_url text,
      video_url text,
      format "format",
+     angle text,
+     persona text,
+     awareness_level text,
+     attributes jsonb NOT NULL DEFAULT '{}',
+     attributes_meta jsonb NOT NULL DEFAULT '{}',
+     tone text[],
      ownership "ownership",
      team_id text,
-     organization_id text
+     notes text,
+     organization_id text,
+     created_at timestamp NOT NULL DEFAULT now(),
+     updated_at timestamp NOT NULL DEFAULT now()
    )`,
   `CREATE TABLE ad (
      id text PRIMARY KEY,
@@ -93,8 +102,11 @@ const FIXTURE_DDL = [
      account_id text REFERENCES ad_account(id) ON DELETE SET NULL,
      ad_creative_id text REFERENCES ad_creative(id) ON DELETE SET NULL,
      meta_id text UNIQUE,
+     destination_url text,
      organization_id text,
-     status "status" NOT NULL DEFAULT 'active'
+     status "status" NOT NULL DEFAULT 'active',
+     created_at timestamp NOT NULL DEFAULT now(),
+     updated_at timestamp NOT NULL DEFAULT now()
    )`,
   `CREATE TABLE performance_log (
      id text PRIMARY KEY,
@@ -103,11 +115,15 @@ const FIXTURE_DDL = [
      roas numeric,
      cpa numeric,
      ctr numeric,
+     cpc numeric,
+     frequency numeric,
      spend numeric,
      conversions integer,
      impressions integer,
      reach integer,
      link_clicks integer,
+     clicks_all integer,
+     video_views_3s integer,
      purchase_value numeric,
      country text,
      platform text,
@@ -166,6 +182,10 @@ type PerfRow = {
   conversions?: number;
   ctr?: number;
   impressions?: number;
+  // Meta's own per-row cpc. Seeded so a test can tell a ratio of sums apart
+  // from an average of these, which is what the aggregates used to return.
+  cpc?: number;
+  clicksAll?: number;
   age?: string;
 };
 
@@ -173,12 +193,13 @@ async function seedPerf(row: PerfRow) {
   await testDb!.execute(sql`
     INSERT INTO performance_log (
       id, ad_id, meta_ad_id, spend, purchase_value, conversions, ctr, impressions,
-      age, date_start, date_end, organization_id
+      cpc, clicks_all, age, date_start, date_end, organization_id
     )
     VALUES (
       ${`pl_${row.adId}_${row.date}_${row.age ?? "base"}`}, ${row.adId}, ${`meta_${row.adId}`},
       ${row.spend ?? null}, ${row.purchaseValue ?? null}, ${row.conversions ?? null},
-      ${row.ctr ?? null}, ${row.impressions ?? null}, ${row.age ?? null},
+      ${row.ctr ?? null}, ${row.impressions ?? null}, ${row.cpc ?? null},
+      ${row.clicksAll ?? null}, ${row.age ?? null},
       ${row.date}, ${row.date}, ${ORG}
     )
   `);
@@ -321,6 +342,170 @@ describeIfDb("ad-creative portfolio aggregates", () => {
       await seedPerf({ adId: "ad_big", date: "2026-06-02", spend: 10 });
       const portfolio = await caller.adCreative.portfolioSummary({ from: FROM, to: TO });
       expect(portfolio.ctr).toBeNull();
+    });
+  });
+
+  describe("CPC weighting", () => {
+    // Two days for one creative with opposite click volumes: 3 clicks bought at
+    // $10 each, then 3,000 bought at $0.10. CPC is spend / clicks, so the
+    // creative's CPC is $330 / 3,003 ≈ $0.1099 — nowhere near the $5.05 midpoint
+    // an average of the two per-row ratios returns.
+    //
+    // The two rows also cover both denominator paths. The first carries
+    // `clicks_all` (rows synced after #231) and a deliberately contradictory
+    // impressions × ctr, so preferring the implied figure over the real one
+    // would show. The second carries only impressions and ctr, as every
+    // historical row does, and its clicks are implied as 300,000 * 1% = 3,000.
+    beforeEach(async () => {
+      await seedCreative("cr_cpc");
+      await seedAd("ad_cpc", { creativeId: "cr_cpc" });
+      await seedPerf({
+        adId: "ad_cpc",
+        date: "2026-06-05",
+        spend: 30,
+        clicksAll: 3,
+        cpc: 10,
+        impressions: 1_000,
+        ctr: 50,
+      });
+      await seedPerf({
+        adId: "ad_cpc",
+        date: "2026-06-06",
+        spend: 300,
+        cpc: 0.1,
+        impressions: 300_000,
+        ctr: 1,
+      });
+    });
+
+    it("weights CPC by clicks rather than averaging per-row ratios", async () => {
+      const [creative] = await caller.adCreative.list({
+        from: FROM,
+        to: TO,
+        includeHealth: false,
+      });
+      expect(num(creative.avgCpc)).toBeCloseTo(330 / 3003, 6);
+    });
+
+    it("does not let a 3-click day drag the CPC toward its own", async () => {
+      const [creative] = await caller.adCreative.list({
+        from: FROM,
+        to: TO,
+        includeHealth: false,
+      });
+      // The unweighted mean of $10 and $0.10. Pinned so `avg(pl.cpc)` cannot
+      // come back by way of a copied line from a neighbouring query.
+      expect(num(creative.avgCpc)).not.toBeCloseTo(5.05, 1);
+    });
+
+    it("prefers a row's own clicks_all over clicks implied from its ctr", async () => {
+      const [creative] = await caller.adCreative.list({
+        from: FROM,
+        to: TO,
+        includeHealth: false,
+      });
+      // Reading the first row's impressions × ctr instead of its clicks_all
+      // would put 500 clicks in the denominator, not 3.
+      expect(num(creative.avgCpc)).not.toBeCloseTo(330 / 3500, 4);
+    });
+
+    it("weights the recent-window CPC the same way", async () => {
+      const [creative] = await caller.adCreative.list({
+        from: FROM,
+        to: TO,
+        includeHealth: false,
+      });
+      // The recent window is the last 3 days of delivery, which both rows fall
+      // inside, so it lands on the same weighted figure.
+      expect(num(creative.recentCpc)).toBeCloseTo(330 / 3003, 6);
+    });
+
+    it("implies clicks from impressions and ctr on rows with no clicks_all", async () => {
+      // Every row synced before #231 has a NULL clicks_all. Summing that column
+      // alone would leave CPC NULL for the whole of history, so the clicks are
+      // implied from Meta's all-clicks CTR instead: 300,000 * 1% = 3,000 clicks
+      // for $300 of spend.
+      await testDb!.execute(sql.raw("TRUNCATE performance_log"));
+      await seedPerf({
+        adId: "ad_cpc",
+        date: "2026-06-05",
+        spend: 300,
+        cpc: 9.99,
+        impressions: 300_000,
+        ctr: 1,
+      });
+      const [creative] = await caller.adCreative.list({
+        from: FROM,
+        to: TO,
+        includeHealth: false,
+      });
+      // 9.99 is the row's own cpc field, which the aggregate no longer reads.
+      expect(num(creative.avgCpc)).toBeCloseTo(0.1, 6);
+    });
+
+    it("returns null CPC when the window bought no clicks", async () => {
+      await testDb!.execute(sql.raw("TRUNCATE performance_log"));
+      await seedPerf({ adId: "ad_cpc", date: "2026-06-05", spend: 10 });
+      const [creative] = await caller.adCreative.list({
+        from: FROM,
+        to: TO,
+        includeHealth: false,
+      });
+      expect(creative.avgCpc).toBeNull();
+    });
+  });
+
+  describe("CPC weighting in the health rollup", () => {
+    // The health rollup compares an ad's recent CPC against its window CPC, so
+    // both sides have to be weighted the same way or the comparison invents a
+    // trend. Here one ad buys 2,000 clicks at $0.05, then 1,000 at $0.10 with a
+    // 10-click $0.01 straggler on the last day.
+    //
+    // Weighted, the recent window costs $100.10 / 1,010 = $0.0991 against a
+    // window CPC of $200.10 / 3,010 = $0.0665 — a real 49% rise. Averaging the
+    // two recent per-row ratios gives $0.055, which reads as CPC *falling* and
+    // hides the rise entirely.
+    beforeEach(async () => {
+      await seedCreative("cr_health");
+      await seedAd("ad_health", { creativeId: "cr_health" });
+      await seedPerf({
+        adId: "ad_health",
+        date: "2026-06-02",
+        spend: 100,
+        clicksAll: 2000,
+        cpc: 0.05,
+        impressions: 50_000,
+        ctr: 2,
+        conversions: 5,
+        purchaseValue: 400,
+      });
+      await seedPerf({
+        adId: "ad_health",
+        date: "2026-06-06",
+        spend: 100,
+        clicksAll: 1000,
+        cpc: 0.1,
+        impressions: 25_000,
+        ctr: 2,
+        conversions: 2,
+        purchaseValue: 300,
+      });
+      await seedPerf({
+        adId: "ad_health",
+        date: "2026-06-07",
+        spend: 0.1,
+        clicksAll: 10,
+        cpc: 0.01,
+        impressions: 250,
+        ctr: 2,
+        conversions: 0,
+        purchaseValue: 0,
+      });
+    });
+
+    it("flags the CPC rise the weighted recent window actually shows", async () => {
+      const [creative] = await caller.adCreative.list({ from: FROM, to: TO });
+      expect(creative.healthReasons).toContain("CPC up 49% vs your average");
     });
   });
 
@@ -477,6 +662,26 @@ describe("no unweighted CTR aggregates survive in the router", () => {
       "utf8",
     );
     expect(source).not.toContain("avg(pl.ctr");
+  });
+
+  it("has no remaining avg(pl.cpc) in ad-creative.ts", () => {
+    const source = readFileSync(
+      path.resolve(process.cwd(), "src/lib/trpc/routers/ad-creative.ts"),
+      "utf8",
+    );
+    expect(source).not.toContain("avg(pl.cpc");
+    expect(source).toContain('clickWeightedCpc("pl")');
+  });
+
+  it("has no remaining avg(pl2.cpc) in creative-health-rollup.ts", () => {
+    const source = readFileSync(
+      path.resolve(process.cwd(), "src/lib/creative-health-rollup.ts"),
+      "utf8",
+    );
+    // The recent-window CPC lives in a correlated subquery on the pl2 alias, so
+    // a grep for `avg(pl.cpc` walks straight past it.
+    expect(source).not.toContain("avg(pl2.cpc");
+    expect(source).toContain('clickWeightedCpc("pl2")');
   });
 
   it("routes every CTR aggregate through the shared helper", () => {

@@ -43,3 +43,29 @@ export function impressionWeightedCtr(alias = "pl"): SQL {
   const impressions = qualifiedColumn(alias, "impressions");
   return sql`(coalesce(sum(${ctr} * ${impressions}), 0) / nullif(sum(${impressions}) FILTER (WHERE ${ctr} IS NOT NULL), 0))`;
 }
+
+// CPC is spend / clicks, so aggregating it means summing both sides — not
+// averaging per-row ratios. `avg(pl.cpc)` gives a 3-click row the same say as a
+// 3,000-click one and does not describe the group at all.
+//
+// The denominator is all clicks, not link clicks: Meta's per-row `cpc` is
+// defined over all clicks, and measured against production it matches
+// spend / clicks_all to a median relative error of 1.6e-07 (against link_clicks
+// the error is ~50%). But `clicks_all` only started populating on syncs after
+// #231, so on historical rows it is NULL and a plain sum over it would make
+// every older window NULL. Those rows still carry `ctr`, Meta's all-clicks CTR
+// in percent, so clicks are implied as impressions * ctr / 100 — the identity
+// the 1.6e-07 figure was measured against.
+export function clickWeightedCpc(alias = "pl"): SQL {
+  const spend = qualifiedColumn(alias, "spend");
+  return sql`(sum(${spend}) / nullif(sum(${impliedClicks(alias)}), 0))`;
+}
+
+// Per-row all-clicks: the synced value when we have it, else implied from
+// impressions and Meta's all-clicks CTR (percent-scale) for pre-#231 rows.
+function impliedClicks(alias: string): SQL {
+  const clicksAll = qualifiedColumn(alias, "clicks_all");
+  const impressions = qualifiedColumn(alias, "impressions");
+  const ctr = qualifiedColumn(alias, "ctr");
+  return sql`coalesce(${clicksAll}::numeric, ${impressions} * ${ctr} / 100.0)`;
+}

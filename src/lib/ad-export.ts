@@ -2,7 +2,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { computeHealth, rollupCreativeHealth, type CreativeHealth } from "./creative-health";
 import { effectiveAdStatusSql } from "./effective-ad-status";
-import { basePerformanceLogFilter } from "./performance-log-sql";
+import { basePerformanceLogFilter, clickWeightedCpc } from "./performance-log-sql";
 import { clampToBreakdownWindow } from "./retention/window-guard";
 
 type RawAdRow = {
@@ -440,7 +440,7 @@ export async function fetchAgentExportRows(opts: {
           sum(pl.conversions) AS conversions,
           coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) AS roas,
           coalesce(sum(pl.ctr * pl.impressions), 0) / nullif(sum(pl.impressions), 0) AS ctr,
-          avg(pl.cpc) AS cpc,
+          ${clickWeightedCpc("pl")} AS cpc,
           avg(pl.frequency) AS frequency,
           sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0) AS thumbstop,
           max(pl.date_end)::date - min(pl.date_start)::date AS running_days,
