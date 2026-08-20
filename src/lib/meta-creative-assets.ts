@@ -313,7 +313,12 @@ function getImageExtension(
   return "jpg";
 }
 
-function isBlobUrl(value: string): boolean {
+/**
+ * Whether the URL points at storage we own. Meta's `scontent-*.fbcdn.net`
+ * previews are signed and expire within days, so anything that is not on our
+ * blob store has to be treated as possibly-dead on every later read.
+ */
+export function isDurableAssetUrl(value: string): boolean {
   try {
     const hostname = new URL(value).hostname;
     return hostname.endsWith("blob.vercel-storage.com");
@@ -375,27 +380,34 @@ async function fetchAndUploadVideo(input: {
   }
 }
 
-async function fetchAndUploadImage(input: {
-  adMetaId: string;
-  assetUrl: string;
+/**
+ * Copy a Meta preview image onto our own blob store and return the durable URL,
+ * or null when it could not be mirrored (no token, source already gone, upload
+ * failed). Callers keep whatever they had on null — a soon-to-expire URL still
+ * renders today — and rely on a later repair pass to heal the row.
+ */
+export async function mirrorMetaImageToBlob(input: {
+  /** Filename base under `meta-previews/`; unique per source image. */
+  key: string;
+  sourceUrl: string;
 }): Promise<string | null> {
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    return input.assetUrl;
+    return null;
   }
-  if (isBlobUrl(input.assetUrl)) {
-    return input.assetUrl;
+  if (isDurableAssetUrl(input.sourceUrl)) {
+    return input.sourceUrl;
   }
 
   try {
-    const imageResponse = await fetch(input.assetUrl);
+    const imageResponse = await fetch(input.sourceUrl);
     if (!imageResponse.ok) {
       return null;
     }
 
     const contentType = imageResponse.headers.get("content-type");
-    const extension = getImageExtension(contentType, input.assetUrl);
+    const extension = getImageExtension(contentType, input.sourceUrl);
     const env = process.env.NODE_ENV === "production" ? "prod" : "dev";
-    const pathname = `${env}/meta-previews/${input.adMetaId}.${extension}`;
+    const pathname = `${env}/meta-previews/${input.key}.${extension}`;
     const body = imageResponse.body ?? await imageResponse.arrayBuffer();
 
     const blob = await put(pathname, body, {
@@ -601,7 +613,7 @@ export async function fetchMetaCreativePreviewsBatch(input: {
       const chunk = entries.slice(i, i + UPLOAD_CONCURRENCY);
       const results = await Promise.all(
         chunk.map(([assetUrl, { adMetaId }]) =>
-          fetchAndUploadImage({ adMetaId, assetUrl }).then(
+          mirrorMetaImageToBlob({ key: adMetaId, sourceUrl: assetUrl }).then(
             (uploaded) => [assetUrl, uploaded] as const,
           ),
         ),
