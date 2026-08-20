@@ -1293,6 +1293,14 @@ export async function evaluateFindingsForStore(params: {
     if (retired.length > 0) summary.resolved.push(type);
   }
 
+  // Stamped last, and only on a run that got this far: the timestamp says "the
+  // rules were applied to the data as it stood at this moment", which is the
+  // one claim anything quoting a finding needs in order to be true.
+  await db
+    .update(shopifyStores)
+    .set({ findingsEvaluatedAt: now })
+    .where(eq(shopifyStores.id, params.storeId));
+
   return summary;
 }
 
@@ -1312,14 +1320,25 @@ const META_DEPENDENT_TYPES: readonly FindingType[] = [
   "untagged_spend",
 ];
 
+export type TodaysChecks = {
+  /**
+   * When the sweep behind these statuses last ran. Null before a store has
+   * ever been swept. Every status here is a reading from that moment, not from
+   * now — a caller that prints one without saying when it was taken turns a
+   * stale snapshot into a claim about the present.
+   */
+  evaluatedAt: Date | null;
+  checks: TodaysCheck[];
+};
+
 export async function getTodaysChecks(params: {
   organizationId: string;
   storeId: string;
   now?: Date;
-}): Promise<TodaysCheck[]> {
+}): Promise<TodaysChecks> {
   const now = params.now ?? new Date();
 
-  const [firstSync, health, openRows, mutedTypes] = await Promise.all([
+  const [firstSync, health, openRows, mutedTypes, [storeRow]] = await Promise.all([
     getFirstSyncState(params),
     getSyncHealth({ ...params, now }),
     db
@@ -1333,19 +1352,29 @@ export async function getTodaysChecks(params: {
         ),
       ),
     getActiveMutedTypes({ organizationId: params.organizationId, now }),
+    db
+      .select({ findingsEvaluatedAt: shopifyStores.findingsEvaluatedAt })
+      .from(shopifyStores)
+      .where(eq(shopifyStores.id, params.storeId))
+      .limit(1),
   ]);
+
+  const evaluatedAt = storeRow?.findingsEvaluatedAt ?? null;
 
   // Before the first sync lands there is nothing to judge any rule against.
   if (!firstSync.hasAnySuccessfulSync) {
-    return FINDING_TYPES.map((type) => ({
-      type,
-      status: "waiting_for_data" as const,
-    }));
+    return {
+      evaluatedAt,
+      checks: FINDING_TYPES.map((type) => ({
+        type,
+        status: "waiting_for_data" as const,
+      })),
+    };
   }
 
   const openTypes = new Set(openRows.map((row) => row.type));
 
-  return FINDING_TYPES.map((type) => {
+  const checks = FINDING_TYPES.map((type) => {
     // A muted type is deliberately quiet, so it never asks for a look.
     if (openTypes.has(type) && !mutedTypes.has(type)) {
       return { type, status: "needs_look" as const };
@@ -1356,4 +1385,6 @@ export async function getTodaysChecks(params: {
     }
     return { type, status: "ok" as const };
   });
+
+  return { evaluatedAt, checks };
 }

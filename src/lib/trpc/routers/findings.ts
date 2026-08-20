@@ -53,6 +53,12 @@ const findingListItemSchema = z.object({
 const listOutputSchema = z.object({ items: z.array(findingListItemSchema) });
 
 const checksOutputSchema = z.object({
+  /**
+   * When the sweep behind these statuses ran. Null before a store's first
+   * sweep. Every status below is a reading from that moment — printing one as
+   * though it described now is how a recovered outage keeps reading as live.
+   */
+  evaluatedAt: z.date().nullable(),
   checks: z.array(
     z.object({
       type: findingTypeSchema,
@@ -235,18 +241,17 @@ export const findingsRouter = router({
         "findings",
         "checks",
         "Today's finding checks",
-        "Each finding rule with its current status: ok, needs_look (an open finding fired), or waiting_for_data (sync too stale to judge).",
+        "Each finding rule as the last sweep left it: ok, needs_look (an open finding fired), or waiting_for_data (sync too stale to judge). `evaluatedAt` is when that sweep ran — the statuses are a snapshot from then, not a live re-evaluation, so quote them with the timestamp.",
       ),
     )
     .output(checksOutputSchema)
     .query(async ({ ctx }) => {
     const store = await requireStore(ctx.organizationId);
-    const checks = await getTodaysChecks({
+
+    return getTodaysChecks({
       organizationId: ctx.organizationId,
       storeId: store.id,
     });
-
-    return { checks };
   }),
 
   markResolved: orgWriteProcedure
