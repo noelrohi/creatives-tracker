@@ -32,11 +32,13 @@ import { type FunnelStage } from "@/lib/creative-taxonomy";
 import { addDays } from "@/lib/day";
 import {
   computeRoas,
+  EMPTY_META_VERIFIED,
   getDailyBucketSeries,
-  getMetaClaims,
-  getMetaVerified,
+  getMetaClaimsByDay,
+  getMetaVerifiedByDay,
   getRoasTarget,
   getSyncHealth,
+  metaClaimsFromRow,
   type SyncHealth,
 } from "@/lib/attribution-queries";
 import { basePerformanceRowsOnly } from "@/lib/performance-rows";
@@ -1071,38 +1073,50 @@ async function getUtmDriftOrders(params: {
     );
 }
 
-/** Per-day Meta claims + Shopify-verified revenue, oldest day first. */
+/**
+ * Per-day Meta claims + Shopify-verified revenue, in the order the days were
+ * asked for.
+ *
+ * Two grouped reads over the whole span rather than a claims + verified pair
+ * per day: the loop this replaced issued fourteen queries for a seven-day
+ * window against a pool of ten, so it landed in two waves. A day the grouped
+ * reads return nothing for is read back through the same helpers the per-day
+ * functions end in, so an absent day answers exactly as an empty range did.
+ */
 async function getClaimVerifiedSeries(params: {
   organizationId: string;
   storeId: string;
   days: string[];
 }) {
-  return Promise.all(
-    params.days.map(async (day) => {
-      const [claims, verified] = await Promise.all([
-        getMetaClaims({
-          organizationId: params.organizationId,
-          dateFrom: day,
-          dateTo: day,
-        }),
-        getMetaVerified({
-          organizationId: params.organizationId,
-          storeId: params.storeId,
-          dateFrom: day,
-          dateTo: day,
-        }),
-      ]);
+  if (params.days.length === 0) return [];
 
-      return {
-        day,
-        claimedCents: claims.claimedCents,
-        // Null once Meta has reported nothing for the day: `spendCents` reads 0
-        // either way, and only the row count tells the two apart.
-        spendCents: claims.spendRowCount > 0 ? claims.spendCents : null,
-        verifiedCents: verified.verifiedRevenueCents,
-      };
+  const ordered = [...params.days].sort();
+  const dateFrom = ordered[0];
+  const dateTo = ordered[ordered.length - 1];
+
+  const [claimsByDay, verifiedByDay] = await Promise.all([
+    getMetaClaimsByDay({ organizationId: params.organizationId, dateFrom, dateTo }),
+    getMetaVerifiedByDay({
+      organizationId: params.organizationId,
+      storeId: params.storeId,
+      dateFrom,
+      dateTo,
     }),
-  );
+  ]);
+
+  return params.days.map((day) => {
+    const claims = claimsByDay.get(day) ?? metaClaimsFromRow(undefined);
+    const verified = verifiedByDay.get(day) ?? EMPTY_META_VERIFIED;
+
+    return {
+      day,
+      claimedCents: claims.claimedCents,
+      // Null once Meta has reported nothing for the day: `spendCents` reads 0
+      // either way, and only the row count tells the two apart.
+      spendCents: claims.spendRowCount > 0 ? claims.spendCents : null,
+      verifiedCents: verified.verifiedRevenueCents,
+    };
+  });
 }
 
 function daysEndingOn(lastDay: string, count: number): string[] {
