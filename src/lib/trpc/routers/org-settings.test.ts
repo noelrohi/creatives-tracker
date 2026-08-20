@@ -30,7 +30,7 @@ describe("orgSettings router", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.selectRows = [];
-    mocks.returnedRows = [{ featureFlags: { attribution: true } }];
+    mocks.returnedRows = [{ featureFlags: { imageStudio: true } }];
     mocks.selectLimit.mockImplementation(() =>
       Promise.resolve(mocks.selectRows),
     );
@@ -56,11 +56,11 @@ describe("orgSettings router", () => {
 
     it("returns the stored flags when a row exists", async () => {
       mocks.selectRows = [
-        { featureFlags: { attribution: true, creativeInsights: false } },
+        { featureFlags: { imageStudio: true, creativeInsights: false } },
       ];
 
       await expect(memberCaller.orgSettings.getFeatureFlags()).resolves.toEqual({
-        attribution: true,
+        imageStudio: true,
         creativeInsights: false,
       });
     });
@@ -68,23 +68,23 @@ describe("orgSettings router", () => {
 
   describe("setFeatureFlag", () => {
     it("inserts a row scoped to the caller's org with just the toggled key", async () => {
-      mocks.returnedRows = [{ featureFlags: { attribution: true } }];
+      mocks.returnedRows = [{ featureFlags: { imageStudio: true } }];
 
       const result = await adminCaller.orgSettings.setFeatureFlag({
-        key: "attribution",
+        key: "imageStudio",
         enabled: true,
       });
 
       expect(mocks.insertValues).toHaveBeenCalledWith({
         organizationId: "test-org-id",
-        featureFlags: { attribution: true },
+        featureFlags: { imageStudio: true },
       });
-      expect(result).toEqual({ attribution: true });
+      expect(result).toEqual({ imageStudio: true });
     });
 
     it("merges the toggled key into the existing row on conflict", async () => {
       mocks.returnedRows = [
-        { featureFlags: { attribution: true, creativeInsights: true } },
+        { featureFlags: { imageStudio: true, creativeInsights: true } },
       ];
 
       const result = await adminCaller.orgSettings.setFeatureFlag({
@@ -109,7 +109,7 @@ describe("orgSettings router", () => {
         expect.objectContaining({ name: "feature_flags" }),
       );
       expect(conflict.set.updatedAt).toBeInstanceOf(Date);
-      expect(result).toEqual({ attribution: true, creativeInsights: true });
+      expect(result).toEqual({ imageStudio: true, creativeInsights: true });
     });
 
     it("rejects an unknown flag key before touching the database", async () => {
@@ -126,7 +126,7 @@ describe("orgSettings router", () => {
     it("rejects a plain member", async () => {
       await expect(
         memberCaller.orgSettings.setFeatureFlag({
-          key: "attribution",
+          key: "imageStudio",
           enabled: true,
         }),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });

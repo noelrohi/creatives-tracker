@@ -5,16 +5,6 @@
  */
 export const featureFlagDefs = [
   {
-    key: "attribution",
-    label: "Attribution",
-    description:
-      "Shows the Attribution view, where revenue is credited back to campaigns.",
-    badge: "Beta",
-    href: "/attribution",
-    icon: "solar:pie-chart-2-linear",
-    group: "analyze",
-  },
-  {
     key: "creativeInsights",
     label: "Creative insights",
     description:

@@ -1,441 +1,410 @@
 "use client";
 
-import Link from "next/link";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useTransition } from "react";
-import { subDays } from "date-fns";
-import { useQueryState, parseAsString } from "nuqs";
-import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role";
-import { useTRPC } from "@/lib/trpc/client";
-import { Button } from "@/components/ui/button";
+import { useQuery } from "@tanstack/react-query";
+import { parseAsString, parseAsStringLiteral, useQueryState } from "nuqs";
+import { useBreadcrumbs } from "@/components/breadcrumbs";
+import { BUCKET_ORDER } from "@/components/blocks/attribution/buckets";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DateRangePicker } from "@/components/blocks/dashboard/date-range-picker";
+import { ChannelLedger } from "@/components/blocks/attribution/channel-ledger";
+import { paybackColor } from "@/components/blocks/attribution/colors";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  page as copy,
+  headerRail as railCopy,
+  help,
+  metaCheck as metaCopy,
+  rangeLabels,
+  RANGE_PRESETS,
+  type VoiceContext,
+} from "@/components/blocks/attribution/copy";
 import {
-  DollarSign,
-  TrendingUp,
-  Download,
-  Upload,
-  Target,
-  MousePointerClick,
-  ShoppingCart,
-  Trophy,
-  AlertTriangle,
-  Shield,
-} from "@/components/icons";
-import { PerformanceChart } from "@/components/blocks/insights/performance-chart";
-import { DemographicBreakdownChart } from "@/components/blocks/dashboard/demographic-chart";
-import { LeaderboardTable } from "@/components/blocks/dashboard/leaderboard-table";
-import { fmtMoney, fmtNum, fmtPct, fmtRoas } from "@/lib/fmt";
-import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
-import { BREAKDOWN_RETENTION_DAYS, clampBreakdownRange } from "@/lib/retention/policy";
-import { BreakdownWindowCaption } from "@/components/blocks/dashboard/breakdown-window-caption";
-import { getUserFacingErrorMessage } from "@/lib/errors";
-import { StaleDataBanner } from "@/components/blocks/dashboard/data-freshness";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+  DateRangeChips,
+  resolveRange,
+} from "@/components/blocks/attribution/date-range-chips";
+import { DetailFolds } from "@/components/blocks/attribution/detail-folds";
+import { FirstLoadProgress } from "@/components/blocks/attribution/first-load";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { toast } from "sonner";
-import { ExportPreviewDialog } from "@/components/blocks/export-preview-dialog";
-import { FORMATS } from "@/components/blocks/creatives/creative-list-filters";
-import { useState } from "react";
+  ConnectionBanner,
+  FreshnessCaption,
+} from "@/components/blocks/attribution/freshness";
+import {
+  formatClock,
+  formatDayRange,
+  formatMoneyExact,
+} from "@/components/blocks/attribution/format";
+import { HeaderRail } from "@/components/blocks/attribution/header-rail";
+import { MobileFindingsSheet } from "@/components/blocks/attribution/mobile-findings-sheet";
+import {
+  connectionsUrl,
+  merRangeUrl,
+  financeSummaryUrl,
+} from "@/components/blocks/attribution/shopify-links";
+import {
+  addDays,
+  dayCount,
+} from "@/components/blocks/attribution/days";
+import { useActiveOrganizationRole } from "@/hooks/use-active-organization-role";
+import { SourceDrawer } from "@/components/blocks/attribution/source-drawer";
+import type { AttributionBucket } from "@/lib/attribution-bucket";
+import { formatDateOnly } from "@/lib/date";
+import { isPrivilegedOrgRole } from "@/lib/organization-access";
+import { useTRPC } from "@/lib/trpc/client";
 
-const EXPORT_COLUMNS = [
-  "date_start", "date_end",
-  "campaign_name",
-  "ad_set_name",
-  "ad_name", "ad_status", "caption", "destination_url",
-  "creative_name", "format", "angle", "persona", "awareness_level",
-  "asset_url", "video_url",
-  "spend", "impressions", "reach", "frequency", "cpm", "cpc",
-  "link_clicks", "ctr", "landing_page_views", "cost_per_lpv",
-  "conversions", "purchase_value", "roas", "cpa",
-  "add_to_cart", "initiate_checkout", "cost_per_add_to_cart",
-  "video_views_3s", "video_thruplay", "video_avg_watch_time",
-  "country", "platform", "placement", "device", "age", "gender",
-  "quality_ranking", "engagement_rate_ranking", "conversion_rate_ranking",
-] as const;
+const BACKFILL_DAYS = 90;
+const FIRST_LOAD_POLL_MS = 5_000;
 
-function downloadCsv(rows: Record<string, unknown>[], filename: string) {
-  const csv = [EXPORT_COLUMNS.join(",")]
-    .concat(
-      rows.map((row) =>
-        EXPORT_COLUMNS.map((col) => {
-          const val = row[col];
-          if (val == null) return "";
-          const str = Array.isArray(val) ? val.join("; ") : String(val);
-          return str.includes(",") || str.includes('"') || str.includes("\n")
-            ? `"${str.replace(/"/g, '""')}"`
-            : str;
-        }).join(","),
-      ),
-    )
-    .join("\n");
+type BackfillProgress = { daysLoaded: number; daysTotal: number };
 
-  const blob = new Blob([csv], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
+/** The `progress` object the backfill task writes onto its sync-run row. */
+function readSyncRunProgress(
+  meta: Record<string, unknown> | null | undefined,
+): BackfillProgress | null {
+  const progress = meta?.progress;
+  if (!progress || typeof progress !== "object") return null;
+  const { daysLoaded, daysTotal } = progress as Record<string, unknown>;
+  if (typeof daysLoaded !== "number" || typeof daysTotal !== "number") {
+    return null;
+  }
+  return { daysLoaded, daysTotal };
 }
-
 
 export default function DashboardPage() {
   const trpc = useTRPC();
-  const queryClient = useQueryClient();
-  const [exporting, startExport] = useTransition();
   const { role } = useActiveOrganizationRole();
-  const isReadOnly = role === "member";
-  const canManageData = !isReadOnly;
+  const canAct = isPrivilegedOrgRole(role);
 
-  const [exportOpen, setExportOpen] = useState(false);
-  const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
-  const [teamId, setTeamId] = useQueryState("team", parseAsString.withDefault(""));
-  const [format, setFormat] = useQueryState("format", parseAsString.withDefault(""));
-  const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
-  const [to, setTo] = useQueryState("to", parseAsString.withDefault(formatDateOnly(new Date())));
-  const [tab, setTab] = useQueryState("tab", parseAsString.withDefault("overview"));
-  const [dimension, setDimension] = useQueryState("dim", parseAsString.withDefault("gender"));
+  useBreadcrumbs([{ label: copy.navLabel }]);
 
-  const selectedAccountId = accountId ? accountId : undefined;
-  const selectedTeamId = teamId || undefined;
-  const selectedFormat = FORMATS.find((value) => value === format);
-  const fromValue = isDateOnlyString(from) ? from : formatDateOnly(subDays(new Date(), 6));
-  const toValue = isDateOnlyString(to) ? to : formatDateOnly(new Date());
-  const fromDate = parseDateOnly(fromValue);
-  const toDate = parseDateOnly(toValue);
+  const [preset, setPreset] = useQueryState(
+    "range",
+    parseAsStringLiteral(RANGE_PRESETS).withDefault("yesterday"),
+  );
+  const [customFrom, setCustomFrom] = useQueryState(
+    "from",
+    parseAsString.withDefault(""),
+  );
+  const [customTo, setCustomTo] = useQueryState(
+    "to",
+    parseAsString.withDefault(""),
+  );
+  /**
+   * The open order panel lives in the URL, so a finding elsewhere can link
+   * straight at the orders behind one channel on one day (§8).
+   */
+  const [openBucket, setOpenBucketState] = useQueryState(
+    "bucket",
+    parseAsStringLiteral(BUCKET_ORDER),
+  );
+  const setOpenBucket = (bucket: AttributionBucket | null) => {
+    void setOpenBucketState(bucket);
+  };
 
-  const accounts = useQuery(trpc.adAccount.list.queryOptions());
-  const teamsQuery = useQuery(trpc.team.list.queryOptions());
-
-  const stats = useQuery(
-    trpc.adCreative.dashboardStats.queryOptions({
-      from: fromValue,
-      to: toValue,
-      accountId: selectedAccountId,
-      teamId: selectedTeamId,
-      format: selectedFormat,
+  /**
+   * One cheap read to learn the store: its timezone, its currency and — the part
+   * every range depends on — what "today" is where the store lives. The browser
+   * clock is only used to ask the question, never to answer it.
+   */
+  const browserDay = formatDateOnly(new Date());
+  const store = useQuery(
+    trpc.attribution.overview.queryOptions({
+      dateFrom: browserDay,
+      dateTo: browserDay,
     }),
   );
 
-  const dailyPerf = useQuery({
-    ...trpc.adCreative.getDailyPortfolioPerformance.queryOptions({
-      from: fromValue,
-      to: toValue,
-      accountId: selectedAccountId,
-      teamId: selectedTeamId,
-      format: selectedFormat,
+  const today = store.data?.store.todayInStoreTz ?? null;
+  const timeZone = store.data?.store.ianaTimezone ?? "UTC";
+  const currency = store.data?.store.currency ?? "USD";
+  const ctx: VoiceContext = { currency, timeZone };
+
+  const range = today
+    ? resolveRange(preset, today, { from: customFrom, to: customTo })
+    : null;
+
+  const previousRange =
+    range && preset !== "today"
+      ? (() => {
+          const days = dayCount(range.dateFrom, range.dateTo);
+          const dateTo = addDays(range.dateFrom, -1);
+          return {
+            dateFrom: addDays(dateTo, -(days - 1)),
+            dateTo,
+            days,
+          };
+        })()
+      : null;
+
+  const overview = useQuery({
+    ...trpc.attribution.overview.queryOptions({
+      dateFrom: range?.dateFrom ?? browserDay,
+      dateTo: range?.dateTo ?? browserDay,
     }),
-    enabled: tab === "charts",
+    enabled: range !== null,
   });
 
-  // Breakdown rows are only retained for 14 days, so the demographics query is
-  // clamped to that window and the tab says so when the range is wider.
-  const demoWindow = clampBreakdownRange({
-    from: fromValue,
-    to: toValue,
-    today: formatDateOnly(new Date()),
-  });
-
-  const demographic = useQuery({
-    ...trpc.performanceLog.demographicBreakdown.queryOptions({
-      dimension: dimension as "age" | "gender" | "country" | "device",
-      from: demoWindow.from,
-      to: toValue,
-      accountId: selectedAccountId,
-      teamId: selectedTeamId,
-      format: selectedFormat,
+  const metaCheck = useQuery({
+    ...trpc.attribution.metaCheck.queryOptions({
+      dateFrom: range?.dateFrom ?? browserDay,
+      dateTo: range?.dateTo ?? browserDay,
     }),
-    enabled: tab === "demographics" && demoWindow.hasWindow,
+    enabled: range !== null,
   });
 
-  const portfolio = stats.data?.portfolio;
-  const topPerformers = stats.data?.topPerformers ?? [];
-  const bottomPerformers = stats.data?.bottomPerformers ?? [];
-  const survivingCreatives = stats.data?.survivingCreatives ?? [];
-  const dailyPerfLogs = dailyPerf.data ?? [];
-  const hasDailyPerfData = dailyPerfLogs.length > 1;
-  const isDailyPerfLoading =
-    !hasDailyPerfData && (dailyPerf.isLoading || dailyPerf.isFetching || !dailyPerf.isFetched);
+  const previousOverview = useQuery({
+    ...trpc.attribution.overview.queryOptions({
+      dateFrom: previousRange?.dateFrom ?? browserDay,
+      dateTo: previousRange?.dateTo ?? browserDay,
+    }),
+    enabled: previousRange !== null,
+  });
 
-  const baseCreativesParams = new URLSearchParams();
-  baseCreativesParams.set("from", fromValue);
-  baseCreativesParams.set("to", toValue);
-  if (accountId) baseCreativesParams.set("account", accountId);
-  if (teamId) baseCreativesParams.set("team", teamId);
-  if (selectedFormat) baseCreativesParams.set("format", selectedFormat);
-  const baseHref = `/creatives${baseCreativesParams.toString() ? `?${baseCreativesParams}` : ""}`;
-  const creativeDetailParams = new URLSearchParams();
-  creativeDetailParams.set("from", fromValue);
-  creativeDetailParams.set("to", toValue);
+  const previousMetaCheck = useQuery({
+    ...trpc.attribution.metaCheck.queryOptions({
+      dateFrom: previousRange?.dateFrom ?? browserDay,
+      dateTo: previousRange?.dateTo ?? browserDay,
+    }),
+    enabled: previousRange !== null,
+  });
 
-  const kpis = [
-    { label: "Spend", value: fmtMoney(portfolio?.totalSpend), icon: DollarSign, accent: "text-emerald-500" },
-    { label: "Revenue", value: fmtMoney(portfolio?.totalRevenue), icon: TrendingUp, accent: "text-blue-500" },
-    { label: "ROAS", value: fmtRoas(portfolio?.roas), icon: Target, accent: "text-violet-500" },
-    { label: "CPA", value: fmtMoney(portfolio?.cpa), icon: Target, accent: "text-amber-500" },
-    { label: "CTR", value: fmtPct(portfolio?.ctr), icon: MousePointerClick, accent: "text-rose-500" },
-    { label: "Conversions", value: fmtNum(portfolio?.conversions), icon: ShoppingCart, accent: "text-orange-500" },
+  const syncStatus = useQuery({
+    ...trpc.attribution.syncStatus.queryOptions(),
+    refetchInterval: (query) =>
+      query.state.data?.run?.result === "running" ? FIRST_LOAD_POLL_MS : false,
+  });
+
+  const run = syncStatus.data?.run ?? null;
+  const isFirstLoad =
+    syncStatus.isSuccess &&
+    (run === null || (run.phase === "backfill" && run.result === "running"));
+
+  /**
+   * Progress comes from the backfill's own `shopify_sync_run` row, written as
+   * each Bulk Operation page lands — not inferred from the order rows.
+   */
+  const backfillProgress = readSyncRunProgress(run?.meta);
+
+  const health = overview.data?.syncHealth ?? store.data?.syncHealth;
+  const frozen = health?.shopify.stale ?? false;
+  const metaDown = health?.meta.stale ?? false;
+  const shopifyClock = formatClock(health?.shopify.lastSuccessAt, timeZone);
+
+  const data = overview.data;
+  const orderCount = data
+    ? data.buckets.reduce((total, bucket) => total + bucket.orderCount, 0) +
+      data.pending.count
+    : 0;
+  const totalMoney = data ? formatMoneyExact(data.total, currency) : null;
+  const previousTotalMoney = previousOverview.data
+    ? formatMoneyExact(previousOverview.data.total, currency)
+    : null;
+  /**
+   * Spend and payback come from Meta; while that connection is down they are
+   * unknown, not zero, so they wear the "no data yet" chip. What we confirm is
+   * read from our own Shopify orders, so it survives a Meta outage.
+   */
+  const meta = metaDown ? undefined : metaCheck.data;
+  const paybackMoney = meta ? formatMoneyExact(meta.verifiedRoas, currency) : null;
+  const paybackSpend = meta ? formatMoneyExact(meta.spend, currency) : null;
+  const paybackGoal = metaCheck.data
+    ? formatMoneyExact(metaCheck.data.roasTarget, currency)
+    : null;
+  const paybackTone = paybackColor(meta?.verifiedRoas, meta?.roasTarget);
+  const confirmedMoney = metaCheck.data
+    ? formatMoneyExact(metaCheck.data.verifiedRevenue, currency)
+    : null;
+  const previousPaybackMoney = meta
+    ? formatMoneyExact(previousMetaCheck.data?.verifiedRoas, currency)
+    : null;
+  const shopifyReportUrl = range
+    ? financeSummaryUrl({
+        shopDomain: store.data?.store.shopDomain,
+        dateFrom: range.dateFrom,
+        dateTo: range.dateTo,
+      })
+    : null;
+
+  const links = {
+    metaVsShopify: merRangeUrl({
+      dateFrom: range?.dateFrom ?? browserDay,
+      dateTo: range?.dateTo ?? browserDay,
+    }),
+    connections: connectionsUrl(),
+  };
+
+  const findingsContext = {
+    ctx,
+    frozen,
+    canAct,
+    firstLoad: isFirstLoad,
+    totalMoney,
+    links,
+    onSeeOrders: (bucket: AttributionBucket) => setOpenBucket(bucket),
+  };
+
+  /**
+   * The four figures, read left to right as the story: what came in, what went
+   * out on Meta, what we could match, what came back. "Meta says" is not here —
+   * it belongs to the Meta check fold, next to the footnote that explains it.
+   */
+  const railFigures = [
+    {
+      key: "net",
+      value: totalMoney,
+      label: `${railCopy.netSales} · ${railCopy.orders(orderCount)}`,
+      sub:
+        previousRange && previousTotalMoney
+          ? copy.previousTotal(previousTotalMoney, previousRange.days)
+          : null,
+      help: help.netSales,
+    },
+    {
+      key: "spend",
+      value: paybackSpend,
+      label: railCopy.spend,
+    },
+    {
+      key: "confirm",
+      value: confirmedMoney,
+      label: railCopy.confirm,
+      color: "var(--attr-known)",
+      help: help.confirm,
+    },
+    {
+      key: "back",
+      value: paybackMoney,
+      label: railCopy.back,
+      color: paybackTone,
+      sub:
+        [
+          paybackGoal ? metaCopy.goal(paybackGoal) : null,
+          previousRange && previousPaybackMoney
+            ? copy.previousBack(previousPaybackMoney, previousRange.days)
+            : null,
+        ]
+          .filter((part): part is string => part !== null)
+          .join(" · ") || null,
+      help: paybackMoney
+        ? help.back(paybackMoney, paybackGoal)
+        : help.backUnknown,
+    },
   ];
 
+  if (store.isError) {
+    return (
+      <p className="py-16 text-center text-[13px] text-muted-foreground">
+        {copy.storeMissing}
+      </p>
+    );
+  }
+
   return (
-    <div className="flex flex-col gap-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Dashboard</h1>
+    <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+        <h1 className="text-[15px] font-semibold tracking-tight">
+          {copy.title}
+        </h1>
         <div className="flex items-center gap-2">
-          <DateRangePicker
-            from={fromDate}
-            to={toDate}
-            onChange={(range) => {
-              if (range) {
-                setFrom(formatDateOnly(range.from));
-                setTo(formatDateOnly(range.to));
-              }
-            }}
+          <FreshnessCaption
+            shopify={health?.shopify}
+            meta={health?.meta}
+            timeZone={timeZone}
+            loading={store.isPending}
           />
-          <Select value={selectedFormat ?? "all"} onValueChange={(value) => setFormat(value === "all" ? "" : value)}>
-            <SelectTrigger className="h-7 w-auto gap-1 text-[13px] capitalize">
-              <SelectValue placeholder="All formats" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All formats</SelectItem>
-              {FORMATS.map((value) => (
-                <SelectItem key={value} value={value} className="capitalize">{value}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {accounts.data && accounts.data.length > 0 && (
-            <Select value={accountId || "all"} onValueChange={(v) => setAccountId(v === "all" ? "" : v)}>
-              <SelectTrigger className="h-7 w-auto gap-1 text-[13px]">
-                <SelectValue placeholder="All accounts" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All accounts</SelectItem>
-                {accounts.data.map((a) => (
-                  <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          {teamsQuery.data && teamsQuery.data.length > 0 && (
-            <Select value={teamId || "all"} onValueChange={(v) => setTeamId(v === "all" ? "" : v)}>
-              <SelectTrigger className="h-7 w-auto gap-1 text-[13px]">
-                <SelectValue placeholder="All teams" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All teams</SelectItem>
-                {teamsQuery.data.map((t) => (
-                  <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 gap-1.5 text-[13px]"
-                disabled={exporting}
-              >
-                <Download className="size-3.5" /> {exporting ? "Exporting..." : "Export"}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => setExportOpen(true)}>
-                Export…
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => {
-                  startExport(async () => {
-                    try {
-                      const rows = await queryClient.fetchQuery(
-                        trpc.adCreative.dashboardExport.queryOptions({
-                          from: fromValue,
-                          to: toValue,
-                          accountId: selectedAccountId,
-                          teamId: selectedTeamId,
-                          format: selectedFormat,
-                          // Breakdown rows only exist for the last 14 days;
-                          // wider ranges export base rows instead of failing.
-                          scope: demoWindow.isClamped ? "base" : "all",
-                        }),
-                      );
-                      if (!rows.length) {
-                        toast.info("No data to export for this date range");
-                        return;
-                      }
-                      downloadCsv(rows, `dashboard_${fromValue}_${toValue}.csv`);
-                      toast.success(
-                        demoWindow.isClamped
-                          ? `Exported ${rows.length} base rows — breakdowns only go back ${BREAKDOWN_RETENTION_DAYS} days`
-                          : `Exported ${rows.length} rows`,
-                      );
-                    } catch (err) {
-                      console.error("Export failed:", err);
-                      toast.error(getUserFacingErrorMessage(err, "Export failed — check the console for details"));
-                    }
-                  });
-                }}
-              >
-                Raw perf logs
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          {canManageData ? (
-            <Button asChild size="sm" variant="outline" className="h-7 gap-1.5 text-[13px]">
-              <Link href="/import">
-                <Upload className="size-3.5" /> Import
-              </Link>
-            </Button>
-          ) : null}
         </div>
       </div>
 
-      <section id="connections">
-        {!isReadOnly ? (
-          <StaleDataBanner
-            account={accountId ? accounts.data?.find((a) => a.id === accountId) : accounts.data?.[0]}
-          />
-        ) : null}
-      </section>
-
-      {/* KPI cards — always visible */}
-      <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-        {kpis.map((kpi) => (
-          <div key={kpi.label} className="rounded-lg border border-border px-3 py-2.5">
-            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70">
-              <kpi.icon className={`size-3 ${kpi.accent}`} />
-              {kpi.label}
-            </div>
-            {stats.isLoading ? (
-              <Skeleton className="mt-1 h-5 w-16" />
-            ) : (
-              <span className="mt-0.5 block text-base font-semibold tabular-nums leading-tight">
-                {kpi.value}
-              </span>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        {range && today ? (
+          <span className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground/60">
+            {copy.kicker(
+              rangeLabels[preset],
+              formatDayRange(range.dateFrom, range.dateTo),
+              timeZone,
             )}
-          </div>
-        ))}
+          </span>
+        ) : (
+          <Skeleton className="h-3 w-52" />
+        )}
+
+        <DateRangeChips
+          preset={preset}
+          range={range}
+          today={today}
+          onPreset={(next) => {
+            void setPreset(next);
+            setOpenBucket(null);
+          }}
+          onCustom={(from, to) => {
+            void setCustomFrom(from);
+            void setCustomTo(to);
+            void setPreset("custom");
+            setOpenBucket(null);
+          }}
+        />
       </div>
 
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList variant="line">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="charts">Charts</TabsTrigger>
-          <TabsTrigger value="demographics">Demographics</TabsTrigger>
-        </TabsList>
+      {frozen ? <ConnectionBanner clock={shopifyClock} canAct={canAct} /> : null}
 
-        <TabsContent value="overview" className="flex flex-col gap-6 pt-4">
-          <div className="grid gap-6 lg:grid-cols-2">
-            <LeaderboardTable
-              title="Top Performers"
-              icon={<Trophy className="size-3.5 text-emerald-500" />}
-              rows={topPerformers}
-              isLoading={stats.isLoading}
-              emptyMessage="No creatives with enough spend data yet"
-              viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=healthy`}
-              detailQueryString={creativeDetailParams.toString()}
-              canManageData={canManageData}
-            />
-            <LeaderboardTable
-              title="Needs Attention"
-              icon={<AlertTriangle className="size-3.5 text-red-400" />}
-              rows={bottomPerformers}
-              isLoading={stats.isLoading}
-              emptyMessage="Nothing urgent in this window"
-              viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=critical`}
-              detailQueryString={creativeDetailParams.toString()}
-              canManageData={canManageData}
-            />
-          </div>
-          <LeaderboardTable
-            title="Surviving Creatives"
-            icon={<Shield className="size-3.5 text-blue-500" />}
-            rows={survivingCreatives}
-            isLoading={stats.isLoading}
-            emptyMessage="No long-running creatives with profitable ROAS yet"
-            viewAllHref={`${baseHref}${baseHref.includes("?") ? "&" : "?"}health=healthy`}
-            detailQueryString={creativeDetailParams.toString()}
-            canManageData={canManageData}
+      <MobileFindingsSheet
+        {...findingsContext}
+        frozenClock={shopifyClock}
+        lastCheckedClock={shopifyClock}
+      />
+
+      {isFirstLoad ? (
+        <FirstLoadProgress
+          daysLoaded={backfillProgress?.daysLoaded ?? 0}
+          daysTotal={backfillProgress?.daysTotal ?? BACKFILL_DAYS}
+        />
+      ) : null}
+
+      {/* The ledger: the four figures, the channels, and the tie-out that proves
+          they add up — one panel, because they are one reading. */}
+      <section className="overflow-hidden rounded-md border border-border bg-card">
+        <HeaderRail
+          figures={railFigures}
+          loading={overview.isPending || metaCheck.isPending || !range}
+          emptyLabel={copy.noDataYet}
+        />
+
+        <div className="px-2 py-3 sm:px-3">
+          <ChannelLedger
+            entries={data?.buckets ?? []}
+            identity={data?.identity ?? null}
+            pending={data?.pending ?? null}
+            currency={currency}
+            selected={openBucket}
+            onSelect={(bucket) =>
+              setOpenBucket(openBucket === bucket ? null : bucket)
+            }
+            loading={overview.isPending || !range}
+            dimmed={frozen}
+            shopifyReportUrl={shopifyReportUrl}
+            renderDrawer={(bucket) =>
+              range ? (
+                <SourceDrawer
+                  bucket={bucket}
+                  dateFrom={range.dateFrom}
+                  dateTo={range.dateTo}
+                  currency={currency}
+                  timeZone={timeZone}
+                  role={role}
+                  shopDomain={store.data?.store.shopDomain ?? null}
+                  shopifyTotal={data?.total != null ? String(data.total) : null}
+                  metaDown={metaDown}
+                  detailHref={links.metaVsShopify}
+                  onClose={() => setOpenBucket(null)}
+                />
+              ) : null
+            }
           />
-        </TabsContent>
+        </div>
+      </section>
 
-        <TabsContent value="charts" className="pt-4">
-          {isDailyPerfLoading ? (
-            <div className="rounded-lg border border-border px-4 py-3">
-              <Skeleton className="h-[300px] w-full rounded-lg" />
-            </div>
-          ) : hasDailyPerfData ? (
-            <div className="rounded-lg border border-border px-4 py-3">
-              <PerformanceChart logs={dailyPerfLogs as Array<typeof dailyPerfLogs[number] & Record<string, unknown>>} />
-            </div>
-          ) : (
-            <div className="rounded-lg border border-dashed border-border/40 px-4 py-12 text-center">
-              <p className="text-sm text-muted-foreground/50">No daily performance data for this period</p>
-            </div>
-          )}
-        </TabsContent>
-
-        <TabsContent value="demographics" className="space-y-2 pt-4">
-          {demoWindow.isClamped || !demoWindow.hasWindow ? (
-            <BreakdownWindowCaption
-              from={demoWindow.from}
-              to={toValue}
-              hasWindow={demoWindow.hasWindow}
-            />
-          ) : null}
-          {demoWindow.hasWindow ? (
-            <DemographicBreakdownChart
-              data={demographic.data}
-              dimension={dimension as "age" | "gender" | "country" | "device"}
-              onDimensionChange={setDimension}
-              isLoading={demographic.isLoading}
-            />
-          ) : null}
-        </TabsContent>
-      </Tabs>
-
-      <ExportPreviewDialog
-        open={exportOpen}
-        onOpenChange={setExportOpen}
-        filters={{
-          from: fromValue,
-          to: toValue,
-          accountId: selectedAccountId,
-          teamId: selectedTeamId,
-          format: selectedFormat,
-        }}
-        filterLabels={[
-          ...(accountId
-            ? [{
-                label: "Account",
-                value: accounts.data?.find((a) => a.id === accountId)?.name ?? accountId,
-              }]
-            : []),
-          ...(selectedFormat
-            ? [{ label: "Format", value: selectedFormat }]
-            : []),
-          ...(teamId
-            ? [{
-                label: "Team",
-                value: teamsQuery.data?.find((t) => t.id === teamId)?.name ?? teamId,
-              }]
-            : []),
-        ]}
+      <DetailFolds
+        findings={findingsContext}
+        timeZone={timeZone}
+        frozenClock={frozen ? shopifyClock : null}
+        lastCheckedClock={shopifyClock}
       />
     </div>
   );
