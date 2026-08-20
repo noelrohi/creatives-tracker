@@ -26,3 +26,13 @@ export function basePerformanceLogFilter(alias = "pl"): SQL {
   parts.push(sql`${qualifiedColumn(alias, "date_start")} = ${qualifiedColumn(alias, "date_end")}`);
   return sql.join(parts, sql` AND `);
 }
+
+// CTR is a ratio, so aggregating it across rows means weighting each row by the
+// impressions it was measured over. `avg(pl.ctr)` gives a 200-impression row the
+// same say as a 400,000-impression one and does not describe the group at all.
+// Returns NULL when the group has no impressions.
+export function impressionWeightedCtr(alias = "pl"): SQL {
+  const ctr = qualifiedColumn(alias, "ctr");
+  const impressions = qualifiedColumn(alias, "impressions");
+  return sql`(coalesce(sum(${ctr} * ${impressions}), 0) / nullif(sum(${impressions}), 0))`;
+}

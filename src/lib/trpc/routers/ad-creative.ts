@@ -11,7 +11,7 @@ import { adAccounts } from "@/schema/account";
 import { adSets } from "@/schema/ad-set";
 import { fetchMetaCreativePreview, fetchMetaAdPreviewUrl } from "@/lib/meta-creative-assets";
 import { importMetaRows } from "@/lib/meta-import";
-import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
+import { basePerformanceLogFilter, impressionWeightedCtr } from "@/lib/performance-log-sql";
 import { assertBreakdownRange } from "@/lib/retention/window-guard";
 import { computeCreativeHealthByCreativeId, type CreativeRollup } from "@/lib/creative-health-rollup";
 import { fetchAgentExportRows } from "@/lib/ad-export";
@@ -603,7 +603,7 @@ async function fetchPortfolioRow(filters: ReturnType<typeof buildDashboardAnalyt
       sum(pl.purchase_value)::text as total_purchase_value,
       (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text as portfolio_roas,
       (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as portfolio_cpa,
-      avg(pl.ctr)::text as portfolio_ctr,
+      ${impressionWeightedCtr("pl")}::text as portfolio_ctr,
       sum(pl.conversions)::text as total_conversions
     FROM performance_log pl
     JOIN ad ON ad.id = pl.ad_id
@@ -820,7 +820,7 @@ export const adCreativeRouter = router({
             (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text AS avg_roas,
             sum(pl.conversions) AS total_conversions,
             (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text AS avg_cpa,
-            avg(pl.ctr)::text AS avg_ctr,
+            ${impressionWeightedCtr("pl")}::text AS avg_ctr,
             avg(pl.cpc)::text AS avg_cpc,
             avg(pl.frequency)::text AS avg_frequency,
             (sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0))::text AS thumbstop_ratio
@@ -843,7 +843,7 @@ export const adCreativeRouter = router({
         recent_perf AS (
           SELECT
             ad.ad_creative_id,
-            (coalesce(sum(pl.ctr * pl.impressions), 0) / nullif(sum(pl.impressions), 0))::text AS recent_ctr,
+            ${impressionWeightedCtr("pl")}::text AS recent_ctr,
             avg(pl.cpc)::text AS recent_cpc,
             (sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0))::text AS recent_hook_rate,
             (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text AS recent_cpa
@@ -1226,7 +1226,7 @@ export const adCreativeRouter = router({
           sum(pl.spend)::text as total_spend,
           (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text as roas,
           (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as cpa,
-          avg(pl.ctr)::text as ctr,
+          ${impressionWeightedCtr("pl")}::text as ctr,
           sum(pl.conversions)::text as total_conversions,
           CASE WHEN bool_or(${effectiveAdActiveSql(sql`ad.status`, sql`ast.status`)}) THEN 'active' ELSE 'paused' END AS ad_status,
           (max(pl.date_end)::date - min(pl.date_start)::date) as running_days
@@ -1270,7 +1270,7 @@ export const adCreativeRouter = router({
           sum(pl.spend)::text as total_spend,
           (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text as roas,
           (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as cpa,
-          avg(pl.ctr)::text as ctr,
+          ${impressionWeightedCtr("pl")}::text as ctr,
           sum(pl.conversions)::text as total_conversions,
           CASE WHEN bool_or(${effectiveAdActiveSql(sql`ad.status`, sql`ast.status`)}) THEN 'active' ELSE 'paused' END AS ad_status,
           (max(pl.date_end)::date - min(pl.date_start)::date) as running_days
@@ -1668,7 +1668,7 @@ export const adCreativeRouter = router({
           COALESCE(sum(pl.purchase_value), 0)::text as purchase_value,
           (COALESCE(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text as roas,
           (COALESCE(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as cpa,
-          (COALESCE(sum(pl.ctr * pl.impressions), 0) / nullif(sum(pl.impressions), 0))::text as ctr,
+          ${impressionWeightedCtr("pl")}::text as ctr,
           COALESCE(sum(pl.conversions), 0)::int as conversions,
           COALESCE(sum(pl.impressions), 0)::int as impressions,
           COALESCE(sum(pl.reach), 0)::int as reach,
