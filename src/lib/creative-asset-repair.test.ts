@@ -103,6 +103,30 @@ describe("resolveCreativeImageUrl", () => {
     expect(mocks.updates).toEqual([]);
   });
 
+  it("does not trust a host that merely ends in the blob domain", async () => {
+    const lookalike = "https://evilblob.vercel-storage.com/prod/x.jpg";
+    vi.stubGlobal("fetch", respondWith(403));
+    mocks.adRows = [];
+
+    const result = await resolveCreativeImageUrl({ ...base, assetUrl: lookalike });
+
+    // Probed like any foreign URL rather than waved through as ours.
+    expect(result).toMatchObject({ url: null, outcome: "unreachable" });
+  });
+
+  it("treats a blob subdomain as durable regardless of case", async () => {
+    const fetchSpy = respondWith(500);
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await resolveCreativeImageUrl({
+      ...base,
+      assetUrl: "https://ABC123.public.Blob.Vercel-Storage.com/prod/x.jpg",
+    });
+
+    expect(result).toMatchObject({ outcome: "durable" });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("reports no image for a missing or video asset", async () => {
     await expect(
       resolveCreativeImageUrl({ ...base, assetUrl: null }),

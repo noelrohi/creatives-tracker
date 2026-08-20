@@ -313,15 +313,21 @@ function getImageExtension(
   return "jpg";
 }
 
+const BLOB_HOST = "blob.vercel-storage.com";
+
 /**
  * Whether the URL points at storage we own. Meta's `scontent-*.fbcdn.net`
  * previews are signed and expire within days, so anything that is not on our
  * blob store has to be treated as possibly-dead on every later read.
+ *
+ * The match is on label boundaries, not a bare suffix: `evilblob.vercel-
+ * storage.com` is somebody else's host, and trusting it would skip both the
+ * liveness probe and the repair that a foreign URL most needs.
  */
 export function isDurableAssetUrl(value: string): boolean {
   try {
-    const hostname = new URL(value).hostname;
-    return hostname.endsWith("blob.vercel-storage.com");
+    const hostname = new URL(value).hostname.toLowerCase();
+    return hostname === BLOB_HOST || hostname.endsWith(`.${BLOB_HOST}`);
   } catch {
     return false;
   }
