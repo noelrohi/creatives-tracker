@@ -505,6 +505,22 @@ function getZodIssues(error: TRPCError): ZodIssueLike[] | null {
   return null;
 }
 
+/**
+ * Whether the message opens by naming this field. A bare `startsWith` would
+ * match a longer word that merely begins with it — field `id` against
+ * "identifier is invalid" — and silently drop the one label the reader needs,
+ * so the match has to end on a token boundary. A dot counts as part of the
+ * token, so field `range` does not claim "range.dateFrom must be …".
+ */
+function messageNamesField(message: string, field: string): boolean {
+  if (!message.startsWith(field)) {
+    return false;
+  }
+
+  const nextCharacter = message[field.length];
+  return nextCharacter === undefined || !/[\w.]/.test(nextCharacter);
+}
+
 function formatZodIssue(issue: ZodIssueLike): string {
   // Zod prefixes type errors with "Invalid input: "; the field name carries
   // that already once the path is in front of it.
@@ -515,7 +531,7 @@ function formatZodIssue(issue: ZodIssueLike): string {
 
   // A refinement already names its own field ("dateFrom must be on or before
   // dateTo"); prefixing it again would stutter.
-  if (!field || message.startsWith(field)) {
+  if (!field || messageNamesField(message, field)) {
     return message;
   }
 

@@ -360,6 +360,36 @@ describe("validation error messages", () => {
     );
   });
 
+  it("keeps the field label when the message merely starts with the same letters", () => {
+    const schema = z.object({ id: z.string() }).refine(() => false, {
+      message: "identifier is invalid",
+      path: ["id"],
+    });
+    const result = schema.safeParse({ id: "x" });
+    if (result.success) throw new Error("expected the fixture input to fail");
+
+    expect(
+      formatTrpcErrorMessage(
+        new TRPCError({ code: "BAD_REQUEST", cause: result.error, message: "" }),
+      ),
+    ).toBe("id: identifier is invalid");
+  });
+
+  it("does not let a parent path claim a message about its child", () => {
+    const schema = z.object({ range: z.object({ dateFrom: z.string() }) }).refine(
+      () => false,
+      { message: "range.dateFrom must be on or before range.dateTo", path: ["range"] },
+    );
+    const result = schema.safeParse({ range: { dateFrom: "2026-08-01" } });
+    if (result.success) throw new Error("expected the fixture input to fail");
+
+    expect(
+      formatTrpcErrorMessage(
+        new TRPCError({ code: "BAD_REQUEST", cause: result.error, message: "" }),
+      ),
+    ).toBe("range: range.dateFrom must be on or before range.dateTo");
+  });
+
   it("leaves non-validation messages untouched", () => {
     expect(
       formatTrpcErrorMessage(
