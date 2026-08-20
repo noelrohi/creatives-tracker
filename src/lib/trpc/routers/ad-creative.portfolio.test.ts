@@ -443,6 +443,43 @@ describeIfDb("ad-creative portfolio aggregates", () => {
       expect(num(creative.avgCpc)).toBeCloseTo(0.1, 6);
     });
 
+    it("backs clicks out of a row carrying only Meta's own cpc", async () => {
+      // The oldest rows predate both clicks_all and any ctr, but they do carry
+      // Meta's cpc — and spend / cpc is that row's click count by the same
+      // identity. Dropping the row instead would leave its spend in the
+      // numerator with nothing under it: $50 at $0.25 is 200 clicks.
+      await testDb!.execute(sql.raw("TRUNCATE performance_log"));
+      await seedPerf({ adId: "ad_cpc", date: "2026-06-05", spend: 50, cpc: 0.25 });
+      const [creative] = await caller.adCreative.list({
+        from: FROM,
+        to: TO,
+        includeHealth: false,
+      });
+      expect(num(creative.avgCpc)).toBeCloseTo(0.25, 6);
+    });
+
+    it("excludes a row with no click signal from both sides of the ratio", async () => {
+      // A row with no clicks_all, no ctr and no cpc says nothing about what
+      // clicks cost. Its spend has to leave the numerator with it — counted on
+      // one side only, $900 of silent spend would report CPC as $1.00 when the
+      // only row that measured anything bought clicks at $0.10.
+      await testDb!.execute(sql.raw("TRUNCATE performance_log"));
+      await seedPerf({
+        adId: "ad_cpc",
+        date: "2026-06-05",
+        spend: 100,
+        clicksAll: 1000,
+        cpc: 0.1,
+      });
+      await seedPerf({ adId: "ad_cpc", date: "2026-06-06", spend: 900 });
+      const [creative] = await caller.adCreative.list({
+        from: FROM,
+        to: TO,
+        includeHealth: false,
+      });
+      expect(num(creative.avgCpc)).toBeCloseTo(0.1, 6);
+    });
+
     it("returns null CPC when the window bought no clicks", async () => {
       await testDb!.execute(sql.raw("TRUNCATE performance_log"));
       await seedPerf({ adId: "ad_cpc", date: "2026-06-05", spend: 10 });

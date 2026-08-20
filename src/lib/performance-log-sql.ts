@@ -51,21 +51,30 @@ export function impressionWeightedCtr(alias = "pl"): SQL {
 // The denominator is all clicks, not link clicks: Meta's per-row `cpc` is
 // defined over all clicks, and measured against production it matches
 // spend / clicks_all to a median relative error of 1.6e-07 (against link_clicks
-// the error is ~50%). But `clicks_all` only started populating on syncs after
-// #231, so on historical rows it is NULL and a plain sum over it would make
-// every older window NULL. Those rows still carry `ctr`, Meta's all-clicks CTR
-// in percent, so clicks are implied as impressions * ctr / 100 — the identity
-// the 1.6e-07 figure was measured against.
+// the error is ~50%). Per-row clicks are read in three steps, in this order:
+// `clicks_all` when the row has it (only rows synced after #231 do), else the
+// figure implied by impressions and `ctr`, Meta's all-clicks CTR in percent,
+// else spend / cpc — by the same identity, and it keeps a row that carries only
+// Meta's own ratio in the aggregate instead of dropping it.
+//
+// Rows where all three come up empty carry no click signal at all, so they are
+// filtered out of the numerator as well, mirroring `impressionWeightedCtr`.
+// Leaving their spend in while their clicks were missing from the denominator
+// would inflate the CPC of every group that contains one.
 export function clickWeightedCpc(alias = "pl"): SQL {
   const spend = qualifiedColumn(alias, "spend");
-  return sql`(sum(${spend}) / nullif(sum(${impliedClicks(alias)}), 0))`;
+  const clicks = impliedClicks(alias);
+  return sql`(sum(${spend}) FILTER (WHERE ${clicks} IS NOT NULL) / nullif(sum(${clicks}), 0))`;
 }
 
 // Per-row all-clicks: the synced value when we have it, else implied from
-// impressions and Meta's all-clicks CTR (percent-scale) for pre-#231 rows.
+// impressions and Meta's all-clicks CTR (percent-scale), else backed out of
+// Meta's own per-row cpc. NULL when the row carries none of the three.
 function impliedClicks(alias: string): SQL {
   const clicksAll = qualifiedColumn(alias, "clicks_all");
   const impressions = qualifiedColumn(alias, "impressions");
   const ctr = qualifiedColumn(alias, "ctr");
-  return sql`coalesce(${clicksAll}::numeric, ${impressions} * ${ctr} / 100.0)`;
+  const spend = qualifiedColumn(alias, "spend");
+  const cpc = qualifiedColumn(alias, "cpc");
+  return sql`coalesce(${clicksAll}::numeric, ${impressions} * ${ctr} / 100.0, ${spend} / nullif(${cpc}, 0))`;
 }
