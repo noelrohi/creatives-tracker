@@ -1338,7 +1338,8 @@ export async function getTodaysChecks(params: {
 }): Promise<TodaysChecks> {
   const now = params.now ?? new Date();
 
-  const [firstSync, health, openRows, mutedTypes, [storeRow]] = await Promise.all([
+  const [firstSync, health, openRows, mutedTypes, [storeRow], [lastFiredRow]] =
+    await Promise.all([
     getFirstSyncState(params),
     getSyncHealth({ ...params, now }),
     db
@@ -1357,9 +1358,31 @@ export async function getTodaysChecks(params: {
       .from(shopifyStores)
       .where(eq(shopifyStores.id, params.storeId))
       .limit(1),
+    // A lower bound for a store swept before the column existed. Only sweeps
+    // write findings, so the newest `firedAt` is a time a sweep certainly ran.
+    db
+      .select({ lastFiredAt: sql<Date | null>`max(${findings.firedAt})`.mapWith(
+        findings.firedAt,
+      ) })
+      .from(findings)
+      .where(
+        and(
+          eq(findings.organizationId, params.organizationId),
+          eq(findings.storeId, params.storeId),
+        ),
+      ),
   ]);
 
-  const evaluatedAt = storeRow?.findingsEvaluatedAt ?? null;
+  // Null has to mean one thing — "we cannot date these statuses" — or a caller
+  // reading it as "never swept" will quote undated statuses as current. A store
+  // swept before this column shipped is knowable, so it is answered rather than
+  // reported as unknown. The floor only ever errs old: a sweep that fired and
+  // retired nothing leaves no trace, so the stamp lags rather than leads, and a
+  // consumer told the reading is older than it is stays more cautious, never
+  // less. A store that has genuinely never been swept has no findings, so it
+  // still answers null, correctly.
+  const evaluatedAt =
+    storeRow?.findingsEvaluatedAt ?? lastFiredRow?.lastFiredAt ?? null;
 
   // Before the first sync lands there is nothing to judge any rule against.
   if (!firstSync.hasAnySuccessfulSync) {

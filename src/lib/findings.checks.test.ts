@@ -47,6 +47,7 @@ vi.mock("server-only", () => ({}));
 
 const { getTodaysChecks } = await import("./findings");
 const { shopifyStores } = await import("@/schema/shopify");
+const { findings } = await import("@/schema/finding");
 const { eq } = await import("drizzle-orm");
 
 const ORG = "org_findings_checks_test";
@@ -170,6 +171,18 @@ describeWithDb("findings checks report when they were taken", () => {
    * `timestamp` without a zone, so only the driver's own mapping — the one the
    * sweep writes through — round-trips a Date unchanged.
    */
+  /** Same reason as `stampSweep`: the Date has to go through Drizzle's mapping. */
+  async function insertFinding(id: string, firedAt: Date) {
+    await testDb?.insert(findings).values({
+      id,
+      organizationId: ORG,
+      storeId: STORE,
+      type: "sync_failure",
+      firedAt,
+      payload: {},
+    });
+  }
+
   async function stampSweep(at: Date, storeId: string = STORE) {
     await testDb
       ?.update(shopifyStores)
@@ -177,7 +190,31 @@ describeWithDb("findings checks report when they were taken", () => {
       .where(eq(shopifyStores.id, storeId));
   }
 
-  it("reports no timestamp before a store has ever been swept", async () => {
+  /**
+   * The window this floor exists for: deployed, not yet swept again, and
+   * carrying findings from a sweep that predates the column. Without it those
+   * statuses arrive undated in exactly the window the new field is most
+   * trusted.
+   */
+  it("dates statuses from a sweep that predates the column", async () => {
+    await insertFinding("finding-old", SWEPT_AT);
+
+    const result = await getTodaysChecks({ organizationId: ORG, storeId: STORE });
+
+    expect(result.evaluatedAt?.toISOString()).toBe(SWEPT_AT.toISOString());
+  });
+
+  it("prefers the stamp over the floor once a sweep has written one", async () => {
+    const newer = new Date("2026-08-20T19:30:00.000Z");
+    await insertFinding("finding-old", SWEPT_AT);
+    await stampSweep(newer);
+
+    const result = await getTodaysChecks({ organizationId: ORG, storeId: STORE });
+
+    expect(result.evaluatedAt?.toISOString()).toBe(newer.toISOString());
+  });
+
+  it("reports no timestamp for a store that has genuinely never been swept", async () => {
     const result = await getTodaysChecks({ organizationId: ORG, storeId: STORE });
 
     expect(result.evaluatedAt).toBeNull();
@@ -199,10 +236,7 @@ describeWithDb("findings checks report when they were taken", () => {
    * timestamp says so.
    */
   it("dates a stale needs_look rather than presenting it as current", async () => {
-    await testDb?.execute(sql`
-      INSERT INTO finding (id, organization_id, store_id, type, fired_at, payload)
-      VALUES ('finding-1', ${ORG}, ${STORE}, 'sync_failure', ${SWEPT_AT}, '{}'::jsonb)
-    `);
+    await insertFinding("finding-1", SWEPT_AT);
     await stampSweep(SWEPT_AT);
 
     const result = await getTodaysChecks({
