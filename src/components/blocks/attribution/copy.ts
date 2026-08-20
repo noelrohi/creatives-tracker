@@ -582,6 +582,18 @@ function driftOffenderPhrase(payload: Record<string, unknown> | null): string {
   return "an ad using non-standard link tags";
 }
 
+/**
+ * Exhaustiveness guard with a runtime floor. The `never` parameter is the point:
+ * adding a finding type without words for it fails the build here, which is the
+ * signal we want. The fallback only matters if a row somehow reaches a
+ * deployment older than the rule that wrote it — `findings.list` validates
+ * `summary` as a string, so returning `undefined` there would fail output
+ * parsing and take down the whole list rather than one row.
+ */
+function undescribed<T>(_type: never, fallback: T): T {
+  return fallback;
+}
+
 export function findingHeadline(item: FindingItem, ctx: VoiceContext): string {
   const payload = item.payload;
 
@@ -650,6 +662,12 @@ export function findingHeadline(item: FindingItem, ctx: VoiceContext): string {
     case "utm_template_drift":
       return (
         str(payload, "headline") ?? "A new ad is sending non-standard UTMs"
+      );
+
+    default:
+      return undescribed(
+        item.type,
+        "A new check fired that we don't have words for yet",
       );
   }
 }
@@ -790,6 +808,11 @@ export function findingBody(item: FindingItem, ctx: VoiceContext): string[] {
         "New ads should send their numeric ad ID in utm_content so orders resolve without a name fallback.",
       ];
     }
+
+    default:
+      return undescribed(item.type, [
+        "This check is newer than the explanation for it. Nothing about your numbers has changed — we just haven't written this one up yet.",
+      ]);
   }
 }
 

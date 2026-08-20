@@ -4,6 +4,12 @@ import { and, desc, eq, gt, isNotNull, isNull, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import {
+  findingBody,
+  findingHeadline,
+  type VoiceContext,
+} from "@/components/blocks/attribution/copy";
+import { getStoreForOrg } from "@/lib/attribution-queries";
+import {
   getTodaysChecks,
   mutedUntilFrom,
   type FindingType,
@@ -38,6 +44,10 @@ const findingListItemSchema = z.object({
   resolvedAt: z.date().nullable(),
   resolution: z.enum(findingResolutionEnum.enumValues).nullable(),
   mutedUntil: z.date().nullable(),
+  /** The headline the attribution screen shows for this finding, word for word. */
+  summary: z.string(),
+  /** The paragraphs under that headline, carrying the figures. */
+  details: z.array(z.string()),
 });
 
 const listOutputSchema = z.object({ items: z.array(findingListItemSchema) });
@@ -53,7 +63,7 @@ const checksOutputSchema = z.object({
 
 type FindingRow = typeof findings.$inferSelect;
 
-type FindingListItem = {
+export type FindingListItem = {
   /** Null only for a mute that has never had a finding fire behind it. */
   id: string | null;
   type: FindingType;
@@ -66,6 +76,42 @@ type FindingListItem = {
   resolution: FindingRow["resolution"];
   mutedUntil: Date | null;
 };
+
+export type RenderedFindingListItem = FindingListItem & {
+  summary: string;
+  details: string[];
+};
+
+/**
+ * The finding sentences, rendered server-side in the store's currency and
+ * timezone. Payload figures are frozen in mixed units — cents in some rules,
+ * dollars in others — and an API client should not have to know which. These
+ * are the same two functions the attribution screen renders through, so a
+ * client quoting `summary` says exactly what the dashboard says.
+ */
+export function render(
+  items: FindingListItem[],
+  voice: VoiceContext,
+): RenderedFindingListItem[] {
+  return items.map((item) => ({
+    ...item,
+    summary: findingHeadline(item, voice),
+    details: findingBody(item, voice),
+  }));
+}
+
+/**
+ * The same fallbacks the attribution page uses. Findings are foreign-keyed to a
+ * store, so a missing one means an empty list rather than an error — this read
+ * stays a 200 for an org that has not connected Shopify yet.
+ */
+async function voiceContextFor(organizationId: string): Promise<VoiceContext> {
+  const store = await getStoreForOrg(organizationId);
+  return {
+    currency: store?.currency ?? "USD",
+    timeZone: store?.ianaTimezone ?? "UTC",
+  };
+}
 
 function toItem(
   row: FindingRow,
@@ -111,9 +157,14 @@ export const findingsRouter = router({
     )
     .input(z.object({ status: z.enum(["open", "handled", "snoozed"]) }))
     .output(listOutputSchema)
-    .query(async ({ input, ctx }): Promise<{ items: FindingListItem[] }> => {
+    .query(async ({ input, ctx }): Promise<{
+      items: RenderedFindingListItem[];
+    }> => {
       const now = new Date();
-      const mutes = await activeMutes(ctx.organizationId, now);
+      const [mutes, voice] = await Promise.all([
+        activeMutes(ctx.organizationId, now),
+        voiceContextFor(ctx.organizationId),
+      ]);
       const mutedTypes = mutes.map((mute) => mute.type);
 
       if (input.status === "snoozed") {
@@ -149,8 +200,12 @@ export const findingsRouter = router({
         );
 
         return {
-          items: items.sort(
-            (a, b) => (b.firedAt?.getTime() ?? 0) - (a.firedAt?.getTime() ?? 0),
+          items: render(
+            items.sort(
+              (a, b) =>
+                (b.firedAt?.getTime() ?? 0) - (a.firedAt?.getTime() ?? 0),
+            ),
+            voice,
           ),
         };
       }
@@ -171,7 +226,7 @@ export const findingsRouter = router({
         )
         .orderBy(desc(findings.firedAt));
 
-      return { items: rows.map((row) => toItem(row)) };
+      return { items: render(rows.map((row) => toItem(row)), voice) };
     }),
 
   checks: orgProcedure
