@@ -63,7 +63,7 @@ const checksOutputSchema = z.object({
 
 type FindingRow = typeof findings.$inferSelect;
 
-type FindingListItem = {
+export type FindingListItem = {
   /** Null only for a mute that has never had a finding fire behind it. */
   id: string | null;
   type: FindingType;
@@ -77,7 +77,7 @@ type FindingListItem = {
   mutedUntil: Date | null;
 };
 
-type RenderedFindingListItem = FindingListItem & {
+export type RenderedFindingListItem = FindingListItem & {
   summary: string;
   details: string[];
 };
@@ -89,7 +89,7 @@ type RenderedFindingListItem = FindingListItem & {
  * are the same two functions the attribution screen renders through, so a
  * client quoting `summary` says exactly what the dashboard says.
  */
-function render(
+export function render(
   items: FindingListItem[],
   voice: VoiceContext,
 ): RenderedFindingListItem[] {
