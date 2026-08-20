@@ -51,6 +51,17 @@ const dashboardAnalyticsInputSchema = dashboardAnalyticsFilterSchema.optional();
 const dashboardStatsInputSchema = dashboardAnalyticsFilterSchema
   .extend({
     includePortfolio: z.boolean().optional(),
+    /**
+     * Rows per leaderboard, applied to all three the same way. The screen wants
+     * ten; an API client reading "best and worst this week" wants three and
+     * pays for the other seven in its context window on every call.
+     */
+    limit: z.number().int().min(1).max(50).default(10),
+    /**
+     * The surviving-creatives leaderboard is the one an API client is most
+     * likely not to read; skipping it drops its query as well as its rows.
+     */
+    includeSurviving: z.boolean().optional(),
   })
   .optional();
 
@@ -1162,6 +1173,8 @@ export const adCreativeRouter = router({
         dateFilter,
       } = filters;
       const includePortfolio = input?.includePortfolio !== false;
+      const limit = input?.limit ?? 10;
+      const includeSurviving = input?.includeSurviving !== false;
       const portfolio = includePortfolio
         ? await fetchPortfolioRow(filters)
         : undefined;
@@ -1227,11 +1240,19 @@ export const adCreativeRouter = router({
           AND coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) >= 1
           AND bool_or(${effectiveAdActiveSql(sql`ad.status`, sql`ast.status`)} AND pl.spend > 0)
         ORDER BY sum(pl.conversions) DESC NULLS LAST, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST
-        LIMIT 10
+        LIMIT ${limit}
       `);
       const topPerformers = topResult.rows as (CreativeRow & { running_days: number })[];
 
       const topIds = topPerformers.map((r) => r.id);
+      // Note the coupling `limit` introduces: this exclusion list is as long as
+      // Top Performers, so a smaller limit excludes fewer creatives and a
+      // profitable concept can appear in both leaderboards. Top and Bottom read
+      // their own rows and are unaffected. Left as is — "the ones that didn't
+      // crack the top list you were shown" is the honest reading of a capped
+      // response, and pinning the exclusion at ten would make a limit=3 caller
+      // pay for a query whose extra rows it never sees.
+      //
       // Surviving creatives: long-running profitable concepts that didn't crack
       // the Top Performers top-10. Same display-vs-qualify split — metrics
       // aggregate all ads (matches Meta) but the creative only qualifies if at
@@ -1239,7 +1260,7 @@ export const adCreativeRouter = router({
       const survivingExclude = topIds.length
         ? sql`AND ac.id NOT IN (${sql.join(topIds.map((id) => sql`${id}`), sql`, `)})`
         : sql``;
-      const survivingResult = await db.execute(sql`
+      const survivingResult = includeSurviving ? await db.execute(sql`
         SELECT
           ac.id,
           ac.name,
@@ -1267,9 +1288,9 @@ export const adCreativeRouter = router({
           AND (max(pl.date_end)::date - min(pl.date_start)::date) >= 14
           AND bool_or(${effectiveAdActiveSql(sql`ad.status`, sql`ast.status`)} AND pl.spend > 0)
         ORDER BY (max(pl.date_end)::date - min(pl.date_start)::date) DESC, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST
-        LIMIT 10
-      `);
-      const survivingCreatives = survivingResult.rows as (CreativeRow & { running_days: number })[];
+        LIMIT ${limit}
+      `) : null;
+      const survivingCreatives = (survivingResult?.rows ?? []) as (CreativeRow & { running_days: number })[];
 
       // Bleeders: per-ad rule, tiered by whether the ad has had a "fair shot."
       // An ad needs both age (running_days >= 5) and spend (>= ~1× portfolio CPA)
@@ -1407,7 +1428,7 @@ export const adCreativeRouter = router({
         ORDER BY
           (CASE WHEN bool_or(b.tier = 'pause_now') THEN 0 ELSE 1 END),
           sum(coalesce(b.spend, 0) * (1 - coalesce(b.roas, 0))) DESC NULLS LAST
-        LIMIT 10
+        LIMIT ${limit}
       `);
       const bottomPerformers = bottomResult.rows as BleederRow[];
 
