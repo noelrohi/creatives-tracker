@@ -198,7 +198,7 @@ export const attributionRouter = router({
         "attribution",
         "metaCheck",
         "Meta claimed vs verified revenue",
-        "For a day range: Meta ad spend, what Meta claims it drove (null when unlabeled — not $0), Shopify-verified revenue and orders, the verified ROAS, and the org's ROAS target.",
+        "For a day range: Meta ad spend, what Meta claims it drove (null when unlabeled — not $0), Shopify-verified revenue and orders, the verified ROAS, and the org's ROAS target. `roasTarget` is set against `verifiedRoas` — compare those two, never `claimed` against it. Meta's claim runs well above verified revenue (roughly 1.5× on this data), so comparing the claim to the target reads a store as near its goal when the revenue behind it was never confirmed. The dashboard, the per-campaign ledger and the `roas_below_target` rule all judge against verified, and the target is a goal a store may sit under for long stretches rather than a line it usually meets.",
       ),
     )
     .input(dateRangeSchema)
@@ -263,7 +263,7 @@ export const attributionRouter = router({
         "attribution",
         "campaignLedger",
         "Per-campaign spend and verified revenue",
-        "The same day range cut by campaign: spend, Meta's claim, Shopify-confirmed revenue, order count, and ROAS per campaign, plus an unresolved row for spend/orders no campaign could be named for.",
+        "The same day range cut by campaign: spend, Meta's claim, Shopify-confirmed revenue, order count, and ROAS per campaign, plus an unresolved row for spend/orders no campaign could be named for. Each row's `roas` is confirmed revenue over spend, so it is on the same footing as `roasTarget` and the two compare directly. Meta's claim is reported beside it and is not what the target is set against.",
       ),
     )
     .input(dateRangeSchema)
