@@ -68,6 +68,20 @@ const checksOutputSchema = z.object({
     z.object({
       type: findingTypeSchema,
       status: z.enum(["ok", "needs_look", "waiting_for_data"]),
+      /**
+       * Days in this rule's window it could not compute, newest last, with the
+       * window's own bounds beside them.
+       *
+       * All three are absent together, on exactly the rules that judge a single
+       * aggregate rather than a day series. Absent is not empty: absent means
+       * the rule cannot say which days it was missing, empty means it looked
+       * and none were. A hole running contiguously back from `periodEnd` is
+       * Meta's ordinary reporting lag; the same days elsewhere in the window
+       * are a real gap.
+       */
+      uncomputableDays: z.array(z.string()).optional(),
+      periodStart: z.string().optional(),
+      periodEnd: z.string().optional(),
     }),
   ),
 });
@@ -246,7 +260,7 @@ export const findingsRouter = router({
         "findings",
         "checks",
         "Today's finding checks",
-        "Which findings are open right now — not whether the numbers are currently good. `needs_look` means an unresolved finding of that type exists at this moment; `ok` means none does, which can equally mean nobody has re-checked. This is a live read, but only the nightly sweep writes findings, so nothing a caller does will change an `ok` before tonight. `waiting_for_data` and `sync_failure` do read live connector health. `rulesLastRanAt` is a different clock: it says when the rules last ran, so read it as \"the rules last ran at T, and these are flagged now\", never \"as of T, these were flagged\". To date what a particular finding said, use its own `firedAt` from findings.list.",
+        "Which findings are open right now — not whether the numbers are currently good. `needs_look` means an unresolved finding of that type exists at this moment; `ok` means none does, which can equally mean nobody has re-checked. This is a live read, but only the nightly sweep writes findings, so nothing a caller does will change an `ok` before tonight. `waiting_for_data` means the rule could not judge, and never that it judged badly: on `roas_below_target` and `meta_overclaim` it is re-derived per request by running that rule\'s windowing against current data, and those two carry `uncomputableDays` — the days in the window with no Meta figures — plus the `periodStart`/`periodEnd` those days are drawn from. Absent is not empty: the other rules judge a single aggregate and omit all three, meaning they cannot say which days were missing, while an empty list means the rule looked and none were. Meta reports a day late as a matter of course, so days running contiguously back from `periodEnd` are the ordinary lag rather than a gap. `sync_failure` reads live connector health, as does `waiting_for_data` on the remaining Meta-backed rules. `rulesLastRanAt` is a different clock: it says when the rules last ran, so read it as \"the rules last ran at T, and these are flagged now\", never \"as of T, these were flagged\". To date what a particular finding said, use its own `firedAt` from findings.list.",
       ),
     )
     .output(checksOutputSchema)

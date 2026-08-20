@@ -111,6 +111,57 @@ const FIXTURE_DDL = [
      is_disabled boolean NOT NULL DEFAULT false,
      organization_id text
    )`,
+  // The checks endpoint evaluates the series rules live, so it reads the same
+  // Meta and Shopify tables the sweep does. Only the columns those two queries
+  // touch are here — `getMetaClaims` filters to base rows, and `getMetaVerified`
+  // joins refunds onto Meta-verified orders.
+  `CREATE TYPE "attribution_bucket" AS ENUM (
+     'meta', 'google', 'klaviyo', 'tiktok', 'ai',
+     'organic_direct', 'unattributed', 'untracked'
+   )`,
+  `CREATE TABLE performance_log (
+     id text PRIMARY KEY,
+     ad_id text NOT NULL,
+     organization_id text,
+     spend numeric,
+     purchase_value numeric,
+     purchase_value_7d_click numeric,
+     purchase_value_1d_view numeric,
+     country text,
+     platform text,
+     placement text,
+     device text,
+     age text,
+     gender text,
+     date_start date NOT NULL,
+     date_end date NOT NULL,
+     created_at timestamp NOT NULL DEFAULT now()
+   )`,
+  `CREATE TABLE shopify_order (
+     id text PRIMARY KEY,
+     organization_id text NOT NULL,
+     store_id text NOT NULL,
+     shopify_order_id text NOT NULL,
+     order_created_at timestamp NOT NULL DEFAULT now(),
+     order_day date NOT NULL,
+     net_sales numeric NOT NULL,
+     bucket "attribution_bucket",
+     meta_verified boolean NOT NULL DEFAULT false,
+     verification_pending boolean NOT NULL DEFAULT false,
+     journey_ready boolean NOT NULL DEFAULT false,
+     created_at timestamp NOT NULL DEFAULT now()
+   )`,
+  `CREATE TABLE shopify_refund (
+     id text PRIMARY KEY,
+     organization_id text NOT NULL,
+     store_id text NOT NULL,
+     order_id text NOT NULL,
+     shopify_refund_id text NOT NULL,
+     refund_day date NOT NULL,
+     amount numeric NOT NULL,
+     kind text NOT NULL DEFAULT 'refund',
+     created_at timestamp NOT NULL DEFAULT now()
+   )`,
   `CREATE TABLE account_sync_run (
      id text PRIMARY KEY,
      organization_id text NOT NULL,
@@ -151,6 +202,9 @@ describeWithDb("findings checks report when they were taken", () => {
       "account_sync_run",
       "ad_account",
       "shopify_sync_run",
+      "shopify_refund",
+      "shopify_order",
+      "performance_log",
       "shopify_store",
     ]) {
       await testDb.execute(sql.raw(`DELETE FROM ${table}`));
@@ -305,6 +359,178 @@ describeWithDb("findings checks report when they were taken", () => {
     const result = await getTodaysChecks({ organizationId: ORG, storeId: STORE });
 
     expect(result.rulesLastRanAt?.toISOString()).toBe(SWEPT_AT.toISOString());
+  });
+
+  /**
+   * The defect these cover: `waiting_for_data` used to be read off the Meta
+   * connector's age, which answers a different question than the one the field
+   * claims to answer. A sync three hours old still leaves yesterday unreported,
+   * and the endpoint said `ok` — indistinguishable, to anything quoting it,
+   * from a rule that looked and found nothing wrong.
+   */
+  describe("waiting_for_data follows what the rules could compute", () => {
+    // 11:00 in Asia/Bangkok, so the evaluation day is 2026-08-19 and the ROAS
+    // window runs 2026-08-13..2026-08-19 with overclaim's inside it at the end.
+    const NOW = new Date("2026-08-20T04:00:00Z");
+    const ROAS_WINDOW = [
+      "2026-08-13",
+      "2026-08-14",
+      "2026-08-15",
+      "2026-08-16",
+      "2026-08-17",
+      "2026-08-18",
+      "2026-08-19",
+    ];
+
+    /** A day Meta has reported. Row count, not the amount, is what says so. */
+    async function metaReported(day: string, spend = "100.00") {
+      await testDb?.execute(sql`
+        INSERT INTO performance_log (id, ad_id, organization_id, spend, purchase_value_7d_click, date_start, date_end)
+        VALUES (${`pl-${day}-${spend}`}, 'ad-1', ${ORG}, ${spend}, '50.00', ${day}, ${day})
+      `);
+    }
+
+    async function reportDays(days: string[]) {
+      for (const day of days) await metaReported(day);
+    }
+
+    async function checkFor(type: string) {
+      const result = await getTodaysChecks({
+        organizationId: ORG,
+        storeId: STORE,
+        now: NOW,
+      });
+      return result.checks.find((check) => check.type === type);
+    }
+
+    it("says ok when every day in the window is reported", async () => {
+      await reportDays(ROAS_WINDOW);
+
+      expect(await checkFor("roas_below_target")).toEqual({
+        type: "roas_below_target",
+        status: "ok",
+        uncomputableDays: [],
+        periodStart: "2026-08-13",
+        periodEnd: "2026-08-19",
+      });
+    });
+
+    /**
+     * The case the old proxy got backwards. Nothing here is stale — there is no
+     * Meta connector at all, so `health.meta.stale` cannot be what answers this
+     * — and the rule still cannot judge a window whose newest day is absent.
+     */
+    it("waits when Meta has not reported the newest day", async () => {
+      await reportDays(ROAS_WINDOW.slice(0, -1));
+
+      expect(await checkFor("roas_below_target")).toEqual({
+        type: "roas_below_target",
+        status: "waiting_for_data",
+        uncomputableDays: ["2026-08-19"],
+        periodStart: "2026-08-13",
+        periodEnd: "2026-08-19",
+      });
+    });
+
+    it("names every missing day, not just the newest", async () => {
+      await reportDays(["2026-08-13", "2026-08-15", "2026-08-16", "2026-08-17"]);
+
+      const check = await checkFor("roas_below_target");
+
+      expect(check?.uncomputableDays).toEqual([
+        "2026-08-14",
+        "2026-08-18",
+        "2026-08-19",
+      ]);
+    });
+
+    /**
+     * The two rules read different windows, so a hole outside the shorter one
+     * is not the shorter rule's problem. A consumer that assumed one window for
+     * every check would report a gap the overclaim rule never had.
+     */
+    it("keeps each rule to its own window", async () => {
+      await reportDays(ROAS_WINDOW.filter((day) => day !== "2026-08-14"));
+
+      expect((await checkFor("roas_below_target"))?.uncomputableDays).toEqual([
+        "2026-08-14",
+      ]);
+      expect(await checkFor("meta_overclaim")).toEqual({
+        type: "meta_overclaim",
+        status: "ok",
+        uncomputableDays: [],
+        periodStart: "2026-08-17",
+        periodEnd: "2026-08-19",
+      });
+    });
+
+    /**
+     * A reported day with no spend has no ratio, so ROAS cannot judge it — but
+     * overclaim can, and does. Collapsing the two holes into one predicate
+     * would leave overclaim findings standing through every quiet weekend.
+     */
+    it("splits a zero-spend day between the two rules", async () => {
+      await reportDays(ROAS_WINDOW.filter((day) => day !== "2026-08-19"));
+      await metaReported("2026-08-19", "0");
+
+      expect((await checkFor("roas_below_target"))?.uncomputableDays).toEqual([
+        "2026-08-19",
+      ]);
+      expect((await checkFor("meta_overclaim"))?.status).toBe("ok");
+    });
+
+    /**
+     * The inverse of the defect, and the reason the connector's age had to go:
+     * a connector that has not run in days can still have every day the window
+     * needs, and the rule that judged them fine should say so.
+     */
+    it("does not wait on a stale connector whose window is complete", async () => {
+      await reportDays(ROAS_WINDOW);
+      await testDb?.execute(sql`
+        INSERT INTO ad_account (id, name, meta_account_id, meta_access_token, organization_id)
+        VALUES ('acct-1', 'Stale', 'act_1', 'token', ${ORG})
+      `);
+      await testDb?.execute(sql`
+        INSERT INTO account_sync_run (id, organization_id, account_id, result, finished_at)
+        VALUES ('acct-run-1', ${ORG}, 'acct-1', 'success', ${new Date("2026-08-10T00:00:00Z")})
+      `);
+
+      expect((await checkFor("roas_below_target"))?.status).toBe("ok");
+      // The rules that judge an aggregate keep the proxy, so the same stale
+      // connector still moves them. Coarse, but it is all they have.
+      expect((await checkFor("untagged_spend"))?.status).toBe(
+        "waiting_for_data",
+      );
+    });
+
+    /**
+     * Absent and empty are different answers and a consumer must not collapse
+     * them: absent is "this rule cannot tell you which days it was missing".
+     */
+    it("omits the day fields on rules that judge an aggregate", async () => {
+      await reportDays(ROAS_WINDOW);
+
+      const check = await checkFor("untagged_spend");
+
+      expect(check).toEqual({ type: "untagged_spend", status: "ok" });
+      expect(check).not.toHaveProperty("uncomputableDays");
+      expect(check).not.toHaveProperty("periodEnd");
+    });
+
+    /** An open finding is a judgement already reached; it outranks the window. */
+    it("reports needs_look over waiting even with a hole in the window", async () => {
+      await reportDays(ROAS_WINDOW.slice(0, -1));
+      await testDb?.insert(findings).values({
+        id: "finding-roas",
+        organizationId: ORG,
+        storeId: STORE,
+        type: "roas_below_target",
+        firedAt: SWEPT_AT,
+        payload: {},
+      });
+
+      expect((await checkFor("roas_below_target"))?.status).toBe("needs_look");
+    });
   });
 });
 
