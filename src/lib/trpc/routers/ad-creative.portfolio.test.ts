@@ -1,0 +1,353 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { sql } from "drizzle-orm";
+import { Pool } from "pg";
+
+// The portfolio aggregates are pure SQL — weighting and join shape only mean
+// something against a real Postgres, so these tests build a throwaway database
+// from a hand-written fixture schema and query it through the router.
+function resolveConnectionString(): string | null {
+  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+  try {
+    const envFile = readFileSync(path.resolve(process.cwd(), ".env"), "utf8");
+    const match = envFile.match(/^\s*DATABASE_URL\s*=\s*"?([^"\n]+)"?/m);
+    return match ? match[1].trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+const baseConnectionString = resolveConnectionString();
+const TEST_DATABASE = "adsolute_ad_creative_portfolio_test";
+
+function withDatabase(connectionString: string, database: string): string {
+  const url = new URL(connectionString);
+  url.pathname = `/${database}`;
+  return url.toString();
+}
+
+const testPool = baseConnectionString
+  ? new Pool({ connectionString: withDatabase(baseConnectionString, TEST_DATABASE) })
+  : null;
+const testDb = testPool ? drizzle(testPool) : null;
+
+vi.mock("@/db", () => ({
+  get db() {
+    return testDb;
+  },
+}));
+vi.mock("server-only", () => ({}));
+
+const { createMockCaller } = await import("../test-helpers");
+
+const ORG = "org_portfolio_test";
+const FROM = "2026-06-01";
+const TO = "2026-06-07";
+
+// The committed migration chain is not replayable from an empty database, so
+// the fixture transcribes the columns the portfolio queries touch straight
+// from src/schema.
+const FIXTURE_DDL = [
+  `CREATE TYPE "status" AS ENUM ('active', 'paused', 'archived')`,
+  `CREATE TYPE "format" AS ENUM ('static', 'video', 'ugc', 'carousel')`,
+  `CREATE TYPE "ownership" AS ENUM ('ours', 'theirs')`,
+  `CREATE TABLE ad_account (
+     id text PRIMARY KEY,
+     name text NOT NULL,
+     meta_account_id text NOT NULL UNIQUE,
+     organization_id text
+   )`,
+  `CREATE TABLE campaign (
+     id text PRIMARY KEY,
+     name text NOT NULL DEFAULT 'Untitled Campaign',
+     organization_id text,
+     account_id text REFERENCES ad_account(id) ON DELETE SET NULL,
+     status "status" NOT NULL DEFAULT 'active',
+     meta_id text UNIQUE
+   )`,
+  `CREATE TABLE ad_set (
+     id text PRIMARY KEY,
+     name text NOT NULL DEFAULT 'Untitled Ad Set',
+     campaign_id text NOT NULL REFERENCES campaign(id) ON DELETE CASCADE,
+     account_id text REFERENCES ad_account(id) ON DELETE SET NULL,
+     meta_id text UNIQUE,
+     organization_id text,
+     status "status" NOT NULL DEFAULT 'active'
+   )`,
+  `CREATE TABLE ad_creative (
+     id text PRIMARY KEY,
+     name text NOT NULL DEFAULT 'Untitled Creative',
+     asset_url text,
+     video_url text,
+     format "format",
+     ownership "ownership",
+     team_id text,
+     organization_id text
+   )`,
+  `CREATE TABLE ad (
+     id text PRIMARY KEY,
+     name text NOT NULL DEFAULT 'Untitled Ad',
+     ad_set_id text REFERENCES ad_set(id) ON DELETE SET NULL,
+     account_id text REFERENCES ad_account(id) ON DELETE SET NULL,
+     ad_creative_id text REFERENCES ad_creative(id) ON DELETE SET NULL,
+     meta_id text UNIQUE,
+     organization_id text,
+     status "status" NOT NULL DEFAULT 'active'
+   )`,
+  `CREATE TABLE performance_log (
+     id text PRIMARY KEY,
+     ad_id text NOT NULL REFERENCES ad(id) ON DELETE CASCADE,
+     meta_ad_id text,
+     roas numeric,
+     cpa numeric,
+     ctr numeric,
+     spend numeric,
+     conversions integer,
+     impressions integer,
+     reach integer,
+     link_clicks integer,
+     purchase_value numeric,
+     country text,
+     platform text,
+     placement text,
+     device text,
+     age text,
+     gender text,
+     date_start date NOT NULL,
+     date_end date NOT NULL,
+     organization_id text
+   )`,
+  `CREATE INDEX performance_log_org_ad_date_idx
+     ON performance_log (organization_id, ad_id, date_start, date_end)`,
+  `CREATE UNIQUE INDEX performance_log_ad_date_breakdown_uniq
+     ON performance_log (ad_id, date_start, date_end, country, platform, placement, device, age, gender)
+     NULLS NOT DISTINCT`,
+];
+
+async function createFixtureSchema() {
+  for (const statement of FIXTURE_DDL) {
+    await testDb!.execute(sql.raw(statement));
+  }
+}
+
+async function seedCreative(
+  id: string,
+  opts: { format?: string; ownership?: string; teamId?: string } = {},
+) {
+  await testDb!.execute(sql`
+    INSERT INTO ad_creative (id, name, format, ownership, team_id, organization_id)
+    VALUES (
+      ${id}, ${id}, ${opts.format ?? null}, ${opts.ownership ?? null},
+      ${opts.teamId ?? null}, ${ORG}
+    )
+  `);
+}
+
+async function seedAd(
+  id: string,
+  opts: { creativeId?: string; accountId?: string; status?: string } = {},
+) {
+  await testDb!.execute(sql`
+    INSERT INTO ad (id, name, ad_set_id, account_id, ad_creative_id, meta_id, status, organization_id)
+    VALUES (
+      ${id}, ${id}, 'set_1', ${opts.accountId ?? "acc_1"}, ${opts.creativeId ?? null},
+      ${`meta_${id}`}, ${opts.status ?? "active"}, ${ORG}
+    )
+  `);
+}
+
+type PerfRow = {
+  adId: string;
+  date: string;
+  spend?: number;
+  purchaseValue?: number;
+  conversions?: number;
+  ctr?: number;
+  impressions?: number;
+  age?: string;
+};
+
+async function seedPerf(row: PerfRow) {
+  await testDb!.execute(sql`
+    INSERT INTO performance_log (
+      id, ad_id, meta_ad_id, spend, purchase_value, conversions, ctr, impressions,
+      age, date_start, date_end, organization_id
+    )
+    VALUES (
+      ${`pl_${row.adId}_${row.date}_${row.age ?? "base"}`}, ${row.adId}, ${`meta_${row.adId}`},
+      ${row.spend ?? null}, ${row.purchaseValue ?? null}, ${row.conversions ?? null},
+      ${row.ctr ?? null}, ${row.impressions ?? null}, ${row.age ?? null},
+      ${row.date}, ${row.date}, ${ORG}
+    )
+  `);
+}
+
+function num(value: string | null): number {
+  expect(value).not.toBeNull();
+  return Number(value);
+}
+
+const describeIfDb = baseConnectionString ? describe : describe.skip;
+
+describeIfDb("ad-creative portfolio aggregates", () => {
+  const caller = createMockCaller({ role: "member", organizationId: ORG });
+
+  beforeAll(async () => {
+    const adminPool = new Pool({
+      connectionString: withDatabase(baseConnectionString!, "postgres"),
+    });
+    try {
+      await adminPool.query(`DROP DATABASE IF EXISTS ${TEST_DATABASE}`);
+      await adminPool.query(`CREATE DATABASE ${TEST_DATABASE}`);
+    } finally {
+      await adminPool.end();
+    }
+    await createFixtureSchema();
+  }, 120_000);
+
+  afterAll(async () => {
+    await testPool?.end();
+  });
+
+  beforeEach(async () => {
+    await testDb!.execute(
+      sql.raw(
+        "TRUNCATE performance_log, ad, ad_creative, ad_set, campaign, ad_account RESTART IDENTITY CASCADE",
+      ),
+    );
+    await testDb!.execute(sql`
+      INSERT INTO ad_account (id, name, meta_account_id, organization_id)
+      VALUES ('acc_1', 'Acme', 'act_acc_1', ${ORG})
+    `);
+    await testDb!.execute(sql`
+      INSERT INTO campaign (id, name, meta_id, account_id, organization_id)
+      VALUES ('cmp_1', 'Prospecting', 'meta_cmp_1', 'acc_1', ${ORG})
+    `);
+    await testDb!.execute(sql`
+      INSERT INTO ad_set (id, name, campaign_id, meta_id, organization_id)
+      VALUES ('set_1', 'Broad', 'cmp_1', 'meta_set_1', ${ORG})
+    `);
+  });
+
+  describe("CTR weighting", () => {
+    // A high-volume ad at a low CTR and a tiny ad at a high CTR. An unweighted
+    // mean of the two per-row ratios lands at 4.5%; the portfolio's actual CTR
+    // is 401,600 clicks-equivalent over 400,200 impressions ≈ 1.0035%.
+    beforeEach(async () => {
+      await seedCreative("cr_1");
+      await seedCreative("cr_2");
+      await seedAd("ad_big", { creativeId: "cr_1" });
+      await seedAd("ad_small", { creativeId: "cr_2" });
+      await seedPerf({
+        adId: "ad_big",
+        date: "2026-06-02",
+        spend: 4000,
+        purchaseValue: 8000,
+        conversions: 100,
+        ctr: 1,
+        impressions: 400_000,
+      });
+      await seedPerf({
+        adId: "ad_small",
+        date: "2026-06-02",
+        spend: 5,
+        purchaseValue: 10,
+        conversions: 1,
+        ctr: 8,
+        impressions: 200,
+      });
+    });
+
+    it("weights portfolio CTR by impressions rather than averaging per-row ratios", async () => {
+      const portfolio = await caller.adCreative.portfolioSummary({ from: FROM, to: TO });
+      expect(num(portfolio.ctr)).toBeCloseTo(1.0035, 3);
+    });
+
+    it("does not let a 200-impression ad drag the portfolio CTR toward its own", async () => {
+      const portfolio = await caller.adCreative.portfolioSummary({ from: FROM, to: TO });
+      // The unweighted mean of 1% and 8%. Pinned so the bug cannot come back
+      // by way of a copied `avg(pl.ctr)` from a neighbouring query.
+      expect(num(portfolio.ctr)).not.toBeCloseTo(4.5, 1);
+    });
+
+    it("keeps CTR impression-weighted across days for a single ad", async () => {
+      await testDb!.execute(sql.raw("TRUNCATE performance_log"));
+      await seedPerf({
+        adId: "ad_big",
+        date: "2026-06-02",
+        spend: 100,
+        ctr: 1,
+        impressions: 90_000,
+      });
+      await seedPerf({
+        adId: "ad_big",
+        date: "2026-06-03",
+        spend: 100,
+        ctr: 10,
+        impressions: 10_000,
+      });
+      const portfolio = await caller.adCreative.portfolioSummary({ from: FROM, to: TO });
+      // (1 * 90k + 10 * 10k) / 100k = 1.9, not the 5.5 midpoint.
+      expect(num(portfolio.ctr)).toBeCloseTo(1.9, 4);
+    });
+
+    it("ignores impressions on rows Meta reported no CTR for", async () => {
+      // A NULL ctr means the row carries no CTR, not that it earned no clicks
+      // — Meta sends an explicit 0 for that. Counting those impressions in the
+      // denominator would drag the result toward zero on a number we never
+      // got. Here the only reported CTR is 4% over 1,000 impressions.
+      await testDb!.execute(sql.raw("TRUNCATE performance_log"));
+      await seedPerf({
+        adId: "ad_big",
+        date: "2026-06-02",
+        spend: 100,
+        ctr: 4,
+        impressions: 1_000,
+      });
+      await seedPerf({
+        adId: "ad_small",
+        date: "2026-06-02",
+        spend: 100,
+        impressions: 9_000,
+      });
+      const portfolio = await caller.adCreative.portfolioSummary({ from: FROM, to: TO });
+      expect(num(portfolio.ctr)).toBeCloseTo(4, 6);
+    });
+
+    it("returns null CTR when the window has no impressions", async () => {
+      await testDb!.execute(sql.raw("TRUNCATE performance_log"));
+      await seedPerf({ adId: "ad_big", date: "2026-06-02", spend: 10 });
+      const portfolio = await caller.adCreative.portfolioSummary({ from: FROM, to: TO });
+      expect(portfolio.ctr).toBeNull();
+    });
+  });
+});
+
+// The behavioural tests above only reach `portfolioSummary`. The same
+// aggregation appears in five more queries in this router whose procedures
+// need far more of the schema than the fixture carries, so the cheap guard is
+// the source itself: the bug came back by copying a neighbouring line, and
+// that is exactly what this catches. It says nothing about whether the
+// weighting is correct — the tests above do that.
+describe("no unweighted CTR aggregates survive in the router", () => {
+  it("has no remaining avg(pl.ctr) in ad-creative.ts", () => {
+    const source = readFileSync(
+      path.resolve(process.cwd(), "src/lib/trpc/routers/ad-creative.ts"),
+      "utf8",
+    );
+    expect(source).not.toContain("avg(pl.ctr");
+  });
+
+  it("routes every CTR aggregate through the shared helper", () => {
+    const source = readFileSync(
+      path.resolve(process.cwd(), "src/lib/trpc/routers/ad-creative.ts"),
+      "utf8",
+    );
+    // Nobody should be hand-rolling sum(ctr * impressions) alongside the
+    // helper; one spelling keeps the weighting reviewable in one place.
+    expect(source).not.toContain("sum(pl.ctr * pl.impressions)");
+    expect(source).toContain('impressionWeightedCtr("pl")');
+  });
+});
