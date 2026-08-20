@@ -465,6 +465,93 @@ async function getCaller(request?: Request) {
   );
 }
 
+type ZodIssueLike = {
+  path?: unknown;
+  message?: unknown;
+};
+
+function isZodIssueLike(value: unknown): value is ZodIssueLike {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    typeof (value as ZodIssueLike).message === "string",
+  );
+}
+
+/**
+ * Zod issues reach the client as `error.cause`, but a caller that re-threw the
+ * error only carries the stringified issue array in `message`. Both are read so
+ * the flattening holds either way.
+ */
+function getZodIssues(error: TRPCError): ZodIssueLike[] | null {
+  const cause = error.cause as { issues?: unknown } | undefined;
+  if (Array.isArray(cause?.issues) && cause.issues.every(isZodIssueLike)) {
+    return cause.issues;
+  }
+
+  if (!error.message.trimStart().startsWith("[")) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(error.message) as unknown;
+    if (Array.isArray(parsed) && parsed.length > 0 && parsed.every(isZodIssueLike)) {
+      return parsed;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+/**
+ * Whether the message opens by naming this field. A bare `startsWith` would
+ * match a longer word that merely begins with it — field `id` against
+ * "identifier is invalid" — and silently drop the one label the reader needs,
+ * so the match has to end on a token boundary. A dot counts as part of the
+ * token, so field `range` does not claim "range.dateFrom must be …".
+ */
+function messageNamesField(message: string, field: string): boolean {
+  if (!message.startsWith(field)) {
+    return false;
+  }
+
+  const nextCharacter = message[field.length];
+  return nextCharacter === undefined || !/[\w.]/.test(nextCharacter);
+}
+
+function formatZodIssue(issue: ZodIssueLike): string {
+  // Zod prefixes type errors with "Invalid input: "; the field name carries
+  // that already once the path is in front of it.
+  const message = String(issue.message).replace(/^Invalid input:\s*/, "");
+  const field = Array.isArray(issue.path)
+    ? issue.path.filter((part) => typeof part === "string" || typeof part === "number").join(".")
+    : "";
+
+  // A refinement already names its own field ("dateFrom must be on or before
+  // dateTo"); prefixing it again would stutter.
+  if (!field || messageNamesField(message, field)) {
+    return message;
+  }
+
+  return `${field}: ${message}`;
+}
+
+/**
+ * A validation failure is the one error an agent can act on, so it goes back as
+ * a sentence it can read — "dateFrom: expected string, received undefined" —
+ * rather than a stringified Zod issue array. The `code` field is untouched.
+ */
+export function formatTrpcErrorMessage(error: TRPCError): string {
+  const issues = getZodIssues(error);
+  if (!issues || issues.length === 0) {
+    return error.message;
+  }
+
+  return issues.map(formatZodIssue).join("; ");
+}
+
 export async function callOpenApiProcedure(
   request: Request,
   routerName: string,
@@ -530,7 +617,7 @@ export async function callOpenApiProcedure(
     if (error instanceof TRPCError) {
       return Response.json(
         {
-          message: error.message,
+          message: formatTrpcErrorMessage(error),
           code: error.code,
         },
         { status: getHTTPStatusCodeFromError(error) },

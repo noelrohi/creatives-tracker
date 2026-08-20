@@ -1,7 +1,8 @@
+import { TRPCError } from "@trpc/server";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { baseProcedure, router } from "./init";
-import { generateOpenApiDocument } from "./openapi";
+import { formatTrpcErrorMessage, generateOpenApiDocument } from "./openapi";
 import { openApiMutationMeta, openApiQueryMeta } from "./openapi-meta";
 import { appRouter } from "./routers/_app";
 
@@ -304,5 +305,107 @@ describe("OpenAPI app inventory", () => {
     for (const { operation } of apiKeyOperations) {
       expect(operation.security).toEqual([{ sessionCookie: [] }]);
     }
+  });
+});
+
+describe("validation error messages", () => {
+  const rangeSchema = z
+    .object({
+      dateFrom: z.string(),
+      dateTo: z.string(),
+    })
+    .refine((value) => value.dateFrom <= value.dateTo, {
+      message: "dateFrom must be on or before dateTo",
+      path: ["dateFrom"],
+    });
+
+  function badRequestFrom(input: unknown) {
+    const result = rangeSchema.safeParse(input);
+    if (result.success) {
+      throw new Error("expected the fixture input to fail validation");
+    }
+    return new TRPCError({
+      code: "BAD_REQUEST",
+      message: JSON.stringify(result.error.issues, null, 2),
+      cause: result.error,
+    });
+  }
+
+  it("names every missing field instead of dumping the issue array", () => {
+    const message = formatTrpcErrorMessage(badRequestFrom({}));
+
+    expect(message).toBe(
+      "dateFrom: expected string, received undefined; dateTo: expected string, received undefined",
+    );
+    expect(message).not.toContain("[");
+  });
+
+  it("does not stutter when a refinement already names its field", () => {
+    expect(
+      formatTrpcErrorMessage(
+        badRequestFrom({ dateFrom: "2026-08-17", dateTo: "2026-08-01" }),
+      ),
+    ).toBe("dateFrom must be on or before dateTo");
+  });
+
+  it("flattens issues carried only in the message, without a cause", () => {
+    const original = badRequestFrom({});
+    const rethrown = new TRPCError({
+      code: "BAD_REQUEST",
+      message: original.message,
+    });
+
+    expect(formatTrpcErrorMessage(rethrown)).toBe(
+      "dateFrom: expected string, received undefined; dateTo: expected string, received undefined",
+    );
+  });
+
+  it("keeps the field label when the message merely starts with the same letters", () => {
+    const schema = z.object({ id: z.string() }).refine(() => false, {
+      message: "identifier is invalid",
+      path: ["id"],
+    });
+    const result = schema.safeParse({ id: "x" });
+    if (result.success) throw new Error("expected the fixture input to fail");
+
+    expect(
+      formatTrpcErrorMessage(
+        new TRPCError({ code: "BAD_REQUEST", cause: result.error, message: "" }),
+      ),
+    ).toBe("id: identifier is invalid");
+  });
+
+  it("does not let a parent path claim a message about its child", () => {
+    const schema = z.object({ range: z.object({ dateFrom: z.string() }) }).refine(
+      () => false,
+      { message: "range.dateFrom must be on or before range.dateTo", path: ["range"] },
+    );
+    const result = schema.safeParse({ range: { dateFrom: "2026-08-01" } });
+    if (result.success) throw new Error("expected the fixture input to fail");
+
+    expect(
+      formatTrpcErrorMessage(
+        new TRPCError({ code: "BAD_REQUEST", cause: result.error, message: "" }),
+      ),
+    ).toBe("range: range.dateFrom must be on or before range.dateTo");
+  });
+
+  it("leaves non-validation messages untouched", () => {
+    expect(
+      formatTrpcErrorMessage(
+        new TRPCError({
+          code: "FORBIDDEN",
+          message: 'API key is missing required "write" scope',
+        }),
+      ),
+    ).toBe('API key is missing required "write" scope');
+  });
+
+  it("leaves a message that merely starts with a bracket untouched", () => {
+    expect(
+      formatTrpcErrorMessage(
+        new TRPCError({ code: "NOT_FOUND", message: "[store] not connected" }),
+      ),
+    ).toBe("[store] not connected");
   });
 });
