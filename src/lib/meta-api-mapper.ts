@@ -138,6 +138,7 @@ export function mapMetaInsightsToRows(
       ctr: row.ctr,
       impressions: row.impressions ? Number(row.impressions) : undefined,
       reach: row.reach ? Number(row.reach) : undefined,
+      clicksAll: row.clicks ? Number(row.clicks) : undefined,
       frequency: row.frequency,
       cpm: row.cpm,
       cpc: row.cpc,
