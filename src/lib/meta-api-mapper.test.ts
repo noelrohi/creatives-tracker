@@ -12,6 +12,19 @@ function baseRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+describe("mapMetaInsightsToRows numeric passthrough fields", () => {
+  it("maps clicks to clicksAll and leaves it undefined when absent", () => {
+    const [withClicks] = mapMetaInsightsToRows(
+      [baseRow({ clicks: "42" })],
+      "ad",
+    );
+    const [withoutClicks] = mapMetaInsightsToRows([baseRow()], "ad");
+
+    expect(withClicks.clicksAll).toBe(42);
+    expect(withoutClicks.clicksAll).toBeUndefined();
+  });
+});
+
 describe("mapMetaInsightsToRows cost_per_* extraction", () => {
   it("reads reported cost_per_action_type entries for LPV and add-to-cart", () => {
     const [row] = mapMetaInsightsToRows(
