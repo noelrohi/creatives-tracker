@@ -323,6 +323,145 @@ describeIfDb("ad-creative portfolio aggregates", () => {
       expect(portfolio.ctr).toBeNull();
     });
   });
+
+  describe("ads with no creative record", () => {
+    // Two tagged ads and one ad Meta delivered without any matching
+    // ad_creative row. The creative-less ad's spend is real money and belongs
+    // in the portfolio total.
+    beforeEach(async () => {
+      await seedCreative("cr_1", { format: "video", ownership: "ours", teamId: "team_1" });
+      await seedAd("ad_tagged", { creativeId: "cr_1" });
+      await seedAd("ad_orphan");
+      await seedPerf({
+        adId: "ad_tagged",
+        date: "2026-06-02",
+        spend: 100,
+        purchaseValue: 300,
+        conversions: 4,
+        ctr: 2,
+        impressions: 10_000,
+      });
+      await seedPerf({
+        adId: "ad_orphan",
+        date: "2026-06-02",
+        spend: 250,
+        purchaseValue: 500,
+        conversions: 5,
+        ctr: 1,
+        impressions: 40_000,
+      });
+    });
+
+    it("counts creative-less ads in portfolio spend, revenue and conversions", async () => {
+      const portfolio = await caller.adCreative.portfolioSummary({ from: FROM, to: TO });
+      expect(num(portfolio.totalSpend)).toBeCloseTo(350, 6);
+      expect(num(portfolio.totalRevenue)).toBeCloseTo(800, 6);
+      expect(num(portfolio.conversions)).toBe(9);
+    });
+
+    it("derives portfolio ROAS and CPA from totals that include creative-less ads", async () => {
+      const portfolio = await caller.adCreative.portfolioSummary({ from: FROM, to: TO });
+      expect(num(portfolio.roas)).toBeCloseTo(800 / 350, 6);
+      expect(num(portfolio.cpa)).toBeCloseTo(350 / 9, 6);
+    });
+
+    it("counts creative-less ads in the daily portfolio series", async () => {
+      const [day] = await caller.adCreative.getDailyPortfolioPerformance({
+        from: "2026-06-02",
+        to: "2026-06-02",
+      });
+      expect(num(day.spend)).toBeCloseTo(350, 6);
+      expect(num(day.purchaseValue)).toBeCloseTo(800, 6);
+    });
+
+    it("counts creative-less ads in the MER account breakdown", async () => {
+      const [account] = await caller.adCreative.getMerAccountBreakdown({
+        from: FROM,
+        to: TO,
+      });
+      expect(account.accountId).toBe("acc_1");
+      expect(num(account.spend)).toBeCloseTo(350, 6);
+      expect(num(account.revenue)).toBeCloseTo(800, 6);
+    });
+
+    it("counts creative-less ads in the MER prior period and sparkline", async () => {
+      // The breakdown runs three separate CTEs over the same ads. current_period
+      // is covered above; these are the other two, which regress independently.
+      await seedPerf({
+        adId: "ad_orphan",
+        date: "2026-05-28",
+        spend: 70,
+        purchaseValue: 140,
+        conversions: 2,
+        ctr: 1,
+        impressions: 9_000,
+      });
+      const [account] = await caller.adCreative.getMerAccountBreakdown({
+        from: FROM,
+        to: TO,
+      });
+      // Prior window is the same length immediately before FROM, so 2026-05-28
+      // falls inside it and only the orphan spent there.
+      expect(num(account.priorSpend)).toBeCloseTo(70, 6);
+
+      const day = account.sparkline.find((p) => p.date === "2026-06-02");
+      expect(day?.spend).toBeCloseTo(350, 6);
+      expect(day?.revenue).toBeCloseTo(800, 6);
+    });
+
+    it("still excludes creative-less ads when a creative attribute is filtered on", async () => {
+      const byFormat = await caller.adCreative.portfolioSummary({
+        from: FROM,
+        to: TO,
+        format: "video",
+      });
+      expect(num(byFormat.totalSpend)).toBeCloseTo(100, 6);
+
+      const byTeam = await caller.adCreative.portfolioSummary({
+        from: FROM,
+        to: TO,
+        teamId: "team_1",
+      });
+      expect(num(byTeam.totalSpend)).toBeCloseTo(100, 6);
+
+      const ours = await caller.adCreative.portfolioSummary({
+        from: FROM,
+        to: TO,
+        ownership: "ours",
+      });
+      expect(num(ours.totalSpend)).toBeCloseTo(100, 6);
+    });
+
+    it("groups creative-less ads with unknown ownership under 'theirs'", async () => {
+      // `theirs` is already defined as "not explicitly ours", which is how a
+      // creative with a null ownership is treated. An ad with no creative row
+      // at all has the same unknown ownership, so it lands in the same bucket
+      // rather than vanishing from both sides of the split.
+      const theirs = await caller.adCreative.portfolioSummary({
+        from: FROM,
+        to: TO,
+        ownership: "theirs",
+      });
+      expect(num(theirs.totalSpend)).toBeCloseTo(250, 6);
+    });
+
+    it("keeps ignoring demographic breakdown rows for creative-less ads", async () => {
+      // The base-row filter and the join fix have to hold at the same time: an
+      // age-split duplicate of the orphan's day must not double its spend.
+      await seedPerf({
+        adId: "ad_orphan",
+        date: "2026-06-02",
+        spend: 250,
+        purchaseValue: 500,
+        conversions: 5,
+        ctr: 1,
+        impressions: 40_000,
+        age: "25-34",
+      });
+      const portfolio = await caller.adCreative.portfolioSummary({ from: FROM, to: TO });
+      expect(num(portfolio.totalSpend)).toBeCloseTo(350, 6);
+    });
+  });
 });
 
 // The behavioural tests above only reach `portfolioSummary`. The same

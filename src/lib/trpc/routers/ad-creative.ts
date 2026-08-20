@@ -608,7 +608,19 @@ async function fetchPortfolioRow(filters: ReturnType<typeof buildDashboardAnalyt
     FROM performance_log pl
     JOIN ad ON ad.id = pl.ad_id
     LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
-    JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+    -- LEFT JOIN: an ad Meta delivered without a matching ad_creative row still
+    -- spent real money. Inner-joining here silently shortens every portfolio
+    -- total by that spend. A filter naming a creative value (format, team,
+    -- ownership='ours') still excludes them; ownership='theirs' keeps them,
+    -- as it already does for a creative whose ownership is unknown.
+    --
+    -- The rule for new queries: anything reporting a *total* joins creatives
+    -- with LEFT, because the total has to be the whole spend. Anything
+    -- grouped *by* creative keeps the inner join for now — a creative-less ad
+    -- has no group to sit in, and inventing a null-keyed bucket silently
+    -- merges unrelated ads. Until those views grow a real "no creative"
+    -- bucket (#207) the leaderboards will not sum to the header above them.
+    LEFT JOIN ad_creative ac ON ac.id = ad.ad_creative_id
     WHERE ${filters.dateFilter}
       AND ${filters.basePl}
       AND ad.organization_id = ${filters.organizationId}
@@ -1676,7 +1688,8 @@ export const adCreativeRouter = router({
           COALESCE(sum(pl.link_clicks), 0)::int as link_clicks
         FROM performance_log pl
         JOIN ad ON ad.id = pl.ad_id
-        JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+        -- LEFT JOIN: see the rule at fetchPortfolioRow.
+        LEFT JOIN ad_creative ac ON ac.id = ad.ad_creative_id
         WHERE pl.date_start >= ${fromStr}::date
           AND pl.date_start <= ${toStr}::date
           AND ad.organization_id = ${ctx.organizationId}
@@ -1774,7 +1787,8 @@ export const adCreativeRouter = router({
             (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0)) as roas
           FROM performance_log pl
           JOIN ad ON ad.id = pl.ad_id
-          JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+          -- LEFT JOIN: see the rule at fetchPortfolioRow.
+          LEFT JOIN ad_creative ac ON ac.id = ad.ad_creative_id
           WHERE pl.date_start <= ${input.to}::date
             AND pl.date_end >= ${input.from}::date
             AND ${basePl}
@@ -1790,7 +1804,8 @@ export const adCreativeRouter = router({
             (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0)) as prior_roas
           FROM performance_log pl
           JOIN ad ON ad.id = pl.ad_id
-          JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+          -- LEFT JOIN: see the rule at fetchPortfolioRow.
+          LEFT JOIN ad_creative ac ON ac.id = ad.ad_creative_id
           WHERE pl.date_start <= (${input.from}::date - 1)
             AND pl.date_end >= (${input.from}::date - (${input.to}::date - ${input.from}::date + 1))
             AND ${basePl}
@@ -1810,7 +1825,8 @@ export const adCreativeRouter = router({
             sum(pl.purchase_value) AS revenue
           FROM performance_log pl
           JOIN ad ON ad.id = pl.ad_id
-          JOIN ad_creative ac ON ac.id = ad.ad_creative_id
+          -- LEFT JOIN: see the rule at fetchPortfolioRow.
+          LEFT JOIN ad_creative ac ON ac.id = ad.ad_creative_id
           WHERE pl.date_start >= ${input.from}::date
             AND pl.date_start <= ${input.to}::date
             AND ad.organization_id = ${ctx.organizationId}
