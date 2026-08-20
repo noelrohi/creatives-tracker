@@ -17,6 +17,8 @@ const testPool = baseConnectionString
       max: 6,
     })
   : null;
+// Prevent straggling async socket errors from becoming unhandled exceptions.
+testPool?.on("error", () => {});
 const testDb = testPool ? drizzle(testPool) : null;
 
 vi.mock("@/db", () => ({
@@ -49,9 +51,7 @@ describeIfDb("Klaviyo evidence queries on PostgreSQL", () => {
   afterAll(async () => {
     await testPool?.end();
     if (adminPool) {
-      await adminPool.query(
-        `DROP DATABASE IF EXISTS ${TEST_DATABASE} WITH (FORCE)`,
-      );
+      await adminPool.query(`DROP DATABASE IF EXISTS ${TEST_DATABASE}`);
       await adminPool.end();
     }
   });
