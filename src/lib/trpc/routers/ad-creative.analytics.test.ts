@@ -49,6 +49,18 @@ function compileSql(query: unknown): string {
   return new PgDialect().sqlToQuery(query as Parameters<PgDialect["sqlToQuery"]>[0]).sql;
 }
 
+function compileParams(query: unknown): unknown[] {
+  return new PgDialect().sqlToQuery(query as Parameters<PgDialect["sqlToQuery"]>[0]).params;
+}
+
+/** The value bound to the trailing `LIMIT $n` of one leaderboard query. */
+function limitParam(query: unknown): unknown {
+  const sql = compileSql(query);
+  const match = sql.match(/limit \$(\d+)\s*$/i);
+  if (!match) throw new Error(`no bound LIMIT in: ${sql.slice(-80)}`);
+  return compileParams(query)[Number(match[1]) - 1];
+}
+
 describe("adCreative analytics procedures", () => {
   beforeEach(() => {
     mockState.executeRows = [];
@@ -245,6 +257,52 @@ describe("adCreative analytics procedures", () => {
       expect(adWindowSql).toContain("from scoped_ads");
       expect(adWindowSql).toContain("pl.date_start <=");
       expect(adWindowSql).toContain("pl.date_end >=");
+    });
+
+    it("caps every leaderboard at ten rows by default", async () => {
+      queueExecuteRows([], [], [], []);
+
+      const caller = createMockCaller({ role: "admin", organizationId: "org_1" });
+      await caller.adCreative.dashboardStats({ from: "2026-06-01", to: "2026-06-07" });
+
+      // [0] is the portfolio row; the other three are the leaderboards.
+      for (const query of mockState.executedSql.slice(1)) {
+        expect(limitParam(query)).toBe(10);
+      }
+    });
+
+    it("applies one limit to all three leaderboards", async () => {
+      queueExecuteRows([], [], [], []);
+
+      const caller = createMockCaller({ role: "admin", organizationId: "org_1" });
+      const result = await caller.adCreative.dashboardStats({
+        from: "2026-06-01",
+        to: "2026-06-07",
+        limit: 3,
+      });
+
+      for (const query of mockState.executedSql.slice(1)) {
+        expect(limitParam(query)).toBe(3);
+      }
+      expect(result.topPerformers).toEqual([]);
+      expect(result.bottomPerformers).toEqual([]);
+      expect(result.survivingCreatives).toEqual([]);
+    });
+
+    it("skips the surviving-creatives query entirely when opted out", async () => {
+      queueExecuteRows([], [], []);
+
+      const caller = createMockCaller({ role: "admin", organizationId: "org_1" });
+      const result = await caller.adCreative.dashboardStats({
+        from: "2026-06-01",
+        to: "2026-06-07",
+        limit: 3,
+        includeSurviving: false,
+      });
+
+      // Portfolio, top, bottom — the surviving query is not run at all.
+      expect(mockState.executedSql).toHaveLength(3);
+      expect(result.survivingCreatives).toEqual([]);
     });
   });
 
