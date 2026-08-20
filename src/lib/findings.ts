@@ -1322,12 +1322,21 @@ const META_DEPENDENT_TYPES: readonly FindingType[] = [
 
 export type TodaysChecks = {
   /**
-   * When the sweep behind these statuses last ran. Null before a store has
-   * ever been swept. Every status here is a reading from that moment, not from
-   * now — a caller that prints one without saying when it was taken turns a
-   * stale snapshot into a claim about the present.
+   * When the rules last ran. Null before a store has ever been swept.
+   *
+   * It dates the rules, not the statuses beside it, and the two are genuinely
+   * different clocks. A status is re-derived per request from three inputs the
+   * sweep does not own: unresolved findings (someone can resolve one), active
+   * mutes (someone can add one), and live connector health. So a status can
+   * change with no sweep in between, and freezing them to make the two agree
+   * would be worse — `sync_failure` reading current connector health is the
+   * point of it.
+   *
+   * The honest pairing is therefore "the rules last ran at T, and N are flagged
+   * now", not "as of T, N were flagged". `findings.list` carries `firedAt` per
+   * item for dating what a specific finding said.
    */
-  evaluatedAt: Date | null;
+  rulesLastRanAt: Date | null;
   checks: TodaysCheck[];
 };
 
@@ -1373,21 +1382,21 @@ export async function getTodaysChecks(params: {
       ),
   ]);
 
-  // Null has to mean one thing — "we cannot date these statuses" — or a caller
-  // reading it as "never swept" will quote undated statuses as current. A store
-  // swept before this column shipped is knowable, so it is answered rather than
-  // reported as unknown. The floor only ever errs old: a sweep that fired and
-  // retired nothing leaves no trace, so the stamp lags rather than leads, and a
-  // consumer told the reading is older than it is stays more cautious, never
-  // less. A store that has genuinely never been swept has no findings, so it
-  // still answers null, correctly.
-  const evaluatedAt =
+  // Null has to mean one thing — "we cannot say when the rules last ran" — or a
+  // caller reading it as "never swept" draws the wrong conclusion from silence.
+  // A store swept before this column shipped is knowable, so it is answered
+  // rather than reported as unknown. The floor only ever errs old: a sweep that
+  // fired and retired nothing leaves no trace, so the stamp lags rather than
+  // leads, and a consumer told the rules ran longer ago than they did stays
+  // more cautious, never less. A store that has genuinely never been swept has
+  // no findings, so it still answers null, correctly.
+  const rulesLastRanAt =
     storeRow?.findingsEvaluatedAt ?? lastFiredRow?.lastFiredAt ?? null;
 
   // Before the first sync lands there is nothing to judge any rule against.
   if (!firstSync.hasAnySuccessfulSync) {
     return {
-      evaluatedAt,
+      rulesLastRanAt,
       checks: FINDING_TYPES.map((type) => ({
         type,
         status: "waiting_for_data" as const,
@@ -1409,5 +1418,5 @@ export async function getTodaysChecks(params: {
     return { type, status: "ok" as const };
   });
 
-  return { evaluatedAt, checks };
+  return { rulesLastRanAt, checks };
 }

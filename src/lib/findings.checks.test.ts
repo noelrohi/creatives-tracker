@@ -196,12 +196,12 @@ describeWithDb("findings checks report when they were taken", () => {
    * statuses arrive undated in exactly the window the new field is most
    * trusted.
    */
-  it("dates statuses from a sweep that predates the column", async () => {
+  it("dates rules that ran before the column existed", async () => {
     await insertFinding("finding-old", SWEPT_AT);
 
     const result = await getTodaysChecks({ organizationId: ORG, storeId: STORE });
 
-    expect(result.evaluatedAt?.toISOString()).toBe(SWEPT_AT.toISOString());
+    expect(result.rulesLastRanAt?.toISOString()).toBe(SWEPT_AT.toISOString());
   });
 
   it("prefers the stamp over the floor once a sweep has written one", async () => {
@@ -211,31 +211,31 @@ describeWithDb("findings checks report when they were taken", () => {
 
     const result = await getTodaysChecks({ organizationId: ORG, storeId: STORE });
 
-    expect(result.evaluatedAt?.toISOString()).toBe(newer.toISOString());
+    expect(result.rulesLastRanAt?.toISOString()).toBe(newer.toISOString());
   });
 
   it("reports no timestamp for a store that has genuinely never been swept", async () => {
     const result = await getTodaysChecks({ organizationId: ORG, storeId: STORE });
 
-    expect(result.evaluatedAt).toBeNull();
+    expect(result.rulesLastRanAt).toBeNull();
     expect(result.checks).toHaveLength(8);
   });
 
-  it("reports the sweep's timestamp once one has run", async () => {
+  it("reports when the rules last ran once a sweep has run", async () => {
     await stampSweep(SWEPT_AT);
 
     const result = await getTodaysChecks({ organizationId: ORG, storeId: STORE });
 
-    expect(result.evaluatedAt?.toISOString()).toBe(SWEPT_AT.toISOString());
+    expect(result.rulesLastRanAt?.toISOString()).toBe(SWEPT_AT.toISOString());
   });
 
   /**
    * The case this field exists for. An open sync_failure keeps reporting
    * needs_look long after the connector recovered, because nothing re-evaluates
-   * it until the next sweep. The status is not wrong — it is old — and only the
-   * timestamp says so.
+   * it until the next sweep. The status is not wrong — the finding behind it is
+   * old — and the timestamp is what lets a reader tell.
    */
-  it("dates a stale needs_look rather than presenting it as current", async () => {
+  it("reports a needs_look alongside rules that ran hours earlier", async () => {
     await insertFinding("finding-1", SWEPT_AT);
     await stampSweep(SWEPT_AT);
 
@@ -249,7 +249,39 @@ describeWithDb("findings checks report when they were taken", () => {
       result.checks.find((check) => check.type === "sync_failure")?.status,
     ).toBe("needs_look");
     // Eight hours older than `now` — the caller can see the reading is stale.
-    expect(result.evaluatedAt?.toISOString()).toBe(SWEPT_AT.toISOString());
+    expect(result.rulesLastRanAt?.toISOString()).toBe(SWEPT_AT.toISOString());
+  });
+
+  /**
+   * Review catch: the timestamp dates the rules, not the statuses. A status is
+   * re-derived per request from unresolved findings, active mutes and live
+   * connector health, so it moves with no sweep in between. Pinned so the field
+   * is never read as "as of T, these were flagged" — freezing the statuses to
+   * make the two clocks agree would break `sync_failure` reflecting live
+   * connector health, which is the point of it.
+   */
+  it("moves a status without moving the timestamp", async () => {
+    await insertFinding("finding-resolvable", SWEPT_AT);
+    await stampSweep(SWEPT_AT);
+
+    const before = await getTodaysChecks({ organizationId: ORG, storeId: STORE });
+    expect(
+      before.checks.find((check) => check.type === "sync_failure")?.status,
+    ).toBe("needs_look");
+
+    await testDb?.execute(sql`
+      UPDATE finding SET resolved_at = now(), resolution = 'handled'
+      WHERE id = 'finding-resolvable'
+    `);
+
+    const after = await getTodaysChecks({ organizationId: ORG, storeId: STORE });
+
+    expect(
+      after.checks.find((check) => check.type === "sync_failure")?.status,
+    ).toBe("ok");
+    expect(after.rulesLastRanAt?.toISOString()).toBe(
+      before.rulesLastRanAt?.toISOString(),
+    );
   });
 
   it("carries the timestamp through the pre-first-sync answer too", async () => {
@@ -259,7 +291,7 @@ describeWithDb("findings checks report when they were taken", () => {
     const result = await getTodaysChecks({ organizationId: ORG, storeId: STORE });
 
     expect(result.checks.every((check) => check.status === "waiting_for_data")).toBe(true);
-    expect(result.evaluatedAt?.toISOString()).toBe(SWEPT_AT.toISOString());
+    expect(result.rulesLastRanAt?.toISOString()).toBe(SWEPT_AT.toISOString());
   });
 
   it("reads the timestamp of the store it was asked about", async () => {
@@ -272,7 +304,7 @@ describeWithDb("findings checks report when they were taken", () => {
 
     const result = await getTodaysChecks({ organizationId: ORG, storeId: STORE });
 
-    expect(result.evaluatedAt?.toISOString()).toBe(SWEPT_AT.toISOString());
+    expect(result.rulesLastRanAt?.toISOString()).toBe(SWEPT_AT.toISOString());
   });
 });
 

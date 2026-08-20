@@ -54,11 +54,16 @@ const listOutputSchema = z.object({ items: z.array(findingListItemSchema) });
 
 const checksOutputSchema = z.object({
   /**
-   * When the sweep behind these statuses ran. Null before a store's first
-   * sweep. Every status below is a reading from that moment — printing one as
-   * though it described now is how a recovered outage keeps reading as live.
+   * When the rules last ran. Null before a store's first sweep.
+   *
+   * It dates the rules, not the statuses beside it. A status is re-derived on
+   * every request — a finding someone resolved, a type someone muted, and live
+   * connector health all move it with no sweep in between. So read this as
+   * "the rules last ran at T, and these are flagged now", never "as of T,
+   * these were flagged". To date what a specific finding said, use `firedAt`
+   * on that finding from `findings.list`.
    */
-  evaluatedAt: z.date().nullable(),
+  rulesLastRanAt: z.date().nullable(),
   checks: z.array(
     z.object({
       type: findingTypeSchema,
@@ -241,7 +246,7 @@ export const findingsRouter = router({
         "findings",
         "checks",
         "Today's finding checks",
-        "Each finding rule as the last sweep left it: ok, needs_look (an open finding fired), or waiting_for_data (sync too stale to judge). `evaluatedAt` is when that sweep ran — the statuses are a snapshot from then, not a live re-evaluation, so quote them with the timestamp.",
+        "Each finding rule's status right now: ok, needs_look (an unresolved finding of that type exists), or waiting_for_data (sync too stale to judge). Statuses are re-derived per request and re-evaluate no rule — they read unresolved findings, active mutes, and live connector health. `rulesLastRanAt` says when the rules themselves last ran, which is a different clock: read it as \"the rules last ran at T, and these are flagged now\". To date what a finding actually said, use `firedAt` on it from findings.list.",
       ),
     )
     .output(checksOutputSchema)
