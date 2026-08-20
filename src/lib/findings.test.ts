@@ -14,8 +14,11 @@ import {
   isMuted,
   median,
   mutedUntilFrom,
+  typesToRetire,
   UTM_TEMPLATE_LOCK_DATE,
   type AdLpMismatchCandidate,
+  type FindingDraft,
+  type FindingType,
   type ClaimVerifiedDay,
   type RoasDay,
   type UnattributedDay,
@@ -57,7 +60,9 @@ function spikeDays(shares: Array<[unattributed: number, total: number]>) {
   })) satisfies UnattributedDay[];
 }
 
-function roasDays(entries: Array<[revenue: number, spend: number]>): RoasDay[] {
+function roasDays(
+  entries: Array<[revenue: number, spend: number | null]>,
+): RoasDay[] {
   return entries.map(([verifiedRevenueCents, spendCents], index) => ({
     day: addDays(DAY, index - (entries.length - 1)),
     verifiedRevenueCents,
@@ -473,44 +478,28 @@ describe("evaluateSyncFailure", () => {
 
 describe("evaluateRoasBelowTarget", () => {
   const target = 1.5;
-  const below: Array<[number, number]> = Array.from({ length: 7 }, () => [
+  const below: Array<[number, number | null]> = Array.from({ length: 7 }, () => [
     1000, 1000,
   ]);
 
   it("fires on seven computable days under target", () => {
-    const finding = evaluateRoasBelowTarget({
-      series: roasDays(below),
-      target,
-    });
+    const result = evaluateRoasBelowTarget({ series: roasDays(below), target });
 
-    expect(finding?.type).toBe("roas_below_target");
-    expect(finding?.periodStart).toBe("2026-07-23");
-    expect(finding?.periodEnd).toBe(DAY);
-    expect(finding?.payload.target).toBe(target);
+    expect(result.outcome).toBe("fires");
+    if (result.outcome !== "fires") throw new Error("expected a draft");
+    expect(result.draft.type).toBe("roas_below_target");
+    expect(result.draft.periodStart).toBe("2026-07-23");
+    expect(result.draft.periodEnd).toBe(DAY);
+    expect(result.draft.payload.target).toBe(target);
   });
 
-  it("does not fire on six days of history", () => {
-    expect(
-      evaluateRoasBelowTarget({ series: roasDays(below.slice(1)), target }),
-    ).toBeNull();
-  });
-
-  it("breaks the streak on a zero-spend day", () => {
-    const withGap: Array<[number, number]> = [...below];
-    withGap[3] = [0, 0];
-
-    expect(
-      evaluateRoasBelowTarget({ series: roasDays(withGap), target }),
-    ).toBeNull();
-  });
-
-  it("does not fire when one day meets target", () => {
-    const withGoodDay: Array<[number, number]> = [...below];
+  it("clears when one day meets target — the rule looked and it does not hold", () => {
+    const withGoodDay: Array<[number, number | null]> = [...below];
     withGoodDay[5] = [3000, 1000];
 
     expect(
-      evaluateRoasBelowTarget({ series: roasDays(withGoodDay), target }),
-    ).toBeNull();
+      evaluateRoasBelowTarget({ series: roasDays(withGoodDay), target }).outcome,
+    ).toBe("clear");
   });
 
   it("treats ROAS exactly at target as not below", () => {
@@ -518,8 +507,58 @@ describe("evaluateRoasBelowTarget", () => {
       evaluateRoasBelowTarget({
         series: roasDays(Array.from({ length: 7 }, () => [1500, 1000])),
         target,
-      }),
-    ).toBeNull();
+      }).outcome,
+    ).toBe("clear");
+  });
+
+  /**
+   * The defect this rule shipped with: a day Meta had not reported yet made
+   * ROAS uncomputable, the streak read as broken, and the sweep retired a live
+   * finding — reporting "resolved" off absent data while verified ROAS sat at
+   * 0.67 against a 1.5 goal.
+   */
+  it("is indeterminate, not clear, when Meta has not reported a day", () => {
+    const withMissingDay: Array<[number, number | null]> = [...below];
+    withMissingDay[3] = [3652, null];
+
+    const result = evaluateRoasBelowTarget({
+      series: roasDays(withMissingDay),
+      target,
+    });
+
+    expect(result.outcome).toBe("indeterminate");
+    if (result.outcome !== "indeterminate") throw new Error("expected no verdict");
+    expect(result.uncomputableDays).toEqual(["2026-07-26"]);
+  });
+
+  it("names every day it could not judge", () => {
+    const withGap: Array<[number, number | null]> = [...below];
+    withGap[4] = [100, null];
+    withGap[5] = [200, null];
+    withGap[6] = [300, null];
+
+    const result = evaluateRoasBelowTarget({ series: roasDays(withGap), target });
+
+    expect(result.outcome).toBe("indeterminate");
+    if (result.outcome !== "indeterminate") throw new Error("expected no verdict");
+    expect(result.uncomputableDays).toEqual(["2026-07-27", "2026-07-28", DAY]);
+  });
+
+  it("is indeterminate on a reported day with no spend — ROAS has no value there", () => {
+    const withZeroSpend: Array<[number, number | null]> = [...below];
+    withZeroSpend[3] = [0, 0];
+
+    expect(
+      evaluateRoasBelowTarget({ series: roasDays(withZeroSpend), target })
+        .outcome,
+    ).toBe("indeterminate");
+  });
+
+  it("is indeterminate on six days of history rather than clear", () => {
+    expect(
+      evaluateRoasBelowTarget({ series: roasDays(below.slice(1)), target })
+        .outcome,
+    ).toBe("indeterminate");
   });
 });
 
@@ -792,5 +831,61 @@ describe("mute window", () => {
     expect(isMuted(mutedUntil, new Date("2026-08-05T23:59:00Z"))).toBe(true);
     expect(isMuted(mutedUntil, new Date("2026-08-06T00:00:01Z"))).toBe(false);
     expect(isMuted(null, now)).toBe(false);
+  });
+});
+
+describe("typesToRetire", () => {
+  const noDrafts = Object.fromEntries(
+    FINDING_TYPES.map((type) => [type, null]),
+  ) as Record<FindingType, FindingDraft | null>;
+
+  const empty = new Set<FindingType>();
+
+  it("retires a rule that was evaluated and did not fire", () => {
+    expect(
+      typesToRetire({ evaluated: noDrafts, muted: empty, indeterminate: empty }),
+    ).toEqual(FINDING_TYPES);
+  });
+
+  it("leaves a firing rule alone", () => {
+    const evaluated = {
+      ...noDrafts,
+      roas_below_target: {
+        type: "roas_below_target",
+        periodStart: "2026-07-23",
+        periodEnd: DAY,
+        payload: {},
+      },
+    } as Record<FindingType, FindingDraft | null>;
+
+    expect(
+      typesToRetire({ evaluated, muted: empty, indeterminate: empty }),
+    ).not.toContain("roas_below_target");
+  });
+
+  /**
+   * The second half of the retire defect: even with the rule reporting
+   * "indeterminate" rather than a false negative, the sweep would still have
+   * closed the finding if it treated "no draft" as "no longer holds".
+   */
+  it("does not retire a rule that reached no judgement", () => {
+    const retired = typesToRetire({
+      evaluated: noDrafts,
+      muted: empty,
+      indeterminate: new Set<FindingType>(["roas_below_target"]),
+    });
+
+    expect(retired).not.toContain("roas_below_target");
+    expect(retired).toContain("sync_failure");
+  });
+
+  it("still leaves a muted type untouched in both directions", () => {
+    expect(
+      typesToRetire({
+        evaluated: noDrafts,
+        muted: new Set<FindingType>(["untagged_spend"]),
+        indeterminate: empty,
+      }),
+    ).not.toContain("untagged_spend");
   });
 });
