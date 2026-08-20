@@ -31,8 +31,15 @@ export function basePerformanceLogFilter(alias = "pl"): SQL {
 // impressions it was measured over. `avg(pl.ctr)` gives a 200-impression row the
 // same say as a 400,000-impression one and does not describe the group at all.
 // Returns NULL when the group has no impressions.
+//
+// The denominator skips rows with a NULL ctr, because a NULL there means Meta
+// reported no CTR for the row, not that the row earned no clicks — when there
+// are genuinely no clicks Meta sends an explicit 0. Counting those impressions
+// would drag the result toward zero on the strength of a number we were never
+// given, and `avg(pl.ctr)` did not count them either, so this keeps the change
+// to the weighting alone.
 export function impressionWeightedCtr(alias = "pl"): SQL {
   const ctr = qualifiedColumn(alias, "ctr");
   const impressions = qualifiedColumn(alias, "impressions");
-  return sql`(coalesce(sum(${ctr} * ${impressions}), 0) / nullif(sum(${impressions}), 0))`;
+  return sql`(coalesce(sum(${ctr} * ${impressions}), 0) / nullif(sum(${impressions}) FILTER (WHERE ${ctr} IS NOT NULL), 0))`;
 }

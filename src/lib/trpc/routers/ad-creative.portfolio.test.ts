@@ -293,6 +293,29 @@ describeIfDb("ad-creative portfolio aggregates", () => {
       expect(num(portfolio.ctr)).toBeCloseTo(1.9, 4);
     });
 
+    it("ignores impressions on rows Meta reported no CTR for", async () => {
+      // A NULL ctr means the row carries no CTR, not that it earned no clicks
+      // — Meta sends an explicit 0 for that. Counting those impressions in the
+      // denominator would drag the result toward zero on a number we never
+      // got. Here the only reported CTR is 4% over 1,000 impressions.
+      await testDb!.execute(sql.raw("TRUNCATE performance_log"));
+      await seedPerf({
+        adId: "ad_big",
+        date: "2026-06-02",
+        spend: 100,
+        ctr: 4,
+        impressions: 1_000,
+      });
+      await seedPerf({
+        adId: "ad_small",
+        date: "2026-06-02",
+        spend: 100,
+        impressions: 9_000,
+      });
+      const portfolio = await caller.adCreative.portfolioSummary({ from: FROM, to: TO });
+      expect(num(portfolio.ctr)).toBeCloseTo(4, 6);
+    });
+
     it("returns null CTR when the window has no impressions", async () => {
       await testDb!.execute(sql.raw("TRUNCATE performance_log"));
       await seedPerf({ adId: "ad_big", date: "2026-06-02", spend: 10 });
