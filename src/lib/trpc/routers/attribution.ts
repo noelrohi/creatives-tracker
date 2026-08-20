@@ -28,6 +28,15 @@ import {
 
 const bucketSchema = z.enum(ATTRIBUTION_BUCKETS);
 
+export function computeAov(
+  revenueCents: number,
+  orderCount: number,
+): string | null {
+  return orderCount === 0
+    ? null
+    : centsToAmount(Math.round(revenueCents / orderCount));
+}
+
 // Output schemas exist for the OpenAPI surface (the generator requires a typed
 // response) and must mirror the resolver returns exactly — these procedures
 // also serve the web UI, and output parsing strips anything undeclared.
@@ -57,10 +66,12 @@ const overviewOutputSchema = z.object({
       bucket: bucketSchema,
       revenue: z.string(),
       orderCount: z.number(),
+      aov: z.string().nullable(),
     }),
   ),
   pending: z.object({ count: z.number(), revenue: z.string() }),
   total: z.string(),
+  aov: z.string().nullable(),
   identity: z.object({
     sumOfBuckets: z.string(),
     actual: z.string(),
@@ -163,6 +174,14 @@ export const attributionRouter = router({
         }),
       ]);
 
+      const verifiedTotals = totals.buckets.reduce(
+        (sum, bucket) => ({
+          revenueCents: sum.revenueCents + bucket.revenueCents,
+          orderCount: sum.orderCount + bucket.orderCount,
+        }),
+        { revenueCents: 0, orderCount: 0 },
+      );
+
       return {
         store: {
           id: store.id,
@@ -176,12 +195,17 @@ export const attributionRouter = router({
           bucket: bucket.bucket,
           revenue: centsToAmount(bucket.revenueCents),
           orderCount: bucket.orderCount,
+          aov: computeAov(bucket.revenueCents, bucket.orderCount),
         })),
         pending: {
           count: totals.pending.count,
           revenue: centsToAmount(totals.pending.revenueCents),
         },
         total: centsToAmount(totals.totalCents),
+        aov: computeAov(
+          verifiedTotals.revenueCents,
+          verifiedTotals.orderCount,
+        ),
         identity: {
           sumOfBuckets: centsToAmount(totals.identity.sumOfBucketsCents),
           actual: centsToAmount(totals.identity.actualCents),
