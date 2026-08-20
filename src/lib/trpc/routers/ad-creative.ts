@@ -11,7 +11,11 @@ import { adAccounts } from "@/schema/account";
 import { adSets } from "@/schema/ad-set";
 import { fetchMetaCreativePreview, fetchMetaAdPreviewUrl } from "@/lib/meta-creative-assets";
 import { importMetaRows } from "@/lib/meta-import";
-import { basePerformanceLogFilter, impressionWeightedCtr } from "@/lib/performance-log-sql";
+import {
+  basePerformanceLogFilter,
+  clickWeightedCpc,
+  impressionWeightedCtr,
+} from "@/lib/performance-log-sql";
 import { assertBreakdownRange } from "@/lib/retention/window-guard";
 import { computeCreativeHealthByCreativeId, type CreativeRollup } from "@/lib/creative-health-rollup";
 import { fetchAgentExportRows } from "@/lib/ad-export";
@@ -833,7 +837,7 @@ export const adCreativeRouter = router({
             sum(pl.conversions) AS total_conversions,
             (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text AS avg_cpa,
             ${impressionWeightedCtr("pl")}::text AS avg_ctr,
-            avg(pl.cpc)::text AS avg_cpc,
+            ${clickWeightedCpc("pl")}::text AS avg_cpc,
             avg(pl.frequency)::text AS avg_frequency,
             (sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0))::text AS thumbstop_ratio
           FROM filtered_creatives fc
@@ -856,7 +860,7 @@ export const adCreativeRouter = router({
           SELECT
             ad.ad_creative_id,
             ${impressionWeightedCtr("pl")}::text AS recent_ctr,
-            avg(pl.cpc)::text AS recent_cpc,
+            ${clickWeightedCpc("pl")}::text AS recent_cpc,
             (sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0))::text AS recent_hook_rate,
             (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text AS recent_cpa
           FROM recent_cutoff rc

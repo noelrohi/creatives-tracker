@@ -2,7 +2,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { computeHealth, rollupCreativeHealth, type CreativeHealth } from "./creative-health";
 import { effectiveAdStatusSql } from "./effective-ad-status";
-import { basePerformanceLogFilter } from "./performance-log-sql";
+import { basePerformanceLogFilter, clickWeightedCpc } from "./performance-log-sql";
 
 type AdHealthRow = {
   ad_id: string;
@@ -74,7 +74,7 @@ export async function computeCreativeHealthByCreativeId(opts: {
         )::text as recent_conversions,
         (coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0))::text as roas,
         (coalesce(sum(pl.ctr * pl.impressions), 0) / nullif(sum(pl.impressions), 0))::text as avg_ctr,
-        avg(pl.cpc)::text as avg_cpc,
+        ${clickWeightedCpc("pl")}::text as avg_cpc,
         (coalesce(sum(pl.spend), 0) / nullif(sum(pl.conversions), 0))::text as avg_cpa,
         avg(pl.frequency)::text as frequency,
         (sum(pl.video_views_3s)::float / nullif(sum(pl.impressions), 0))::text as thumbstop_ratio,
@@ -91,7 +91,7 @@ export async function computeCreativeHealthByCreativeId(opts: {
             )
         ) as recent_ctr,
         (
-          SELECT avg(pl2.cpc)::text
+          SELECT ${clickWeightedCpc("pl2")}::text
           FROM performance_log pl2
           WHERE pl2.ad_id = ad.id
             AND ${basePl2}
