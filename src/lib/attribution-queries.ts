@@ -178,6 +178,13 @@ export type MetaClaims = {
   claimed7dClickCents: number | null;
   claimed1dViewCents: number | null;
   spendCents: number;
+  /**
+   * How many Meta rows the range actually had. `spendCents` sums to 0 whether
+   * Meta reported a zero-spend day or has not reported the day at all, and the
+   * difference decides whether a rule may draw a conclusion — so the count that
+   * separates them travels with the figure rather than being re-derived.
+   */
+  spendRowCount: number;
   labeledRowShare: number;
 };
 
@@ -542,12 +549,15 @@ export function metaClaimsFromRow(
   const labeled = (value: string | null | undefined) =>
     labeledClaimCents(value, labeledRows);
 
+  const totalRows = row?.totalRows ?? 0;
+
   return {
     claimedCents: labeled(row?.claimed),
     claimed7dClickCents: labeled(row?.claimed7dClick),
     claimed1dViewCents: labeled(row?.claimed1dView),
     spendCents: toCents(row?.spend),
-    labeledRowShare: labeledShare(labeledRows, row?.totalRows ?? 0),
+    spendRowCount: totalRows,
+    labeledRowShare: labeledShare(labeledRows, totalRows),
   };
 }
 

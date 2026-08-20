@@ -229,8 +229,30 @@ describe("Meta claim reads (§3.2)", () => {
       claimed7dClickCents: null,
       claimed1dViewCents: null,
       spendCents: 0,
+      spendRowCount: 0,
       labeledRowShare: 0,
     });
+  });
+
+  /**
+   * `spendCents` reads 0 for both, so the row count is the only thing telling a
+   * day Meta has not reported from a day on which nothing was spent. A rule
+   * that cannot tell them apart reports missing data as a real zero.
+   */
+  it("separates a day Meta has not reported from a day with no spend", () => {
+    const unreported = metaClaimsFromRow(undefined);
+    const reportedAtZero = metaClaimsFromRow({
+      claimed: null,
+      claimed7dClick: null,
+      claimed1dView: null,
+      spend: "0.00",
+      totalRows: 12,
+      labeledRows: 0,
+    });
+
+    expect(unreported.spendCents).toBe(reportedAtZero.spendCents);
+    expect(unreported.spendRowCount).toBe(0);
+    expect(reportedAtZero.spendRowCount).toBe(12);
   });
 
   it("reads a claim as unknown, not zero, when nothing was labeled", () => {

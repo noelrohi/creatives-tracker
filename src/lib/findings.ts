@@ -393,38 +393,70 @@ export function evaluateSyncFailure(params: {
 export type RoasDay = {
   day: string;
   verifiedRevenueCents: number;
-  spendCents: number;
+  /**
+   * Null when Meta has reported nothing for the day. Distinct from 0, which is
+   * a real day on which nothing was spent — the rule may conclude from the
+   * second and must not conclude from the first.
+   */
+  spendCents: number | null;
 };
+
+/**
+ * Three outcomes, not two. "Fires" and "clear" are both judgements the rule
+ * reached; "indeterminate" is the absence of one, and the sweep must not let it
+ * retire an open finding. Meta reports a day two days late as a matter of
+ * course, so a window that reaches into that lag is the normal case, not an
+ * edge case.
+ */
+export type RoasEvaluation =
+  | { outcome: "fires"; draft: FindingDraft }
+  | { outcome: "clear" }
+  | { outcome: "indeterminate"; uncomputableDays: string[] };
 
 export function evaluateRoasBelowTarget(params: {
   series: RoasDay[];
   target: number;
-}): FindingDraft | null {
+}): RoasEvaluation {
   const window = trailingWindow(params.series, ROAS_CONSECUTIVE_DAYS);
-  if (!window) return null;
+  // Too little history to have an opinion either way.
+  if (!window) return { outcome: "indeterminate", uncomputableDays: [] };
 
   const points = window.map((day) => ({
     day: day.day,
-    roas: computeRoas(day.verifiedRevenueCents, day.spendCents),
+    roas:
+      day.spendCents === null
+        ? null
+        : computeRoas(day.verifiedRevenueCents, day.spendCents),
     verifiedRevenueCents: day.verifiedRevenueCents,
     spendCents: day.spendCents,
   }));
 
-  // A non-computable day (no spend, no claims data) breaks the streak — it is
-  // not a zero-ROAS day.
+  // A day Meta has not reported is not a day the rule can judge. Calling it a
+  // broken streak would read "ROAS recovered" off missing data — the mistake
+  // that retired a live finding while verified ROAS sat at 0.67 of a 1.5 goal.
+  const uncomputableDays = points
+    .filter((point) => point.roas === null)
+    .map((point) => point.day);
+  if (uncomputableDays.length > 0) {
+    return { outcome: "indeterminate", uncomputableDays };
+  }
+
   const belowAllWeek = points.every(
     (point) => point.roas !== null && point.roas < params.target,
   );
-  if (!belowAllWeek) return null;
+  if (!belowAllWeek) return { outcome: "clear" };
 
   return {
-    type: "roas_below_target",
-    periodStart: window[0].day,
-    periodEnd: window[window.length - 1].day,
-    payload: {
-      target: params.target,
-      consecutiveDays: ROAS_CONSECUTIVE_DAYS,
-      days: points,
+    outcome: "fires",
+    draft: {
+      type: "roas_below_target",
+      periodStart: window[0].day,
+      periodEnd: window[window.length - 1].day,
+      payload: {
+        target: params.target,
+        consecutiveDays: ROAS_CONSECUTIVE_DAYS,
+        days: points,
+      },
     },
   };
 }
@@ -1000,7 +1032,9 @@ async function getClaimVerifiedSeries(params: {
       return {
         day,
         claimedCents: claims.claimedCents,
-        spendCents: claims.spendCents,
+        // Null once Meta has reported nothing for the day: `spendCents` reads 0
+        // either way, and only the row count tells the two apart.
+        spendCents: claims.spendRowCount > 0 ? claims.spendCents : null,
         verifiedCents: verified.verifiedRevenueCents,
       };
     }),
@@ -1039,7 +1073,32 @@ export type FindingsRunSummary = {
   refreshed: FindingType[];
   resolved: FindingType[];
   skippedMuted: FindingType[];
+  /** Rules the run could not judge, whose open findings were left standing. */
+  indeterminate: FindingType[];
 };
+
+/**
+ * Which open findings this run may take back.
+ *
+ * A finding that no longer holds is not news the reader still has to dismiss,
+ * so a rule that stopped firing retires its own alert. Two things are never
+ * retired: a muted type, because a mute means "don't touch this type" rather
+ * than "don't raise it"; and a rule that reached no judgement this run, because
+ * "we could not tell" is not "the problem went away" — retiring on it closes a
+ * live alert on missing data and files the closure as a resolution.
+ */
+export function typesToRetire(params: {
+  evaluated: Record<FindingType, FindingDraft | null>;
+  muted: ReadonlySet<FindingType>;
+  indeterminate: ReadonlySet<FindingType>;
+}): FindingType[] {
+  return FINDING_TYPES.filter(
+    (type) =>
+      params.evaluated[type] === null &&
+      !params.muted.has(type) &&
+      !params.indeterminate.has(type),
+  );
+}
 
 export async function evaluateFindingsForStore(params: {
   organizationId: string;
@@ -1052,6 +1111,7 @@ export async function evaluateFindingsForStore(params: {
     refreshed: [],
     resolved: [],
     skippedMuted: [],
+    indeterminate: [],
   };
 
   const store = await getStoreById(params);
@@ -1113,6 +1173,22 @@ export async function evaluateFindingsForStore(params: {
     };
   });
 
+  const roasEvaluation = evaluateRoasBelowTarget({
+    series: claimVerified.slice(-ROAS_CONSECUTIVE_DAYS).map((entry) => ({
+      day: entry.day,
+      verifiedRevenueCents: entry.verifiedCents,
+      spendCents: entry.spendCents,
+    })),
+    target: roasTarget,
+  });
+
+  // Rules that could not reach a judgement this run. They are not "no longer
+  // firing" — nothing about them was decided — so the retire pass leaves their
+  // open findings alone.
+  const indeterminate = new Set<FindingType>(
+    roasEvaluation.outcome === "indeterminate" ? ["roas_below_target"] : [],
+  );
+
   // Every rule the run evaluates, under the type it can raise. The keys are
   // exhaustive over FindingType, so the list of types a run covers cannot drift
   // from the rules it actually ran.
@@ -1127,14 +1203,7 @@ export async function evaluateFindingsForStore(params: {
     unattributed_spike: evaluateUnattributedSpike(unattributedSeries),
     broken_utm_template: evaluateBrokenUtmTemplate({ day, ...brokenUtm }),
     sync_failure: evaluateSyncFailure({ health, day, now }),
-    roas_below_target: evaluateRoasBelowTarget({
-      series: claimVerified.slice(-ROAS_CONSECUTIVE_DAYS).map((entry) => ({
-        day: entry.day,
-        verifiedRevenueCents: entry.verifiedCents,
-        spendCents: entry.spendCents,
-      })),
-      target: roasTarget,
-    }),
+    roas_below_target: roasEvaluation.outcome === "fires" ? roasEvaluation.draft : null,
     ad_lp_funnel_mismatch: evaluateAdLpFunnelMismatch({
       day,
       candidates: mismatchCandidates,
@@ -1197,15 +1266,17 @@ export async function evaluateFindingsForStore(params: {
     summary.fired.push(draft.type);
   }
 
-  // A finding that no longer holds is not news the reader still has to dismiss.
-  // A rule that stopped firing takes its own alert back, so the store is not
-  // left staring at a gap the rule itself has since decided it cannot call
-  // unusual. A muted type is left alone in both directions: a mute means "don't
-  // touch this type", not "don't raise it".
-  for (const type of FINDING_TYPES) {
-    if (evaluated[type] !== null) continue;
-    if (mutedTypes.has(type)) continue;
+  summary.indeterminate.push(
+    ...FINDING_TYPES.filter(
+      (type) => indeterminate.has(type) && !mutedTypes.has(type),
+    ),
+  );
 
+  for (const type of typesToRetire({
+    evaluated,
+    muted: mutedTypes,
+    indeterminate,
+  })) {
     const retired = await db
       .update(findings)
       .set({ resolvedAt: now, resolution: "retired" })
