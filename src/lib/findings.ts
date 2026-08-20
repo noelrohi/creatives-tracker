@@ -172,6 +172,13 @@ export type ClaimVerifiedDay = {
   /** Null when Meta sent no labeled claim for the day — nothing to compare. */
   claimedCents: number | null;
   verifiedCents: number;
+  /**
+   * Null once Meta has reported no rows at all for the day. This is the only
+   * field that separates "Meta says you claimed nothing" from "Meta has not
+   * told us yet" — `claimedCents` reads null for both, and treating the second
+   * as the first is how a rule ends up judging a day it never saw.
+   */
+  spendCents: number | null;
 };
 
 /** Claimed with nothing verified is the worst case, so it counts as over. */
@@ -180,12 +187,49 @@ export function isOverclaimDay(day: ClaimVerifiedDay): boolean {
   return day.claimedCents > OVERCLAIM_MULTIPLE * day.verifiedCents;
 }
 
+/**
+ * Days in an already-sliced overclaim window that Meta has not reported.
+ *
+ * The signal is `spendCents`, not `claimedCents`. Meta reporting real spend and
+ * zero claimed revenue is an answer — no claim cannot overclaim — while Meta
+ * not having reported the day at all is the absence of one, and `claimedCents`
+ * reads null for both. Deliberately narrower than the ROAS rule's hole: a day
+ * of genuine zero spend is uncomputable for a ratio but perfectly judgeable
+ * here, and widening it would leave open findings standing on quiet days.
+ */
+export function overclaimUncomputableDays(
+  window: readonly ClaimVerifiedDay[],
+): string[] {
+  return window
+    .filter((day) => day.spendCents === null)
+    .map((day) => day.day);
+}
+
+/**
+ * Three outcomes, for the same reason `roas_below_target` has three: a day Meta
+ * has not reported is not an overclaim-free day. `isOverclaimDay` reads false
+ * for it either way, so folding it into "clear" retires a live finding on the
+ * strength of data that never arrived.
+ */
+export type MetaOverclaimEvaluation =
+  | { outcome: "fires"; draft: FindingDraft }
+  | { outcome: "clear" }
+  | { outcome: "indeterminate"; uncomputableDays: string[] };
+
 export function evaluateMetaOverclaim(
   series: ClaimVerifiedDay[],
-): FindingDraft | null {
+): MetaOverclaimEvaluation {
   const window = trailingWindow(series, OVERCLAIM_CONSECUTIVE_DAYS);
-  if (!window) return null;
-  if (!window.every(isOverclaimDay)) return null;
+  // No window at all. The empty list says "could not judge, but not because any
+  // particular day is absent".
+  if (!window) return { outcome: "indeterminate", uncomputableDays: [] };
+
+  const uncomputableDays = overclaimUncomputableDays(window);
+  if (uncomputableDays.length > 0) {
+    return { outcome: "indeterminate", uncomputableDays };
+  }
+
+  if (!window.every(isOverclaimDay)) return { outcome: "clear" };
 
   const multipleFor = (days: ClaimVerifiedDay[]): number | null => {
     const verifiedCents = days.reduce(
@@ -219,15 +263,17 @@ export function evaluateMetaOverclaim(
   // The rule reports movement, so it stays quiet until it can see movement. A
   // store with too little history has no normal to be wide of, and firing on
   // size alone would greet every new store with a critical alert for a gap that
-  // may be entirely ordinary for it.
-  if (baselineMultipleRaw === null) return null;
+  // may be entirely ordinary for it. This is "clear", not "indeterminate": the
+  // window's days are all present and judged, and the missing baseline is a
+  // reason to say nothing rather than a reason to distrust the silence.
+  if (baselineMultipleRaw === null) return { outcome: "clear" };
 
   const movedWider =
     windowMultipleRaw === null ||
     windowMultipleRaw >= OVERCLAIM_MOVEMENT_MULTIPLE * baselineMultipleRaw;
-  if (!movedWider) return null;
+  if (!movedWider) return { outcome: "clear" };
 
-  return {
+  const draft: FindingDraft = {
     type: "meta_overclaim",
     periodStart: window[0].day,
     periodEnd: window[window.length - 1].day,
@@ -245,6 +291,8 @@ export function evaluateMetaOverclaim(
       })),
     },
   };
+
+  return { outcome: "fires", draft };
 }
 
 /* ------------------------------------------------------------------ */
@@ -1182,24 +1230,26 @@ export async function evaluateFindingsForStore(params: {
     target: roasTarget,
   });
 
+  const overclaimEvaluation = evaluateMetaOverclaim(claimVerified);
+
   // Rules that could not reach a judgement this run. They are not "no longer
   // firing" — nothing about them was decided — so the retire pass leaves their
   // open findings alone.
-  const indeterminate = new Set<FindingType>(
-    roasEvaluation.outcome === "indeterminate" ? ["roas_below_target"] : [],
-  );
+  const indeterminate = new Set<FindingType>([
+    ...(roasEvaluation.outcome === "indeterminate"
+      ? (["roas_below_target"] as const)
+      : []),
+    ...(overclaimEvaluation.outcome === "indeterminate"
+      ? (["meta_overclaim"] as const)
+      : []),
+  ]);
 
   // Every rule the run evaluates, under the type it can raise. The keys are
   // exhaustive over FindingType, so the list of types a run covers cannot drift
   // from the rules it actually ran.
   const evaluated: Record<FindingType, FindingDraft | null> = {
-    meta_overclaim: evaluateMetaOverclaim(
-      claimVerified.map((entry) => ({
-        day: entry.day,
-        claimedCents: entry.claimedCents,
-        verifiedCents: entry.verifiedCents,
-      })),
-    ),
+    meta_overclaim:
+      overclaimEvaluation.outcome === "fires" ? overclaimEvaluation.draft : null,
     unattributed_spike: evaluateUnattributedSpike(unattributedSeries),
     broken_utm_template: evaluateBrokenUtmTemplate({ day, ...brokenUtm }),
     sync_failure: evaluateSyncFailure({ health, day, now }),
