@@ -4,6 +4,7 @@ import {
   evaluateAdLpFunnelMismatch,
   evaluateBrokenUtmTemplate,
   evaluateMetaOverclaim,
+  type MetaOverclaimEvaluation,
   evaluateRoasBelowTarget,
   evaluateSyncFailure,
   evaluateUntaggedSpend,
@@ -27,14 +28,31 @@ import {
 
 const DAY = "2026-07-29";
 
+/**
+ * Days for the overclaim rule. The third slot is `spendCents` and defaults to a
+ * reported day — pass null for a day Meta has not reported at all, which is the
+ * only way to say "no data" here. A null *claim* on a reported day is a
+ * different thing: Meta spoke and labelled nothing.
+ */
 function claimDays(
-  entries: Array<[claimed: number | null, verified: number]>,
+  entries: Array<
+    | [claimed: number | null, verified: number]
+    | [claimed: number | null, verified: number, spend: number | null]
+  >,
 ): ClaimVerifiedDay[] {
-  return entries.map(([claimedCents, verifiedCents], index) => ({
+  return entries.map((entry, index) => ({
     day: addDays(DAY, index - (entries.length - 1)),
-    claimedCents,
-    verifiedCents,
+    claimedCents: entry[0],
+    verifiedCents: entry[1],
+    spendCents: entry.length > 2 ? (entry[2] ?? null) : 1000,
   }));
+}
+
+/** The draft from a firing evaluation, or null when the rule did not fire. */
+function overclaimDraft(
+  result: MetaOverclaimEvaluation,
+): FindingDraft | null {
+  return result.outcome === "fires" ? result.draft : null;
 }
 
 /** Days at a flat 1x, to give the overclaim rule a normal to compare against. */
@@ -118,7 +136,9 @@ describe("median", () => {
 });
 
 describe("evaluateMetaOverclaim", () => {
-  it("does not fire on two over days", () => {
+  // Two days cannot answer a three-day question. The rule has not looked at a
+  // full window, so it says so rather than reporting a quiet one.
+  it("is indeterminate on two days of history rather than clear", () => {
     expect(
       evaluateMetaOverclaim(
         claimDays([
@@ -127,7 +147,20 @@ describe("evaluateMetaOverclaim", () => {
           [3000, 1000],
         ]).slice(1),
       ),
-    ).toBeNull();
+    ).toEqual({ outcome: "indeterminate", uncomputableDays: [] });
+  });
+
+  it("does not fire when only two days of a full window are over", () => {
+    expect(
+      evaluateMetaOverclaim(
+        claimDays([
+          ...flatBaseline(14),
+          [1000, 900],
+          [3000, 1000],
+          [3000, 1000],
+        ]),
+      ),
+    ).toEqual({ outcome: "clear" });
   });
 
   // A store with no history has no normal to be wide of. The rule reports a
@@ -141,7 +174,7 @@ describe("evaluateMetaOverclaim", () => {
           [4000, 1000],
         ]),
       ),
-    ).toBeNull();
+    ).toEqual({ outcome: "clear" });
   });
 
   it("stays quiet until the baseline is long enough to trust", () => {
@@ -154,17 +187,19 @@ describe("evaluateMetaOverclaim", () => {
           [4000, 1000],
         ]),
       ),
-    ).toBeNull();
+    ).toEqual({ outcome: "clear" });
   });
 
   it("carries the firing window's own days in the payload", () => {
-    const finding = evaluateMetaOverclaim(
-      claimDays([
-        ...flatBaseline(14),
-        [3000, 1000],
-        [5000, 1000],
-        [4000, 1000],
-      ]),
+    const finding = overclaimDraft(
+      evaluateMetaOverclaim(
+        claimDays([
+          ...flatBaseline(14),
+          [3000, 1000],
+          [5000, 1000],
+          [4000, 1000],
+        ]),
+      ),
     );
 
     expect(finding?.type).toBe("meta_overclaim");
@@ -203,15 +238,17 @@ describe("evaluateMetaOverclaim", () => {
       evaluateMetaOverclaim(
         claimDays([...baseline, [3000, 1000], [3000, 1000], [3000, 1000]]),
       ),
-    ).toBeNull();
+    ).toEqual({ outcome: "clear" });
   });
 
   it("fires when the window is at least 1.4× the baseline", () => {
     const baseline: Array<[number, number]> = Array.from({ length: 14 }, () => [
       2100, 1000,
     ]);
-    const finding = evaluateMetaOverclaim(
-      claimDays([...baseline, [3000, 1000], [3000, 1000], [3000, 1000]]),
+    const finding = overclaimDraft(
+      evaluateMetaOverclaim(
+        claimDays([...baseline, [3000, 1000], [3000, 1000], [3000, 1000]]),
+      ),
     );
 
     expect(finding?.payload.windowMultiple).toBe(3);
@@ -220,7 +257,7 @@ describe("evaluateMetaOverclaim", () => {
 
   // §7.2: a Meta outage shows "no data", never $0 — an unlabeled day cannot
   // over-claim, so it breaks the streak instead of firing on a phantom zero.
-  it("does not fire when a day has no claim data at all", () => {
+  it("does not fire when a reported day carries no claim", () => {
     expect(
       evaluateMetaOverclaim(
         claimDays([
@@ -229,7 +266,58 @@ describe("evaluateMetaOverclaim", () => {
           [4000, 1000],
         ]),
       ),
-    ).toBeNull();
+    ).toEqual({ outcome: "clear" });
+  });
+
+  // The day above is a day Meta reported and labelled nothing on — an answer.
+  // This is a day Meta has not reported at all, which is the absence of one.
+  // Both read `claimedCents: null`; only `spendCents` separates them, and
+  // calling this one "clear" retires a live finding on data that never arrived.
+  it("is indeterminate, not clear, when Meta has not reported a day", () => {
+    expect(
+      evaluateMetaOverclaim(
+        claimDays([
+          [3000, 1000],
+          [null, 1000, null],
+          [4000, 1000],
+        ]),
+      ),
+    ).toEqual({
+      outcome: "indeterminate",
+      uncomputableDays: ["2026-07-28"],
+    });
+  });
+
+  it("names every day it could not judge", () => {
+    expect(
+      evaluateMetaOverclaim(
+        claimDays([
+          ...flatBaseline(14),
+          [3000, 1000],
+          [null, 1000, null],
+          [null, 1000, null],
+        ]),
+      ),
+    ).toEqual({
+      outcome: "indeterminate",
+      uncomputableDays: ["2026-07-28", DAY],
+    });
+  });
+
+  // A reported day with zero spend is judgeable here even though the ROAS rule
+  // cannot divide by it. Widening this hole to match would leave overclaim
+  // findings standing through every quiet weekend.
+  it("judges a reported day with no spend rather than waiting on it", () => {
+    expect(
+      evaluateMetaOverclaim(
+        claimDays([
+          ...flatBaseline(14),
+          [3000, 1000],
+          [3000, 1000],
+          [0, 1000, 0],
+        ]),
+      ),
+    ).toEqual({ outcome: "clear" });
   });
 
   it("breaks the streak when a day sits exactly at 2×", () => {
@@ -241,14 +329,16 @@ describe("evaluateMetaOverclaim", () => {
           [3000, 1000],
         ]),
       ),
-    ).toBeNull();
+    ).toEqual({ outcome: "clear" });
   });
 
   it("counts claims against zero verified as over", () => {
     // Baseline days first, else the rule stays quiet for want of a normal.
     expect(
-      evaluateMetaOverclaim(
-        claimDays([...flatBaseline(14), [1, 0], [1, 0], [1, 0]]),
+      overclaimDraft(
+        evaluateMetaOverclaim(
+          claimDays([...flatBaseline(14), [1, 0], [1, 0], [1, 0]]),
+        ),
       ),
     ).not.toBeNull();
   });
@@ -262,18 +352,20 @@ describe("evaluateMetaOverclaim", () => {
           [0, 0],
         ]),
       ),
-    ).toBeNull();
+    ).toEqual({ outcome: "clear" });
   });
 
   it("ignores days before the trailing window", () => {
-    const finding = evaluateMetaOverclaim(
-      claimDays([
-        ...flatBaseline(14),
-        [0, 5000],
-        [3000, 1000],
-        [3000, 1000],
-        [3000, 1000],
-      ]),
+    const finding = overclaimDraft(
+      evaluateMetaOverclaim(
+        claimDays([
+          ...flatBaseline(14),
+          [0, 5000],
+          [3000, 1000],
+          [3000, 1000],
+          [3000, 1000],
+        ]),
+      ),
     );
 
     // The window is the last three days; the quiet day before it sets no bound.
