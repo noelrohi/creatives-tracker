@@ -8,7 +8,7 @@
  * module resolves a creative to an image URL that still loads, repairing the
  * stored row when it can and reporting honestly when it cannot.
  */
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { db } from "@/db";
 import {
   fetchMetaCreativePreviewsBatch,
@@ -19,6 +19,9 @@ import { getMetaAccountWithToken } from "@/lib/meta-insights-sync";
 import { isVideoFile } from "@/lib/studio-assets";
 import { adCreatives } from "@/schema/ad-creative";
 import { ads } from "@/schema/ad";
+
+/** Enough linked ads to survive dead accounts without fanning out forever. */
+const MAX_RERESOLVE_ADS = 5;
 
 export type CreativeImageResolution = {
   /** A URL that responded successfully, or null when none could be produced. */
@@ -31,7 +34,10 @@ export type CreativeImageResolution = {
     | "unmirrored"
     | "no_image"
     | "unreachable";
-  /** True when `ad_creative.asset_url` was rewritten as part of resolving. */
+  /**
+   * True when `ad_creative.asset_url` was rewritten as part of resolving. False
+   * on a lost race with a concurrent sync — the returned URL is still usable.
+   */
   repaired: boolean;
 };
 
@@ -47,32 +53,46 @@ async function isReachable(url: string): Promise<boolean> {
   }
 }
 
+/**
+ * Compare-and-set on the URL we started from. Probing, mirroring and the Graph
+ * round-trip all take time, and a sync running alongside may have written a
+ * fresher URL meanwhile — that one wins, because it is the newer read of Meta.
+ * Returns whether the row was actually rewritten.
+ */
 async function persistAssetUrl(input: {
   organizationId: string;
   creativeId: string;
+  previousAssetUrl: string;
   assetUrl: string;
-}) {
-  await db
+}): Promise<boolean> {
+  const rows = await db
     .update(adCreatives)
     .set({ assetUrl: input.assetUrl })
     .where(
       and(
         eq(adCreatives.id, input.creativeId),
         eq(adCreatives.organizationId, input.organizationId),
+        eq(adCreatives.assetUrl, input.previousAssetUrl),
       ),
-    );
+    )
+    .returning({ id: adCreatives.id });
+  return rows.length > 0;
 }
 
 /**
- * Ask Meta for the creative's current preview URL. Returns null whenever the
- * ad, the account or the token is gone — all ordinary states for an old ad, and
- * none of them worth failing a tagging run over.
+ * Ask Meta for the creative's current preview URL.
+ *
+ * One creative can be linked to several ads, and any of them may be the one
+ * still resolvable — the others can sit on a disabled account, a revoked token
+ * or a deleted ad. So every linked ad gets a turn, newest first, and only an
+ * exhausted list means the creative really has no image. All of those states
+ * are ordinary for an old ad; none is worth failing a tagging run over.
  */
 async function reresolveFromMeta(input: {
   organizationId: string;
   creativeId: string;
 }): Promise<string | null> {
-  const [ad] = await db
+  const linkedAds = await db
     .select({ metaId: ads.metaId, accountId: ads.accountId })
     .from(ads)
     .where(
@@ -83,27 +103,46 @@ async function reresolveFromMeta(input: {
         isNotNull(ads.accountId),
       ),
     )
-    .limit(1);
+    .orderBy(desc(ads.updatedAt))
+    .limit(MAX_RERESOLVE_ADS);
 
-  if (!ad?.metaId || !ad.accountId) return null;
+  // Tokens are per account and several ads usually share one; resolve each
+  // account at most once so a long list stays one query per distinct account.
+  const accountCache = new Map<
+    string,
+    { metaAccountId: string; metaAccessToken: string } | null
+  >();
 
-  try {
-    const account = await getMetaAccountWithToken({
-      accountId: ad.accountId,
-      organizationId: input.organizationId,
-    });
-    const { previews } = await fetchMetaCreativePreviewsBatch({
-      adMetaIds: [ad.metaId],
-      metaAccountId: account.metaAccountId,
-      accessToken: account.metaAccessToken,
-      videoUrlMode: "none",
-    });
-    const assetUrl = previews.get(ad.metaId)?.assetUrl;
-    if (!assetUrl || isVideoFile(assetUrl)) return null;
-    return assetUrl;
-  } catch {
-    return null;
+  for (const ad of linkedAds) {
+    if (!ad.metaId || !ad.accountId) continue;
+
+    try {
+      if (!accountCache.has(ad.accountId)) {
+        accountCache.set(
+          ad.accountId,
+          await getMetaAccountWithToken({
+            accountId: ad.accountId,
+            organizationId: input.organizationId,
+          }).catch(() => null),
+        );
+      }
+      const account = accountCache.get(ad.accountId);
+      if (!account) continue;
+
+      const { previews } = await fetchMetaCreativePreviewsBatch({
+        adMetaIds: [ad.metaId],
+        metaAccountId: account.metaAccountId,
+        accessToken: account.metaAccessToken,
+        videoUrlMode: "none",
+      });
+      const assetUrl = previews.get(ad.metaId)?.assetUrl;
+      if (assetUrl && !isVideoFile(assetUrl)) return assetUrl;
+    } catch {
+      // This ad cannot answer; the next one still might.
+    }
   }
+
+  return null;
 }
 
 /**
@@ -137,14 +176,22 @@ export async function resolveCreativeImageUrl(input: {
       // Still serving today; usable now, and re-checked on the next pass.
       return { url: assetUrl, outcome: "unmirrored", repaired: false };
     }
-    await persistAssetUrl({ ...input, assetUrl: mirrored });
-    return { url: mirrored, outcome: "mirrored", repaired: true };
+    const repaired = await persistAssetUrl({
+      ...input,
+      previousAssetUrl: assetUrl,
+      assetUrl: mirrored,
+    });
+    return { url: mirrored, outcome: "mirrored", repaired };
   }
 
   const refreshed = await reresolveFromMeta(input);
   if (!refreshed) {
     return { url: null, outcome: "unreachable", repaired: false };
   }
-  await persistAssetUrl({ ...input, assetUrl: refreshed });
-  return { url: refreshed, outcome: "reresolved", repaired: true };
+  const repaired = await persistAssetUrl({
+    ...input,
+    previousAssetUrl: assetUrl,
+    assetUrl: refreshed,
+  });
+  return { url: refreshed, outcome: "reresolved", repaired };
 }
