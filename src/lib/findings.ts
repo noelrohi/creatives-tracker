@@ -461,6 +461,24 @@ export type RoasEvaluation =
   | { outcome: "clear" }
   | { outcome: "indeterminate"; uncomputableDays: string[] };
 
+/**
+ * Days in an already-sliced ROAS window with no computable ratio.
+ *
+ * Wider than the overclaim rule's hole by design, and for a different reason at
+ * each end: a day Meta has not reported has no spend to divide by, and a day of
+ * genuine zero spend has no ratio either. Both leave the streak unjudgeable,
+ * which is the only question this answers.
+ */
+export function roasUncomputableDays(window: readonly RoasDay[]): string[] {
+  return window
+    .filter(
+      (day) =>
+        day.spendCents === null ||
+        computeRoas(day.verifiedRevenueCents, day.spendCents) === null,
+    )
+    .map((day) => day.day);
+}
+
 export function evaluateRoasBelowTarget(params: {
   series: RoasDay[];
   target: number;
@@ -468,6 +486,14 @@ export function evaluateRoasBelowTarget(params: {
   const window = trailingWindow(params.series, ROAS_CONSECUTIVE_DAYS);
   // Too little history to have an opinion either way.
   if (!window) return { outcome: "indeterminate", uncomputableDays: [] };
+
+  // A day Meta has not reported is not a day the rule can judge. Calling it a
+  // broken streak would read "ROAS recovered" off missing data — the mistake
+  // that retired a live finding while verified ROAS sat at 0.67 of a 1.5 goal.
+  const uncomputableDays = roasUncomputableDays(window);
+  if (uncomputableDays.length > 0) {
+    return { outcome: "indeterminate", uncomputableDays };
+  }
 
   const points = window.map((day) => ({
     day: day.day,
@@ -478,16 +504,6 @@ export function evaluateRoasBelowTarget(params: {
     verifiedRevenueCents: day.verifiedRevenueCents,
     spendCents: day.spendCents,
   }));
-
-  // A day Meta has not reported is not a day the rule can judge. Calling it a
-  // broken streak would read "ROAS recovered" off missing data — the mistake
-  // that retired a live finding while verified ROAS sat at 0.67 of a 1.5 goal.
-  const uncomputableDays = points
-    .filter((point) => point.roas === null)
-    .map((point) => point.day);
-  if (uncomputableDays.length > 0) {
-    return { outcome: "indeterminate", uncomputableDays };
-  }
 
   const belowAllWeek = points.every(
     (point) => point.roas !== null && point.roas < params.target,
@@ -1229,7 +1245,6 @@ export async function evaluateFindingsForStore(params: {
     })),
     target: roasTarget,
   });
-
   const overclaimEvaluation = evaluateMetaOverclaim(claimVerified);
 
   // Rules that could not reach a judgement this run. They are not "no longer
@@ -1367,7 +1382,35 @@ export async function evaluateFindingsForStore(params: {
  */
 export type CheckStatus = "ok" | "needs_look" | "waiting_for_data";
 
-export type TodaysCheck = { type: FindingType; status: CheckStatus };
+export type TodaysCheck = {
+  type: FindingType;
+  status: CheckStatus;
+  /**
+   * Days in the rule's decision window it could not compute, newest last.
+   *
+   * Absent, not empty, on a rule that has no per-day window to report on — the
+   * two mean different things and a reader must not collapse them. Absent is
+   * "this rule cannot tell you which days it was missing"; empty is "it looked
+   * and no day was missing". An empty list beside `waiting_for_data` therefore
+   * means the rule was blocked by something other than an absent day, which
+   * today means it has no full window of history yet.
+   */
+  uncomputableDays?: string[];
+  /**
+   * The window `uncomputableDays` is drawn from, inclusive, in store-local days.
+   * Present on exactly the rules that report `uncomputableDays`.
+   *
+   * Here so a reader can tell a routine reporting lag from a real gap without
+   * knowing this repo's window lengths or the store's evaluation day. Meta fills
+   * the newest day in late as a matter of course, so a hole that ends at
+   * `periodEnd` and runs contiguously back is the ordinary case, while the same
+   * number of days sitting in the middle of the window is not. Deriving that
+   * from a hardcoded window length would leave a copy of these constants in
+   * every consumer, going stale silently the first time one changes.
+   */
+  periodStart?: string;
+  periodEnd?: string;
+};
 
 /** Only these read Meta; the rest run off Shopify alone. */
 const META_DEPENDENT_TYPES: readonly FindingType[] = [
@@ -1376,6 +1419,25 @@ const META_DEPENDENT_TYPES: readonly FindingType[] = [
   "ad_lp_funnel_mismatch",
   "untagged_spend",
 ];
+
+/**
+ * The Meta-dependent rules that walk a per-day series, and so can say which
+ * days they were missing.
+ *
+ * `ad_lp_funnel_mismatch` and `untagged_spend` are Meta-dependent too, but both
+ * judge a single aggregate over their window rather than a series, so there is
+ * no day list to hand back. They keep the connector-age proxy below until their
+ * queries return per-day spend.
+ */
+const DAY_SERIES_TYPES = ["meta_overclaim", "roas_below_target"] as const;
+
+type DaySeriesType = (typeof DAY_SERIES_TYPES)[number];
+
+type DaySeriesWindow = {
+  uncomputableDays: string[];
+  periodStart: string;
+  periodEnd: string;
+};
 
 export type TodaysChecks = {
   /**
@@ -1396,6 +1458,59 @@ export type TodaysChecks = {
   rulesLastRanAt: Date | null;
   checks: TodaysCheck[];
 };
+
+function isDaySeriesType(type: FindingType): type is DaySeriesType {
+  return (DAY_SERIES_TYPES as readonly FindingType[]).includes(type);
+}
+
+/**
+ * Which days each series rule could not compute, as of right now.
+ *
+ * This is the whole point of the endpoint being a live read. The sweep's answer
+ * is hours old by morning, and Meta fills a day in at its own pace, so asking
+ * the rules again is the only way `waiting_for_data` can mean "the rule cannot
+ * judge" rather than "a connector looked old at some point".
+ *
+ * One fetch serves both rules: the overclaim window is the tail of the ROAS
+ * one, which is the shorter-window rule riding along for free. The days come
+ * from `daysEndingOn`, not from a query, so the series is always full length —
+ * a store with too little history shows up as days present with no Meta rows,
+ * which is the same hole under a different cause and wants the same answer.
+ */
+async function getUncomputableDaysByType(params: {
+  organizationId: string;
+  storeId: string;
+  now: Date;
+  ianaTimezone: string;
+}): Promise<Record<DaySeriesType, DaySeriesWindow>> {
+  const day = evaluationDayFor(params.now, params.ianaTimezone);
+  const series = await getClaimVerifiedSeries({
+    organizationId: params.organizationId,
+    storeId: params.storeId,
+    days: daysEndingOn(day, ROAS_CONSECUTIVE_DAYS),
+  });
+
+  const overclaimWindow = series.slice(-OVERCLAIM_CONSECUTIVE_DAYS);
+
+  return {
+    roas_below_target: {
+      uncomputableDays: roasUncomputableDays(
+        series.map((entry) => ({
+          day: entry.day,
+          verifiedRevenueCents: entry.verifiedCents,
+          spendCents: entry.spendCents,
+        })),
+      ),
+      periodStart: series[0].day,
+      periodEnd: day,
+    },
+    meta_overclaim: {
+      uncomputableDays: overclaimUncomputableDays(overclaimWindow),
+      periodStart: overclaimWindow[0].day,
+      periodEnd: day,
+    },
+  };
+}
 
 export async function getTodaysChecks(params: {
   organizationId: string;
@@ -1420,7 +1535,10 @@ export async function getTodaysChecks(params: {
       ),
     getActiveMutedTypes({ organizationId: params.organizationId, now }),
     db
-      .select({ findingsEvaluatedAt: shopifyStores.findingsEvaluatedAt })
+      .select({
+        findingsEvaluatedAt: shopifyStores.findingsEvaluatedAt,
+        ianaTimezone: shopifyStores.ianaTimezone,
+      })
       .from(shopifyStores)
       .where(eq(shopifyStores.id, params.storeId))
       .limit(1),
@@ -1450,24 +1568,51 @@ export async function getTodaysChecks(params: {
   const rulesLastRanAt =
     storeRow?.findingsEvaluatedAt ?? lastFiredRow?.lastFiredAt ?? null;
 
-  // Before the first sync lands there is nothing to judge any rule against.
+  // Before the first sync lands there is nothing to judge any rule against. No
+  // day is nameable yet either, so the series rules report an empty list rather
+  // than pretending to know which days they were missing.
   if (!firstSync.hasAnySuccessfulSync) {
     return {
       rulesLastRanAt,
       checks: FINDING_TYPES.map((type) => ({
         type,
         status: "waiting_for_data" as const,
+        // No sync has landed, so there is no window to draw bounds from either.
+        ...(isDaySeriesType(type) ? { uncomputableDays: [] } : {}),
       })),
     };
   }
 
   const openTypes = new Set(openRows.map((row) => row.type));
+  const uncomputable = await getUncomputableDaysByType({
+    ...params,
+    now,
+    ianaTimezone: storeRow?.ianaTimezone ?? "UTC",
+  });
 
-  const checks = FINDING_TYPES.map((type) => {
+  const checks = FINDING_TYPES.map((type): TodaysCheck => {
     // A muted type is deliberately quiet, so it never asks for a look.
     if (openTypes.has(type) && !mutedTypes.has(type)) {
       return { type, status: "needs_look" as const };
     }
+
+    // The rules that walk a series answer for themselves: they either could
+    // compute their window or they could not, and the connector's age is beside
+    // the point. A sync three hours old still leaves yesterday unreported, and
+    // a sync two days old can still have every day the window needs.
+    if (isDaySeriesType(type)) {
+      const window = uncomputable[type];
+      return {
+        type,
+        status:
+          window.uncomputableDays.length > 0 ? "waiting_for_data" : "ok",
+        ...window,
+      };
+    }
+
+    // The rest keep the connector-age proxy. It is coarse — it cannot tell a
+    // reported day from an unreported one — but it is the only signal these two
+    // have, and dropping it would turn a hedge into a confident `ok`.
     // sync_failure reports on the connectors itself — it is never "waiting".
     if (META_DEPENDENT_TYPES.includes(type) && health.meta.stale) {
       return { type, status: "waiting_for_data" as const };
