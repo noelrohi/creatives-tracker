@@ -69,6 +69,27 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Router tests that assert aggregate SQL run against a real Postgres and
+    # skip themselves when DATABASE_URL is unset. Without a server here they
+    # were green by skipping, which is indistinguishable from green by passing.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # Each suite creates and drops its own throwaway database off this one,
+      # so the connection user has to be able to CREATE DATABASE.
+      DATABASE_URL: postgres://ci:ci@localhost:5432/ci
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
