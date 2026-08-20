@@ -1308,6 +1308,13 @@ export async function evaluateFindingsForStore(params: {
 /* Today's checklist                                                   */
 /* ------------------------------------------------------------------ */
 
+/**
+ * What a check reports is which findings are open, not whether the numbers are
+ * currently good. The read is live, but only the nightly sweep writes findings,
+ * so an `ok` can equally mean nobody has re-checked — and nothing a reader does
+ * will change it before tonight. Calling this a stale snapshot would be worse
+ * than useless: it invites the reader to think a fresh read fixes it.
+ */
 export type CheckStatus = "ok" | "needs_look" | "waiting_for_data";
 
 export type TodaysCheck = { type: FindingType; status: CheckStatus };

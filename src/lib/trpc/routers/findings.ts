@@ -246,7 +246,7 @@ export const findingsRouter = router({
         "findings",
         "checks",
         "Today's finding checks",
-        "Each finding rule's status right now: ok, needs_look (an unresolved finding of that type exists), or waiting_for_data (sync too stale to judge). Statuses are re-derived per request and re-evaluate no rule — they read unresolved findings, active mutes, and live connector health. `rulesLastRanAt` says when the rules themselves last ran, which is a different clock: read it as \"the rules last ran at T, and these are flagged now\". To date what a finding actually said, use `firedAt` on it from findings.list.",
+        "Which findings are open right now — not whether the numbers are currently good. `needs_look` means an unresolved finding of that type exists at this moment; `ok` means none does, which can equally mean nobody has re-checked. This is a live read, but only the nightly sweep writes findings, so nothing a caller does will change an `ok` before tonight. `waiting_for_data` and `sync_failure` do read live connector health. `rulesLastRanAt` is a different clock: it says when the rules last ran, so read it as \"the rules last ran at T, and these are flagged now\", never \"as of T, these were flagged\". To date what a particular finding said, use its own `firedAt` from findings.list.",
       ),
     )
     .output(checksOutputSchema)
