@@ -43,6 +43,12 @@ export const shopifyStores = pgTable(
     ianaTimezone: text("iana_timezone").notNull(),
     currency: text("currency"),
     lastSyncedAt: timestamp("last_synced_at"),
+    /**
+     * When the findings sweep last ran for this store. A finding is a snapshot
+     * frozen at fire time, so anything quoting one has to be able to say when
+     * it was taken — without that, a stale sentence reads as present fact.
+     */
+    findingsEvaluatedAt: timestamp("findings_evaluated_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()

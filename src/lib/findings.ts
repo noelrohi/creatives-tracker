@@ -1293,6 +1293,14 @@ export async function evaluateFindingsForStore(params: {
     if (retired.length > 0) summary.resolved.push(type);
   }
 
+  // Stamped last, and only on a run that got this far: the timestamp says "the
+  // rules were applied to the data as it stood at this moment", which is the
+  // one claim anything quoting a finding needs in order to be true.
+  await db
+    .update(shopifyStores)
+    .set({ findingsEvaluatedAt: now })
+    .where(eq(shopifyStores.id, params.storeId));
+
   return summary;
 }
 
@@ -1300,6 +1308,13 @@ export async function evaluateFindingsForStore(params: {
 /* Today's checklist                                                   */
 /* ------------------------------------------------------------------ */
 
+/**
+ * What a check reports is which findings are open, not whether the numbers are
+ * currently good. The read is live, but only the nightly sweep writes findings,
+ * so an `ok` can equally mean nobody has re-checked — and nothing a reader does
+ * will change it before tonight. Calling this a stale snapshot would be worse
+ * than useless: it invites the reader to think a fresh read fixes it.
+ */
 export type CheckStatus = "ok" | "needs_look" | "waiting_for_data";
 
 export type TodaysCheck = { type: FindingType; status: CheckStatus };
@@ -1312,14 +1327,35 @@ const META_DEPENDENT_TYPES: readonly FindingType[] = [
   "untagged_spend",
 ];
 
+export type TodaysChecks = {
+  /**
+   * When the rules last ran. Null before a store has ever been swept.
+   *
+   * It dates the rules, not the statuses beside it, and the two are genuinely
+   * different clocks. A status is re-derived per request from three inputs the
+   * sweep does not own: unresolved findings (someone can resolve one), active
+   * mutes (someone can add one), and live connector health. So a status can
+   * change with no sweep in between, and freezing them to make the two agree
+   * would be worse — `sync_failure` reading current connector health is the
+   * point of it.
+   *
+   * The honest pairing is therefore "the rules last ran at T, and N are flagged
+   * now", not "as of T, N were flagged". `findings.list` carries `firedAt` per
+   * item for dating what a specific finding said.
+   */
+  rulesLastRanAt: Date | null;
+  checks: TodaysCheck[];
+};
+
 export async function getTodaysChecks(params: {
   organizationId: string;
   storeId: string;
   now?: Date;
-}): Promise<TodaysCheck[]> {
+}): Promise<TodaysChecks> {
   const now = params.now ?? new Date();
 
-  const [firstSync, health, openRows, mutedTypes] = await Promise.all([
+  const [firstSync, health, openRows, mutedTypes, [storeRow], [lastFiredRow]] =
+    await Promise.all([
     getFirstSyncState(params),
     getSyncHealth({ ...params, now }),
     db
@@ -1333,19 +1369,51 @@ export async function getTodaysChecks(params: {
         ),
       ),
     getActiveMutedTypes({ organizationId: params.organizationId, now }),
+    db
+      .select({ findingsEvaluatedAt: shopifyStores.findingsEvaluatedAt })
+      .from(shopifyStores)
+      .where(eq(shopifyStores.id, params.storeId))
+      .limit(1),
+    // A lower bound for a store swept before the column existed. Only sweeps
+    // write findings, so the newest `firedAt` is a time a sweep certainly ran.
+    db
+      .select({ lastFiredAt: sql<Date | null>`max(${findings.firedAt})`.mapWith(
+        findings.firedAt,
+      ) })
+      .from(findings)
+      .where(
+        and(
+          eq(findings.organizationId, params.organizationId),
+          eq(findings.storeId, params.storeId),
+        ),
+      ),
   ]);
+
+  // Null has to mean one thing — "we cannot say when the rules last ran" — or a
+  // caller reading it as "never swept" draws the wrong conclusion from silence.
+  // A store swept before this column shipped is knowable, so it is answered
+  // rather than reported as unknown. The floor only ever errs old: a sweep that
+  // fired and retired nothing leaves no trace, so the stamp lags rather than
+  // leads, and a consumer told the rules ran longer ago than they did stays
+  // more cautious, never less. A store that has genuinely never been swept has
+  // no findings, so it still answers null, correctly.
+  const rulesLastRanAt =
+    storeRow?.findingsEvaluatedAt ?? lastFiredRow?.lastFiredAt ?? null;
 
   // Before the first sync lands there is nothing to judge any rule against.
   if (!firstSync.hasAnySuccessfulSync) {
-    return FINDING_TYPES.map((type) => ({
-      type,
-      status: "waiting_for_data" as const,
-    }));
+    return {
+      rulesLastRanAt,
+      checks: FINDING_TYPES.map((type) => ({
+        type,
+        status: "waiting_for_data" as const,
+      })),
+    };
   }
 
   const openTypes = new Set(openRows.map((row) => row.type));
 
-  return FINDING_TYPES.map((type) => {
+  const checks = FINDING_TYPES.map((type) => {
     // A muted type is deliberately quiet, so it never asks for a look.
     if (openTypes.has(type) && !mutedTypes.has(type)) {
       return { type, status: "needs_look" as const };
@@ -1356,4 +1424,6 @@ export async function getTodaysChecks(params: {
     }
     return { type, status: "ok" as const };
   });
+
+  return { rulesLastRanAt, checks };
 }

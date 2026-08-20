@@ -53,6 +53,17 @@ const findingListItemSchema = z.object({
 const listOutputSchema = z.object({ items: z.array(findingListItemSchema) });
 
 const checksOutputSchema = z.object({
+  /**
+   * When the rules last ran. Null before a store's first sweep.
+   *
+   * It dates the rules, not the statuses beside it. A status is re-derived on
+   * every request — a finding someone resolved, a type someone muted, and live
+   * connector health all move it with no sweep in between. So read this as
+   * "the rules last ran at T, and these are flagged now", never "as of T,
+   * these were flagged". To date what a specific finding said, use `firedAt`
+   * on that finding from `findings.list`.
+   */
+  rulesLastRanAt: z.date().nullable(),
   checks: z.array(
     z.object({
       type: findingTypeSchema,
@@ -235,18 +246,17 @@ export const findingsRouter = router({
         "findings",
         "checks",
         "Today's finding checks",
-        "Each finding rule with its current status: ok, needs_look (an open finding fired), or waiting_for_data (sync too stale to judge).",
+        "Which findings are open right now — not whether the numbers are currently good. `needs_look` means an unresolved finding of that type exists at this moment; `ok` means none does, which can equally mean nobody has re-checked. This is a live read, but only the nightly sweep writes findings, so nothing a caller does will change an `ok` before tonight. `waiting_for_data` and `sync_failure` do read live connector health. `rulesLastRanAt` is a different clock: it says when the rules last ran, so read it as \"the rules last ran at T, and these are flagged now\", never \"as of T, these were flagged\". To date what a particular finding said, use its own `firedAt` from findings.list.",
       ),
     )
     .output(checksOutputSchema)
     .query(async ({ ctx }) => {
     const store = await requireStore(ctx.organizationId);
-    const checks = await getTodaysChecks({
+
+    return getTodaysChecks({
       organizationId: ctx.organizationId,
       storeId: store.id,
     });
-
-    return { checks };
   }),
 
   markResolved: orgWriteProcedure

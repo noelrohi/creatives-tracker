@@ -71,6 +71,7 @@ const PRE_0055_FIXTURE_DDL = [
      iana_timezone text NOT NULL,
      currency text,
      last_synced_at timestamp,
+     findings_evaluated_at timestamp,
      created_at timestamp DEFAULT now() NOT NULL,
      updated_at timestamp DEFAULT now() NOT NULL
    )`,

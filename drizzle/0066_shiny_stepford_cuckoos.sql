@@ -1,0 +1,1 @@
+ALTER TABLE "shopify_store" ADD COLUMN "findings_evaluated_at" timestamp;
