@@ -189,9 +189,9 @@ function fromItemValue(value: string): string | null {
 }
 
 /**
- * The triage tabs, in the order an ad walks them. "All ads" is the inbox:
- * everything lands there untouched, so the tab reads as the full pile rather
- * than as a stage someone put the ad in.
+ * The triage tabs, in the order an ad walks them. "All ads" means all: it
+ * shows every ad whatever its stage, so moving one files it under its stage
+ * tab without ever shrinking the full pile.
  */
 const TAB_LABELS: Record<AdWorkflowStatus, string> = {
   inbox: "All ads",
@@ -200,9 +200,9 @@ const TAB_LABELS: Record<AdWorkflowStatus, string> = {
   made: "Made ad",
 };
 
-/** Nothing to show is a different sentence per tab — the filters are only the inbox's story. */
+/** What a genuinely empty tab says; a tab merely filtered to nothing blames the filters instead. */
 const EMPTY_COPY: Record<AdWorkflowStatus, string> = {
-  inbox: "No ads match these filters",
+  inbox: "No active ads for this competitor",
   shortlist:
     "Nothing shortlisted yet — tick ads under All ads and add them here",
   deprioritised: "No deprioritised ads",
@@ -260,21 +260,27 @@ export function CompetitorAdsGrid({ data }: { data: CompetitorAdsData }) {
     }),
   );
 
+  // "All ads" counts and shows the whole pile; the stage tabs are subsets.
   const counts = useMemo(() => {
     const tally: Record<AdWorkflowStatus, number> = {
-      inbox: 0,
+      inbox: data.ads.length,
       shortlist: 0,
       deprioritised: 0,
       made: 0,
     };
     for (const ad of data.ads) {
-      tally[ad.workflowStatus] += 1;
+      if (ad.workflowStatus !== "inbox") {
+        tally[ad.workflowStatus] += 1;
+      }
     }
     return tally;
   }, [data.ads]);
 
   const inTab = useMemo(
-    () => data.ads.filter((ad) => ad.workflowStatus === status),
+    () =>
+      status === "inbox"
+        ? data.ads
+        : data.ads.filter((ad) => ad.workflowStatus === status),
     [data.ads, status],
   );
 
@@ -415,7 +421,7 @@ export function CompetitorAdsGrid({ data }: { data: CompetitorAdsData }) {
 
       {visible.length === 0 ? (
         <div className="flex items-center justify-center rounded-xl border border-dashed py-16 text-sm text-muted-foreground">
-          {EMPTY_COPY[status]}
+          {inTab.length > 0 ? "No ads match these filters" : EMPTY_COPY[status]}
         </div>
       ) : (
         <div className="columns-2 gap-4 sm:columns-3 lg:columns-4">

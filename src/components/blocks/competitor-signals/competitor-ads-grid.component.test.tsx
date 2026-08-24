@@ -159,15 +159,16 @@ describe("CompetitorAdsGrid", () => {
       const user = userEvent.setup();
       renderGrid(makeData(triaged));
 
-      expect(screen.getByRole("button", { name: "All ads 2" })).toBeVisible();
+      // All ads means all of them — moved ads stay in the pile.
+      expect(screen.getByRole("button", { name: "All ads 5" })).toBeVisible();
       expect(screen.getByRole("button", { name: "Shortlist 1" })).toBeVisible();
       expect(
         screen.getByRole("button", { name: "Deprioritised 1" }),
       ).toBeVisible();
       expect(screen.getByRole("button", { name: "Made ad 1" })).toBeVisible();
 
-      // The inbox is the default landing tab.
-      expect(screen.getByText("2 ads")).toBeVisible();
+      // All ads is the default landing tab.
+      expect(screen.getByText("5 ads")).toBeVisible();
 
       await user.click(screen.getByRole("button", { name: "Shortlist 1" }));
       expect(screen.getByText("1 ad")).toBeVisible();
@@ -201,6 +202,20 @@ describe("CompetitorAdsGrid", () => {
           "No ads made yet — move shortlisted ads here with Make ad",
         ),
       ).toBeVisible();
+    });
+
+    it("blames the filters when they hide a tab that does have ads", () => {
+      renderGrid(
+        makeData([makeAd({ workflowStatus: "shortlist" })]),
+        "?status=shortlist&format=Video",
+      );
+
+      expect(screen.getByText("No ads match these filters")).toBeVisible();
+      expect(
+        screen.queryByText(
+          "Nothing shortlisted yet — tick ads under All ads and add them here",
+        ),
+      ).not.toBeInTheDocument();
     });
 
     it("shortlists the ticked ads from the inbox", async () => {
