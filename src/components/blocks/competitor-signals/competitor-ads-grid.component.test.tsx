@@ -204,6 +204,22 @@ describe("CompetitorAdsGrid", () => {
       ).toBeVisible();
     });
 
+    it("marks moved ads with their stage on All ads only", async () => {
+      const user = userEvent.setup();
+      renderGrid(makeData(triaged));
+
+      // The pile shows where each moved ad went; untouched ads wear nothing.
+      // Scoped to span so the tab buttons' own labels don't match.
+      const chip = { selector: "span" };
+      expect(screen.getByText("Shortlist", chip)).toBeVisible();
+      expect(screen.getByText("Deprioritised", chip)).toBeVisible();
+      expect(screen.getByText("Made ad", chip)).toBeVisible();
+
+      // The stage tab itself doesn't repeat what the tab already says.
+      await user.click(screen.getByRole("button", { name: "Shortlist 1" }));
+      expect(screen.queryByText("Shortlist", chip)).not.toBeInTheDocument();
+    });
+
     it("blames the filters when they hide a tab that does have ads", () => {
       renderGrid(
         makeData([makeAd({ workflowStatus: "shortlist" })]),

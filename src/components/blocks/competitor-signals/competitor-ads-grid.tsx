@@ -76,6 +76,7 @@ function AdCard({
   selectable,
   selected,
   onSelectedChange,
+  stageLabel,
 }: {
   ad: CompetitorAd;
   competitorName: string;
@@ -83,6 +84,7 @@ function AdCard({
   selectable: boolean;
   selected: boolean;
   onSelectedChange: (next: boolean) => void;
+  stageLabel: string | null;
 }) {
   const videoUrl = ad.videoUrl;
   // Natural image height — the masonry columns need each tile's own aspect.
@@ -130,6 +132,13 @@ function AdCard({
             <PlayIcon className="size-4 text-white" />
           </span>
         </div>
+      )}
+      {/* On All ads, a moved ad wears its stage so the pile shows what has
+          already been triaged; the stage tabs don't repeat what the tab says. */}
+      {stageLabel && (
+        <span className="pointer-events-none absolute top-2 left-2 rounded-full bg-primary/90 px-2 py-0.5 text-[11px] font-medium text-primary-foreground">
+          {stageLabel}
+        </span>
       )}
       {/* The tick sits above the creative, so its clicks must never reach the
           play button underneath it. Always visible: triage is the job here,
@@ -432,6 +441,11 @@ export function CompetitorAdsGrid({ data }: { data: CompetitorAdsData }) {
               competitorName={data.competitor.name}
               onPlay={setPlaying}
               selectable={selectable}
+              stageLabel={
+                status === "inbox" && ad.workflowStatus !== "inbox"
+                  ? TAB_LABELS[ad.workflowStatus]
+                  : null
+              }
               selected={selectedIds.includes(ad.id)}
               onSelectedChange={(next) =>
                 setSelectedIds(
