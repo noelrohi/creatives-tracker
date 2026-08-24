@@ -584,14 +584,16 @@ export async function processOrderCoreBatch(
 
 /**
  * Timeline modes share one batch engine: journey and consent runs differ
- * only in their canonical kind tuple, immutable source contract, and the
- * window-boundary failure message.
+ * only in their canonical kind tuple, immutable source contract,
+ * window-boundary failure message, and whether event pages request the
+ * sparse profile email for identity HMAC derivation.
  */
 type TimelineModeConfig = {
   sourceMode: "journey" | "consent";
   kinds: readonly KlaviyoMetricKind[];
   contract: () => KlaviyoEventSourceContract;
   boundaryErrorMessage: string;
+  includeProfileEmail: boolean;
 };
 
 const JOURNEY_MODE: TimelineModeConfig = {
@@ -600,6 +602,7 @@ const JOURNEY_MODE: TimelineModeConfig = {
   contract: journeySourceContract,
   boundaryErrorMessage:
     "Klaviyo journey window must stay inside the 90-store-day boundary",
+  includeProfileEmail: true,
 };
 
 const CONSENT_MODE: TimelineModeConfig = {
@@ -608,6 +611,10 @@ const CONSENT_MODE: TimelineModeConfig = {
   contract: consentSourceContract,
   boundaryErrorMessage:
     "Klaviyo consent window must stay inside the 90-store-day boundary",
+  // Spec: consent ingestion stores no emails and no HMACs. Without the
+  // sparse profile email in the payload, normalization derives no identity
+  // digests, so consent events persist identity-free.
+  includeProfileEmail: false,
 };
 
 function initialTimelineCheckpoint(
@@ -792,10 +799,12 @@ export type TimelineRunnerDependencies = SourceRunnerDependencies & {
 
 /**
  * Timeline batch on the one mode-aware engine surface: same store, page
- * machinery, heartbeat lease, and finalizer as order core. Timeline pages
- * request the sparse profile email only for in-memory HMAC conversion —
- * identity preflight and commit gates are identical — and use no aliases,
- * attributions, or product evidence.
+ * machinery, heartbeat lease, and finalizer as order core. Journey pages
+ * request the sparse profile email only for in-memory HMAC conversion;
+ * consent pages never request it, so consent events normalize with no
+ * identity digests (spec: no emails, no HMACs). Identity preflight and
+ * commit gates are identical across modes — and timeline pages use no
+ * aliases, attributions, or product evidence.
  */
 async function processTimelineBatch(
   config: TimelineModeConfig,
@@ -936,7 +945,7 @@ async function processTimelineBatch(
       to: window.to,
       cursor: checkpoint.cursor,
       includeAttributions: false,
-      includeProfileEmail: true,
+      includeProfileEmail: config.includeProfileEmail,
     });
     const events = normalizeEventPage({
       metricRowId: binding.metricRowId,

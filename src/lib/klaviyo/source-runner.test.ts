@@ -991,12 +991,14 @@ describe("consent sync", () => {
       scope,
       KLAVIYO_CONSENT_KINDS,
     );
+    // Spec: consent ingestion never retrieves the profile email, so no
+    // identity HMAC digests can be derived or persisted.
     expect(deps.listEvents).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         metricId: "external-subscribed",
         includeAttributions: false,
-        includeProfileEmail: true,
+        includeProfileEmail: false,
       }),
     );
     expect(deps.listEvents).toHaveBeenNthCalledWith(
@@ -1007,7 +1009,10 @@ describe("consent sync", () => {
       ([call]) =>
         call as unknown as {
           sourceContract: unknown;
-          events: Array<{ metricId: string }>;
+          events: Array<{
+            metricId: string;
+            identityDigests: unknown[];
+          }>;
         },
     );
     expect(firstCommit.sourceContract).toEqual(consentSourceContract());
@@ -1017,6 +1022,10 @@ describe("consent sync", () => {
     expect(secondCommit.events.map((event) => event.metricId)).toEqual([
       "metric-row-unsubscribed",
     ]);
+    // Committed consent events carry no email-derived identity digests.
+    for (const event of [...firstCommit.events, ...secondCommit.events]) {
+      expect(event.identityDigests).toEqual([]);
+    }
     expect(deps.finishRun).toHaveBeenCalledTimes(1);
   });
 
