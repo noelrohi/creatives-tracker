@@ -35,45 +35,24 @@ function drawer(bucket: AttributionBucket, role: string | null = "owner") {
 }
 
 describe("SourceDrawer", () => {
-  it("meta: panel, orders, and a dashboard link for every role", () => {
-    drawer("meta", "member");
-    expect(screen.getByTestId("meta-panel")).toBeInTheDocument();
+  it.each([
+    ["meta", "meta-panel"],
+    ["google", "google-panel"],
+    ["klaviyo", "klaviyo-panel"],
+  ] as const)("%s: renders its panel above the orders table", (bucket, panel) => {
+    drawer(bucket);
+    expect(screen.getByTestId(panel)).toBeInTheDocument();
     expect(screen.getByTestId("orders-panel")).toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: "Meta dashboard" }),
-    ).toHaveAttribute("href", "/meta");
-  });
-
-  it("google: panel plus a privileged lab link", () => {
-    drawer("google");
-    expect(screen.getByTestId("google-panel")).toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: "Google Ads Lab" }),
-    ).toHaveAttribute("href", "/attribution/google-ads");
-  });
-
-  it("google: members see no lab link", () => {
-    drawer("google", "member");
-    expect(screen.queryByRole("link", { name: "Google Ads Lab" })).toBeNull();
-  });
-
-  it("klaviyo: panel plus a privileged lab link", () => {
-    drawer("klaviyo");
-    expect(screen.getByTestId("klaviyo-panel")).toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: "Klaviyo Lab" }),
-    ).toHaveAttribute("href", "/attribution/klaviyo");
-  });
-
-  it("klaviyo: members see no lab link", () => {
-    drawer("klaviyo", "member");
-    expect(screen.queryByRole("link", { name: "Klaviyo Lab" })).toBeNull();
   });
 
   it("buckets without a panel render only the orders table", () => {
     drawer("tiktok");
     expect(screen.getByTestId("orders-panel")).toBeInTheDocument();
     expect(screen.queryByTestId("meta-panel")).toBeNull();
+  });
+
+  it("carries no dashboard/lab links — those live on the ledger row", () => {
+    drawer("meta", "owner");
     expect(screen.queryByRole("link")).toBeNull();
   });
 });

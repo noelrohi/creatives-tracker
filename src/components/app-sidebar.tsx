@@ -19,11 +19,20 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -52,9 +61,33 @@ const dashboardSubItems: Array<{
   icon: string;
   badge?: string;
 }> = [
-  { label: "Dashboard", href: "/", icon: "solar:widget-5-linear" },
-  { label: "Meta", href: "/meta", icon: "solar:cursor-square-linear" },
   { label: "MER", href: "/mer", icon: "solar:graph-up-linear" },
+];
+
+/**
+ * The Dashboard entry's dropdown: one row per source with its own screen.
+ * The labs are privileged navigation only — hiding them is UX, the
+ * `orgAdminProcedure` on their data remains the security boundary.
+ */
+const dashboardChildren: Array<{
+  label: string;
+  href: string;
+  icon: string;
+  privileged?: boolean;
+}> = [
+  { label: "Meta", href: "/meta", icon: "solar:cursor-square-linear" },
+  {
+    label: "Klaviyo",
+    href: "/attribution/klaviyo",
+    icon: "solar:letter-linear",
+    privileged: true,
+  },
+  {
+    label: "Google",
+    href: "/attribution/google-ads",
+    icon: "solar:magnifer-linear",
+    privileged: true,
+  },
 ];
 
 const navItems: Array<{
@@ -87,6 +120,30 @@ export function AppSidebar() {
   const [renaming, setRenaming] = useState(false);
   const orgId = activeOrg?.id;
   const trpc = useTRPC();
+
+  /**
+   * Controlled, not `defaultOpen`: Radix only reads `defaultOpen` at mount, so
+   * a client-side navigation onto `/meta` or a lab would leave the active
+   * child hidden behind a closed dropdown. The open state is derived from the
+   * route; a manual toggle wins only while the pathname it happened on is
+   * still current, so every navigation re-follows the route.
+   */
+  const dashboardRouteActive =
+    pathname === "/" ||
+    dashboardChildren.some(
+      (child) =>
+        pathname === child.href || pathname.startsWith(`${child.href}/`),
+    );
+  const [dashboardToggle, setDashboardToggle] = useState<{
+    pathname: string;
+    open: boolean;
+  } | null>(null);
+  const dashboardOpen =
+    dashboardToggle?.pathname === pathname
+      ? dashboardToggle.open
+      : dashboardRouteActive;
+  const setDashboardOpen = (open: boolean) =>
+    setDashboardToggle({ pathname, open });
 
   /** Where the money is read rather than managed: gated behind org feature flags. */
   const { data: featureFlags } = useQuery(
@@ -283,6 +340,56 @@ export function AppSidebar() {
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu>
+                <Collapsible
+                  asChild
+                  open={dashboardOpen}
+                  onOpenChange={setDashboardOpen}
+                  className="group/collapsible"
+                >
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      tooltip="Dashboard"
+                      isActive={pathname === "/"}
+                    >
+                      <Link href="/">
+                        <Icon icon="solar:widget-5-linear" className="size-4" />
+                        <span>Dashboard</span>
+                      </Link>
+                    </SidebarMenuButton>
+                    <CollapsibleTrigger asChild>
+                      <SidebarMenuAction className="transition-transform group-data-[state=open]/collapsible:rotate-90">
+                        <Icon icon="solar:alt-arrow-right-linear" />
+                        <span className="sr-only">Toggle sources</span>
+                      </SidebarMenuAction>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <SidebarMenuSub>
+                        {dashboardChildren
+                          .filter((child) => isPrivileged || !child.privileged)
+                          .map((child) => (
+                            <SidebarMenuSubItem key={child.href}>
+                              <SidebarMenuSubButton
+                                asChild
+                                isActive={
+                                  pathname === child.href ||
+                                  pathname.startsWith(`${child.href}/`)
+                                }
+                              >
+                                <Link href={child.href}>
+                                  <Icon
+                                    icon={child.icon}
+                                    className="size-4"
+                                  />
+                                  <span>{child.label}</span>
+                                </Link>
+                              </SidebarMenuSubButton>
+                            </SidebarMenuSubItem>
+                          ))}
+                      </SidebarMenuSub>
+                    </CollapsibleContent>
+                  </SidebarMenuItem>
+                </Collapsible>
                 {dashboardSubItems.map((item) => {
                   const isActive =
                     item.href === "/"

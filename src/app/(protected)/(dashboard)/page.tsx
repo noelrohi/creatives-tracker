@@ -376,6 +376,7 @@ export default function DashboardPage() {
             onSelect={(bucket) =>
               setOpenBucket(openBucket === bucket ? null : bucket)
             }
+            role={role}
             loading={overview.isPending || !range}
             dimmed={frozen}
             shopifyReportUrl={shopifyReportUrl}
