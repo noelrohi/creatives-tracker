@@ -17,6 +17,7 @@ import { ADVISORY_BANNER, LAB_VIEWS, type LabView } from "./copy";
 import { CoverageSummary } from "./coverage-summary";
 import { LabFilterBar } from "./filter-bar";
 import { LabHeader } from "./lab-header";
+import { ListHealthTable } from "./list-health-table";
 import { OrderDetailSheet } from "./order-detail-sheet";
 import { OrdersTable } from "./orders-table";
 import { LabPanelState } from "./panel-state";
@@ -37,6 +38,7 @@ const VIEW_LABELS: Record<LabView, string> = {
   unmatched: "Unmatched events",
   reports: "Reports",
   probe: "Probe & runs",
+  "list-health": "List health",
 };
 
 /**
@@ -483,6 +485,9 @@ export function KlaviyoPlayground() {
               }
             />
           ) : null}
+          {view === "list-health" ? (
+            <ListHealthView range={range} />
+          ) : null}
         </div>
       ) : null}
 
@@ -672,6 +677,23 @@ function ReportsView(props: {
       busy={props.busy}
       onRetry={() => void reports.refetch()}
       onRefresh={props.onRefresh}
+    />
+  );
+}
+
+function ListHealthView(props: { range: { dateFrom: string; dateTo: string } }) {
+  const trpc = useTRPC();
+  const listHealth = useQuery(
+    trpc.klaviyo.listHealth.queryOptions({
+      dateFrom: props.range.dateFrom,
+      dateTo: props.range.dateTo,
+    }),
+  );
+  return (
+    <ListHealthTable
+      summary={listHealth.data ?? null}
+      error={listHealth.isError}
+      onRetry={() => void listHealth.refetch()}
     />
   );
 }

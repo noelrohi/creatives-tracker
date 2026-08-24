@@ -18,8 +18,7 @@ import { klaviyoEvents, klaviyoMetrics } from "@/schema/klaviyo";
 export const QUICK_CHURN_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
 // Prior-state lookback for flip detection, matching what a fresh 90-day
-// backfill can see; identical semantics for any window inside the retained
-// range.
+// backfill can see; the same view a fresh backfill would produce.
 export const PRIOR_STATE_HORIZON_MS = 90 * 24 * 60 * 60 * 1000;
 
 export type ConsentEventInput = {

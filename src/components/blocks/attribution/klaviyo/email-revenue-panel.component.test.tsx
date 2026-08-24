@@ -10,6 +10,7 @@ import type { EmailAttributionSummary } from "@/lib/klaviyo/email-attribution";
 const queryState = vi.hoisted(() => ({
   attributionFn: (): Promise<unknown> => Promise.resolve(null),
   healthFn: (): Promise<unknown> => Promise.resolve(null),
+  listHealthFn: (): Promise<unknown> => Promise.resolve(null),
 }));
 
 vi.mock("@/lib/trpc/client", () => ({
@@ -26,6 +27,13 @@ vi.mock("@/lib/trpc/client", () => ({
         queryOptions: () => ({
           queryKey: ["health"],
           queryFn: queryState.healthFn,
+          retry: false,
+        }),
+      },
+      listHealth: {
+        queryOptions: (input: unknown) => ({
+          queryKey: ["list-health", input],
+          queryFn: queryState.listHealthFn,
           retry: false,
         }),
       },

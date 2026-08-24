@@ -14,6 +14,7 @@ import { isPrivilegedOrgRole } from "@/lib/organization-access";
 import { useTRPC } from "@/lib/trpc/client";
 import { emailRevenue as copy } from "./copy";
 import { EmailRevenueGaps } from "./email-revenue-gaps";
+import { EmailRevenueListHealth } from "./email-revenue-list-health";
 import { centsOf } from "./email-revenue-math";
 import { EmailRevenueTables } from "./email-revenue-tables";
 
@@ -208,6 +209,11 @@ export function EmailRevenuePanel({
     enabled: privileged,
     retry: false,
   });
+  const listHealth = useQuery({
+    ...trpc.klaviyo.listHealth.queryOptions({ dateFrom, dateTo }),
+    enabled: privileged,
+    retry: false,
+  });
 
   if (!privileged) return null;
   if (attribution.error?.data?.code === "NOT_FOUND") return null;
@@ -265,6 +271,13 @@ export function EmailRevenuePanel({
             dateFrom={dateFrom}
             dateTo={dateTo}
           />
+          {listHealth.data ? (
+            <EmailRevenueListHealth
+              summary={listHealth.data}
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+            />
+          ) : null}
         </div>
       )}
     </section>
