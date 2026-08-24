@@ -4,7 +4,10 @@ import { headers } from "next/headers";
 import { asc, eq } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { authenticateApiKey, getBearerToken } from "@/lib/api-keys";
-import { isPrivilegedOrgRole } from "@/lib/organization-access";
+import {
+  isOrgRole,
+  isPrivilegedOrgRole,
+} from "@/lib/organization-access";
 import { getOrganizationRole } from "@/lib/server/organization-role";
 import { db } from "@/db";
 import { member } from "@/schema/auth";
@@ -225,7 +228,9 @@ const hasOrganization = t.middleware(async ({ ctx, next }) => {
   });
 });
 
-const hasWriteAccess = t.middleware(async ({ ctx, next }) => {
+type WriteContext = Context & { organizationId: string };
+
+function assertWritePrincipal(ctx: Context): asserts ctx is WriteContext {
   if (
     !ctx.session &&
     !ctx.apiKeyId &&
@@ -242,41 +247,41 @@ const hasWriteAccess = t.middleware(async ({ ctx, next }) => {
   }
 
   requireApiKeyScope(ctx.apiKeyId, ctx.apiKeyScopes, "write");
+}
 
-  if (ctx.principalType === "apiKey" || ctx.principalType === "worker") {
-    return next({
-      ctx: {
-        ...ctx,
-        apiKeyId: ctx.apiKeyId,
-        apiKeyScopes: ctx.apiKeyScopes,
-        organizationId: ctx.organizationId,
-        orgRole: ctx.orgRole,
-        principalType: ctx.principalType,
-        session: ctx.session,
-        userId: ctx.userId,
-      },
-    });
-  }
+const hasWriteAccess = t.middleware(async ({ ctx, next }) => {
+  assertWritePrincipal(ctx);
 
-  if (!isPrivilegedOrgRole(ctx.orgRole)) {
+  if (
+    ctx.principalType !== "apiKey" &&
+    ctx.principalType !== "worker" &&
+    !isPrivilegedOrgRole(ctx.orgRole)
+  ) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "Only organization admins can modify data",
     });
   }
 
-  return next({
-    ctx: {
-      ...ctx,
-      apiKeyId: ctx.apiKeyId,
-      apiKeyScopes: ctx.apiKeyScopes,
-      organizationId: ctx.organizationId,
-      orgRole: ctx.orgRole,
-      principalType: ctx.principalType,
-      session: ctx.session,
-      userId: ctx.userId,
-    },
-  });
+  return next({ ctx });
+});
+
+/** Write access for collaborative actions that every organization role owns. */
+const hasMemberWriteAccess = t.middleware(async ({ ctx, next }) => {
+  assertWritePrincipal(ctx);
+
+  if (
+    ctx.principalType !== "apiKey" &&
+    ctx.principalType !== "worker" &&
+    !isOrgRole(ctx.orgRole)
+  ) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Organization membership is required to modify this data",
+    });
+  }
+
+  return next({ ctx });
 });
 
 const hasWorkerAccess = t.middleware(async ({ ctx, next }) => {
@@ -369,6 +374,7 @@ export const writeAccessRequired = hasWriteAccess;
 export const protectedProcedure = t.procedure.use(isAuthenticated);
 export const orgProcedure = t.procedure.use(hasOrganization);
 export const orgWriteProcedure = t.procedure.use(hasWriteAccess);
+export const orgMemberWriteProcedure = t.procedure.use(hasMemberWriteAccess);
 export const orgAdminProcedure = t.procedure.use(hasOrgAdminSession);
 export const orgOwnerProcedure = t.procedure.use(hasOrgOwnerSession);
 export const internalWorkerProcedure = t.procedure.use(hasWorkerAccess);

@@ -3,12 +3,18 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@/db", () => ({ db: {} }));
 vi.mock("server-only", () => ({}));
 
-const { createCallerFactory, orgProcedure, orgWriteProcedure, router } =
-  await import("../init");
+const {
+  createCallerFactory,
+  orgMemberWriteProcedure,
+  orgProcedure,
+  orgWriteProcedure,
+  router,
+} = await import("../init");
 
 const scopeRouter = router({
   read: orgProcedure.query(() => ({ ok: true })),
   write: orgWriteProcedure.mutation(() => ({ ok: true })),
+  memberWrite: orgMemberWriteProcedure.mutation(() => ({ ok: true })),
 });
 
 const createCaller = createCallerFactory(scopeRouter);
@@ -25,7 +31,7 @@ function createApiKeyCaller(scopes: string[]) {
   });
 }
 
-function createSessionCaller() {
+function createSessionCaller(role: "admin" | "member" = "admin") {
   return createCaller({
     session: {
       user: { id: "test-user-id" },
@@ -37,7 +43,7 @@ function createSessionCaller() {
     principalType: "session" as const,
     userId: "test-user-id",
     organizationId: "test-org-id",
-    orgRole: "admin",
+    orgRole: role,
     apiKeyId: null,
     apiKeyScopes: ["unrelated"],
   });
@@ -52,12 +58,17 @@ describe("API key procedure scopes", () => {
       code: "FORBIDDEN",
       message: expect.stringContaining("write"),
     });
+    await expect(caller.memberWrite()).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining("write"),
+    });
   });
 
   it("allows a write-scoped key through write procedures and rejects reads", async () => {
     const caller = createApiKeyCaller(["write"]);
 
     await expect(caller.write()).resolves.toEqual({ ok: true });
+    await expect(caller.memberWrite()).resolves.toEqual({ ok: true });
     await expect(caller.read()).rejects.toMatchObject({
       code: "FORBIDDEN",
       message: expect.stringContaining("read"),
@@ -67,11 +78,12 @@ describe("API key procedure scopes", () => {
   it.each([
     ["wildcard", ["*"]],
     ["legacy empty scopes", []],
-  ])("allows a %s key through both procedure tiers", async (_name, scopes) => {
+  ])("allows a %s key through every procedure tier", async (_name, scopes) => {
     const caller = createApiKeyCaller(scopes);
 
     await expect(caller.read()).resolves.toEqual({ ok: true });
     await expect(caller.write()).resolves.toEqual({ ok: true });
+    await expect(caller.memberWrite()).resolves.toEqual({ ok: true });
   });
 
   it("does not apply API key scopes to session principals", async () => {
@@ -79,5 +91,13 @@ describe("API key procedure scopes", () => {
 
     await expect(caller.read()).resolves.toEqual({ ok: true });
     await expect(caller.write()).resolves.toEqual({ ok: true });
+    await expect(caller.memberWrite()).resolves.toEqual({ ok: true });
+  });
+
+  it("allows members only through the collaborative write tier", async () => {
+    const caller = createSessionCaller("member");
+
+    await expect(caller.memberWrite()).resolves.toEqual({ ok: true });
+    await expect(caller.write()).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });

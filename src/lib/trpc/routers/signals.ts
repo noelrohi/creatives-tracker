@@ -31,7 +31,12 @@ import {
   intelSourceEnum,
 } from "@/schema/competitor-signals";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
-import { orgProcedure, orgWriteProcedure, router } from "../init";
+import {
+  orgMemberWriteProcedure,
+  orgProcedure,
+  orgWriteProcedure,
+  router,
+} from "../init";
 import { signalsFeedbackProcedures } from "./signals.feedback";
 import { signalsPlanProcedures } from "./signals.plan";
 import type {
@@ -531,7 +536,7 @@ export const signalsRouter = router({
    * Bulk workflow-status move for the competitor ad triage board. Any org
    * member can move rows; organization scoping prevents cross-org updates.
    */
-  setAdWorkflowStatus: orgWriteProcedure
+  setAdWorkflowStatus: orgMemberWriteProcedure
     .input(
       z.object({
         adIds: z.array(z.string()).min(1).max(200),
