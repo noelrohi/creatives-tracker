@@ -17,6 +17,14 @@ There is no OpenAPI read for the tracked list (`signals.listCompetitors` is an i
 |---|---|---|
 | AIRWAAV | `109178280892310` | Known-active — the breakage canary (§11) |
 | Shock Doctor | `92823337978` | Genuinely sparse (1 active US ad in the trial); zero-ish is normal here |
+| SleepBrace | `612479481940253` | getsleepbrace.com; heavy advertiser (71 active US ads on 2026-08-20) |
+| MyoEdge | `783800264826596` | myoedge.co tongue positioner; Profile Plus page — this is the delegate/Ad Library id, not the profile id. Sparse (1 like-page ad) |
+| Zygo Tape | `1087943771068601` | zygotape.com; classic page, verified correct — has never run Meta ads anywhere (distribution is IG/TikTok). Zero-ad fills are genuinely true here |
+| Nuvola | `111035484157964` | nuvolaworld.com clear aligners (Italian, sold through dentists) — the page is `facebook.com/NuvolaWorldAligners`. B2B advertiser: sparse, practitioner-facing webinar ads |
+
+Requested by the client but **not trackable on Meta** (checked 2026-08-20): **Mayena** (mayenafit.com — no Facebook page exists, IG/TikTok only; the FB page named "Mayena" `104542821456475` is an unrelated Dutch apparel shop — do not use).
+
+**Ad Library page search only indexes pages that currently run ads**, so a real brand with one low-spend ad — or none — is invisible to `--search-pages`. When a brand does not surface there, find its page from its own website's Facebook link (fetch the site with a Googlebot UA and read `delegate_page.id` off the FB page) before concluding it has no Meta presence. That is how Nuvola was found after the typeahead missed it.
 
 Get a `metaPageId` from the Ad Library URL for the brand: `https://www.facebook.com/ads/library/?view_all_page_id=<metaPageId>`. It must match a tracked competitor row in the app, or `ingestFill` returns `NOT_FOUND` (`No tracked competitor for Meta page <id>`); add it in-app at `/competitors` first.
 
@@ -95,7 +103,7 @@ This is what format breadth scores from (§8), and it must describe the competit
 
 **Media URLs.** Pass the expiring signed `scontent.*` links through as-is — the server mirrors the primary creative's media immediately at ingest and never persists source URLs. Do not download or rewrite them here. Variant media is not mirrored in v1.
 
-Where they live in the source: single-creative ads keep them in `raw_data.images[]` / `raw_data.videos[]`, but **card-based ads (DCO/carousel) keep them in `raw_data.cards[]`** (`original_image_url` / `resized_image_url` / `video_*_url` per card) — take the primary creative's from the first card. The server also recovers them from `raw` when all four top-level URLs are null (`src/lib/competitor-signals/raw-media.ts`), but send them explicitly; the fallback is a safety net, not the contract.
+Where they live depends on the collector output. MetaAdsCollector's normalized output uses root `creatives[]`: map `video_hd_url` / `video_sd_url`, and map its video poster `thumbnail_url` to `videoPreviewImageUrl`. Native snapshot shapes use `raw_data.images[]` / `raw_data.videos[]`; **card-based ads (DCO/carousel) use `raw_data.cards[]`** (`original_image_url` / `resized_image_url` / `video_*_url` per card). Take the primary creative's fields from the first creative. The server recovers each missing media field independently from `raw` (`src/lib/competitor-signals/raw-media.ts`), but send all of them explicitly; the fallback is a safety net, not the contract.
 
 Step 2 is done when every ad collected in step 1 has a NormalizedAd carrying all 23 keys — required fields populated, nullable fields explicit `null`.
 

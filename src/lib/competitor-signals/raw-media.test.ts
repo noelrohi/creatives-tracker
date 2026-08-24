@@ -66,6 +66,19 @@ describe("extractRawPrimaryMedia", () => {
     });
   });
 
+  it("reads MetaAdsCollector root creatives and its thumbnail alias", () => {
+    const raw = {
+      creatives: [{ video_hd_url: VID, thumbnail_url: PREVIEW }],
+    };
+    expect(extractRawPrimaryMedia(raw)).toEqual({
+      imageUrl: null,
+      resizedImageUrl: null,
+      videoHdUrl: VID,
+      videoSdUrl: null,
+      videoPreviewImageUrl: PREVIEW,
+    });
+  });
+
   it("skips media-less creatives to find the primary", () => {
     const raw = {
       raw_data: {

@@ -599,27 +599,20 @@ export const signalsRouter = router({
       const now = new Date();
 
       // Source URLs are expiring signed CDN links (§4) — they ride in the job
-      // payload and are never persisted. A harness that missed the primary
-      // creative's media (card-based ads keep it in raw cards, not top-level)
-      // sends all four as null; recover them from the verbatim raw payload
-      // rather than leaving the ad with nothing to mirror.
+      // payload and are never persisted as display copies. Recover each
+      // missing slot independently from the verbatim raw payload: collector
+      // shapes and harness versions can surface the video while missing its
+      // poster (or vice versa), so an all-or-nothing fallback leaves blanks.
       const media: CompetitorMediaSource[] = input.ads
         .map((ad) => {
-          const hasTopLevelMedia =
-            ad.imageUrl !== null ||
-            ad.videoHdUrl !== null ||
-            ad.videoSdUrl !== null ||
-            ad.videoPreviewImageUrl !== null;
-          const fallback = hasTopLevelMedia
-            ? null
-            : extractRawPrimaryMedia(ad.raw);
+          const fallback = extractRawPrimaryMedia(ad.raw);
           return {
             archiveId: ad.archiveId,
-            imageUrl: ad.imageUrl ?? fallback?.imageUrl ?? null,
-            videoHdUrl: ad.videoHdUrl ?? fallback?.videoHdUrl ?? null,
-            videoSdUrl: ad.videoSdUrl ?? fallback?.videoSdUrl ?? null,
+            imageUrl: ad.imageUrl ?? fallback.imageUrl,
+            videoHdUrl: ad.videoHdUrl ?? fallback.videoHdUrl,
+            videoSdUrl: ad.videoSdUrl ?? fallback.videoSdUrl,
             videoPreviewImageUrl:
-              ad.videoPreviewImageUrl ?? fallback?.videoPreviewImageUrl ?? null,
+              ad.videoPreviewImageUrl ?? fallback.videoPreviewImageUrl,
           };
         })
         .filter(
