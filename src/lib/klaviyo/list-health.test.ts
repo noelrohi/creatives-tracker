@@ -47,6 +47,21 @@ describe("computeListHealth", () => {
     ]);
   });
 
+  it("counts won-back from an unsubscribe arbitrarily far before the window — no lookback horizon", () => {
+    // Spec: prior state is the immediately-previous consent event across the
+    // full retained history, any time — an unsubscribe ~200 days before the
+    // window still makes an in-window resubscribe a won-back.
+    const result = computeListHealth(
+      [
+        ev("p1", "unsubscribed_from_list", "2026-01-13T10:00:00Z"),
+        ev("p1", "subscribed_to_list", "2026-08-05T10:00:00Z"),
+      ],
+      { window, timeZone: TZ },
+    );
+    expect(result.totals.wonBack).toBe(1);
+    expect(result.totals.subscribed).toBe(1);
+  });
+
   it("never counts a first-ever event as won-back or quick churn", () => {
     const result = computeListHealth(
       [ev("p1", "unsubscribed_from_list", "2026-08-05T10:00:00Z")],

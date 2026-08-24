@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, gte, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { deriveDayInTimezone } from "@/lib/shopify-ingest";
 import type { KlaviyoConnectionScope } from "@/lib/klaviyo/types";
@@ -16,10 +16,6 @@ import { klaviyoEvents, klaviyoMetrics } from "@/schema/klaviyo";
  */
 
 export const QUICK_CHURN_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
-
-// Prior-state lookback for flip detection, matching what a fresh 90-day
-// backfill can see; the same view a fresh backfill would produce.
-export const PRIOR_STATE_HORIZON_MS = 90 * 24 * 60 * 60 * 1000;
 
 export type ConsentEventInput = {
   profileId: string | null;
@@ -140,10 +136,13 @@ export async function loadListHealth(input: {
   const kindByMetricId = new Map(
     metrics.map((metric) => [metric.id, metric.canonicalKind]),
   );
-  // History back to PRIOR_STATE_HORIZON_MS before the window (NOT
-  // window-filtered): the won-back/quick-churn "previous event" may predate
-  // the window, so we look back far enough to catch it without fetching an
-  // unbounded, ever-growing history.
+  // Full retained consent history (NOT window-filtered): per the spec,
+  // prior state is the immediately-previous consent event for the profile
+  // across the connection's full retained history — a resubscribe counts as
+  // won-back no matter how old the unsubscribe it reverses is. Growth
+  // watch-item: consent history accretes roughly forever at low volume, so
+  // this fetch grows unboundedly; if a high-churn store makes it heavy,
+  // revisit with a lookback horizon — but that needs a spec change first.
   const rows = await db
     .select({
       profileId: klaviyoEvents.profileId,
@@ -159,10 +158,6 @@ export async function loadListHealth(input: {
         inArray(
           klaviyoEvents.metricId,
           metrics.map((metric) => metric.id),
-        ),
-        gte(
-          klaviyoEvents.occurredAt,
-          new Date(input.window.from.getTime() - PRIOR_STATE_HORIZON_MS),
         ),
       ),
     );

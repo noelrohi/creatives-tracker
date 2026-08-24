@@ -196,9 +196,11 @@ describeIfDb("Klaviyo list health aggregates on PostgreSQL", () => {
 
   it("uses prior state from before the window for won-back", async () => {
     await seedConsentMetrics();
-    // July unsubscribe (outside the August window) sets the prior state;
-    // the in-window resubscribe flips to won-back.
-    await seedConsentEvent("ev-prior", "metric-unsub", "p-prior", "2026-07-10T10:00:00Z");
+    // An unsubscribe well over 90 days before the August window sets the
+    // prior state; the in-window resubscribe flips to won-back. The >90d gap
+    // proves the fetch reads the full retained history with no lookback
+    // horizon (spec: full history, any time).
+    await seedConsentEvent("ev-prior", "metric-unsub", "p-prior", "2026-04-10T10:00:00Z");
     await seedConsentEvent("ev-resub", "metric-sub", "p-prior", "2026-08-05T10:00:00Z");
 
     const summary = await loadListHealth({ scope, window, timeZone });
