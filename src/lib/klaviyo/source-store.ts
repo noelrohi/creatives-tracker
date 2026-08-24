@@ -2373,7 +2373,7 @@ export async function getKlaviyoHealthForOrganization(
 }
 
 type CheckpointSummary = {
-  sourceMode: "order_core" | "journey" | "consent" | null;
+  sourceMode: KlaviyoEventSourceContract["sourceMode"] | null;
   metricIndex: number | null;
   page: number | null;
 };

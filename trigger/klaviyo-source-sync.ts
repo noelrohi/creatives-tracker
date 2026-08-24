@@ -64,6 +64,15 @@ function checkpointFingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+// Idempotency-key prefixes per source mode. The order_core spelling is
+// historical ("order-core"); changing it would break the seven-day
+// continuation-key continuity of in-flight runs.
+const KEY_PREFIX: Record<string, string> = {
+  journey: "journey",
+  consent: "consent",
+  order_core: "order-core",
+};
+
 export const klaviyoDiscoveryTask = task({
   id: "klaviyo-discovery",
   retry: KLAVIYO_TASK_RETRY,
@@ -134,7 +143,7 @@ export const klaviyoOrderCoreBatchTask = task({
     }
     await tags.add(orgTag(run.scope.organizationId));
     // The durable run's immutable parameters — never the payload — decide
-    // order-core versus journey processing inside the one engine.
+    // order-core, journey, or consent processing inside the one engine.
     const result = await processEventSourceBatch({
       scope: run.scope,
       syncRunId: payload.syncRunId,
@@ -147,7 +156,7 @@ export const klaviyoOrderCoreBatchTask = task({
       // The key hashes the validated persisted next checkpoint, so provider
       // cursors never appear in task keys or logs.
       const idempotencyKey = await idempotencyKeys.create(
-        `klaviyo-${result.sourceMode === "journey" ? "journey" : "order-core"}:${payload.syncRunId}:${checkpointFingerprint(result.checkpoint)}`,
+        `klaviyo-${KEY_PREFIX[result.sourceMode]}:${payload.syncRunId}:${checkpointFingerprint(result.checkpoint)}`,
         { scope: "global" },
       );
       await tasks.trigger<typeof klaviyoOrderCoreBatchTask>(

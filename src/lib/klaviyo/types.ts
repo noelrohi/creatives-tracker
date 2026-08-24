@@ -132,8 +132,8 @@ export type ConsentSourceContract = {
 };
 
 /**
- * Closed event-source union: resume can never reinterpret a journey metric
- * index as order core or vice versa, and the canonical tuple is never
+ * Closed event-source union: resume can never reinterpret a metric index
+ * under one mode as another mode's, and the canonical tuple is never
  * shortened or reordered.
  */
 export type KlaviyoEventSourceContract =
