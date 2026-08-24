@@ -107,10 +107,15 @@ export const emailRevenue = {
   retry: "Retry",
 } as const;
 
+/** ASCII "-" prefix for a nonnegative magnitude; never renders as "-0". */
+function negated(n: number): string {
+  return n === 0 ? `${n}` : `-${n}`;
+}
+
 export const listHealth = {
   stripLead: "List health:",
   subscribed: (n: number) => `+${n} subscribed`,
-  unsubscribed: (n: number) => `−${n} unsubscribed`,
+  unsubscribed: (n: number) => `${negated(n)} unsubscribed`,
   wonBack: (n: number) => `${n} won back`,
   quickChurn: (n: number) => `${n} quick churn`,
   net: (n: number) => `net ${n >= 0 ? `+${n}` : `${n}`}`,
@@ -124,5 +129,5 @@ export const listHealth = {
     "Aggregate counts only — no per-person rows; list-membership semantics (a person on two lists counts once per list)",
   undiscovered:
     "Run discovery to enable list tracking — the consent metrics haven't been synced for this connection yet.",
-  error: "Couldn't load list health.",
+  error: "Couldn’t load list health.",
 } as const;

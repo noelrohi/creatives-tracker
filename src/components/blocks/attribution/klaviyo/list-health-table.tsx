@@ -9,7 +9,9 @@ const KPIS = [
   { key: "unsubscribed", label: copy.kpiUnsubscribed, tone: "text-red-600" },
   { key: "wonBack", label: copy.kpiWonBack, tone: "text-amber-600" },
   { key: "quickChurn", label: copy.kpiQuickChurn, tone: "" },
-  { key: "net", label: copy.kpiNet, tone: "text-emerald-600" },
+  // Net's tone is sign-dependent (a negative net must not read as emerald/positive) —
+  // computed at render from summary.totals.net rather than fixed here.
+  { key: "net", label: copy.kpiNet, tone: "" },
 ] as const;
 
 export function ListHealthTable({
@@ -43,27 +45,46 @@ export function ListHealthTable({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-x-7 gap-y-2">
-        {KPIS.map((kpi) => (
-          <div key={kpi.key}>
-            <p
-              className={`text-[20px] font-semibold tabular-nums ${kpi.tone}`}
-              data-testid={`list-health-kpi-${kpi.key}`}
-            >
-              {format(kpi.key)}
-            </p>
-            <p className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-              {kpi.label}
-            </p>
-          </div>
-        ))}
+        {KPIS.map((kpi) => {
+          const value = summary.totals[kpi.key];
+          const tone =
+            kpi.key === "net"
+              ? value >= 0
+                ? "text-emerald-600"
+                : "text-red-600"
+              : kpi.tone;
+          return (
+            <div key={kpi.key}>
+              <p
+                className={`text-[20px] font-semibold tabular-nums ${tone}`}
+                data-testid={`list-health-kpi-${kpi.key}`}
+              >
+                {format(kpi.key)}
+              </p>
+              <p className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+                {kpi.label}
+              </p>
+            </div>
+          );
+        })}
       </div>
       <div>
-        <div className="flex h-12 items-end gap-[2px]">
+        {/* Decorative — the daily table below is the accessible representation of the same data. */}
+        <div className="flex h-12 items-end gap-[2px]" aria-hidden="true">
           {[...summary.daily].reverse().map((row) => (
             <div
               key={row.day}
+              data-testid={`list-health-bar-${row.day}`}
               title={`${row.day}: ${row.net >= 0 ? "+" : ""}${row.net}`}
-              className={row.net >= 0 ? "w-2.5 bg-emerald-600/70" : "w-2.5 bg-red-600/70"}
+              // A quiet day (net 0) gets a neutral bar, not green: `0 >= 0` would otherwise
+              // paint it as inflow. Height keeps its 8% floor so quiet days stay visible.
+              className={
+                row.net > 0
+                  ? "w-2.5 bg-emerald-600/70"
+                  : row.net < 0
+                    ? "w-2.5 bg-red-600/70"
+                    : "w-2.5 bg-muted"
+              }
               style={{ height: `${Math.max(8, (Math.abs(row.net) / maxAbsNet) * 100)}%` }}
             />
           ))}
