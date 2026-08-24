@@ -149,7 +149,14 @@ export type IncrementalChildren = {
     claimReplayId: string,
   ): Promise<void>;
   runJourney(scope: KlaviyoConnectionScope): Promise<{ ok: boolean }>;
-  runConsent(scope: KlaviyoConnectionScope): Promise<{ ok: boolean }>;
+  /**
+   * Unlike fire-and-forget journey, consent reports run completion: the
+   * supervisor polls the durable sync-run row to a terminal status, and
+   * "running" means the run was still live when the poll deadline expired.
+   */
+  runConsent(
+    scope: KlaviyoConnectionScope,
+  ): Promise<{ status: "success" | "failed" | "running" }>;
   runDimensions(scope: KlaviyoConnectionScope): Promise<{ ok: boolean }>;
   runReports(scope: KlaviyoConnectionScope): Promise<{ ok: boolean }>;
 };
@@ -275,11 +282,17 @@ export async function runIncrementalConnection(
     console.error("klaviyo incremental consent stage failed", {
       message: error instanceof Error ? error.message : String(error),
     });
-    return { ok: false };
+    return { status: "failed" as const };
   });
-  report.consent = consent.ok
-    ? { state: "completed" }
-    : { state: "failed", detail: "consent_failed" };
+  // Mirrors the claims stage: completion is what the durable run row says,
+  // and a run still live at the poll deadline stays visibly pending.
+  if (consent.status === "success") {
+    report.consent = { state: "completed" };
+  } else if (consent.status === "running") {
+    report.consent = { state: "pending", detail: "live_at_deadline" };
+  } else {
+    report.consent = { state: "failed", detail: "consent_failed" };
+  }
   const dimensions = await children.runDimensions(input.scope).catch(() => ({
     ok: false,
   }));

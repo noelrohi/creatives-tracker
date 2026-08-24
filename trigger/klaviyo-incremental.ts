@@ -101,6 +101,29 @@ async function hasRunningEventsRun(
   return run !== undefined;
 }
 
+// Scope-qualified terminal-status read for one events sync run: the consent
+// stage reports run completion (not dispatch), so the supervisor polls the
+// durable run row it started until it leaves "running".
+async function getEventsRunStatus(
+  scope: KlaviyoConnectionScope,
+  syncRunId: string,
+): Promise<string | null> {
+  const [run] = await db
+    .select({ status: klaviyoSyncRuns.status })
+    .from(klaviyoSyncRuns)
+    .where(
+      and(
+        eq(klaviyoSyncRuns.id, syncRunId),
+        eq(klaviyoSyncRuns.organizationId, scope.organizationId),
+        eq(klaviyoSyncRuns.storeId, scope.storeId),
+        eq(klaviyoSyncRuns.connectionId, scope.connectionId),
+        eq(klaviyoSyncRuns.operation, "events"),
+      ),
+    )
+    .limit(1);
+  return run?.status ?? null;
+}
+
 function trailingWeekWindow(storeTimezone: string): HalfOpenWindow {
   const today = new Date();
   return inclusiveStoreDaysToHalfOpenUtc({
@@ -432,7 +455,7 @@ function buildChildren(): IncrementalChildren {
     async runConsent(scope) {
       await flushStage("consent");
       const connection = await getConnectionRecord(scope);
-      if (!connection) return { ok: false };
+      if (!connection) return { status: "failed" as const };
       // Journey and consent share the one running-events slot
       // (klaviyo_sync_run_one_running_events_uidx). runJourney above only
       // fires-and-forgets its batch task, so its run row can still be
@@ -465,7 +488,20 @@ function buildChildren(): IncrementalChildren {
         { syncRunId: prepared.syncRunId },
         { idempotencyKey, idempotencyKeyTTL: "7d" },
       );
-      return { ok: true };
+      // The consent stage reports completion, not dispatch: poll the
+      // durable run row to its terminal status. Still "running" (or not
+      // yet visible) at the deadline reports as live_at_deadline pending,
+      // mirroring the claims stage.
+      await flushStage("consent_run_wait", { syncRunId: prepared.syncRunId });
+      const terminal = await pollDatabase(async () => {
+        const status = await getEventsRunStatus(scope, prepared.syncRunId);
+        if (status === null || status === "running") return null;
+        return status;
+      });
+      if (terminal === null) return { status: "running" as const };
+      return terminal === "success"
+        ? { status: "success" as const }
+        : { status: "failed" as const };
     },
 
     async runDimensions(scope) {

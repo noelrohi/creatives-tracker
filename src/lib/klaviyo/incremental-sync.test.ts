@@ -58,7 +58,9 @@ function children(overrides: Partial<Children> = {}): {
       calls.push("claims_recover");
     }),
     runJourney: vi.fn(async () => track("journey", { ok: true })),
-    runConsent: vi.fn(async () => track("consent", { ok: true })),
+    runConsent: vi.fn(async () =>
+      track("consent", { status: "success" as const }),
+    ),
     runDimensions: vi.fn(async () => track("dimensions", { ok: true })),
     runReports: vi.fn(async () => track("reports", { ok: true })),
   };
@@ -230,6 +232,36 @@ describe("runIncrementalConnection", () => {
     });
     expect(report.dimensions.state).toBe("completed");
     expect(report.reports.state).toBe("completed");
+  });
+
+  it("records consent run completion, not dispatch — failed runs fail, live ones stay pending", async () => {
+    // Mirrors the claims-stage outcome mapping: the report reflects what
+    // the durable run row reached, not that a batch task was fired.
+    const failed = children({
+      runConsent: vi.fn(async () => ({ status: "failed" as const })),
+    });
+    expect(
+      (await runIncrementalConnection({ scope }, failed.children)).consent,
+    ).toEqual({ state: "failed", detail: "consent_failed" });
+
+    const live = children({
+      runConsent: vi.fn(async () => ({ status: "running" as const })),
+    });
+    const liveReport = await runIncrementalConnection({ scope }, live.children);
+    expect(liveReport.consent).toEqual({
+      state: "pending",
+      detail: "live_at_deadline",
+    });
+    // A non-completed consent stage still isolates: later enrichment runs.
+    expect(liveReport.dimensions.state).toBe("completed");
+    expect(liveReport.reports.state).toBe("completed");
+
+    const success = children({
+      runConsent: vi.fn(async () => ({ status: "success" as const })),
+    });
+    expect(
+      (await runIncrementalConnection({ scope }, success.children)).consent,
+    ).toEqual({ state: "completed" });
   });
 });
 
