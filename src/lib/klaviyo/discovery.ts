@@ -42,6 +42,8 @@ const METRIC_NAME_KINDS: ReadonlyMap<string, KlaviyoMetricKind> = new Map([
   ["Viewed Product", "viewed_product"],
   ["Added to Cart", "added_to_cart"],
   ["Checkout Started", "checkout_started"],
+  ["Subscribed to List", "subscribed_to_list"],
+  ["Unsubscribed from List", "unsubscribed_from_list"],
 ]);
 
 const NATIVE_ORDER_KIND_LABELS: Record<NativeOrderKind, string> = {
