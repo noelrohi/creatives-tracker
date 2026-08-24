@@ -616,10 +616,6 @@ function initialTimelineCheckpoint(
   return { ...config.contract(), metricIndex: 0, cursor: null, page: 0 };
 }
 
-export function initialJourneyCheckpoint(): KlaviyoEventCheckpoint {
-  return initialTimelineCheckpoint(JOURNEY_MODE);
-}
-
 function emptyTimelineAliasRegistry(): KlaviyoEventAliasRegistry {
   return Object.fromEntries(
     KLAVIYO_EVENT_ALIAS_FIELDS.map((field) => [field, null]),
@@ -630,12 +626,6 @@ export type TimelineMetricBinding = {
   metricRowId: string;
   externalMetricId: string;
   metricKind: KlaviyoMetricKind;
-} | null;
-
-export type JourneyMetricBinding = {
-  metricRowId: string;
-  externalMetricId: string;
-  metricKind: (typeof KLAVIYO_JOURNEY_KINDS)[number];
 } | null;
 
 /**
@@ -672,12 +662,6 @@ export async function loadTimelineMetricBindings<K extends KlaviyoMetricKind>(
       metricKind: kind,
     };
   });
-}
-
-export async function loadJourneyMetricBindings(
-  scope: KlaviyoConnectionScope,
-): Promise<JourneyMetricBinding[]> {
-  return loadTimelineMetricBindings(scope, KLAVIYO_JOURNEY_KINDS);
 }
 
 /**
@@ -805,9 +789,6 @@ export type TimelineRunnerDependencies = SourceRunnerDependencies & {
     kinds: readonly KlaviyoMetricKind[],
   ) => Promise<TimelineMetricBinding[]>;
 };
-
-/** Kept name for existing callers; journey is one timeline mode. */
-export type JourneyRunnerDependencies = TimelineRunnerDependencies;
 
 /**
  * Timeline batch on the one mode-aware engine surface: same store, page
@@ -1002,22 +983,6 @@ async function processTimelineBatch(
   }
 
   return { done: false, pagesProcessed, eventsRead, checkpoint };
-}
-
-export async function processJourneyBatch(
-  input: {
-    scope: KlaviyoConnectionScope;
-    syncRunId: string;
-    maxPages: number;
-  },
-  dependencies: JourneyRunnerDependencies = {},
-): Promise<{
-  done: boolean;
-  pagesProcessed: number;
-  eventsRead: number;
-  checkpoint: KlaviyoEventCheckpoint | null;
-}> {
-  return processTimelineBatch(JOURNEY_MODE, input, dependencies);
 }
 
 /**
