@@ -43,6 +43,11 @@ export const clusterVerdictEnum = pgEnum("cluster_verdict", [
   "low",
 ]);
 
+export const competitorAdWorkflowStatusEnum = pgEnum(
+  "competitor_ad_workflow_status",
+  ["inbox", "shortlist", "deprioritised", "made"],
+);
+
 export const testPlanFormatEnum = pgEnum("test_plan_format", [
   "static",
   "video",
@@ -170,6 +175,9 @@ export const competitorAds = pgTable(
       .notNull()
       .references(() => competitors.id, { onDelete: "cascade" }),
     archiveId: text("archive_id").notNull(),
+    workflowStatus: competitorAdWorkflowStatusEnum("workflow_status")
+      .notNull()
+      .default("inbox"),
     startDate: timestamp("start_date").notNull(),
     endDate: timestamp("end_date"),
     bodyText: text("body_text").notNull(),

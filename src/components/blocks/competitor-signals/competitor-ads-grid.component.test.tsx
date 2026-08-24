@@ -14,6 +14,7 @@ function makeAd(overrides: Partial<CompetitorAd> = {}): CompetitorAd {
   return {
     id: "ad1",
     archiveId: "a1",
+    workflowStatus: "inbox",
     startDate: daysAgo(30),
     displayFormat: "IMAGE",
     mediaKinds: ["image"],

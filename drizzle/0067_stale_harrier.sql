@@ -1,0 +1,2 @@
+CREATE TYPE "public"."competitor_ad_workflow_status" AS ENUM('inbox', 'shortlist', 'deprioritised', 'made');--> statement-breakpoint
+ALTER TABLE "competitor_ad" ADD COLUMN "workflow_status" "competitor_ad_workflow_status" DEFAULT 'inbox' NOT NULL;
