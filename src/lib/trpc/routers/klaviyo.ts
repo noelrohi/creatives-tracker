@@ -12,6 +12,7 @@ import {
 } from "@/lib/klaviyo/match-invocation";
 import { selectLatestMatchInputs } from "@/lib/klaviyo/match-service";
 import { loadEmailAttribution } from "@/lib/klaviyo/email-attribution";
+import { loadListHealth } from "@/lib/klaviyo/list-health";
 import {
   listEvidenceOrders,
   listUnmatchedEvents,
@@ -280,6 +281,21 @@ export const klaviyoRouter = router({
         timeZone: connection.storeTimezone,
       });
       return loadEmailAttribution({ scope: connection, window, days: input });
+    }),
+
+  listHealth: orgAdminProcedure
+    .input(z.object({ dateFrom: storeDaySchema, dateTo: storeDaySchema }))
+    .query(async ({ input, ctx }) => {
+      const connection = await requirePilotConnection(ctx.organizationId);
+      const window = inclusiveStoreDaysToHalfOpenUtc({
+        ...input,
+        timeZone: connection.storeTimezone,
+      });
+      return loadListHealth({
+        scope: connection,
+        window,
+        timeZone: connection.storeTimezone,
+      });
     }),
 
   orders: orgAdminProcedure

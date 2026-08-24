@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => {
     runsRetrieve: vi.fn(),
     loadEvidenceCoverage: vi.fn(),
     loadEmailAttribution: vi.fn(),
+    loadListHealth: vi.fn(),
     listEvidenceOrders: vi.fn(),
     loadOrderExplanation: vi.fn(),
     loadOrderProducts: vi.fn(),
@@ -67,6 +68,9 @@ vi.mock("@/lib/klaviyo/queries", () => ({
 }));
 vi.mock("@/lib/klaviyo/email-attribution", () => ({
   loadEmailAttribution: mocks.loadEmailAttribution,
+}));
+vi.mock("@/lib/klaviyo/list-health", () => ({
+  loadListHealth: mocks.loadListHealth,
 }));
 vi.mock("@/lib/klaviyo/report-repository", () => ({
   failReportSync: mocks.failReportSync,
@@ -219,6 +223,11 @@ beforeEach(() => {
       unmatchedEvents: 0,
     },
   });
+  mocks.loadListHealth.mockResolvedValue({
+    discovered: true,
+    totals: { subscribed: 0, unsubscribed: 0, wonBack: 0, quickChurn: 0, net: 0 },
+    daily: [],
+  });
   mocks.listEvidenceOrders.mockResolvedValue({ items: [], nextCursor: null });
   mocks.loadOrderExplanation.mockResolvedValue({
     orderId: "order-1",
@@ -300,6 +309,10 @@ const PROCEDURE_CALLS: Array<[string, (caller: ReturnType<typeof sessionCaller>)
     "emailAttribution",
     (caller) =>
       caller.emailAttribution({ dateFrom: "2026-08-01", dateTo: "2026-08-04" }),
+  ],
+  [
+    "listHealth",
+    (caller) => caller.listHealth({ dateFrom: "2026-08-01", dateTo: "2026-08-04" }),
   ],
   [
     "orders",
@@ -646,6 +659,21 @@ describe("klaviyo match procedures", () => {
     expect(call.window.to.getTime() - call.window.from.getTime()).toBe(
       23 * 60 * 60 * 1000,
     );
+  });
+
+  it("derives the window and timezone server-side for listHealth", async () => {
+    await sessionCaller("admin").listHealth({
+      dateFrom: "2026-08-01",
+      dateTo: "2026-08-04",
+    });
+    expect(mocks.loadListHealth).toHaveBeenCalledWith({
+      scope: mocks.connection,
+      window: {
+        from: new Date("2026-08-01T04:00:00.000Z"),
+        to: new Date("2026-08-05T04:00:00.000Z"),
+      },
+      timeZone: "America/New_York",
+    });
   });
 });
 
