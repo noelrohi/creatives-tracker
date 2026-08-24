@@ -42,6 +42,9 @@ describe("computeListHealth", () => {
     );
     expect(result.totals.wonBack).toBe(1);
     expect(result.totals.subscribed).toBe(1);
+    expect(result.daily).toEqual([
+      { day: "2026-08-05", subscribed: 1, unsubscribed: 0, wonBack: 1, quickChurn: 0, net: 1 },
+    ]);
   });
 
   it("never counts a first-ever event as won-back or quick churn", () => {
@@ -110,5 +113,34 @@ describe("computeListHealth", () => {
       ev("p1", "unsubscribed_from_list", "2026-07-10T10:00:00Z"),
     ];
     expect(computeListHealth(shuffled, { window, timeZone: TZ }).totals.wonBack).toBe(1);
+  });
+
+  it("treats every profile-less event as its own singleton sequence — no phantom flip from a same-instant pair", () => {
+    const result = computeListHealth(
+      [
+        { profileId: null, metricKind: "unsubscribed_from_list", occurredAt: new Date("2026-08-05T10:00:00Z") },
+        { profileId: null, metricKind: "subscribed_to_list", occurredAt: new Date("2026-08-05T10:00:00Z") },
+      ],
+      { window, timeZone: TZ },
+    );
+    expect(result.totals).toEqual({
+      subscribed: 1,
+      unsubscribed: 1,
+      wonBack: 0,
+      quickChurn: 0,
+      net: 0,
+    });
+  });
+
+  it("returns zero totals and empty daily rows for no events", () => {
+    const result = computeListHealth([], { window, timeZone: TZ });
+    expect(result.totals).toEqual({
+      subscribed: 0,
+      unsubscribed: 0,
+      wonBack: 0,
+      quickChurn: 0,
+      net: 0,
+    });
+    expect(result.daily).toEqual([]);
   });
 });

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, gte, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { deriveDayInTimezone } from "@/lib/shopify-ingest";
 import type { KlaviyoConnectionScope } from "@/lib/klaviyo/types";
@@ -16,6 +16,11 @@ import { klaviyoEvents, klaviyoMetrics } from "@/schema/klaviyo";
  */
 
 export const QUICK_CHURN_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+
+// Prior-state lookback for flip detection, matching what a fresh 90-day
+// backfill can see; identical semantics for any window inside the retained
+// range.
+export const PRIOR_STATE_HORIZON_MS = 90 * 24 * 60 * 60 * 1000;
 
 export type ConsentEventInput = {
   profileId: string | null;
@@ -51,10 +56,13 @@ export function computeListHealth(
 ): Omit<ListHealthSummary, "discovered"> {
   const { window, timeZone } = options;
   const byProfile = new Map<string, ConsentEventInput[]>();
+  let anonIndex = 0;
   for (const event of events) {
     // Profile-less events (Klaviyo anomaly) still count toward totals but
-    // can never form a transition.
-    const key = event.profileId ?? `anon:${event.occurredAt.toISOString()}`;
+    // can never form a transition: each gets its own singleton sequence via
+    // a per-event counter, so two same-instant anonymous events can never
+    // share a sequence and form a phantom flip.
+    const key = event.profileId ?? `anon:${anonIndex++}`;
     const list = byProfile.get(key);
     if (list) list.push(event);
     else byProfile.set(key, [event]);
@@ -133,8 +141,10 @@ export async function loadListHealth(input: {
   const kindByMetricId = new Map(
     metrics.map((metric) => [metric.id, metric.canonicalKind]),
   );
-  // Full retained history (90d ingestion bound), NOT window-filtered: the
-  // won-back/quick-churn "previous event" may predate the window.
+  // History back to PRIOR_STATE_HORIZON_MS before the window (NOT
+  // window-filtered): the won-back/quick-churn "previous event" may predate
+  // the window, so we look back far enough to catch it without fetching an
+  // unbounded, ever-growing history.
   const rows = await db
     .select({
       profileId: klaviyoEvents.profileId,
@@ -150,6 +160,10 @@ export async function loadListHealth(input: {
         inArray(
           klaviyoEvents.metricId,
           metrics.map((metric) => metric.id),
+        ),
+        gte(
+          klaviyoEvents.occurredAt,
+          new Date(input.window.from.getTime() - PRIOR_STATE_HORIZON_MS),
         ),
       ),
     );
