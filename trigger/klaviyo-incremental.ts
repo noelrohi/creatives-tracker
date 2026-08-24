@@ -8,7 +8,11 @@ import {
   tasks,
   wait,
 } from "@trigger.dev/sdk";
-import { inclusiveStoreDaysToHalfOpenUtc } from "@/lib/klaviyo/types";
+import {
+  inclusiveStoreDaysToHalfOpenUtc,
+  type HalfOpenWindow,
+  type KlaviyoConnectionScope,
+} from "@/lib/klaviyo/types";
 import {
   recoverExhaustedClaimBatch,
   startOrResumeClaimReplay,
@@ -66,6 +70,41 @@ async function pollDatabase<T>(
     if (Date.now() >= deadline) return null;
     await wait.for({ seconds: POLL_INTERVAL_SECONDS });
   }
+}
+
+// The DB enforces exactly one running `operation: "events"` sync run per
+// connection (klaviyo_sync_run_one_running_events_uidx). Journey and
+// consent are both timeline modes over that same slot, so a scheduled
+// consent start must wait for a still-running journey run to vacate it
+// instead of racing the guard in startOrResumeConsentSync.
+async function hasRunningEventsRun(
+  scope: KlaviyoConnectionScope,
+): Promise<boolean> {
+  const [run] = await db
+    .select({ id: klaviyoSyncRuns.id })
+    .from(klaviyoSyncRuns)
+    .where(
+      and(
+        eq(klaviyoSyncRuns.organizationId, scope.organizationId),
+        eq(klaviyoSyncRuns.storeId, scope.storeId),
+        eq(klaviyoSyncRuns.connectionId, scope.connectionId),
+        eq(klaviyoSyncRuns.operation, "events"),
+        eq(klaviyoSyncRuns.status, "running"),
+      ),
+    )
+    .limit(1);
+  return run !== undefined;
+}
+
+function trailingWeekWindow(storeTimezone: string): HalfOpenWindow {
+  const today = new Date();
+  return inclusiveStoreDaysToHalfOpenUtc({
+    dateFrom: new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 10),
+    dateTo: today.toISOString().slice(0, 10),
+    timeZone: storeTimezone,
+  });
 }
 
 function buildChildren(): IncrementalChildren {
@@ -367,14 +406,7 @@ function buildChildren(): IncrementalChildren {
       await flushStage("journey");
       const connection = await getConnectionRecord(scope);
       if (!connection) return { ok: false };
-      const today = new Date();
-      const window = inclusiveStoreDaysToHalfOpenUtc({
-        dateFrom: new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000)
-          .toISOString()
-          .slice(0, 10),
-        dateTo: today.toISOString().slice(0, 10),
-        timeZone: connection.storeTimezone,
-      });
+      const window = trailingWeekWindow(connection.storeTimezone);
       const prepared = await startOrResumeJourneySync({
         scope,
         window,
@@ -396,14 +428,18 @@ function buildChildren(): IncrementalChildren {
       await flushStage("consent");
       const connection = await getConnectionRecord(scope);
       if (!connection) return { ok: false };
-      const today = new Date();
-      const window = inclusiveStoreDaysToHalfOpenUtc({
-        dateFrom: new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000)
-          .toISOString()
-          .slice(0, 10),
-        dateTo: today.toISOString().slice(0, 10),
-        timeZone: connection.storeTimezone,
-      });
+      // Journey and consent share the one running-events slot
+      // (klaviyo_sync_run_one_running_events_uidx). runJourney above only
+      // fires-and-forgets its batch task, so its run row can still be
+      // "running" here — wait for it to vacate instead of racing the
+      // "already running in a different source mode" guard in
+      // startOrResumeConsentSync.
+      await flushStage("consent_wait");
+      const cleared = await pollDatabase(async () =>
+        (await hasRunningEventsRun(scope)) ? null : true,
+      );
+      if (cleared === null) return { ok: false };
+      const window = trailingWeekWindow(connection.storeTimezone);
       const prepared = await startOrResumeConsentSync({
         scope,
         window,

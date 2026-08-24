@@ -271,9 +271,12 @@ export async function runIncrementalConnection(
   report.journey = journey.ok
     ? { state: "completed" }
     : { state: "failed", detail: "journey_failed" };
-  const consent = await children.runConsent(input.scope).catch(() => ({
-    ok: false,
-  }));
+  const consent = await children.runConsent(input.scope).catch((error) => {
+    console.error("klaviyo incremental consent stage failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return { ok: false };
+  });
   report.consent = consent.ok
     ? { state: "completed" }
     : { state: "failed", detail: "consent_failed" };

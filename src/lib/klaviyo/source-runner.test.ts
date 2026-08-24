@@ -23,6 +23,7 @@ import {
   consentSourceContract,
   inclusiveStoreDaysToHalfOpenUtc,
   initialEventCheckpoint,
+  journeySourceContract,
   orderCoreSourceContract,
   type KlaviyoEventCheckpoint,
 } from "@/lib/klaviyo/types";
@@ -922,6 +923,42 @@ describe("consent sync", () => {
     ]);
     // Consent (like journey) never persists an order-core initial floor.
     expect(state.persistedInitialWindows).toEqual([]);
+  });
+
+  it("rejects a start while a live journey run holds the one running-events slot", async () => {
+    const liveJourneyRun: RunningEventRun = {
+      syncRunId: "run-journey-live",
+      requestedFrom: allowed.from,
+      requestedTo: allowed.to,
+      requestParameters: journeySourceContract(),
+      heartbeatAt: NOW,
+    };
+    const state = startState({ running: { ...liveJourneyRun } });
+    await expect(
+      startOrResumeConsentSync(
+        { scope, window: allowed, triggerType: "scheduled" },
+        baseDeps(state),
+      ),
+    ).rejects.toThrow("already running in a different source mode");
+    expect(state.inserted).toHaveLength(0);
+  });
+
+  it("resumes an identical live consent run", async () => {
+    const liveConsentRun: RunningEventRun = {
+      syncRunId: "run-consent-live",
+      requestedFrom: allowed.from,
+      requestedTo: allowed.to,
+      requestParameters: consentSourceContract(),
+      heartbeatAt: NOW,
+    };
+    const state = startState({ running: { ...liveConsentRun } });
+    await expect(
+      startOrResumeConsentSync(
+        { scope, window: allowed, triggerType: "scheduled" },
+        baseDeps(state),
+      ),
+    ).resolves.toEqual({ syncRunId: "run-consent-live", resumed: true });
+    expect(state.inserted).toHaveLength(0);
   });
 
   it("dispatches a consent run to the timeline batch path", async () => {
