@@ -16,6 +16,7 @@ import {
 import { formatMoneyExact, formatPercent } from "./format";
 import { HelpMark } from "./help-mark";
 import { ledgerLines } from "./ledger";
+import { SourceActionLink } from "./source-links";
 
 export type ChannelEntry = {
   bucket: AttributionBucket;
@@ -47,6 +48,7 @@ export function ChannelLedger({
   currency,
   selected,
   onSelect,
+  role,
   loading = false,
   dimmed = false,
   shopifyReportUrl,
@@ -58,6 +60,7 @@ export function ChannelLedger({
   currency: string;
   selected: AttributionBucket | null;
   onSelect: (bucket: AttributionBucket) => void;
+  role: string | null;
   loading?: boolean;
   dimmed?: boolean;
   shopifyReportUrl?: string | null;
@@ -121,15 +124,13 @@ export function ChannelLedger({
 
           return (
             <Fragment key={entry.bucket}>
-              <button
-                type="button"
-                onClick={() => onSelect(entry.bucket)}
-                disabled={isEmpty}
-                aria-pressed={isSelected}
+              {/* A div, not a button: the row-wide click lives on the stretched
+                  overlay button below, so the lab/dashboard link can be a real
+                  link beside the share figure instead of a nested control. */}
+              <div
                 className={cn(
                   GRID,
                   "group relative overflow-hidden rounded-sm px-2.5 py-2 text-left transition-colors",
-                  isEmpty ? "cursor-default" : "cursor-pointer",
                   isSelected && "ring-2 ring-ring ring-offset-1 ring-offset-card",
                 )}
               >
@@ -152,28 +153,48 @@ export function ChannelLedger({
                   </>
                 )}
 
-                <span className="relative z-10 flex min-w-0 items-center gap-2.5 text-[12.5px]">
+                <button
+                  type="button"
+                  onClick={() => onSelect(entry.bucket)}
+                  disabled={isEmpty}
+                  aria-pressed={isSelected}
+                  className={cn(
+                    "absolute inset-0 z-10",
+                    isEmpty ? "cursor-default" : "cursor-pointer",
+                  )}
+                >
+                  <span className="sr-only">{bucketLabels[entry.bucket]}</span>
+                </button>
+
+                <span className="pointer-events-none relative z-20 flex min-w-0 items-center gap-2.5 text-[12.5px]">
                   <Icon
                     className="size-3.5 shrink-0"
                     style={{ color: isEmpty ? "var(--border)" : color }}
                   />
-                  <span className="truncate">{bucketLabels[entry.bucket]}</span>
+                  <span className="min-w-0 truncate">
+                    {bucketLabels[entry.bucket]}
+                  </span>
                   {explanation ? (
                     <HelpMark
                       text={explanation}
                       focusable={false}
-                      className="hidden sm:inline-flex"
+                      className="pointer-events-auto hidden sm:inline-flex"
                     />
                   ) : null}
+                  <SourceActionLink
+                    bucket={entry.bucket}
+                    role={role}
+                    className="pointer-events-auto ml-auto shrink-0"
+                  />
                 </span>
 
-                <span className="relative z-10 text-right text-[11px] tabular-nums text-muted-foreground">
+                <span className="pointer-events-none relative z-20 text-right text-[11px] tabular-nums text-muted-foreground">
                   {isEmpty ? "" : (formatPercent(value / total) ?? "")}
                 </span>
 
                 <span
                   className={cn(
-                    "relative z-10 text-right text-[12.5px] font-semibold tabular-nums",
+                    "pointer-events-none relative z-20 text-right text-[12.5px] font-semibold tabular-nums",
                     isEmpty && "font-normal text-muted-foreground/60",
                   )}
                 >
@@ -182,7 +203,7 @@ export function ChannelLedger({
                     : (formatMoneyExact(entry.revenue, currency) ??
                       page.noDataYet)}
                 </span>
-              </button>
+              </div>
 
               {isSelected && !isEmpty ? renderDrawer(entry.bucket) : null}
             </Fragment>
