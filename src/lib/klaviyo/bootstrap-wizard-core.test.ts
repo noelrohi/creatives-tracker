@@ -41,6 +41,7 @@ function adapters(overrides: Partial<BootstrapWizardAdapters> = {}) {
     runMatching: mark("matching"),
     runClaims: mark("claims"),
     runJourney: mark("journey"),
+    runConsent: mark("consent"),
     runDimensions: mark("dimensions"),
     runReports: mark("reports"),
     verify: async (_input, before) => {
@@ -70,6 +71,7 @@ describe("Klaviyo bootstrap wizard", () => {
       "matching",
       "claims",
       "journey",
+      "consent",
       "dimensions",
       "reports",
       "verify:safe",

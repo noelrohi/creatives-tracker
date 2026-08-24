@@ -337,7 +337,7 @@ async function buildProductionAdapters(): Promise<BootstrapWizardAdapters> {
 
   async function findSuccessfulSourceRun(
     context: BootstrapContext,
-    sourceMode: "order_core" | "journey",
+    sourceMode: "order_core" | "journey" | "consent",
   ) {
     if (!initialWindow) throw new Error("Initial window is unavailable");
     const [run] = await db
@@ -360,7 +360,7 @@ async function buildProductionAdapters(): Promise<BootstrapWizardAdapters> {
 
   async function startAndWaitEventRun(
     context: BootstrapContext,
-    sourceMode: "order_core" | "journey",
+    sourceMode: "order_core" | "journey" | "consent",
   ) {
     const existing = await findSuccessfulSourceRun(context, sourceMode);
     if (existing) return existing;
@@ -372,11 +372,17 @@ async function buildProductionAdapters(): Promise<BootstrapWizardAdapters> {
             window: initialWindow,
             triggerType: "manual_backfill",
           })
-        : await sourceRunner.startOrResumeJourneySync({
-            scope: context as BootstrapContext & { connectionId: string },
-            window: initialWindow,
-            triggerType: "manual_backfill",
-          });
+        : sourceMode === "journey"
+          ? await sourceRunner.startOrResumeJourneySync({
+              scope: context as BootstrapContext & { connectionId: string },
+              window: initialWindow,
+              triggerType: "manual_backfill",
+            })
+          : await sourceRunner.startOrResumeConsentSync({
+              scope: context as BootstrapContext & { connectionId: string },
+              window: initialWindow,
+              triggerType: "manual_backfill",
+            });
     await triggerTask(
       "klaviyo-order-core-batch",
       { syncRunId: prepared.syncRunId },
@@ -714,6 +720,10 @@ async function buildProductionAdapters(): Promise<BootstrapWizardAdapters> {
 
     async runJourney(context) {
       await startAndWaitEventRun(context, "journey");
+    },
+
+    async runConsent(context) {
+      await startAndWaitEventRun(context, "consent");
     },
 
     async runDimensions(context) {

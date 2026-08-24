@@ -8,6 +8,7 @@ export const BOOTSTRAP_STAGES = [
   "matching",
   "claims",
   "journey",
+  "consent",
   "dimensions",
   "reports",
   "verification",
@@ -42,6 +43,7 @@ export type BootstrapWizardAdapters = {
   runMatching(context: BootstrapContext): Promise<void>;
   runClaims(context: BootstrapContext): Promise<void>;
   runJourney(context: BootstrapContext): Promise<void>;
+  runConsent(context: BootstrapContext): Promise<void>;
   runDimensions(context: BootstrapContext): Promise<void>;
   runReports(context: BootstrapContext): Promise<void>;
   verify(
@@ -105,6 +107,7 @@ export async function runKlaviyoBootstrapWizard(
   await stage(adapters, "matching", () => adapters.runMatching(context));
   await stage(adapters, "claims", () => adapters.runClaims(context));
   await stage(adapters, "journey", () => adapters.runJourney(context));
+  await stage(adapters, "consent", () => adapters.runConsent(context));
   await stage(adapters, "dimensions", () => adapters.runDimensions(context));
   await stage(adapters, "reports", () => adapters.runReports(context));
   await stage(adapters, "verification", () =>
