@@ -34,9 +34,12 @@ export default function CompetitorAdsPage() {
       {ads.isLoading ? (
         <div className="flex flex-col gap-4">
           <Skeleton className="h-12 w-80 rounded-lg" />
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton key={i} className="h-96 rounded-xl" />
+          <div className="columns-2 gap-4 sm:columns-3 lg:columns-4">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <Skeleton
+                key={i}
+                className={`mb-4 break-inside-avoid rounded-xl ${i % 2 === 0 ? "h-72" : "h-96"}`}
+              />
             ))}
           </div>
         </div>
