@@ -178,7 +178,7 @@ export function EmailRevenueHeadline({
 
 /**
  * Privileged-only panel: hiding it is UX; `orgAdminProcedure` on the
- * queries remains the security boundary (same stance as KlaviyoLabLink).
+ * queries remains the security boundary (same stance as SourceActionLink).
  * NOT_FOUND means no pilot connection — the section renders nothing.
  */
 export function EmailRevenuePanel({
