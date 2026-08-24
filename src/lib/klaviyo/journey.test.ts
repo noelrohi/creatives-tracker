@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildOrderJourney, type JourneyEvent } from "@/lib/klaviyo/journey";
 import {
   assertExactEventSourceContract,
+  consentSourceContract,
   journeySourceContract,
   orderCoreSourceContract,
 } from "@/lib/klaviyo/types";
@@ -189,5 +190,33 @@ describe("event source contract union", () => {
         extra: 1,
       }),
     ).toThrow("not an immutable source contract");
+  });
+});
+
+describe("consent source contract", () => {
+  it("builds the fixed two-kind contract", () => {
+    expect(consentSourceContract()).toEqual({
+      sourceMode: "consent",
+      metricKinds: ["subscribed_to_list", "unsubscribed_from_list"],
+    });
+  });
+
+  it("accepts only the exact consent shape", () => {
+    expect(() =>
+      assertExactEventSourceContract(consentSourceContract()),
+    ).not.toThrow();
+    expect(() =>
+      assertExactEventSourceContract({
+        sourceMode: "consent",
+        metricKinds: ["unsubscribed_from_list", "subscribed_to_list"],
+      }),
+    ).toThrow("invalid source contract");
+    expect(() =>
+      assertExactEventSourceContract({
+        sourceMode: "consent",
+        metricKinds: ["subscribed_to_list", "unsubscribed_from_list"],
+        extra: 1,
+      }),
+    ).toThrow();
   });
 });
