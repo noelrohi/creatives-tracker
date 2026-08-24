@@ -161,26 +161,93 @@ describe("CompetitorAdsGrid", () => {
       makeAd({ id: "ad5", archiveId: "a5", workflowStatus: "made" }),
     ];
 
-    it("counts every ad by tab and shows only the active tab's ads", async () => {
+    it("counts every ad by tab and defaults All ads to untriaged", async () => {
       const user = userEvent.setup();
       renderGrid(makeData(triaged));
 
-      // All ads means all of them — moved ads stay in the pile.
+      // The tab count covers the complete active set, while its default filter
+      // hides ads that have already moved through the workflow.
       expect(screen.getByRole("button", { name: "All ads 5" })).toBeVisible();
       expect(screen.getByRole("button", { name: "Shortlist 1" })).toBeVisible();
       expect(
         screen.getByRole("button", { name: "Deprioritised 1" }),
       ).toBeVisible();
       expect(screen.getByRole("button", { name: "Made ad 1" })).toBeVisible();
-
-      // All ads is the default landing tab.
-      expect(screen.getByText("5 ads")).toBeVisible();
+      expect(
+        screen.getByRole("combobox", { name: "Status filter" }),
+      ).toHaveTextContent("Untriaged");
+      expect(screen.getByText("2 ads")).toBeVisible();
+      expect(
+        screen.getAllByRole("link", { name: /View in Ad Library/ }),
+      ).toHaveLength(2);
 
       await user.click(screen.getByRole("button", { name: "Shortlist 1" }));
       expect(screen.getByText("1 ad")).toBeVisible();
       expect(
         screen.getAllByRole("link", { name: /View in Ad Library/ }),
       ).toHaveLength(1);
+    });
+
+    it.each([
+      ["shortlist", "Shortlist"],
+      ["deprioritised", "Deprioritised"],
+      ["made", "Made ad"],
+    ])("can filter All ads to %s", (workflow, stageLabel) => {
+      renderGrid(makeData(triaged), `?workflow=${workflow}`);
+
+      expect(screen.getByText("1 ad")).toBeVisible();
+      expect(
+        screen.getByText(stageLabel, { selector: "span.absolute" }),
+      ).toBeVisible();
+    });
+
+    it("composes status, format, and theme filters in All ads", () => {
+      renderGrid(
+        makeData([
+          makeAd({
+            id: "ad1",
+            archiveId: "a1",
+            displayFormat: "VIDEO",
+            theme: "Sleep science",
+            workflowStatus: "shortlist",
+          }),
+          makeAd({
+            id: "ad2",
+            archiveId: "a2",
+            displayFormat: "IMAGE",
+            theme: "Sleep science",
+            workflowStatus: "shortlist",
+          }),
+          makeAd({
+            id: "ad3",
+            archiveId: "a3",
+            displayFormat: "VIDEO",
+            theme: "Coach endorsement",
+            workflowStatus: "shortlist",
+          }),
+        ]),
+        "?workflow=shortlist&format=Video&theme=Sleep%20science",
+      );
+
+      expect(screen.getByText("1 ad")).toBeVisible();
+      expect(
+        screen.getAllByRole("link", { name: /View in Ad Library/ }),
+      ).toHaveLength(1);
+    });
+
+    it("names an empty default view when every ad is triaged", () => {
+      renderGrid(makeData([makeAd({ workflowStatus: "made" })]));
+
+      expect(screen.getByText("No untriaged ads")).toBeVisible();
+    });
+
+    it("can show every status again in All ads", () => {
+      renderGrid(makeData(triaged), "?workflow=all");
+
+      expect(screen.getByText("5 ads")).toBeVisible();
+      expect(
+        screen.getAllByRole("link", { name: /View in Ad Library/ }),
+      ).toHaveLength(5);
     });
 
     it("keeps the format filter working inside a tab", () => {
@@ -192,7 +259,11 @@ describe("CompetitorAdsGrid", () => {
             displayFormat: "VIDEO",
             workflowStatus: "shortlist",
           }),
-          makeAd({ id: "ad3", displayFormat: "VIDEO", workflowStatus: "inbox" }),
+          makeAd({
+            id: "ad3",
+            displayFormat: "VIDEO",
+            workflowStatus: "inbox",
+          }),
         ]),
         "?status=shortlist&format=Video",
       );
@@ -201,7 +272,10 @@ describe("CompetitorAdsGrid", () => {
     });
 
     it("names the empty tab rather than blaming the filters", () => {
-      renderGrid(makeData([makeAd({ workflowStatus: "inbox" })]), "?status=made");
+      renderGrid(
+        makeData([makeAd({ workflowStatus: "inbox" })]),
+        "?status=made",
+      );
 
       expect(
         screen.getByText(
@@ -212,7 +286,7 @@ describe("CompetitorAdsGrid", () => {
 
     it("marks moved ads with their stage on All ads only", async () => {
       const user = userEvent.setup();
-      renderGrid(makeData(triaged));
+      renderGrid(makeData(triaged), "?workflow=all");
 
       // The pile shows where each moved ad went; untouched ads wear nothing.
       // Scoped to span so the tab buttons' own labels don't match.
@@ -245,12 +319,8 @@ describe("CompetitorAdsGrid", () => {
       mutate.mockClear();
       renderGrid(makeData(triaged));
 
-      await user.click(
-        screen.getByRole("checkbox", { name: "Select ad a1" }),
-      );
-      await user.click(
-        screen.getByRole("checkbox", { name: "Select ad a2" }),
-      );
+      await user.click(screen.getByRole("checkbox", { name: "Select ad a1" }));
+      await user.click(screen.getByRole("checkbox", { name: "Select ad a2" }));
 
       expect(screen.getByText("2 selected")).toBeVisible();
 
@@ -329,16 +399,24 @@ describe("CompetitorAdsGrid", () => {
       expect(screen.queryByText("1 selected")).not.toBeInTheDocument();
     });
 
-    it("offers no ticks on the archive tabs", () => {
-      const { unmount } = renderGrid(
-        makeData(triaged),
-        "?status=deprioritised",
-      );
-      expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
-      unmount();
+    it.each([
+      ["shortlist", "a3"],
+      ["deprioritised", "a4"],
+      ["made", "a5"],
+    ])("moves a %s ad back to All ads", async (tab, archiveId) => {
+      const user = userEvent.setup();
+      mutate.mockClear();
+      renderGrid(makeData(triaged), `?status=${tab}`);
 
-      renderGrid(makeData(triaged), "?status=made");
-      expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+      await user.click(
+        screen.getByRole("checkbox", { name: `Select ad ${archiveId}` }),
+      );
+      await user.click(screen.getByRole("button", { name: "Move to All ads" }));
+
+      expect(mutate).toHaveBeenCalledWith({
+        adIds: [`ad${archiveId.slice(1)}`],
+        status: "inbox",
+      });
     });
   });
 });
