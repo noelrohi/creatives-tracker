@@ -92,7 +92,7 @@ vi.mock("@trigger.dev/sdk", () => ({
 }));
 
 const { createMockCaller } = await import("../test-helpers");
-const { testPlanAds, testPlanConcepts } = await import(
+const { competitorAds, testPlanAds, testPlanConcepts } = await import(
   "@/schema/competitor-signals"
 );
 
@@ -158,6 +158,24 @@ describe("signals plan router (competitor-signals v1 §9, Phase 3)", () => {
           concepts: [concept()],
         }),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+  });
+
+  describe("setAdWorkflowStatus", () => {
+    it("allows a member to move organization-scoped ads", async () => {
+      dbState.returningRows.push([{ id: "ad-1" }, { id: "ad-2" }]);
+
+      await expect(
+        memberCaller.signals.setAdWorkflowStatus({
+          adIds: ["ad-1", "ad-2"],
+          status: "made",
+        }),
+      ).resolves.toEqual({ updated: 2 });
+
+      expect(dbState.updates[0]).toEqual({
+        table: competitorAds,
+        set: { workflowStatus: "made" },
+      });
     });
   });
 
