@@ -121,6 +121,30 @@ export function AppSidebar() {
   const orgId = activeOrg?.id;
   const trpc = useTRPC();
 
+  /**
+   * Controlled, not `defaultOpen`: Radix only reads `defaultOpen` at mount, so
+   * a client-side navigation onto `/meta` or a lab would leave the active
+   * child hidden behind a closed dropdown. The open state is derived from the
+   * route; a manual toggle wins only while the pathname it happened on is
+   * still current, so every navigation re-follows the route.
+   */
+  const dashboardRouteActive =
+    pathname === "/" ||
+    dashboardChildren.some(
+      (child) =>
+        pathname === child.href || pathname.startsWith(`${child.href}/`),
+    );
+  const [dashboardToggle, setDashboardToggle] = useState<{
+    pathname: string;
+    open: boolean;
+  } | null>(null);
+  const dashboardOpen =
+    dashboardToggle?.pathname === pathname
+      ? dashboardToggle.open
+      : dashboardRouteActive;
+  const setDashboardOpen = (open: boolean) =>
+    setDashboardToggle({ pathname, open });
+
   /** Where the money is read rather than managed: gated behind org feature flags. */
   const { data: featureFlags } = useQuery(
     trpc.orgSettings.getFeatureFlags.queryOptions(),
@@ -318,14 +342,8 @@ export function AppSidebar() {
               <SidebarMenu>
                 <Collapsible
                   asChild
-                  defaultOpen={
-                    pathname === "/" ||
-                    dashboardChildren.some(
-                      (child) =>
-                        pathname === child.href ||
-                        pathname.startsWith(`${child.href}/`),
-                    )
-                  }
+                  open={dashboardOpen}
+                  onOpenChange={setDashboardOpen}
                   className="group/collapsible"
                 >
                   <SidebarMenuItem>
