@@ -74,6 +74,12 @@ function renderGrid(data: CompetitorAdsData, searchParams = "") {
   );
 }
 
+// Radix Select drives its listbox with pointer-capture and scrolling APIs
+// jsdom doesn't implement; stub them so tests can open the filter selects.
+window.HTMLElement.prototype.scrollIntoView = vi.fn();
+window.HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
+window.HTMLElement.prototype.releasePointerCapture = vi.fn();
+
 describe("CompetitorAdsGrid", () => {
   const ads = [
     makeAd({ id: "ad1", archiveId: "a1", theme: "Coach endorsement" }),
@@ -294,6 +300,32 @@ describe("CompetitorAdsGrid", () => {
       expect(screen.getByText("1 selected")).toBeVisible();
 
       await user.click(screen.getByRole("button", { name: "Clear" }));
+      expect(screen.queryByText("1 selected")).not.toBeInTheDocument();
+    });
+
+    it("offers ticks only on untouched ads within All ads", () => {
+      renderGrid(makeData(triaged));
+
+      // Two inbox ads are tickable; the three already-triaged ads are not.
+      expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+    });
+
+    it("drops ticks from the bar when a filter hides their ads", async () => {
+      const user = userEvent.setup();
+      renderGrid(
+        makeData([
+          makeAd({ id: "ad1", archiveId: "a1" }),
+          makeAd({ id: "ad2", archiveId: "a2", displayFormat: "VIDEO" }),
+        ]),
+      );
+
+      await user.click(screen.getByRole("checkbox", { name: "Select ad a1" }));
+      expect(screen.getByText("1 selected")).toBeVisible();
+
+      // The format filter hides the ticked image ad — the bar must not keep
+      // offering to move it.
+      await user.click(screen.getByRole("combobox", { name: "Format filter" }));
+      await user.click(screen.getByRole("option", { name: "Video" }));
       expect(screen.queryByText("1 selected")).not.toBeInTheDocument();
     });
 

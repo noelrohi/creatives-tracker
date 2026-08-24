@@ -218,7 +218,11 @@ const EMPTY_COPY: Record<AdWorkflowStatus, string> = {
   made: "No ads made yet — move shortlisted ads here with Make ad",
 };
 
-/** Only the two working tabs are triaged from; the other two are archives. */
+/**
+ * Only the two working tabs are triaged from; the other two are archives.
+ * On All ads the tick additionally skips already-triaged ads — re-staging
+ * them happens from their own tab, not by accident from the pile.
+ */
 function isSelectableTab(status: AdWorkflowStatus): boolean {
   return status === "inbox" || status === "shortlist";
 }
@@ -321,6 +325,13 @@ export function CompetitorAdsGrid({ data }: { data: CompetitorAdsData }) {
   }, [inTab, formatFilter, themeFilter, sort]);
 
   const selectable = isSelectableTab(status);
+
+  // The bar acts only on ads the user can still see: a tick whose ad a filter
+  // has since hidden neither counts nor gets submitted.
+  const visibleSelectedIds = useMemo(() => {
+    const visibleIds = new Set(visible.map((ad) => ad.id));
+    return selectedIds.filter((id) => visibleIds.has(id));
+  }, [visible, selectedIds]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -440,7 +451,10 @@ export function CompetitorAdsGrid({ data }: { data: CompetitorAdsData }) {
               ad={ad}
               competitorName={data.competitor.name}
               onPlay={setPlaying}
-              selectable={selectable}
+              selectable={
+                selectable &&
+                (status !== "inbox" || ad.workflowStatus === "inbox")
+              }
               stageLabel={
                 status === "inbox" && ad.workflowStatus !== "inbox"
                   ? TAB_LABELS[ad.workflowStatus]
@@ -459,10 +473,10 @@ export function CompetitorAdsGrid({ data }: { data: CompetitorAdsData }) {
         </div>
       )}
 
-      {selectable && selectedIds.length > 0 && (
+      {selectable && visibleSelectedIds.length > 0 && (
         <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-full bg-background px-3 py-2 shadow-lg ring-1 ring-foreground/10">
           <span className="px-1 text-sm font-medium tabular-nums">
-            {selectedIds.length} selected
+            {visibleSelectedIds.length} selected
           </span>
           <Separator orientation="vertical" className="h-5" />
           {status === "inbox" ? (
@@ -472,7 +486,7 @@ export function CompetitorAdsGrid({ data }: { data: CompetitorAdsData }) {
               disabled={setWorkflowStatus.isPending}
               onClick={() =>
                 setWorkflowStatus.mutate({
-                  adIds: selectedIds,
+                  adIds: visibleSelectedIds,
                   status: "shortlist",
                 })
               }
@@ -485,7 +499,10 @@ export function CompetitorAdsGrid({ data }: { data: CompetitorAdsData }) {
               className="rounded-full"
               disabled={setWorkflowStatus.isPending}
               onClick={() =>
-                setWorkflowStatus.mutate({ adIds: selectedIds, status: "made" })
+                setWorkflowStatus.mutate({
+                  adIds: visibleSelectedIds,
+                  status: "made",
+                })
               }
             >
               Make ad
@@ -498,7 +515,7 @@ export function CompetitorAdsGrid({ data }: { data: CompetitorAdsData }) {
             disabled={setWorkflowStatus.isPending}
             onClick={() =>
               setWorkflowStatus.mutate({
-                adIds: selectedIds,
+                adIds: visibleSelectedIds,
                 status: "deprioritised",
               })
             }
