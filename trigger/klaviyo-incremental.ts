@@ -51,6 +51,11 @@ const POLL_DEADLINE_MS = 8 * 60 * 1000;
 // run ~25-40 minutes on live stores. Durable waits freeze the run between
 // polls, so a long deadline costs wall clock only, never compute.
 const EVIDENCE_POLL_DEADLINE_MS = 60 * 60 * 1000;
+// Same durable-wait doctrine: freezing between polls costs wall clock
+// only, never compute. 30 minutes covers the documented worst case for a
+// journey chain (6 pages x 300s) exactly, so consent waits out a live
+// journey run instead of losing the night to a still-tight deadline.
+const CONSENT_WAIT_DEADLINE_MS = 30 * 60 * 1000;
 
 type SupervisorPayload = { organizationId?: string };
 
@@ -435,10 +440,16 @@ function buildChildren(): IncrementalChildren {
       // "already running in a different source mode" guard in
       // startOrResumeConsentSync.
       await flushStage("consent_wait");
-      const cleared = await pollDatabase(async () =>
-        (await hasRunningEventsRun(scope)) ? null : true,
+      await pollDatabase(
+        async () => ((await hasRunningEventsRun(scope)) ? null : true),
+        CONSENT_WAIT_DEADLINE_MS,
       );
-      if (cleared === null) return { ok: false };
+      // Deadline expiry falls through to one start attempt regardless: a
+      // genuinely still-live run makes the guard throw (caught and logged
+      // upstream, same outcome as returning early), but a run that went
+      // stale during the wait (>20 min heartbeat) gets reaped by the
+      // guard's own reap-on-start, so consent still proceeds tonight.
+      await flushStage("consent");
       const window = trailingWeekWindow(connection.storeTimezone);
       const prepared = await startOrResumeConsentSync({
         scope,
