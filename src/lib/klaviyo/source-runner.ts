@@ -800,7 +800,6 @@ export async function startOrResumeConsentSync(
 }
 
 export type TimelineRunnerDependencies = SourceRunnerDependencies & {
-  loadJourneyBindings?: typeof loadJourneyMetricBindings;
   loadTimelineBindings?: (
     scope: KlaviyoConnectionScope,
     kinds: readonly KlaviyoMetricKind[],
@@ -904,15 +903,8 @@ async function processTimelineBatch(
     persistedKlaviyoAccountId: connection.klaviyoAccountId,
     shopDomain: connection.shopDomain,
   });
-  const journeyBindings = dependencies.loadJourneyBindings;
-  const loadBindings: (
-    scope: KlaviyoConnectionScope,
-    kinds: readonly KlaviyoMetricKind[],
-  ) => Promise<TimelineMetricBinding[]> =
-    dependencies.loadTimelineBindings ??
-    (config.sourceMode === "journey" && journeyBindings
-      ? (bindingScope) => journeyBindings(bindingScope)
-      : loadTimelineMetricBindings);
+  const loadBindings =
+    dependencies.loadTimelineBindings ?? loadTimelineMetricBindings;
   const bindings = await loadBindings(input.scope, config.kinds);
   const client = (
     dependencies.createClient ??
@@ -1040,7 +1032,7 @@ export async function processEventSourceBatch(
     syncRunId: string;
     maxPages: number;
   },
-  dependencies: JourneyRunnerDependencies = {},
+  dependencies: TimelineRunnerDependencies = {},
 ): Promise<{
   done: boolean;
   pagesProcessed: number;

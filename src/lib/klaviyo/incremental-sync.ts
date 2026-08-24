@@ -16,6 +16,7 @@ export type IncrementalStageName =
   | "matching"
   | "claims"
   | "journey"
+  | "consent"
   | "dimensions"
   | "reports";
 
@@ -148,6 +149,7 @@ export type IncrementalChildren = {
     claimReplayId: string,
   ): Promise<void>;
   runJourney(scope: KlaviyoConnectionScope): Promise<{ ok: boolean }>;
+  runConsent(scope: KlaviyoConnectionScope): Promise<{ ok: boolean }>;
   runDimensions(scope: KlaviyoConnectionScope): Promise<{ ok: boolean }>;
   runReports(scope: KlaviyoConnectionScope): Promise<{ ok: boolean }>;
 };
@@ -159,6 +161,7 @@ function emptyReport(): IncrementalRunReport {
     matching: { state: "not_run" },
     claims: { state: "not_run" },
     journey: { state: "not_run" },
+    consent: { state: "not_run" },
     dimensions: { state: "not_run" },
     reports: { state: "not_run" },
   };
@@ -268,6 +271,12 @@ export async function runIncrementalConnection(
   report.journey = journey.ok
     ? { state: "completed" }
     : { state: "failed", detail: "journey_failed" };
+  const consent = await children.runConsent(input.scope).catch(() => ({
+    ok: false,
+  }));
+  report.consent = consent.ok
+    ? { state: "completed" }
+    : { state: "failed", detail: "consent_failed" };
   const dimensions = await children.runDimensions(input.scope).catch(() => ({
     ok: false,
   }));

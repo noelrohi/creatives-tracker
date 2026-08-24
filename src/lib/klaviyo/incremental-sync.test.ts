@@ -58,6 +58,7 @@ function children(overrides: Partial<Children> = {}): {
       calls.push("claims_recover");
     }),
     runJourney: vi.fn(async () => track("journey", { ok: true })),
+    runConsent: vi.fn(async () => track("consent", { ok: true })),
     runDimensions: vi.fn(async () => track("dimensions", { ok: true })),
     runReports: vi.fn(async () => track("reports", { ok: true })),
   };
@@ -75,6 +76,7 @@ describe("runIncrementalConnection", () => {
       "claims_start",
       "claims_graph",
       "journey",
+      "consent",
       "dimensions",
       "reports",
     ]);
@@ -84,6 +86,7 @@ describe("runIncrementalConnection", () => {
       matching: { state: "completed" },
       claims: { state: "completed" },
       journey: { state: "completed" },
+      consent: { state: "completed" },
       dimensions: { state: "completed" },
       reports: { state: "completed" },
     });
@@ -207,6 +210,25 @@ describe("runIncrementalConnection", () => {
       state: "failed",
       detail: "dimensions_failed",
     });
+    expect(report.reports.state).toBe("completed");
+  });
+
+  it("records the consent stage after journey and isolates its failure", async () => {
+    const ok = children();
+    const okReport = await runIncrementalConnection({ scope }, ok.children);
+    expect(okReport.consent).toEqual({ state: "completed" });
+
+    const { children: fakes } = children({
+      runConsent: vi.fn(async () => {
+        throw new Error("consent start failed");
+      }),
+    });
+    const report = await runIncrementalConnection({ scope }, fakes);
+    expect(report.consent).toEqual({
+      state: "failed",
+      detail: "consent_failed",
+    });
+    expect(report.dimensions.state).toBe("completed");
     expect(report.reports.state).toBe("completed");
   });
 });

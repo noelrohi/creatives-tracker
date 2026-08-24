@@ -7,6 +7,7 @@ import {
   failKlaviyoSyncRunAfterRetryExhaustion,
   resolveTaskSyncRun,
 } from "@/lib/klaviyo/source-store";
+import type { KlaviyoEventSourceContract } from "@/lib/klaviyo/types";
 import { KLAVIYO_TASK_RETRY } from "./retry";
 
 const KLAVIYO_DISCOVERY_QUEUE = {
@@ -67,7 +68,7 @@ function checkpointFingerprint(value: unknown): string {
 // Idempotency-key prefixes per source mode. The order_core spelling is
 // historical ("order-core"); changing it would break the seven-day
 // continuation-key continuity of in-flight runs.
-const KEY_PREFIX: Record<string, string> = {
+const KEY_PREFIX: Record<KlaviyoEventSourceContract["sourceMode"], string> = {
   journey: "journey",
   consent: "consent",
   order_core: "order-core",

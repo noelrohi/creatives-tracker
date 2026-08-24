@@ -23,6 +23,7 @@ import { selectLatestMatchInputs } from "@/lib/klaviyo/match-service";
 import { startOrResumeReportSync } from "@/lib/klaviyo/report-repository";
 import { startOrResumeDimensionSync } from "@/lib/klaviyo/dimension-repository";
 import {
+  startOrResumeConsentSync,
   startOrResumeJourneySync,
   startOrResumeOrderCoreSync,
 } from "@/lib/klaviyo/source-runner";
@@ -381,6 +382,35 @@ function buildChildren(): IncrementalChildren {
       });
       const idempotencyKey = await idempotencyKeys.create(
         `klaviyo:journey:first:${prepared.syncRunId}`,
+        { scope: "global" },
+      );
+      await tasks.trigger(
+        "klaviyo-order-core-batch",
+        { syncRunId: prepared.syncRunId },
+        { idempotencyKey, idempotencyKeyTTL: "7d" },
+      );
+      return { ok: true };
+    },
+
+    async runConsent(scope) {
+      await flushStage("consent");
+      const connection = await getConnectionRecord(scope);
+      if (!connection) return { ok: false };
+      const today = new Date();
+      const window = inclusiveStoreDaysToHalfOpenUtc({
+        dateFrom: new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000)
+          .toISOString()
+          .slice(0, 10),
+        dateTo: today.toISOString().slice(0, 10),
+        timeZone: connection.storeTimezone,
+      });
+      const prepared = await startOrResumeConsentSync({
+        scope,
+        window,
+        triggerType: "scheduled",
+      });
+      const idempotencyKey = await idempotencyKeys.create(
+        `klaviyo:consent:first:${prepared.syncRunId}`,
         { scope: "global" },
       );
       await tasks.trigger(
