@@ -357,7 +357,10 @@ export function KlaviyoPlayground() {
 
   const latestProbe = probe.data?.reports[0] ?? null;
   const probePassed = latestProbe?.status === "passed";
-  const connectionReady = health.data?.configured === true;
+  // Spec: a configured-but-not-ready connection (pending, degraded,
+  // disabled, or not yet discovered) shows the pending state — evidence
+  // views unlock only once the connection itself is ready.
+  const connectionReady = health.data?.connection?.status === "ready";
   const evidenceUnlocked = connectionReady && probePassed && range !== null;
 
   // Stale running runs (heartbeat past the lease) must not lock the button:
@@ -425,8 +428,8 @@ export function KlaviyoPlayground() {
       {view !== "probe" && !evidenceUnlocked ? (
         <div className="space-y-4">
           <p className="rounded-md border p-3 text-sm text-muted-foreground">
-            Broad evidence views stay locked until the connection is
-            configured and the latest probe passes review.
+            Broad evidence views stay locked until the connection is ready
+            and the latest probe passes review.
           </p>
           <ProbePanel
             reports={probe.data?.reports ?? []}
