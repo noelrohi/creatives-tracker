@@ -2,11 +2,11 @@
  * Fallback media extraction from a fill's verbatim `raw` payload (§4).
  *
  * The harness is supposed to surface the primary creative's media URLs
- * top-level on the NormalizedAd, but card-based ads (DCO/carousel) keep them
- * inside `raw_data.cards[]` in both collector shapes, and a harness that only
- * reads `images[]`/`videos[]` sends `imageUrl: null` for every one of them —
- * leaving nothing to mirror and blank thumbnails in the app. The server holds
- * the verbatim payload anyway, so it can recover the URLs itself.
+ * top-level on the NormalizedAd, but source shapes differ: MetaAdsCollector's
+ * normalized output uses root `creatives[]` (and calls a video poster
+ * `thumbnail_url`), while native snapshots use `raw_data.cards[]` or the
+ * image/video lists. The server holds the verbatim payload anyway, so it can
+ * recover any media slot the harness missed.
  */
 
 export type RawPrimaryMedia = {
@@ -51,7 +51,8 @@ function creativeMedia(creative: unknown): RawPrimaryMedia | null {
     resizedImageUrl: resized !== imageUrl ? resized : null,
     videoHdUrl: asUrl(record.video_hd_url),
     videoSdUrl: asUrl(record.video_sd_url),
-    videoPreviewImageUrl: asUrl(record.video_preview_image_url),
+    videoPreviewImageUrl:
+      asUrl(record.video_preview_image_url) ?? asUrl(record.thumbnail_url),
   };
 
   const hasAny =
@@ -64,10 +65,10 @@ function creativeMedia(creative: unknown): RawPrimaryMedia | null {
 
 /**
  * The primary creative's media from the raw payload, or all-null when none is
- * found. Both sources return Meta's native snapshot shape; the creative lists
- * live under `raw_data` (MetaAdsCollector) or `snapshot` (native), with
- * card-based ads in `cards[]` and single-creative ads in `videos[]`/`images[]`.
- * The first creative carrying any media wins — that is the primary.
+ * found. MetaAdsCollector's normalized output keeps creatives at the root;
+ * native snapshot shapes keep card-based ads in `cards[]` and single-creative
+ * ads in `videos[]`/`images[]`, under `raw_data`, `snapshot`, or both. The first
+ * creative carrying any media wins — that is the primary.
  */
 export function extractRawPrimaryMedia(raw: unknown): RawPrimaryMedia {
   const root = asRecord(raw);
@@ -83,7 +84,7 @@ export function extractRawPrimaryMedia(raw: unknown): RawPrimaryMedia {
 
   for (const container of containers) {
     if (!container) continue;
-    for (const listKey of ["cards", "videos", "images"] as const) {
+    for (const listKey of ["cards", "videos", "images", "creatives"] as const) {
       const list = container[listKey];
       if (!Array.isArray(list)) continue;
       for (const creative of list) {

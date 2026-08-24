@@ -445,6 +445,43 @@ describe("signals router (competitor-signals v1 §4/§5, Phase 1)", () => {
       expect(dbState.inserts[0].values[0].pipelineStatus).toBe("received");
     });
 
+    it("recovers a collector thumbnail when top-level video media is only partial", async () => {
+      queueKnownCompetitor();
+
+      await adminCaller.signals.ingestFill({
+        competitorPageId: "page-1",
+        source: "meta_ads_collector",
+        ads: [
+          normalizedAd({
+            displayFormat: "VIDEO",
+            videoHdUrl: "https://cdn.test/top-level.mp4",
+            raw: {
+              creatives: [
+                {
+                  video_hd_url: "https://cdn.test/raw.mp4",
+                  thumbnail_url: "https://cdn.test/poster.jpg",
+                },
+              ],
+            },
+          }),
+        ],
+        clusters: null,
+      });
+
+      const payload = triggerMock.mock.calls[0]?.[1];
+      expect(payload).toMatchObject({
+        media: [
+          {
+            archiveId: "ad-1",
+            imageUrl: null,
+            videoHdUrl: "https://cdn.test/top-level.mp4",
+            videoSdUrl: null,
+            videoPreviewImageUrl: "https://cdn.test/poster.jpg",
+          },
+        ],
+      });
+    });
+
     it("skips the job when there is neither media nor clusters", async () => {
       queueKnownCompetitor();
 
