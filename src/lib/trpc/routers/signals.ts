@@ -458,6 +458,7 @@ export const signalsRouter = router({
           .select({
             id: competitorAds.id,
             archiveId: competitorAds.archiveId,
+            workflowStatus: competitorAds.workflowStatus,
             startDate: competitorAds.startDate,
             displayFormat: competitorAds.displayFormat,
             copyClusterId: competitorAds.copyClusterId,
@@ -512,6 +513,7 @@ export const signalsRouter = router({
         ads: ads.map((ad) => ({
           id: ad.id,
           archiveId: ad.archiveId,
+          workflowStatus: ad.workflowStatus,
           startDate: ad.startDate,
           displayFormat: ad.displayFormat,
           mediaKinds: ad.mediaKinds,
@@ -523,6 +525,33 @@ export const signalsRouter = router({
             : null,
         })),
       };
+    }),
+
+  /**
+   * Bulk workflow-status move for the competitor ad triage board. Any org
+   * member can move rows; organization scoping prevents cross-org updates.
+   */
+  setAdWorkflowStatus: orgWriteProcedure
+    .input(
+      z.object({
+        adIds: z.array(z.string()).min(1).max(200),
+        status: z.enum(["inbox", "shortlist", "deprioritised", "made"]),
+      }),
+    )
+    .output(z.object({ updated: z.number().int() }))
+    .mutation(async ({ input, ctx }) => {
+      const updated = await db
+        .update(competitorAds)
+        .set({ workflowStatus: input.status })
+        .where(
+          and(
+            eq(competitorAds.organizationId, ctx.organizationId),
+            inArray(competitorAds.id, input.adIds),
+          ),
+        )
+        .returning({ id: competitorAds.id });
+
+      return { updated: updated.length };
     }),
 
   /**
