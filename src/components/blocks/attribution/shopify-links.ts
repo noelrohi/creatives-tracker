@@ -53,13 +53,14 @@ export function financeSummaryUrl(params: {
   return `https://admin.shopify.com/store/${handle}${FINANCE_SUMMARY_PATH}?${query.toString()}`;
 }
 
-/** Meta evidence lands on the existing MER page — no new route in v1. */
+/** Meta evidence lands on the Meta page's Charts tab, where MER lives now. */
 export function merRangeUrl(params: { dateFrom: string; dateTo: string }): string {
   const query = new URLSearchParams({
+    tab: "charts",
     from: params.dateFrom,
     to: params.dateTo,
   });
-  return `/mer?${query.toString()}`;
+  return `/meta?${query.toString()}`;
 }
 
 /**

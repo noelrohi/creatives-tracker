@@ -29,7 +29,11 @@ import {
   AlertTriangle,
   Shield,
 } from "@/components/icons";
-import { PerformanceChart } from "@/components/blocks/insights/performance-chart";
+import { CombinedPerformanceChart } from "@/components/blocks/insights/combined-performance-chart";
+import {
+  MerAccountBreakdown,
+  MerSummary,
+} from "@/components/blocks/mer/mer-panel";
 import { DemographicBreakdownChart } from "@/components/blocks/dashboard/demographic-chart";
 import { LeaderboardTable } from "@/components/blocks/dashboard/leaderboard-table";
 import { fmtMoney, fmtNum, fmtPct, fmtRoas } from "@/lib/fmt";
@@ -374,20 +378,35 @@ export default function MetaDashboardPage() {
           />
         </TabsContent>
 
-        <TabsContent value="charts" className="pt-4">
+        <TabsContent value="charts" className="flex flex-col gap-4 pt-4">
+          <MerSummary
+            from={fromValue}
+            to={toValue}
+            teamId={selectedTeamId}
+            accountId={selectedAccountId}
+            format={selectedFormat}
+          />
           {isDailyPerfLoading ? (
             <div className="rounded-lg border border-border px-4 py-3">
               <Skeleton className="h-[300px] w-full rounded-lg" />
             </div>
           ) : hasDailyPerfData ? (
             <div className="rounded-lg border border-border px-4 py-3">
-              <PerformanceChart logs={dailyPerfLogs as Array<typeof dailyPerfLogs[number] & Record<string, unknown>>} />
+              <CombinedPerformanceChart
+                logs={dailyPerfLogs as Array<typeof dailyPerfLogs[number] & Record<string, unknown>>}
+              />
             </div>
           ) : (
             <div className="rounded-lg border border-dashed border-border/40 px-4 py-12 text-center">
               <p className="text-sm text-muted-foreground/50">No daily performance data for this period</p>
             </div>
           )}
+          <MerAccountBreakdown
+            from={fromValue}
+            to={toValue}
+            teamId={selectedTeamId}
+            accountId={selectedAccountId}
+          />
         </TabsContent>
 
         <TabsContent value="demographics" className="space-y-2 pt-4">
