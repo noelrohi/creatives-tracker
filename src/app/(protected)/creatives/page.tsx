@@ -24,10 +24,14 @@ import { ExportPreviewDialog } from "@/components/blocks/export-preview-dialog";
 import { DateRangePicker } from "@/components/blocks/dashboard/date-range-picker";
 import { formatDateOnly } from "@/lib/date";
 import type { CreativeHealth } from "@/lib/creative-health";
-import { useCreativeFilters } from "@/components/blocks/creatives/use-creative-filters";
+import {
+  UTM_TRACKING_FILTERS,
+  useCreativeFilters,
+} from "@/components/blocks/creatives/use-creative-filters";
 import { CreativeBulkActions } from "@/components/blocks/creatives/creative-bulk-actions";
 import { creativeColumns } from "@/components/blocks/creatives/creative-list-columns";
 import type { Creative } from "@/components/blocks/creatives/creative-list-types";
+import { getUtmParams } from "@/lib/utm-params";
 import {
   AD_STATUSES,
   AWARENESS,
@@ -58,6 +62,7 @@ export default function CreativesPage() {
     landingPageUrls, setLandingPageUrls,
     minRoas, setMinRoas, minConversions, setMinConversions, minCtr, setMinCtr,
     healthFilter, setHealthFilter, teamId, setTeamId, status, setStatus,
+    utmTracking, setUtmTracking,
     fromValue, toValue, fromDate, toDate, setFrom, setTo,
     clearFilters, hasFilters,
   } = useCreativeFilters();
@@ -107,12 +112,21 @@ export default function CreativesPage() {
 
   const healthValues = healthFilter ? healthFilter.split(",").filter(Boolean) as CreativeHealth[] : [];
 
-  const creativeRows = [...(creatives.data ?? [])]
-    .filter((c) => {
-      if (healthValues.length === 0) return true;
-      return c.health != null && healthValues.includes(c.health);
-    })
-;
+  const creativeRows = [...(creatives.data ?? [])].filter((creative) => {
+    if (
+      healthValues.length > 0
+      && (creative.health == null || !healthValues.includes(creative.health))
+    ) {
+      return false;
+    }
+
+    if (!utmTracking) return true;
+    const hasUtmTracking = getUtmParams(
+      creative.destinationUrl,
+      creative.urlTags,
+    ).length > 0;
+    return utmTracking === "set" ? hasUtmTracking : !hasUtmTracking;
+  });
 
   const selectedCreativeIds = Object.keys(rowSelection).filter((id) => rowSelection[id]);
 
@@ -141,6 +155,12 @@ export default function CreativesPage() {
     }
     if (status) labels.push({ label: "Status", value: status });
     if (healthFilter) labels.push({ label: "Health", value: healthFilter });
+    if (utmTracking) {
+      labels.push({
+        label: "UTM Tracking",
+        value: utmTracking === "set" ? "Set" : "Missing",
+      });
+    }
     return labels;
   })();
 
@@ -202,6 +222,23 @@ export default function CreativesPage() {
           options={[
             { label: "All Statuses", value: "all" },
             ...AD_STATUSES.map((item) => ({ label: item, value: item })),
+          ]}
+        />
+        <FilterPill
+          value={utmTracking ?? "all"}
+          onValueChange={(value) => {
+            setRowSelection({});
+            setUtmTracking(
+              value === "all"
+                ? null
+                : value as (typeof UTM_TRACKING_FILTERS)[number],
+            );
+          }}
+          placeholder="UTM Tracking"
+          options={[
+            { label: "All UTM Tracking", value: "all" },
+            { label: "UTM Set", value: "set" },
+            { label: "UTM Missing", value: "missing" },
           ]}
         />
         {teamsQuery.data && teamsQuery.data.length > 0 && (
@@ -302,6 +339,7 @@ export default function CreativesPage() {
         />
       ) : (
         <DataTable
+          key={`utm-${utmTracking ?? "all"}`}
           columns={tableColumns}
           data={creativeRows as Creative[]}
           getRowId={(row) => row.id}
@@ -337,6 +375,11 @@ export default function CreativesPage() {
           teamId: teamId || undefined,
         }}
         filterLabels={exportFilterLabels}
+        includedCreativeIds={
+          healthFilter || utmTracking
+            ? creativeRows.map((creative) => creative.id)
+            : undefined
+        }
       />
     </div>
   );

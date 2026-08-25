@@ -144,11 +144,13 @@ export function ExportPreviewDialog({
   onOpenChange,
   filters,
   filterLabels,
+  includedCreativeIds,
 }: {
   open: boolean;
   onOpenChange: (next: boolean) => void;
   filters: ExportFilters;
   filterLabels: FilterLabel[];
+  includedCreativeIds?: string[];
 }) {
   const trpc = useTRPC();
   const preview = useQuery({
@@ -170,7 +172,17 @@ export function ExportPreviewDialog({
     enabled: open,
   });
 
-  const data = preview.data;
+  const includedCreativeIdSet = includedCreativeIds
+    ? new Set(includedCreativeIds)
+    : null;
+  const data = preview.data && includedCreativeIdSet
+    ? {
+        ads: preview.data.ads.filter((ad) => includedCreativeIdSet.has(ad.creativeId)),
+        creatives: preview.data.creatives.filter((creative) => (
+          includedCreativeIdSet.has(creative.creativeId)
+        )),
+      }
+    : preview.data;
   const summary = data
     ? {
         ads: data.ads.length,
