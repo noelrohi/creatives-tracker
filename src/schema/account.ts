@@ -15,6 +15,13 @@ export const adAccounts = pgTable(
     isDisabled: boolean("is_disabled").default(false).notNull(),
     lastImportedAt: timestamp("last_imported_at"),
     dataDateEnd: date("data_date_end"),
+    /**
+     * The ad account's own timezone (IANA name, from Meta's `timezone_name`).
+     * Meta reports daily insights in this zone, so screens over that data use
+     * it — not the browser clock — to decide what "today" is. Null until the
+     * account's first sync after this column landed.
+     */
+    timezone: text("timezone"),
     organizationId: text("organization_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")

@@ -24,6 +24,7 @@ import {
   fetchMetaAdDelivery,
   fetchMetaInsightsPage,
   getMetaAccountWithToken,
+  syncMetaAccountTimezone,
   requestMetaInsightsReport,
   checkMetaInsightsReport,
 } from "@/lib/meta-insights-sync";
@@ -273,6 +274,8 @@ export const metaSyncRouter = router({
         accountId: input.accountId,
         organizationId: ctx.organizationId,
       });
+
+      await syncMetaAccountTimezone(account);
 
       const { reportRunId } = await requestMetaInsightsReport({
         organizationId: ctx.organizationId,
