@@ -6,6 +6,7 @@ export interface Creative {
   assetUrl: string | null;
   videoUrl: string | null;
   destinationUrl: string | null;
+  urlTags: string | null;
   format: string | null;
   angle: string | null;
   persona: string | null;

@@ -612,6 +612,7 @@ export const metaSyncRouter = router({
         eq(ads.organizationId, ctx.organizationId),
         isNotNull(ads.metaId),
         or(
+          isNull(ads.urlTagsCheckedAt),
           and(
             isNull(ads.enrichmentAttemptedAt),
             or(

@@ -10,6 +10,7 @@ export function mapRowsForImport(rows: MappedRow[]) {
     videoUrl: r.videoUrl,
     format: r.format,
     destinationUrl: r.destinationUrl,
+    urlTags: r.urlTags,
     roas: r.roas,
     cpa: r.cpa,
     ctr: r.ctr,

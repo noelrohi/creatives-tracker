@@ -11,7 +11,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ArrowUpDown, Copy, ExternalLink, ImageIcon, MoreHorizontal, Sparkles, Video } from "@/components/icons";
 import { parseDateOnly } from "@/lib/date";
-import { getQueryParamKeys } from "@/lib/query-param-keys";
+import { getQueryParamKeys, getQueryParamValue } from "@/lib/query-param-keys";
 import { useTRPC } from "@/lib/trpc/client";
 import { cn } from "@/lib/utils";
 import type { CreativeHealth } from "@/lib/creative-health";
@@ -50,15 +50,6 @@ const UTM_COLUMNS = [
   { key: "utm_content", label: "UTM Content" },
   { key: "utm_term", label: "UTM Term" },
 ] as const;
-
-function getUtmParam(url: string | null, key: string) {
-  if (!url) return null;
-  try {
-    return new URL(url).searchParams.get(key) || null;
-  } catch {
-    return null;
-  }
-}
 
 function NameListCell({ names, count }: { names: string[]; count: number }) {
   if (names.length === 0) return <span className="text-muted-foreground/30">&mdash;</span>;
@@ -299,18 +290,20 @@ export const creativeColumns: ColumnDef<Creative>[] = [
   },
   {
     id: "queryParamKeys",
-    accessorFn: (row) => getQueryParamKeys(row.destinationUrl),
+    accessorFn: (row) => getQueryParamKeys(row.destinationUrl, row.urlTags),
     header: "Query Param Keys",
     cell: ({ row }) => (
-      <UtmCell value={getQueryParamKeys(row.original.destinationUrl)} />
+      <UtmCell value={getQueryParamKeys(row.original.destinationUrl, row.original.urlTags)} />
     ),
     enableSorting: false,
   },
   ...UTM_COLUMNS.map<ColumnDef<Creative>>(({ key, label }) => ({
     id: key,
-    accessorFn: (row: Creative) => getUtmParam(row.destinationUrl, key),
+    accessorFn: (row: Creative) => getQueryParamValue(row.destinationUrl, row.urlTags, key),
     header: label,
-    cell: ({ row }) => <UtmCell value={getUtmParam(row.original.destinationUrl, key)} />,
+    cell: ({ row }) => (
+      <UtmCell value={getQueryParamValue(row.original.destinationUrl, row.original.urlTags, key)} />
+    ),
   })),
   {
     accessorKey: "teamId",
