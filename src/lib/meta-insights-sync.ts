@@ -431,6 +431,7 @@ export async function downloadMetaInsightsReport(input: {
       if (preview.destinationUrl) {
         row.destinationUrl = preview.destinationUrl;
       }
+      row.urlTags = preview.urlTags ?? null;
     }
   }
 

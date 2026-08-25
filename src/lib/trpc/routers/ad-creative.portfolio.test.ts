@@ -103,6 +103,7 @@ const FIXTURE_DDL = [
      ad_creative_id text REFERENCES ad_creative(id) ON DELETE SET NULL,
      meta_id text UNIQUE,
      destination_url text,
+     url_tags text,
      organization_id text,
      status "status" NOT NULL DEFAULT 'active',
      created_at timestamp NOT NULL DEFAULT now(),

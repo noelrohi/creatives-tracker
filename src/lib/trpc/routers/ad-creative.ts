@@ -157,6 +157,7 @@ const adCreativeListItemSchema = z.object({
   assetUrl: z.string().nullable(),
   videoUrl: z.string().nullable(),
   destinationUrl: z.string().nullable(),
+  urlTags: z.string().nullable(),
   format: creativeFormatSchema.nullable(),
   angle: z.string().nullable(),
   persona: z.string().nullable(),
@@ -759,6 +760,7 @@ export const adCreativeRouter = router({
         asset_url: string | null;
         video_url: string | null;
         destination_url: string | null;
+        url_tags: string | null;
         format: z.infer<typeof creativeFormatSchema> | null;
         angle: string | null;
         persona: string | null;
@@ -900,6 +902,7 @@ export const adCreativeRouter = router({
           SELECT DISTINCT ON (ad.ad_creative_id)
             ad.ad_creative_id,
             ad.destination_url,
+            ad.url_tags,
             ${effectiveAdStatusSql(sql`ad.status`, sql`ast.status`)} AS ad_status,
             ad.meta_id AS meta_ad_id,
             c.meta_id AS meta_campaign_id,
@@ -924,6 +927,7 @@ export const adCreativeRouter = router({
           fc.asset_url,
           fc.video_url,
           latest_ad.destination_url,
+          latest_ad.url_tags,
           fc.format,
           fc.angle,
           fc.persona,
@@ -988,6 +992,7 @@ export const adCreativeRouter = router({
           assetUrl: r.asset_url,
           videoUrl: r.video_url,
           destinationUrl: r.destination_url,
+          urlTags: r.url_tags,
           format: r.format,
           angle: r.angle,
           persona: r.persona,
@@ -2250,6 +2255,7 @@ export const adCreativeRouter = router({
             delivery: z.string().optional(),
             adId: z.string().optional(),
             destinationUrl: z.string().optional(),
+            urlTags: z.string().nullable().optional(),
             campaignName: z.string().optional(),
             campaignId: z.string().optional(),
             adSetName: z.string().optional(),

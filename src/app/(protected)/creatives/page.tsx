@@ -83,11 +83,6 @@ export default function CreativesPage() {
     format: false,
     health: false,
     avgCpa: false,
-    utm_source: false,
-    utm_medium: false,
-    utm_campaign: false,
-    utm_content: false,
-    utm_term: false,
   });
 
   const creatives = useQuery(

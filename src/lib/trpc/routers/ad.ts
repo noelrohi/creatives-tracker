@@ -26,6 +26,8 @@ const adSchema = z.object({
   accountId: z.string().nullable(),
   caption: z.string().nullable(),
   destinationUrl: z.string().nullable(),
+  urlTags: z.string().nullable(),
+  urlTagsCheckedAt: z.date().nullable(),
   metaId: z.string().nullable(),
   metaImageHash: z.string().nullable(),
   metaVideoId: z.string().nullable(),

@@ -382,6 +382,7 @@ export interface MappedRow {
   campaignId?: string;
   adSetId?: string;
   destinationUrl?: string;
+  urlTags?: string | null;
 }
 
 export function applyMapping(

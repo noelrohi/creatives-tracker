@@ -25,6 +25,8 @@ export const ads = pgTable(
     }),
     caption: text("caption"),
     destinationUrl: text("destination_url"),
+    urlTags: text("url_tags"),
+    urlTagsCheckedAt: timestamp("url_tags_checked_at"),
     funnelStage: funnelStageEnum("funnel_stage"),
     funnelStageSource: text("funnel_stage_source"),
     funnelStageConfidence: numeric("funnel_stage_confidence"),

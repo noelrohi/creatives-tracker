@@ -8,6 +8,7 @@ export type MetaCreativePreview = {
   format: "static" | "video" | null;
   videoUrl?: string;
   destinationUrl?: string;
+  urlTags?: string;
   caption?: string;
 };
 
@@ -24,6 +25,7 @@ type MetaAdCreativeResponse = {
     image_url?: string;
     thumbnail_url?: string;
     link_url?: string;
+    url_tags?: string;
     video_id?: string;
     object_type?: string;
     effective_object_story_id?: string;
@@ -240,6 +242,7 @@ function toPreview(
     assetUrl,
     format: format ?? (assetUrl ? "static" : null),
     destinationUrl: getDestinationUrl(creative),
+    urlTags: creative?.url_tags,
     caption: getCaption(creative),
   };
 }
@@ -558,7 +561,7 @@ export async function fetchMetaCreativePreviewsBatch(input: {
       url.searchParams.set("ids", chunk.join(","));
       url.searchParams.set(
         "fields",
-        "creative{body,image_hash,image_url,thumbnail_url,link_url,video_id,object_type,effective_object_story_id,object_story_spec,asset_feed_spec}",
+        "creative{body,image_hash,image_url,thumbnail_url,link_url,url_tags,video_id,object_type,effective_object_story_id,object_story_spec,asset_feed_spec}",
       );
       return fetchJson<Record<string, MetaAdCreativeResponse>>(url);
     }),

@@ -813,11 +813,14 @@ export async function enrichMetaCreativePreviews(input: {
 
   for (const adRow of adRows) {
     if (!adRow.metaId) continue;
-    if (!successfulAdMetaIds.has(adRow.metaId)) continue;
+    const responseSucceeded = successfulAdMetaIds.has(adRow.metaId);
     const preview = previews.get(adRow.metaId);
 
     const adSet: Partial<typeof ads.$inferInsert> = {
       enrichmentAttemptedAt: now,
+      ...(responseSucceeded && preview
+        ? { urlTags: preview.urlTags ?? null, urlTagsCheckedAt: now }
+        : {}),
     };
     if (preview?.destinationUrl) adSet.destinationUrl = preview.destinationUrl;
     if (preview?.caption) adSet.caption = preview.caption;
@@ -830,9 +833,8 @@ export async function enrichMetaCreativePreviews(input: {
     );
     updatedAds += 1;
 
-    if (!adRow.adCreativeId) continue;
+    if (!responseSucceeded || !preview || !adRow.adCreativeId) continue;
     touchedCreativeIds.add(adRow.adCreativeId);
-    if (!preview) continue;
     creativeUpdates.set(adRow.adCreativeId, mergeImportedCreativeMeta(
       creativeUpdates.get(adRow.adCreativeId),
       {
@@ -1191,6 +1193,7 @@ export async function importMetaRows(input: {
     metaAdId?: string;
     adSetDbId?: string;
     destinationUrl?: string;
+    urlTags?: string | null;
     caption?: string;
   }>();
   for (const row of rows) {
@@ -1210,6 +1213,7 @@ export async function importMetaRows(input: {
         metaAdId: row.adId,
         adSetDbId: adSetKey ? adSetIdByKey.get(adSetKey) : undefined,
         destinationUrl: row.destinationUrl,
+        urlTags: row.urlTags,
         caption: undefined,
       });
     }
@@ -1355,6 +1359,8 @@ export async function importMetaRows(input: {
     );
   }
 
+  const urlTagsCheckedAt = new Date();
+
   if (newKeys.length > 0) {
     const newAdsValues = newKeys.map((key) => {
       const info = adInfoMap.get(key)!;
@@ -1365,6 +1371,8 @@ export async function importMetaRows(input: {
         status: normalizeImportedAdStatus(info.delivery),
         metaId: info.metaAdId,
         destinationUrl: info.destinationUrl,
+        urlTags: info.urlTags,
+        urlTagsCheckedAt: info.urlTags !== undefined ? urlTagsCheckedAt : undefined,
         caption: info.caption,
         accountId: knownAccountId,
         organizationId: input.organizationId,
@@ -1387,6 +1395,9 @@ export async function importMetaRows(input: {
       ...(info.adSetDbId ? { adSetId: info.adSetDbId } : {}),
       ...(info.metaAdId ? { metaId: info.metaAdId } : {}),
       ...(info.destinationUrl ? { destinationUrl: info.destinationUrl } : {}),
+      ...(info.urlTags !== undefined
+        ? { urlTags: info.urlTags, urlTagsCheckedAt }
+        : {}),
       ...(info.caption ? { caption: info.caption } : {}),
       ...(knownAccountId ? { accountId: knownAccountId } : {}),
     }).where(
