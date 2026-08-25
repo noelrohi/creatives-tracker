@@ -113,6 +113,32 @@ export async function getMetaAccountWithToken(input: {
   return account as MetaAccountWithToken;
 }
 
+/**
+ * Stamp the account with Meta's own `timezone_name` (an IANA name like
+ * "America/Los_Angeles") so daily figures can be read against the clock Meta
+ * bucketed them in. Best-effort and once per account — timezones effectively
+ * never change, a failure just retries on the next sync, and the sync itself
+ * must never fail over this.
+ */
+export async function syncMetaAccountTimezone(
+  account: MetaAccountWithToken,
+): Promise<void> {
+  if (account.timezone) return;
+  try {
+    const url = `${META_GRAPH_API_BASE}/act_${account.metaAccountId}?fields=timezone_name&access_token=${account.metaAccessToken}`;
+    const response = await fetch(url);
+    if (!response.ok) return;
+    const body = (await response.json()) as { timezone_name?: string };
+    if (!body.timezone_name) return;
+    await db
+      .update(adAccounts)
+      .set({ timezone: body.timezone_name })
+      .where(eq(adAccounts.id, account.id));
+  } catch {
+    // Missing timezone falls back to the browser clock in the UI.
+  }
+}
+
 export function handleMetaApiError(
   response: { status: number; statusText: string },
   errorBody: MetaErrorBody | null,

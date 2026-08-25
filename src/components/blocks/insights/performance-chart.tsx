@@ -10,9 +10,9 @@ import {
 } from "@/components/ui/chart";
 import { formatDateOnly, parseDateOnly } from "@/lib/date";
 
-type MetricKey = "spend" | "roas" | "cpa" | "ctr" | "conversions" | "impressions" | "reach" | "cpm";
+export type MetricKey = "spend" | "roas" | "cpa" | "ctr" | "conversions" | "impressions" | "reach" | "cpm";
 
-const METRICS: { key: MetricKey; label: string; color: string }[] = [
+export const METRICS: { key: MetricKey; label: string; color: string }[] = [
   { key: "spend", label: "Spend", color: "hsl(262, 83%, 58%)" },
   { key: "roas", label: "ROAS", color: "hsl(160, 84%, 39%)" },
   { key: "cpa", label: "CPA", color: "hsl(38, 92%, 50%)" },
@@ -23,7 +23,7 @@ const METRICS: { key: MetricKey; label: string; color: string }[] = [
   { key: "cpm", label: "CPM", color: "hsl(24, 95%, 53%)" },
 ];
 
-interface PerformanceLog {
+export interface PerformanceLog {
   dateStart: string;
   dateEnd: string;
   spend: string | null;
@@ -45,11 +45,13 @@ interface PerformanceChartProps {
   lockMetric?: boolean;
 }
 
-export function PerformanceChart({ logs, compact, defaultMetric = "spend", lockMetric = false }: PerformanceChartProps) {
-  const [activeMetric, setActiveMetric] = useState<MetricKey>(defaultMetric);
-
-  const chartData = useMemo(() => {
-    const byDate = new Map<string, {
+/**
+ * Sum the raw per-ad rows into one row per day, deriving the ratio metrics
+ * (ROAS, CPA, CTR, CPM) from the summed parts rather than averaging averages.
+ * Shared by the single-metric chart below and the combined chart.
+ */
+export function aggregateDailyLogs(logs: PerformanceLog[]) {
+  const byDate = new Map<string, {
       date: string;
       spend: number;
       purchaseValue: number;
@@ -86,20 +88,27 @@ export function PerformanceChart({ logs, compact, defaultMetric = "spend", lockM
       byDate.set(key, bucket);
     }
 
-    return [...byDate.values()]
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .map((bucket) => ({
-        date: bucket.date,
-        spend: bucket.spend,
-        roas: bucket.spend > 0 ? bucket.purchaseValue / bucket.spend : 0,
-        cpa: bucket.conversions > 0 ? bucket.spend / bucket.conversions : 0,
-        ctr: bucket.impressions > 0 ? bucket.weightedCtrNumerator / bucket.impressions : 0,
-        conversions: bucket.conversions,
-        impressions: bucket.impressions,
-        reach: bucket.reach,
-        cpm: bucket.impressions > 0 ? (bucket.spend / bucket.impressions) * 1000 : 0,
-      }));
-  }, [logs]);
+  return [...byDate.values()]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((bucket) => ({
+      date: bucket.date,
+      spend: bucket.spend,
+      roas: bucket.spend > 0 ? bucket.purchaseValue / bucket.spend : 0,
+      cpa: bucket.conversions > 0 ? bucket.spend / bucket.conversions : 0,
+      ctr: bucket.impressions > 0 ? bucket.weightedCtrNumerator / bucket.impressions : 0,
+      conversions: bucket.conversions,
+      impressions: bucket.impressions,
+      reach: bucket.reach,
+      cpm: bucket.impressions > 0 ? (bucket.spend / bucket.impressions) * 1000 : 0,
+    }));
+}
+
+export type DailyPerformanceRow = ReturnType<typeof aggregateDailyLogs>[number];
+
+export function PerformanceChart({ logs, compact, defaultMetric = "spend", lockMetric = false }: PerformanceChartProps) {
+  const [activeMetric, setActiveMetric] = useState<MetricKey>(defaultMetric);
+
+  const chartData = useMemo(() => aggregateDailyLogs(logs), [logs]);
 
   const availableMetrics = METRICS.filter((m) =>
     chartData.some((d) => (d[m.key] as number) > 0),

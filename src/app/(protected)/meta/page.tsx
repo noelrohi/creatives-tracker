@@ -29,11 +29,20 @@ import {
   AlertTriangle,
   Shield,
 } from "@/components/icons";
-import { PerformanceChart } from "@/components/blocks/insights/performance-chart";
+import { CombinedPerformanceChart } from "@/components/blocks/insights/combined-performance-chart";
+import {
+  MerAccountBreakdown,
+  MerSummary,
+} from "@/components/blocks/mer/mer-panel";
 import { DemographicBreakdownChart } from "@/components/blocks/dashboard/demographic-chart";
 import { LeaderboardTable } from "@/components/blocks/dashboard/leaderboard-table";
 import { fmtMoney, fmtNum, fmtPct, fmtRoas } from "@/lib/fmt";
-import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
+import {
+  formatDateOnly,
+  formatDateOnlyInTimeZone,
+  isDateOnlyString,
+  parseDateOnly,
+} from "@/lib/date";
 import { BREAKDOWN_RETENTION_DAYS, clampBreakdownRange } from "@/lib/retention/policy";
 import { BreakdownWindowCaption } from "@/components/blocks/dashboard/breakdown-window-caption";
 import { getUserFacingErrorMessage } from "@/lib/errors";
@@ -104,20 +113,38 @@ export default function MetaDashboardPage() {
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
   const [teamId, setTeamId] = useQueryState("team", parseAsString.withDefault(""));
   const [format, setFormat] = useQueryState("format", parseAsString.withDefault(""));
-  const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
-  const [to, setTo] = useQueryState("to", parseAsString.withDefault(formatDateOnly(new Date())));
+  const [from, setFrom] = useQueryState("from", parseAsString.withDefault(""));
+  const [to, setTo] = useQueryState("to", parseAsString.withDefault(""));
   const [tab, setTab] = useQueryState("tab", parseAsString.withDefault("overview"));
   const [dimension, setDimension] = useQueryState("dim", parseAsString.withDefault("gender"));
 
   const selectedAccountId = accountId ? accountId : undefined;
   const selectedTeamId = teamId || undefined;
   const selectedFormat = FORMATS.find((value) => value === format);
-  const fromValue = isDateOnlyString(from) ? from : formatDateOnly(subDays(new Date(), 6));
-  const toValue = isDateOnlyString(to) ? to : formatDateOnly(new Date());
-  const fromDate = parseDateOnly(fromValue);
-  const toDate = parseDateOnly(toValue);
 
   const accounts = useQuery(trpc.adAccount.list.queryOptions());
+
+  /**
+   * Meta buckets every daily row in the ad account's own timezone, so "today"
+   * is read off that clock, not the browser's — otherwise a viewer ahead of
+   * the account (e.g. Asia looking at a US account) starts on a day Meta
+   * hasn't opened yet. With several accounts in view, the first synced
+   * timezone stands in; until any account has synced one, the browser clock
+   * is all there is.
+   */
+  const dataTimeZone =
+    (selectedAccountId
+      ? accounts.data?.find((a) => a.id === selectedAccountId)?.timezone
+      : accounts.data?.find((a) => a.timezone)?.timezone) ?? null;
+  const todayValue = dataTimeZone
+    ? formatDateOnlyInTimeZone(new Date(), dataTimeZone)
+    : formatDateOnly(new Date());
+  const fromValue = isDateOnlyString(from)
+    ? from
+    : formatDateOnly(subDays(parseDateOnly(todayValue), 6));
+  const toValue = isDateOnlyString(to) ? to : todayValue;
+  const fromDate = parseDateOnly(fromValue);
+  const toDate = parseDateOnly(toValue);
   const teamsQuery = useQuery(trpc.team.list.queryOptions());
 
   const stats = useQuery(
@@ -146,7 +173,7 @@ export default function MetaDashboardPage() {
   const demoWindow = clampBreakdownRange({
     from: fromValue,
     to: toValue,
-    today: formatDateOnly(new Date()),
+    today: todayValue,
   });
 
   const demographic = useQuery({
@@ -196,6 +223,11 @@ export default function MetaDashboardPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Meta</h1>
         <div className="flex items-center gap-2">
+          {dataTimeZone ? (
+            <span className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground/60">
+              {dataTimeZone}
+            </span>
+          ) : null}
           <DateRangePicker
             from={fromDate}
             to={toDate}
@@ -374,20 +406,35 @@ export default function MetaDashboardPage() {
           />
         </TabsContent>
 
-        <TabsContent value="charts" className="pt-4">
+        <TabsContent value="charts" className="flex flex-col gap-4 pt-4">
+          <MerSummary
+            from={fromValue}
+            to={toValue}
+            teamId={selectedTeamId}
+            accountId={selectedAccountId}
+            format={selectedFormat}
+          />
           {isDailyPerfLoading ? (
             <div className="rounded-lg border border-border px-4 py-3">
               <Skeleton className="h-[300px] w-full rounded-lg" />
             </div>
           ) : hasDailyPerfData ? (
             <div className="rounded-lg border border-border px-4 py-3">
-              <PerformanceChart logs={dailyPerfLogs as Array<typeof dailyPerfLogs[number] & Record<string, unknown>>} />
+              <CombinedPerformanceChart
+                logs={dailyPerfLogs as Array<typeof dailyPerfLogs[number] & Record<string, unknown>>}
+              />
             </div>
           ) : (
             <div className="rounded-lg border border-dashed border-border/40 px-4 py-12 text-center">
               <p className="text-sm text-muted-foreground/50">No daily performance data for this period</p>
             </div>
           )}
+          <MerAccountBreakdown
+            from={fromValue}
+            to={toValue}
+            teamId={selectedTeamId}
+            accountId={selectedAccountId}
+          />
         </TabsContent>
 
         <TabsContent value="demographics" className="space-y-2 pt-4">
