@@ -88,8 +88,8 @@ function UtmTrackingCell({ creative }: { creative: Creative }) {
         <div className="space-y-2">
           {params.map(({ key, value }) => (
             <div key={key} className="grid grid-cols-[auto_1fr] gap-3 text-xs">
-              <span className="font-medium text-muted-foreground">{key}</span>
-              <span className="break-all font-mono text-foreground">{value}</span>
+              <span className="font-medium text-background/70">{key}</span>
+              <span className="break-all font-mono font-medium text-background">{value}</span>
             </div>
           ))}
         </div>
