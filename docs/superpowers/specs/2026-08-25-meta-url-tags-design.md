@@ -9,8 +9,8 @@ Meta stores Ads Manager's **URL parameters** separately from the landing URL in 
 - Add nullable `url_tags` storage and a nullable `url_tags_checked_at` timestamp to each ad. Keep tags separate from `destination_url`; the clickable landing URL must remain unchanged. The timestamp distinguishes “Meta returned no tags” from “not checked yet.”
 - Request `creative.url_tags` during Meta preview enrichment, persist the raw value when present, and stamp `url_tags_checked_at` after every successful response.
 - Treat an ad whose URL tags have never been checked as eligible for preview enrichment, allowing a normal sync to backfill existing ads once without retrying tagless ads forever.
-- Return URL tags with creative list rows. For query-param and UTM columns, parse URL tags first and fall back to parameters embedded in the destination URL.
-- Preserve Meta template values such as `{{campaign.name}}` verbatim.
+- Return URL tags with creative list rows. Replace the individual query-param and UTM columns with one `UTM Tracking` column: a compact `Set · N` badge when UTMs exist and a tooltip listing their full values. Ignore unrelated parameters such as `pb` and `variant`.
+- Parse URL tags first and fall back to UTM parameters embedded in the destination URL. Preserve Meta template values such as `{{campaign.name}}` verbatim.
 
 ## Verification
 

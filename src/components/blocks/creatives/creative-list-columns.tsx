@@ -11,7 +11,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ArrowUpDown, Copy, ExternalLink, ImageIcon, MoreHorizontal, Sparkles, Video } from "@/components/icons";
 import { parseDateOnly } from "@/lib/date";
-import { getQueryParamKeys, getQueryParamValue } from "@/lib/query-param-keys";
+import { getUtmParams } from "@/lib/utm-params";
 import { useTRPC } from "@/lib/trpc/client";
 import { cn } from "@/lib/utils";
 import type { CreativeHealth } from "@/lib/creative-health";
@@ -43,14 +43,6 @@ function formatDateTime(value: Date | string) {
   };
 }
 
-const UTM_COLUMNS = [
-  { key: "utm_source", label: "UTM Source" },
-  { key: "utm_medium", label: "UTM Medium" },
-  { key: "utm_campaign", label: "UTM Campaign" },
-  { key: "utm_content", label: "UTM Content" },
-  { key: "utm_term", label: "UTM Term" },
-] as const;
-
 function NameListCell({ names, count }: { names: string[]; count: number }) {
   if (names.length === 0) return <span className="text-muted-foreground/30">&mdash;</span>;
   return (
@@ -76,15 +68,31 @@ function NameListCell({ names, count }: { names: string[]; count: number }) {
   );
 }
 
-function UtmCell({ value }: { value: string | null }) {
-  if (!value) return <span className="text-muted-foreground/30">&mdash;</span>;
+function UtmTrackingCell({ creative }: { creative: Creative }) {
+  const params = getUtmParams(creative.destinationUrl, creative.urlTags);
+  if (params.length === 0) {
+    return <span className="text-muted-foreground/30">&mdash;</span>;
+  }
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="block max-w-[140px] truncate text-sm text-muted-foreground">{value}</span>
+        <Badge
+          variant="secondary"
+          className="cursor-default border-emerald-500/20 bg-emerald-500/10 text-[10px] font-medium text-emerald-600 dark:text-emerald-400"
+        >
+          Set · {params.length}
+        </Badge>
       </TooltipTrigger>
-      <TooltipContent side="bottom" className="max-w-xs break-all text-xs">
-        {value}
+      <TooltipContent side="bottom" align="start" className="max-w-sm p-3">
+        <div className="space-y-2">
+          {params.map(({ key, value }) => (
+            <div key={key} className="grid grid-cols-[auto_1fr] gap-3 text-xs">
+              <span className="font-medium text-muted-foreground">{key}</span>
+              <span className="break-all font-mono text-foreground">{value}</span>
+            </div>
+          ))}
+        </div>
       </TooltipContent>
     </Tooltip>
   );
@@ -289,22 +297,13 @@ export const creativeColumns: ColumnDef<Creative>[] = [
     },
   },
   {
-    id: "queryParamKeys",
-    accessorFn: (row) => getQueryParamKeys(row.destinationUrl, row.urlTags),
-    header: "Query Param Keys",
-    cell: ({ row }) => (
-      <UtmCell value={getQueryParamKeys(row.original.destinationUrl, row.original.urlTags)} />
-    ),
+    id: "utmTracking",
+    accessorFn: (row) => getUtmParams(row.destinationUrl, row.urlTags).length,
+    header: "UTM Tracking",
+    cell: ({ row }) => <UtmTrackingCell creative={row.original} />,
     enableSorting: false,
+    size: 110,
   },
-  ...UTM_COLUMNS.map<ColumnDef<Creative>>(({ key, label }) => ({
-    id: key,
-    accessorFn: (row: Creative) => getQueryParamValue(row.destinationUrl, row.urlTags, key),
-    header: label,
-    cell: ({ row }) => (
-      <UtmCell value={getQueryParamValue(row.original.destinationUrl, row.original.urlTags, key)} />
-    ),
-  })),
   {
     accessorKey: "teamId",
     header: "Team",
