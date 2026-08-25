@@ -11,6 +11,8 @@ import { subDays } from "date-fns";
 import { formatDateOnly, isDateOnlyString, parseDateOnly } from "@/lib/date";
 import { AD_STATUSES, AWARENESS, FORMATS } from "./creative-list-filters";
 
+export const UTM_TRACKING_FILTERS = ["set", "missing"] as const;
+
 export function useCreativeFilters() {
   const [format, setFormat] = useQueryState(
     "format",
@@ -30,6 +32,12 @@ export function useCreativeFilters() {
     parseAsStringLiteral(AD_STATUSES).withDefault(undefined as unknown as (typeof AD_STATUSES)[number]),
   );
   const [teamId, setTeamId] = useQueryState("team", parseAsString.withDefault(""));
+  const [utmTracking, setUtmTracking] = useQueryState(
+    "utm",
+    parseAsStringLiteral(UTM_TRACKING_FILTERS).withDefault(
+      undefined as unknown as (typeof UTM_TRACKING_FILTERS)[number],
+    ),
+  );
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 6))));
   const [to, setTo] = useQueryState("to", parseAsString.withDefault(formatDateOnly(new Date())));
   const [landingPageUrls, setLandingPageUrls] = useQueryState(
@@ -57,14 +65,16 @@ export function useCreativeFilters() {
     setTeamId("");
     setHealthFilter("");
     setStatus(null);
+    setUtmTracking(null);
   }, [
     setAccountId, setAdSetIds, setAwareness, setCampaignIds, setFormat, setHealthFilter,
     setLandingPageUrls, setMinConversions, setMinCtr, setMinRoas, setSearch, setStatus, setTeamId,
+    setUtmTracking,
   ]);
 
   const hasFilters = Boolean(
     format || awareness || search || accountId || adSetIds || campaignIds || landingPageUrls.length ||
-    minRoas || minConversions || minCtr || healthFilter || teamId || status,
+    minRoas || minConversions || minCtr || healthFilter || teamId || status || utmTracking,
   );
 
   return {
@@ -73,6 +83,7 @@ export function useCreativeFilters() {
     landingPageUrls, setLandingPageUrls,
     minRoas, setMinRoas, minConversions, setMinConversions, minCtr, setMinCtr,
     healthFilter, setHealthFilter, teamId, setTeamId, status, setStatus,
+    utmTracking, setUtmTracking,
     fromValue, toValue,
     fromDate: parseDateOnly(fromValue),
     toDate: parseDateOnly(toValue),

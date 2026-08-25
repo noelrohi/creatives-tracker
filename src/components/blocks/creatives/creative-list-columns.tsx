@@ -298,11 +298,23 @@ export const creativeColumns: ColumnDef<Creative>[] = [
   },
   {
     id: "utmTracking",
-    accessorFn: (row) => getUtmParams(row.destinationUrl, row.urlTags).length,
-    header: "UTM Tracking",
+    accessorFn: (row) => (
+      getUtmParams(row.destinationUrl, row.urlTags).length > 0 ? 1 : 0
+    ),
+    header: ({ column }) => (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="-ml-3 h-8"
+        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+      >
+        UTM Tracking
+        <ArrowUpDown className="ml-1.5 size-3.5" />
+      </Button>
+    ),
     cell: ({ row }) => <UtmTrackingCell creative={row.original} />,
-    enableSorting: false,
-    size: 110,
+    sortDescFirst: false,
+    size: 125,
   },
   {
     accessorKey: "teamId",
