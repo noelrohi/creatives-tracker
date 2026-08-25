@@ -55,15 +55,6 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { useTRPC } from "@/lib/trpc/client";
 import { featureFlagDefs } from "@/lib/feature-flags";
 
-const dashboardSubItems: Array<{
-  label: string;
-  href: string;
-  icon: string;
-  badge?: string;
-}> = [
-  { label: "MER", href: "/mer", icon: "solar:graph-up-linear" },
-];
-
 /**
  * The Dashboard entry's dropdown: one row per source with its own screen.
  * The labs are privileged navigation only — hiding them is UX, the
@@ -89,6 +80,24 @@ const dashboardChildren: Array<{
     privileged: true,
   },
 ];
+
+/**
+ * Controlled collapsible state, not `defaultOpen`: Radix only reads
+ * `defaultOpen` at mount, so a client-side navigation onto a child route
+ * would leave the active link hidden behind a closed dropdown. The open
+ * state is derived from the route; a manual toggle wins only while the
+ * pathname it happened on is still current, so every navigation re-follows
+ * the route.
+ */
+function useRouteCollapsible(routeActive: boolean, pathname: string) {
+  const [toggle, setToggle] = useState<{
+    pathname: string;
+    open: boolean;
+  } | null>(null);
+  const open = toggle?.pathname === pathname ? toggle.open : routeActive;
+  const setOpen = (next: boolean) => setToggle({ pathname, open: next });
+  return { open, setOpen };
+}
 
 const navItems: Array<{
   label: string;
@@ -121,29 +130,18 @@ export function AppSidebar() {
   const orgId = activeOrg?.id;
   const trpc = useTRPC();
 
-  /**
-   * Controlled, not `defaultOpen`: Radix only reads `defaultOpen` at mount, so
-   * a client-side navigation onto `/meta` or a lab would leave the active
-   * child hidden behind a closed dropdown. The open state is derived from the
-   * route; a manual toggle wins only while the pathname it happened on is
-   * still current, so every navigation re-follows the route.
-   */
-  const dashboardRouteActive =
+  const dashboard = useRouteCollapsible(
     pathname === "/" ||
-    dashboardChildren.some(
-      (child) =>
-        pathname === child.href || pathname.startsWith(`${child.href}/`),
-    );
-  const [dashboardToggle, setDashboardToggle] = useState<{
-    pathname: string;
-    open: boolean;
-  } | null>(null);
-  const dashboardOpen =
-    dashboardToggle?.pathname === pathname
-      ? dashboardToggle.open
-      : dashboardRouteActive;
-  const setDashboardOpen = (open: boolean) =>
-    setDashboardToggle({ pathname, open });
+      dashboardChildren.some(
+        (child) =>
+          pathname === child.href || pathname.startsWith(`${child.href}/`),
+      ),
+    pathname,
+  );
+  const manage = useRouteCollapsible(
+    navItems.some((item) => pathname.startsWith(item.href)),
+    pathname,
+  );
 
   /** Where the money is read rather than managed: gated behind org feature flags. */
   const { data: featureFlags } = useQuery(
@@ -342,8 +340,8 @@ export function AppSidebar() {
               <SidebarMenu>
                 <Collapsible
                   asChild
-                  open={dashboardOpen}
-                  onOpenChange={setDashboardOpen}
+                  open={dashboard.open}
+                  onOpenChange={dashboard.setOpen}
                   className="group/collapsible"
                 >
                   <SidebarMenuItem>
@@ -390,32 +388,6 @@ export function AppSidebar() {
                     </CollapsibleContent>
                   </SidebarMenuItem>
                 </Collapsible>
-                {dashboardSubItems.map((item) => {
-                  const isActive =
-                    item.href === "/"
-                      ? pathname === "/"
-                      : pathname === item.href || pathname.startsWith(`${item.href}/`);
-                  return (
-                    <SidebarMenuItem key={item.href}>
-                      <SidebarMenuButton
-                        asChild
-                        tooltip={item.label}
-                        isActive={isActive}
-                        className={item.badge ? "pr-14" : undefined}
-                      >
-                        <Link href={item.href}>
-                          <Icon icon={item.icon} className="size-4" />
-                          <span>{item.label}</span>
-                        </Link>
-                      </SidebarMenuButton>
-                      {item.badge ? (
-                        <SidebarMenuBadge className="rounded-full border border-sidebar-border bg-sidebar-accent/80 px-2 text-[10px] font-semibold uppercase tracking-wide text-sidebar-accent-foreground">
-                          {item.badge}
-                        </SidebarMenuBadge>
-                      ) : null}
-                    </SidebarMenuItem>
-                  );
-                })}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
@@ -455,26 +427,47 @@ export function AppSidebar() {
             <SidebarGroupLabel>Manage</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {visibleNavItems.map((item) => (
-                  <SidebarMenuItem key={item.href}>
-                    <SidebarMenuButton
-                      asChild
-                      tooltip={item.label}
-                      isActive={pathname.startsWith(item.href)}
-                      className={item.badge ? "pr-14" : undefined}
-                    >
-                      <Link href={item.href}>
-                        <Icon icon={item.icon} className="size-4" />
-                        <span>{item.label}</span>
-                      </Link>
-                    </SidebarMenuButton>
-                    {item.badge ? (
-                      <SidebarMenuBadge className="rounded-full border border-sidebar-border bg-sidebar-accent/80 px-2 text-[10px] font-semibold uppercase tracking-wide text-sidebar-accent-foreground">
-                        {item.badge}
-                      </SidebarMenuBadge>
-                    ) : null}
+                {/* Everything under Manage is Meta's world (creatives, campaigns,
+                    imports…), so it folds under one Meta entry. */}
+                <Collapsible
+                  asChild
+                  open={manage.open}
+                  onOpenChange={manage.setOpen}
+                  className="group/manage"
+                >
+                  <SidebarMenuItem>
+                    <CollapsibleTrigger asChild>
+                      <SidebarMenuButton tooltip="Meta">
+                        <Icon
+                          icon="solar:cursor-square-linear"
+                          className="size-4"
+                        />
+                        <span>Meta</span>
+                        <Icon
+                          icon="solar:alt-arrow-right-linear"
+                          className="ml-auto size-4 transition-transform group-data-[state=open]/manage:rotate-90"
+                        />
+                      </SidebarMenuButton>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <SidebarMenuSub>
+                        {visibleNavItems.map((item) => (
+                          <SidebarMenuSubItem key={item.href}>
+                            <SidebarMenuSubButton
+                              asChild
+                              isActive={pathname.startsWith(item.href)}
+                            >
+                              <Link href={item.href}>
+                                <Icon icon={item.icon} className="size-4" />
+                                <span>{item.label}</span>
+                              </Link>
+                            </SidebarMenuSubButton>
+                          </SidebarMenuSubItem>
+                        ))}
+                      </SidebarMenuSub>
+                    </CollapsibleContent>
                   </SidebarMenuItem>
-                ))}
+                </Collapsible>
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
