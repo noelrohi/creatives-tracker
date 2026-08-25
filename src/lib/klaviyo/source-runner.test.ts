@@ -9,7 +9,9 @@ import type { KlaviyoCompoundPage } from "@/lib/klaviyo/client";
 import type { ConnectionRecord } from "@/lib/klaviyo/source-store";
 import {
   nextEventCheckpoint,
+  processEventSourceBatch,
   processOrderCoreBatch,
+  startOrResumeConsentSync,
   startOrResumeOrderCoreSync,
   type EventRunRecord,
   type EventRunStore,
@@ -17,8 +19,11 @@ import {
   type RunningEventRun,
 } from "@/lib/klaviyo/source-runner";
 import {
+  KLAVIYO_CONSENT_KINDS,
+  consentSourceContract,
   inclusiveStoreDaysToHalfOpenUtc,
   initialEventCheckpoint,
+  journeySourceContract,
   orderCoreSourceContract,
   type KlaviyoEventCheckpoint,
 } from "@/lib/klaviyo/types";
@@ -724,8 +729,12 @@ describe("klaviyo source task boundary", () => {
 
   it("hashes the persisted checkpoint into a global seven-day continuation key", () => {
     expect(source).toContain(
-      "`klaviyo-${result.sourceMode === \"journey\" ? \"journey\" : \"order-core\"}:${payload.syncRunId}:${checkpointFingerprint(result.checkpoint)}`",
+      "`klaviyo-${KEY_PREFIX[result.sourceMode]}:${payload.syncRunId}:${checkpointFingerprint(result.checkpoint)}`",
     );
+    // The historical order-core prefix spelling survives the mode record;
+    // rewording it would break idempotency continuity for in-flight runs.
+    expect(source).toContain('order_core: "order-core"');
+    expect(source).toContain('consent: "consent"');
     expect(source).toContain('{ scope: "global" }');
     expect(source).toContain('idempotencyKeyTTL: "7d"');
     expect(source).toContain('createHash("sha256")');
@@ -818,5 +827,254 @@ describe("processOrderCoreBatch identity flow", () => {
     ).rejects.toThrow("IDENTITY_ERASURE_HMAC_SECRET is required");
     expect(deps.createClient).not.toHaveBeenCalled();
     expect(deps.commitPage).not.toHaveBeenCalled();
+  });
+});
+
+describe("consent sync", () => {
+  const NOW = new Date("2026-07-30T12:00:00.000Z");
+  const TIMEZONE = "America/New_York";
+  const allowed = inclusiveStoreDaysToHalfOpenUtc({
+    dateFrom: "2026-05-02",
+    dateTo: "2026-07-30",
+    timeZone: TIMEZONE,
+  });
+
+  function startState(overrides: Partial<StartState> = {}): StartState {
+    return {
+      connection: {
+        status: "ready",
+        storeTimezone: TIMEZONE,
+        initialSourceFrom: null,
+        initialSourceTo: null,
+      },
+      passedProbe: true,
+      running: null,
+      inserted: [],
+      persistedInitialWindows: [],
+      reaped: [],
+      ...overrides,
+    };
+  }
+
+  const baseDeps = (state: StartState) => ({
+    loadIdentityKeyring: vi.fn(() => TEST_KEYRING),
+    loadSuppressionKey: vi.fn(() => TEST_SUPPRESSION_KEY),
+    initializeGate: vi.fn(async () => ({ initialized: false })),
+    now: () => NOW,
+    runStore: makeStartStore(state),
+  });
+
+  const SUBSCRIBED_BINDING = {
+    metricRowId: "metric-row-subscribed",
+    externalMetricId: "external-subscribed",
+    metricKind: "subscribed_to_list" as const,
+  };
+  const UNSUBSCRIBED_BINDING = {
+    metricRowId: "metric-row-unsubscribed",
+    externalMetricId: "external-unsubscribed",
+    metricKind: "unsubscribed_from_list" as const,
+  };
+
+  function consentPages(): Map<string, KlaviyoCompoundPage[]> {
+    return new Map([
+      [
+        "external-subscribed",
+        [
+          eventPage({
+            metricExternalId: "external-subscribed",
+            eventIds: ["subscribed-1"],
+            nextCursor: null,
+          }),
+        ],
+      ],
+      [
+        "external-unsubscribed",
+        [
+          eventPage({
+            metricExternalId: "external-unsubscribed",
+            eventIds: ["unsubscribed-1"],
+            nextCursor: null,
+          }),
+        ],
+      ],
+    ]);
+  }
+
+  it("creates a consent run with the consent contract and checkpoint", async () => {
+    const state = startState();
+    await expect(
+      startOrResumeConsentSync(
+        { scope, window: allowed, triggerType: "manual_backfill" },
+        baseDeps(state),
+      ),
+    ).resolves.toEqual({ syncRunId: "run-1", resumed: false });
+    expect(state.inserted).toEqual([
+      expect.objectContaining({
+        window: allowed,
+        triggerType: "manual_backfill",
+        contract: consentSourceContract(),
+        checkpoint: {
+          ...consentSourceContract(),
+          metricIndex: 0,
+          cursor: null,
+          page: 0,
+        },
+      }),
+    ]);
+    // Consent (like journey) never persists an order-core initial floor.
+    expect(state.persistedInitialWindows).toEqual([]);
+  });
+
+  it("rejects a start while a live journey run holds the one running-events slot", async () => {
+    const liveJourneyRun: RunningEventRun = {
+      syncRunId: "run-journey-live",
+      requestedFrom: allowed.from,
+      requestedTo: allowed.to,
+      requestParameters: journeySourceContract(),
+      heartbeatAt: NOW,
+    };
+    const state = startState({ running: { ...liveJourneyRun } });
+    await expect(
+      startOrResumeConsentSync(
+        { scope, window: allowed, triggerType: "scheduled" },
+        baseDeps(state),
+      ),
+    ).rejects.toThrow("already running in a different source mode");
+    expect(state.inserted).toHaveLength(0);
+  });
+
+  it("resumes an identical live consent run", async () => {
+    const liveConsentRun: RunningEventRun = {
+      syncRunId: "run-consent-live",
+      requestedFrom: allowed.from,
+      requestedTo: allowed.to,
+      requestParameters: consentSourceContract(),
+      heartbeatAt: NOW,
+    };
+    const state = startState({ running: { ...liveConsentRun } });
+    await expect(
+      startOrResumeConsentSync(
+        { scope, window: allowed, triggerType: "scheduled" },
+        baseDeps(state),
+      ),
+    ).resolves.toEqual({ syncRunId: "run-consent-live", resumed: true });
+    expect(state.inserted).toHaveLength(0);
+  });
+
+  it("dispatches a consent run to the timeline batch path", async () => {
+    const deps = makeRunnerDependencies({
+      requestParameters: consentSourceContract(),
+      persistedCheckpoint: {
+        ...consentSourceContract(),
+        metricIndex: 0,
+        cursor: null,
+        page: 0,
+      },
+      pages: consentPages(),
+    });
+    const loadTimelineBindings = vi.fn(async () => [
+      SUBSCRIBED_BINDING,
+      UNSUBSCRIBED_BINDING,
+    ]);
+    const result = await processEventSourceBatch(
+      { scope: deps.scope, syncRunId: "run-1", maxPages: 5 },
+      { ...deps.services, loadTimelineBindings },
+    );
+    expect(result).toEqual({
+      done: true,
+      pagesProcessed: 2,
+      eventsRead: 2,
+      checkpoint: null,
+      sourceMode: "consent",
+    });
+    expect(loadTimelineBindings).toHaveBeenCalledWith(
+      scope,
+      KLAVIYO_CONSENT_KINDS,
+    );
+    // Spec: consent ingestion never retrieves the profile email, so no
+    // identity HMAC digests can be derived or persisted.
+    expect(deps.listEvents).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        metricId: "external-subscribed",
+        includeAttributions: false,
+        includeProfileEmail: false,
+      }),
+    );
+    expect(deps.listEvents).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ metricId: "external-unsubscribed" }),
+    );
+    const [firstCommit, secondCommit] = deps.commitPage.mock.calls.map(
+      ([call]) =>
+        call as unknown as {
+          sourceContract: unknown;
+          events: Array<{
+            metricId: string;
+            identityDigests: unknown[];
+          }>;
+        },
+    );
+    expect(firstCommit.sourceContract).toEqual(consentSourceContract());
+    expect(firstCommit.events.map((event) => event.metricId)).toEqual([
+      "metric-row-subscribed",
+    ]);
+    expect(secondCommit.events.map((event) => event.metricId)).toEqual([
+      "metric-row-unsubscribed",
+    ]);
+    // Committed consent events carry no email-derived identity digests.
+    for (const event of [...firstCommit.events, ...secondCommit.events]) {
+      expect(event.identityDigests).toEqual([]);
+    }
+    expect(deps.finishRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("commits an empty page and advances when a consent metric is unbound", async () => {
+    const deps = makeRunnerDependencies({
+      requestParameters: consentSourceContract(),
+      persistedCheckpoint: {
+        ...consentSourceContract(),
+        metricIndex: 0,
+        cursor: null,
+        page: 0,
+      },
+      pages: consentPages(),
+    });
+    const loadTimelineBindings = vi.fn(async () => [
+      null,
+      UNSUBSCRIBED_BINDING,
+    ]);
+    const result = await processEventSourceBatch(
+      { scope: deps.scope, syncRunId: "run-1", maxPages: 5 },
+      { ...deps.services, loadTimelineBindings },
+    );
+    expect(result).toEqual({
+      done: true,
+      pagesProcessed: 2,
+      eventsRead: 1,
+      checkpoint: null,
+      sourceMode: "consent",
+    });
+    const [emptyCommit, boundCommit] = deps.commitPage.mock.calls.map(
+      ([call]) =>
+        call as unknown as {
+          sourceContract: unknown;
+          expectedCheckpoint: { metricIndex: number };
+          events: unknown[];
+          rowsRead: number;
+        },
+    );
+    // The unbound canonical slot commits as an empty page and advances.
+    expect(emptyCommit.sourceContract).toEqual(consentSourceContract());
+    expect(emptyCommit.expectedCheckpoint.metricIndex).toBe(0);
+    expect(emptyCommit.events).toEqual([]);
+    expect(emptyCommit.rowsRead).toBe(0);
+    expect(boundCommit.expectedCheckpoint.metricIndex).toBe(1);
+    expect(boundCommit.events).toHaveLength(1);
+    expect(deps.listEvents).toHaveBeenCalledTimes(1);
+    expect(deps.listEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ metricId: "external-unsubscribed" }),
+    );
+    expect(deps.finishRun).toHaveBeenCalledTimes(1);
   });
 });

@@ -16,6 +16,7 @@ export type IncrementalStageName =
   | "matching"
   | "claims"
   | "journey"
+  | "consent"
   | "dimensions"
   | "reports";
 
@@ -148,6 +149,14 @@ export type IncrementalChildren = {
     claimReplayId: string,
   ): Promise<void>;
   runJourney(scope: KlaviyoConnectionScope): Promise<{ ok: boolean }>;
+  /**
+   * Unlike fire-and-forget journey, consent reports run completion: the
+   * supervisor polls the durable sync-run row to a terminal status, and
+   * "running" means the run was still live when the poll deadline expired.
+   */
+  runConsent(
+    scope: KlaviyoConnectionScope,
+  ): Promise<{ status: "success" | "failed" | "running" }>;
   runDimensions(scope: KlaviyoConnectionScope): Promise<{ ok: boolean }>;
   runReports(scope: KlaviyoConnectionScope): Promise<{ ok: boolean }>;
 };
@@ -159,6 +168,7 @@ function emptyReport(): IncrementalRunReport {
     matching: { state: "not_run" },
     claims: { state: "not_run" },
     journey: { state: "not_run" },
+    consent: { state: "not_run" },
     dimensions: { state: "not_run" },
     reports: { state: "not_run" },
   };
@@ -181,6 +191,28 @@ export async function runIncrementalConnection(
   children: IncrementalChildren,
 ): Promise<IncrementalRunReport> {
   const report = emptyReport();
+
+  // Consent runs FIRST, outside the core gate: it consumes nothing from
+  // evidence or matching (pure Klaviyo-side ingest), and nothing below
+  // consumes it — so a routine evidence/matching failure must never starve
+  // list health, and a consent failure blocks nothing. Its child waits for
+  // the events slot and polls its run to terminal, vacating the slot
+  // before order-core needs it.
+  const consent = await children.runConsent(input.scope).catch((error) => {
+    console.error("klaviyo incremental consent stage failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return { status: "failed" as const };
+  });
+  // Mirrors the claims stage: completion is what the durable run row says,
+  // and a run still live at the poll deadline stays visibly pending.
+  if (consent.status === "success") {
+    report.consent = { state: "completed" };
+  } else if (consent.status === "running") {
+    report.consent = { state: "pending", detail: "live_at_deadline" };
+  } else {
+    report.consent = { state: "failed", detail: "consent_failed" };
+  }
 
   const evidence = await children.runShopifyEvidence(input.scope);
   const evidenceAcceptable =

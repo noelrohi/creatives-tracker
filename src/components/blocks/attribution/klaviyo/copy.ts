@@ -1,4 +1,10 @@
-export const LAB_VIEWS = ["orders", "unmatched", "reports", "probe"] as const;
+export const LAB_VIEWS = [
+  "orders",
+  "unmatched",
+  "reports",
+  "probe",
+  "list-health",
+] as const;
 export const LAB_RANGES = ["last7", "last30", "last90", "custom"] as const;
 export const ORDER_STATUS_FILTERS = [
   "all",
@@ -99,4 +105,29 @@ export const emailRevenue = {
   noDataYet: "No data yet",
   error: "Couldn’t load email revenue.",
   retry: "Retry",
+} as const;
+
+/** ASCII "-" prefix for a nonnegative magnitude; never renders as "-0". */
+function negated(n: number): string {
+  return n === 0 ? `${n}` : `-${n}`;
+}
+
+export const listHealth = {
+  stripLead: "List health:",
+  subscribed: (n: number) => `+${n} subscribed`,
+  unsubscribed: (n: number) => `${negated(n)} unsubscribed`,
+  wonBack: (n: number) => `${n} won back`,
+  quickChurn: (n: number) => `${n} quick churn`,
+  net: (n: number) => `net ${n >= 0 ? `+${n}` : `${n}`}`,
+  kpiSubscribed: "Subscribed",
+  kpiUnsubscribed: "Unsubscribed",
+  kpiWonBack: "Won back",
+  kpiQuickChurn: "Quick churn (≤14d)",
+  kpiNet: "Net",
+  barsCaption: "Daily net (green in / red out), page range",
+  aggregateNote:
+    "Aggregate counts only — no per-person rows; list-membership semantics (a person on two lists counts once per list)",
+  undiscovered:
+    "Run discovery to enable list tracking — the consent metrics haven't been synced for this connection yet.",
+  error: "Couldn’t load list health.",
 } as const;

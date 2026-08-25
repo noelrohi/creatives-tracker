@@ -8,7 +8,11 @@ import {
   tasks,
   wait,
 } from "@trigger.dev/sdk";
-import { inclusiveStoreDaysToHalfOpenUtc } from "@/lib/klaviyo/types";
+import {
+  inclusiveStoreDaysToHalfOpenUtc,
+  type HalfOpenWindow,
+  type KlaviyoConnectionScope,
+} from "@/lib/klaviyo/types";
 import {
   recoverExhaustedClaimBatch,
   startOrResumeClaimReplay,
@@ -17,12 +21,17 @@ import {
   listEligibleConnections,
   runIncrementalConnection,
   type IncrementalChildren,
+  type ShopifyEvidenceOutcome,
 } from "@/lib/klaviyo/incremental-sync";
 import { triggerOrRepairMatchInvocation } from "@/lib/klaviyo/match-invocation";
-import { selectLatestMatchInputs } from "@/lib/klaviyo/match-service";
+import {
+  isEvidenceRunAcceptableForMatching,
+  selectLatestMatchInputs,
+} from "@/lib/klaviyo/match-service";
 import { startOrResumeReportSync } from "@/lib/klaviyo/report-repository";
 import { startOrResumeDimensionSync } from "@/lib/klaviyo/dimension-repository";
 import {
+  startOrResumeConsentSync,
   startOrResumeJourneySync,
   startOrResumeOrderCoreSync,
 } from "@/lib/klaviyo/source-runner";
@@ -46,6 +55,11 @@ const POLL_DEADLINE_MS = 8 * 60 * 1000;
 // run ~25-40 minutes on live stores. Durable waits freeze the run between
 // polls, so a long deadline costs wall clock only, never compute.
 const EVIDENCE_POLL_DEADLINE_MS = 60 * 60 * 1000;
+// Same durable-wait doctrine: freezing between polls costs wall clock
+// only, never compute. 30 minutes covers the documented worst case for a
+// journey chain (6 pages x 300s) exactly, so consent waits out a live
+// journey run instead of losing the night to a still-tight deadline.
+const CONSENT_WAIT_DEADLINE_MS = 30 * 60 * 1000;
 
 type SupervisorPayload = { organizationId?: string };
 
@@ -67,6 +81,128 @@ async function pollDatabase<T>(
   }
 }
 
+// The DB enforces exactly one running `operation: "events"` sync run per
+// connection (klaviyo_sync_run_one_running_events_uidx). Journey and
+// consent are both timeline modes over that same slot, so a scheduled
+// consent start must wait for a still-running journey run to vacate it
+// instead of racing the guard in startOrResumeConsentSync.
+async function hasRunningEventsRun(
+  scope: KlaviyoConnectionScope,
+): Promise<boolean> {
+  const [run] = await db
+    .select({ id: klaviyoSyncRuns.id })
+    .from(klaviyoSyncRuns)
+    .where(
+      and(
+        eq(klaviyoSyncRuns.organizationId, scope.organizationId),
+        eq(klaviyoSyncRuns.storeId, scope.storeId),
+        eq(klaviyoSyncRuns.connectionId, scope.connectionId),
+        eq(klaviyoSyncRuns.operation, "events"),
+        eq(klaviyoSyncRuns.status, "running"),
+      ),
+    )
+    .limit(1);
+  return run !== undefined;
+}
+
+// Scope-qualified terminal-status read for one events sync run: the consent
+// stage reports run completion (not dispatch), so the supervisor polls the
+// durable run row it started until it leaves "running".
+async function getEventsRunStatus(
+  scope: KlaviyoConnectionScope,
+  syncRunId: string,
+): Promise<string | null> {
+  const [run] = await db
+    .select({ status: klaviyoSyncRuns.status })
+    .from(klaviyoSyncRuns)
+    .where(
+      and(
+        eq(klaviyoSyncRuns.id, syncRunId),
+        eq(klaviyoSyncRuns.organizationId, scope.organizationId),
+        eq(klaviyoSyncRuns.storeId, scope.storeId),
+        eq(klaviyoSyncRuns.connectionId, scope.connectionId),
+        eq(klaviyoSyncRuns.operation, "events"),
+      ),
+    )
+    .limit(1);
+  return run?.status ?? null;
+}
+
+function trailingWeekWindow(storeTimezone: string): HalfOpenWindow {
+  const today = new Date();
+  return inclusiveStoreDaysToHalfOpenUtc({
+    dateFrom: new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 10),
+    dateTo: today.toISOString().slice(0, 10),
+    timeZone: storeTimezone,
+  });
+}
+
+// One evidence handoff under one explicit idempotency key: trigger the
+// mode-only start child, then poll the durable evidence run row to a
+// terminal status.
+async function runEvidenceAttempt(key: string): Promise<ShopifyEvidenceOutcome> {
+  const idempotencyKey = await idempotencyKeys.create(key, { scope: "global" });
+  // Mode-only payload: the evidence task is bound to the environment
+  // store and rejects any extra keys by exact shape.
+  const result = await tasks.triggerAndWait(
+    "shopify-evidence-start",
+    { mode: "incremental_7d" },
+    { idempotencyKey, idempotencyKeyTTL: "7d" },
+  );
+  metadata.set("shopifyTriggerRunId", result.id);
+  await metadata.flush();
+  if (!result.ok) {
+    return {
+      ok: false,
+      evidenceRunId: null,
+      status: "failed" as const,
+      lineCompleteness: "unavailable" as const,
+    };
+  }
+  const output = result.output as { evidenceRunId?: string };
+  const evidenceRunId = output?.evidenceRunId ?? null;
+  if (evidenceRunId === null) {
+    return {
+      ok: false,
+      evidenceRunId: null,
+      status: "failed" as const,
+      lineCompleteness: "unavailable" as const,
+    };
+  }
+  await flushStage("shopify_evidence_wait", { evidenceRunId });
+  const terminal = await pollDatabase(async () => {
+    const [run] = await db
+      .select({
+        status: shopifyEvidenceSyncRuns.status,
+        lineCompleteness: shopifyEvidenceSyncRuns.lineCompleteness,
+      })
+      .from(shopifyEvidenceSyncRuns)
+      .where(eq(shopifyEvidenceSyncRuns.id, evidenceRunId))
+      .limit(1);
+    if (!run || run.status === "running") return null;
+    return run;
+  }, EVIDENCE_POLL_DEADLINE_MS);
+  if (terminal === null) {
+    return {
+      ok: true,
+      evidenceRunId,
+      status: "running" as const,
+      lineCompleteness: "unavailable" as const,
+    };
+  }
+  return {
+    ok: true,
+    evidenceRunId,
+    status: terminal.status as "success" | "partial" | "failed",
+    lineCompleteness: (terminal.lineCompleteness ?? "unavailable") as
+      | "complete"
+      | "partial"
+      | "unavailable",
+  };
+}
+
 function buildChildren(): IncrementalChildren {
   return {
     async runShopifyEvidence(scope) {
@@ -78,67 +214,37 @@ function buildChildren(): IncrementalChildren {
       const connection = await getConnectionRecord(scope);
       if (!connection) throw new Error("Klaviyo connection is outside scope");
       const storeDay = deriveDayInTimezone(new Date(), connection.storeTimezone);
-      const idempotencyKey = await idempotencyKeys.create(
-        `klaviyo:incremental:evidence:${scope.connectionId}:incremental_7d:${storeDay}`,
-        { scope: "global" },
+      const dayKey = `klaviyo:incremental:evidence:${scope.connectionId}:incremental_7d:${storeDay}`;
+      const attempt = await runEvidenceAttempt(dayKey);
+      const attemptAcceptable =
+        attempt.ok &&
+        attempt.evidenceRunId !== null &&
+        ((attempt.status === "success" &&
+          attempt.lineCompleteness === "complete") ||
+          (attempt.status === "partial" &&
+            attempt.lineCompleteness === "partial"));
+      if (!attemptAcceptable) return attempt;
+      // The same-store-day key can resume an evidence run that finished
+      // before later Shopify ingest mutated in-window orders; the matching
+      // stage would then reject it (shopify_content_mutated). Evaluate the
+      // matcher's own acceptability predicate here — resume if fresh,
+      // rerun if stale — so supervisor and matcher can never disagree.
+      const verdict = await isEvidenceRunAcceptableForMatching({
+        scope,
+        shopifyEvidenceRunId: attempt.evidenceRunId!,
+      });
+      if (verdict.acceptable) return attempt;
+      // Exactly one forced fresh pass, keyed deterministically off the
+      // stale run so supervisor replays dedupe to the same retry. If the
+      // fresh run is also staled by racing ingest, downstream matching
+      // records the failure exactly as before — never a retry loop.
+      await flushStage("shopify_evidence_supersede", {
+        staleEvidenceRunId: attempt.evidenceRunId,
+        reason: verdict.reason,
+      });
+      return runEvidenceAttempt(
+        `${dayKey}:supersede:${attempt.evidenceRunId}`,
       );
-      // Mode-only payload: the evidence task is bound to the environment
-      // store and rejects any extra keys by exact shape.
-      const result = await tasks.triggerAndWait(
-        "shopify-evidence-start",
-        { mode: "incremental_7d" },
-        { idempotencyKey, idempotencyKeyTTL: "7d" },
-      );
-      metadata.set("shopifyTriggerRunId", result.id);
-      await metadata.flush();
-      if (!result.ok) {
-        return {
-          ok: false,
-          evidenceRunId: null,
-          status: "failed" as const,
-          lineCompleteness: "unavailable" as const,
-        };
-      }
-      const output = result.output as { evidenceRunId?: string };
-      const evidenceRunId = output?.evidenceRunId ?? null;
-      if (evidenceRunId === null) {
-        return {
-          ok: false,
-          evidenceRunId: null,
-          status: "failed" as const,
-          lineCompleteness: "unavailable" as const,
-        };
-      }
-      await flushStage("shopify_evidence_wait", { evidenceRunId });
-      const terminal = await pollDatabase(async () => {
-        const [run] = await db
-          .select({
-            status: shopifyEvidenceSyncRuns.status,
-            lineCompleteness: shopifyEvidenceSyncRuns.lineCompleteness,
-          })
-          .from(shopifyEvidenceSyncRuns)
-          .where(eq(shopifyEvidenceSyncRuns.id, evidenceRunId))
-          .limit(1);
-        if (!run || run.status === "running") return null;
-        return run;
-      }, EVIDENCE_POLL_DEADLINE_MS);
-      if (terminal === null) {
-        return {
-          ok: true,
-          evidenceRunId,
-          status: "running" as const,
-          lineCompleteness: "unavailable" as const,
-        };
-      }
-      return {
-        ok: true,
-        evidenceRunId,
-        status: terminal.status as "success" | "partial" | "failed",
-        lineCompleteness: (terminal.lineCompleteness ?? "unavailable") as
-          | "complete"
-          | "partial"
-          | "unavailable",
-      };
     },
 
     async runOrderCore(scope) {
@@ -366,14 +472,7 @@ function buildChildren(): IncrementalChildren {
       await flushStage("journey");
       const connection = await getConnectionRecord(scope);
       if (!connection) return { ok: false };
-      const today = new Date();
-      const window = inclusiveStoreDaysToHalfOpenUtc({
-        dateFrom: new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000)
-          .toISOString()
-          .slice(0, 10),
-        dateTo: today.toISOString().slice(0, 10),
-        timeZone: connection.storeTimezone,
-      });
+      const window = trailingWeekWindow(connection.storeTimezone);
       const prepared = await startOrResumeJourneySync({
         scope,
         window,
@@ -389,6 +488,58 @@ function buildChildren(): IncrementalChildren {
         { idempotencyKey, idempotencyKeyTTL: "7d" },
       );
       return { ok: true };
+    },
+
+    async runConsent(scope) {
+      await flushStage("consent");
+      const connection = await getConnectionRecord(scope);
+      if (!connection) return { status: "failed" as const };
+      // Journey and consent share the one running-events slot
+      // (klaviyo_sync_run_one_running_events_uidx). runJourney above only
+      // fires-and-forgets its batch task, so its run row can still be
+      // "running" here — wait for it to vacate instead of racing the
+      // "already running in a different source mode" guard in
+      // startOrResumeConsentSync.
+      await flushStage("consent_wait");
+      await pollDatabase(
+        async () => ((await hasRunningEventsRun(scope)) ? null : true),
+        CONSENT_WAIT_DEADLINE_MS,
+      );
+      // Deadline expiry falls through to one start attempt regardless: a
+      // genuinely still-live run makes the guard throw (caught and logged
+      // upstream, same outcome as returning early), but a run that went
+      // stale during the wait (>20 min heartbeat) gets reaped by the
+      // guard's own reap-on-start, so consent still proceeds tonight.
+      await flushStage("consent");
+      const window = trailingWeekWindow(connection.storeTimezone);
+      const prepared = await startOrResumeConsentSync({
+        scope,
+        window,
+        triggerType: "scheduled",
+      });
+      const idempotencyKey = await idempotencyKeys.create(
+        `klaviyo:consent:first:${prepared.syncRunId}`,
+        { scope: "global" },
+      );
+      await tasks.trigger(
+        "klaviyo-order-core-batch",
+        { syncRunId: prepared.syncRunId },
+        { idempotencyKey, idempotencyKeyTTL: "7d" },
+      );
+      // The consent stage reports completion, not dispatch: poll the
+      // durable run row to its terminal status. Still "running" (or not
+      // yet visible) at the deadline reports as live_at_deadline pending,
+      // mirroring the claims stage.
+      await flushStage("consent_run_wait", { syncRunId: prepared.syncRunId });
+      const terminal = await pollDatabase(async () => {
+        const status = await getEventsRunStatus(scope, prepared.syncRunId);
+        if (status === null || status === "running") return null;
+        return status;
+      });
+      if (terminal === null) return { status: "running" as const };
+      return terminal === "success"
+        ? { status: "success" as const }
+        : { status: "failed" as const };
     },
 
     async runDimensions(scope) {

@@ -99,6 +99,17 @@ export function LabHeader(props: {
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
+        {/* Re-discovery upserts newly allowlisted metric kinds (e.g. list
+            consent) for an existing connection; with unchanged order-metric
+            bindings it never resets aliases, rules, or readiness. */}
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={props.onStartDiscovery}
+          disabled={props.busy}
+        >
+          Re-run discovery
+        </Button>
         <Button
           size="sm"
           variant="outline"

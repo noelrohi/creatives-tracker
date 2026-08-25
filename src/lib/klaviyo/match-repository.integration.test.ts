@@ -283,6 +283,31 @@ describeIfDb("Klaviyo match publication on PostgreSQL", () => {
     expect(orphan.rows[0].count).toBe(0);
   });
 
+  it("exposes the matcher's evidence acceptability predicate as a callable verdict", async () => {
+    // The incremental supervisor consults this exact predicate before
+    // reusing a resumed same-store-day evidence run.
+    const before = await service.isEvidenceRunAcceptableForMatching({
+      scope,
+      shopifyEvidenceRunId: "evidence-run-a",
+    });
+    expect(before).toEqual({ acceptable: true });
+
+    // Later Shopify ingest mutates an in-window order's line content: the
+    // recomputed canonical checksum no longer equals the run's immutable
+    // observation — the matcher's shopify_content_mutated rejection.
+    await testPool!.query(
+      `UPDATE shopify_order_line SET quantity = quantity + 1 WHERE id = 'line-a'`,
+    );
+    const after = await service.isEvidenceRunAcceptableForMatching({
+      scope,
+      shopifyEvidenceRunId: "evidence-run-a",
+    });
+    expect(after).toEqual({
+      acceptable: false,
+      reason: "shopify_content_mutated",
+    });
+  });
+
   it("supersedes direct entities and incident edges then recounts the prior run", async () => {
     const first = await service.computeAndPublishMatches({
       scope,

@@ -174,6 +174,25 @@ describe("Klaviyo discovery", () => {
     ).toBeNull();
   });
 
+  it("classifies list consent metrics regardless of integration", () => {
+    expect(
+      classifyMetric({
+        id: "m-sub",
+        name: "Subscribed to List",
+        integrationName: "klaviyo",
+        integrationCategory: "internal",
+      }),
+    ).toBe("subscribed_to_list");
+    expect(
+      classifyMetric({
+        id: "m-unsub",
+        name: "Unsubscribed from List",
+        integrationName: "klaviyo",
+        integrationCategory: "internal",
+      }),
+    ).toBe("unsubscribed_from_list");
+  });
+
   it("requires one Shopify-native metric of each order kind", () => {
     expect(
       requireUniqueNativeOrderMetrics([

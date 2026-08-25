@@ -28,6 +28,7 @@ import {
 } from "@/lib/klaviyo/source-store";
 import { deriveDayInTimezone } from "@/lib/shopify-ingest";
 import {
+  KLAVIYO_CONSENT_KINDS,
   KLAVIYO_EVENT_ALIAS_FIELDS,
   KLAVIYO_JOURNEY_KINDS,
   KLAVIYO_ORDER_CORE_KINDS,
@@ -35,6 +36,7 @@ import {
   assertExactOrderCoreRequestParameters,
   assertHalfOpenWindow,
   assertOrderCoreSourceContract,
+  consentSourceContract,
   inclusiveStoreDaysToHalfOpenUtc,
   initialEventCheckpoint,
   journeySourceContract,
@@ -44,6 +46,7 @@ import {
   type KlaviyoEventAliasRegistry,
   type KlaviyoEventCheckpoint,
   type KlaviyoEventSourceContract,
+  type KlaviyoMetricKind,
 } from "@/lib/klaviyo/types";
 import {
   klaviyoConnections,
@@ -579,30 +582,70 @@ export async function processOrderCoreBatch(
   return { done: false, pagesProcessed, eventsRead, checkpoint };
 }
 
-export function initialJourneyCheckpoint(): KlaviyoEventCheckpoint {
-  return { ...journeySourceContract(), metricIndex: 0, cursor: null, page: 0 };
+/**
+ * Timeline modes share one batch engine: journey and consent runs differ
+ * only in their canonical kind tuple, immutable source contract,
+ * window-boundary failure message, and whether event pages request the
+ * sparse profile email for identity HMAC derivation.
+ */
+type TimelineModeConfig = {
+  sourceMode: "journey" | "consent";
+  kinds: readonly KlaviyoMetricKind[];
+  contract: () => KlaviyoEventSourceContract;
+  boundaryErrorMessage: string;
+  includeProfileEmail: boolean;
+};
+
+const JOURNEY_MODE: TimelineModeConfig = {
+  sourceMode: "journey",
+  kinds: KLAVIYO_JOURNEY_KINDS,
+  contract: journeySourceContract,
+  boundaryErrorMessage:
+    "Klaviyo journey window must stay inside the 90-store-day boundary",
+  includeProfileEmail: true,
+};
+
+const CONSENT_MODE: TimelineModeConfig = {
+  sourceMode: "consent",
+  kinds: KLAVIYO_CONSENT_KINDS,
+  contract: consentSourceContract,
+  boundaryErrorMessage:
+    "Klaviyo consent window must stay inside the 90-store-day boundary",
+  // Spec: consent ingestion stores no emails and no HMACs. Without the
+  // sparse profile email in the payload, normalization derives no identity
+  // digests, so consent events persist identity-free.
+  includeProfileEmail: false,
+};
+
+function initialTimelineCheckpoint(
+  config: TimelineModeConfig,
+): KlaviyoEventCheckpoint {
+  return { ...config.contract(), metricIndex: 0, cursor: null, page: 0 };
 }
 
-function emptyJourneyAliasRegistry(): KlaviyoEventAliasRegistry {
+function emptyTimelineAliasRegistry(): KlaviyoEventAliasRegistry {
   return Object.fromEntries(
     KLAVIYO_EVENT_ALIAS_FIELDS.map((field) => [field, null]),
   ) as KlaviyoEventAliasRegistry;
 }
 
-export type JourneyMetricBinding = {
+export type TimelineMetricBinding = {
   metricRowId: string;
   externalMetricId: string;
-  metricKind: (typeof KLAVIYO_JOURNEY_KINDS)[number];
+  metricKind: KlaviyoMetricKind;
 } | null;
 
 /**
- * Canonical-index journey metric bindings. A missing or ambiguous metric
+ * Canonical-index timeline metric bindings. A missing or ambiguous metric
  * is reported unavailable at its canonical position — never selected by
  * display name alone — and the tuple is never shortened or reordered.
  */
-export async function loadJourneyMetricBindings(
+export async function loadTimelineMetricBindings<K extends KlaviyoMetricKind>(
   scope: KlaviyoConnectionScope,
-): Promise<JourneyMetricBinding[]> {
+  kinds: readonly K[],
+): Promise<
+  Array<{ metricRowId: string; externalMetricId: string; metricKind: K } | null>
+> {
   const rows = await db
     .select({
       metricRowId: klaviyoMetrics.id,
@@ -617,7 +660,7 @@ export async function loadJourneyMetricBindings(
         eq(klaviyoMetrics.connectionId, scope.connectionId),
       ),
     );
-  return KLAVIYO_JOURNEY_KINDS.map((kind) => {
+  return kinds.map((kind) => {
     const matches = rows.filter((row) => row.canonicalKind === kind);
     if (matches.length !== 1) return null;
     return {
@@ -629,12 +672,13 @@ export async function loadJourneyMetricBindings(
 }
 
 /**
- * Journey-mode start on the same connection-locked primitive as order
- * core: expired-lease reap first, resume only a still-live journey row
+ * Timeline-mode start on the same connection-locked primitive as order
+ * core: expired-lease reap first, resume only a still-live same-mode row
  * with the identical canonical contract and window, and reject a live
- * order-core or different-window row.
+ * different-mode or different-window row.
  */
-export async function startOrResumeJourneySync(
+async function startOrResumeTimelineSync(
+  config: TimelineModeConfig,
   input: {
     scope: KlaviyoConnectionScope;
     window: HalfOpenWindow;
@@ -679,9 +723,7 @@ export async function startOrResumeJourneySync(
       input.window.from.getTime() < allowed.from.getTime() ||
       input.window.to.getTime() > allowed.to.getTime()
     ) {
-      throw new Error(
-        "Klaviyo journey window must stay inside the 90-store-day boundary",
-      );
+      throw new Error(config.boundaryErrorMessage);
     }
 
     const running = await ops.findRunningEventRun();
@@ -699,7 +741,7 @@ export async function startOrResumeJourneySync(
         }
       } else {
         assertExactEventSourceContract(running.requestParameters);
-        if (running.requestParameters.sourceMode !== "journey") {
+        if (running.requestParameters.sourceMode !== config.sourceMode) {
           throw new Error(
             "A Klaviyo event run is already running in a different source mode",
           );
@@ -719,31 +761,59 @@ export async function startOrResumeJourneySync(
     const created = await ops.insertEventRun({
       window: input.window,
       triggerType: input.triggerType,
-      contract: journeySourceContract(),
-      checkpoint: initialJourneyCheckpoint(),
+      contract: config.contract(),
+      checkpoint: initialTimelineCheckpoint(config),
     });
     return { syncRunId: created.syncRunId, resumed: false };
   });
 }
 
-export type JourneyRunnerDependencies = SourceRunnerDependencies & {
-  loadJourneyBindings?: typeof loadJourneyMetricBindings;
+export async function startOrResumeJourneySync(
+  input: {
+    scope: KlaviyoConnectionScope;
+    window: HalfOpenWindow;
+    triggerType: "manual_backfill" | "scheduled";
+  },
+  dependencies: SourceRunnerDependencies = {},
+): Promise<{ syncRunId: string; resumed: boolean }> {
+  return startOrResumeTimelineSync(JOURNEY_MODE, input, dependencies);
+}
+
+export async function startOrResumeConsentSync(
+  input: {
+    scope: KlaviyoConnectionScope;
+    window: HalfOpenWindow;
+    triggerType: "manual_backfill" | "scheduled";
+  },
+  dependencies: SourceRunnerDependencies = {},
+): Promise<{ syncRunId: string; resumed: boolean }> {
+  return startOrResumeTimelineSync(CONSENT_MODE, input, dependencies);
+}
+
+export type TimelineRunnerDependencies = SourceRunnerDependencies & {
+  loadTimelineBindings?: (
+    scope: KlaviyoConnectionScope,
+    kinds: readonly KlaviyoMetricKind[],
+  ) => Promise<TimelineMetricBinding[]>;
 };
 
 /**
- * Journey batch on the one mode-aware engine surface: same store, page
+ * Timeline batch on the one mode-aware engine surface: same store, page
  * machinery, heartbeat lease, and finalizer as order core. Journey pages
- * request the sparse profile email only for in-memory HMAC conversion —
- * identity preflight and commit gates are identical — and use no aliases,
- * attributions, or product evidence.
+ * request the sparse profile email only for in-memory HMAC conversion;
+ * consent pages never request it, so consent events normalize with no
+ * identity digests (spec: no emails, no HMACs). Identity preflight and
+ * commit gates are identical across modes — and timeline pages use no
+ * aliases, attributions, or product evidence.
  */
-export async function processJourneyBatch(
+async function processTimelineBatch(
+  config: TimelineModeConfig,
   input: {
     scope: KlaviyoConnectionScope;
     syncRunId: string;
     maxPages: number;
   },
-  dependencies: JourneyRunnerDependencies = {},
+  dependencies: TimelineRunnerDependencies = {},
 ): Promise<{
   done: boolean;
   pagesProcessed: number;
@@ -766,8 +836,10 @@ export async function processJourneyBatch(
     throw new Error("Klaviyo event sync run is not active in this scope");
   }
   assertExactEventSourceContract(run.requestParameters);
-  if (run.requestParameters.sourceMode !== "journey") {
-    throw new Error("Klaviyo journey batch requires a journey source run");
+  if (run.requestParameters.sourceMode !== config.sourceMode) {
+    throw new Error(
+      `Klaviyo ${config.sourceMode} batch requires a ${config.sourceMode} source run`,
+    );
   }
 
   const finishRun = dependencies.finishRun ?? finishKlaviyoSyncRun;
@@ -821,16 +893,16 @@ export async function processJourneyBatch(
     persistedKlaviyoAccountId: connection.klaviyoAccountId,
     shopDomain: connection.shopDomain,
   });
-  const bindings = await (
-    dependencies.loadJourneyBindings ?? loadJourneyMetricBindings
-  )(input.scope);
+  const loadBindings =
+    dependencies.loadTimelineBindings ?? loadTimelineMetricBindings;
+  const bindings = await loadBindings(input.scope, config.kinds);
   const client = (
     dependencies.createClient ??
     ((privateApiKey: string) => new KlaviyoApiClient({ privateApiKey }))
   )(credential.privateApiKey);
   const commitPage = dependencies.commitPage ?? commitKlaviyoEventPage;
   const merchantHosts = new Set(credential.allowedUrlHosts);
-  const aliases = emptyJourneyAliasRegistry();
+  const aliases = emptyTimelineAliasRegistry();
 
   let checkpoint: KlaviyoEventCheckpoint = run.checkpoint;
   let pagesProcessed = 0;
@@ -844,7 +916,7 @@ export async function processJourneyBatch(
       const result = await commitPage({
         scope: input.scope,
         syncRunId: input.syncRunId,
-        sourceContract: journeySourceContract(),
+        sourceContract: config.contract(),
         expectedCheckpoint: checkpoint,
         nextCheckpoint: next,
         events: [],
@@ -873,7 +945,7 @@ export async function processJourneyBatch(
       to: window.to,
       cursor: checkpoint.cursor,
       includeAttributions: false,
-      includeProfileEmail: true,
+      includeProfileEmail: config.includeProfileEmail,
     });
     const events = normalizeEventPage({
       metricRowId: binding.metricRowId,
@@ -896,7 +968,7 @@ export async function processJourneyBatch(
     const result = await commitPage({
       scope: input.scope,
       syncRunId: input.syncRunId,
-      sourceContract: journeySourceContract(),
+      sourceContract: config.contract(),
       expectedCheckpoint: checkpoint,
       nextCheckpoint: next,
       events,
@@ -924,8 +996,9 @@ export async function processJourneyBatch(
 
 /**
  * One mode-aware batch engine entry: the durable run's immutable request
- * parameters — never a task payload — decide order-core versus journey
- * processing, so a resume can never reinterpret one mode as the other.
+ * parameters — never a task payload — decide order-core, journey, or
+ * consent processing, so a resume can never reinterpret one mode as
+ * another.
  */
 export async function processEventSourceBatch(
   input: {
@@ -933,7 +1006,7 @@ export async function processEventSourceBatch(
     syncRunId: string;
     maxPages: number;
   },
-  dependencies: JourneyRunnerDependencies = {},
+  dependencies: TimelineRunnerDependencies = {},
 ): Promise<{
   done: boolean;
   pagesProcessed: number;
@@ -945,8 +1018,12 @@ export async function processEventSourceBatch(
   const run = await loadEventRun(input.scope, input.syncRunId);
   assertExactEventSourceContract(run.requestParameters);
   if (run.requestParameters.sourceMode === "journey") {
-    const result = await processJourneyBatch(input, dependencies);
+    const result = await processTimelineBatch(JOURNEY_MODE, input, dependencies);
     return { ...result, sourceMode: "journey" };
+  }
+  if (run.requestParameters.sourceMode === "consent") {
+    const result = await processTimelineBatch(CONSENT_MODE, input, dependencies);
+    return { ...result, sourceMode: "consent" };
   }
   const result = await processOrderCoreBatch(input, dependencies);
   return { ...result, sourceMode: "order_core" };

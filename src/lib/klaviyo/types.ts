@@ -23,6 +23,8 @@ export const KLAVIYO_ALLOWED_METRIC_KINDS = [
   "viewed_product",
   "added_to_cart",
   "checkout_started",
+  "subscribed_to_list",
+  "unsubscribed_from_list",
 ] as const;
 
 export type KlaviyoMetricKind =
@@ -119,14 +121,25 @@ export type JourneySourceContract = {
   ];
 };
 
+export const KLAVIYO_CONSENT_KINDS = [
+  "subscribed_to_list",
+  "unsubscribed_from_list",
+] as const;
+
+export type ConsentSourceContract = {
+  sourceMode: "consent";
+  metricKinds: ["subscribed_to_list", "unsubscribed_from_list"];
+};
+
 /**
- * Closed event-source union: resume can never reinterpret a journey metric
- * index as order core or vice versa, and the canonical tuple is never
+ * Closed event-source union: resume can never reinterpret a metric index
+ * under one mode as another mode's, and the canonical tuple is never
  * shortened or reordered.
  */
 export type KlaviyoEventSourceContract =
   | OrderCoreSourceContract
-  | JourneySourceContract;
+  | JourneySourceContract
+  | ConsentSourceContract;
 
 export type KlaviyoEventRunParameters = KlaviyoEventSourceContract;
 
@@ -155,6 +168,33 @@ export function assertJourneySourceContract(
   }
 }
 
+export function consentSourceContract(): ConsentSourceContract {
+  return {
+    sourceMode: "consent",
+    metricKinds: [
+      ...KLAVIYO_CONSENT_KINDS,
+    ] as ConsentSourceContract["metricKinds"],
+  };
+}
+
+export function assertConsentSourceContract(
+  value: unknown,
+): asserts value is ConsentSourceContract {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Klaviyo event run has an invalid source contract");
+  }
+  const candidate = value as { sourceMode?: unknown; metricKinds?: unknown };
+  const metricKinds = candidate.metricKinds;
+  if (
+    candidate.sourceMode !== "consent" ||
+    !Array.isArray(metricKinds) ||
+    metricKinds.length !== KLAVIYO_CONSENT_KINDS.length ||
+    metricKinds.some((kind, index) => kind !== KLAVIYO_CONSENT_KINDS[index])
+  ) {
+    throw new Error("Klaviyo event run has an invalid source contract");
+  }
+}
+
 export function assertExactEventSourceContract(
   value: unknown,
 ): asserts value is KlaviyoEventSourceContract {
@@ -166,6 +206,8 @@ export function assertExactEventSourceContract(
     assertOrderCoreSourceContract(value);
   } else if (sourceMode === "journey") {
     assertJourneySourceContract(value);
+  } else if (sourceMode === "consent") {
+    assertConsentSourceContract(value);
   } else {
     throw new Error("Klaviyo event run has an invalid source contract");
   }

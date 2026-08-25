@@ -58,6 +58,9 @@ function children(overrides: Partial<Children> = {}): {
       calls.push("claims_recover");
     }),
     runJourney: vi.fn(async () => track("journey", { ok: true })),
+    runConsent: vi.fn(async () =>
+      track("consent", { status: "success" as const }),
+    ),
     runDimensions: vi.fn(async () => track("dimensions", { ok: true })),
     runReports: vi.fn(async () => track("reports", { ok: true })),
   };
@@ -69,6 +72,7 @@ describe("runIncrementalConnection", () => {
     const { children: fakes, calls } = children();
     const report = await runIncrementalConnection({ scope }, fakes);
     expect(calls).toEqual([
+      "consent",
       "shopify_evidence",
       "order_core",
       "matching",
@@ -84,6 +88,7 @@ describe("runIncrementalConnection", () => {
       matching: { state: "completed" },
       claims: { state: "completed" },
       journey: { state: "completed" },
+      consent: { state: "completed" },
       dimensions: { state: "completed" },
       reports: { state: "completed" },
     });
@@ -209,6 +214,90 @@ describe("runIncrementalConnection", () => {
     });
     expect(report.reports.state).toBe("completed");
   });
+
+  it("runs consent even when evidence is unacceptable", async () => {
+    // Consent consumes nothing from evidence or matching — a core-chain
+    // failure must never starve list health.
+    const { children: fakes } = children({
+      runShopifyEvidence: vi.fn(async () => ({
+        ok: false,
+        evidenceRunId: null,
+        status: "failed" as const,
+        lineCompleteness: "unavailable" as const,
+      })),
+    });
+    const report = await runIncrementalConnection({ scope }, fakes);
+    expect(fakes.runConsent).toHaveBeenCalledTimes(1);
+    expect(report.consent).toEqual({ state: "completed" });
+    expect(report.shopify_evidence.state).toBe("failed");
+    expect(fakes.runOrderCore).not.toHaveBeenCalled();
+  });
+
+  it("runs consent even when matching is not published", async () => {
+    const { children: fakes } = children({
+      runMatching: vi.fn(async () => ({
+        published: false,
+        matchRunId: null,
+      })),
+    });
+    const report = await runIncrementalConnection({ scope }, fakes);
+    expect(fakes.runConsent).toHaveBeenCalledTimes(1);
+    expect(report.consent).toEqual({ state: "completed" });
+    expect(report.matching).toEqual({
+      state: "failed",
+      detail: "not_published",
+    });
+    expect(fakes.runJourney).not.toHaveBeenCalled();
+  });
+
+  it("records the consent stage and isolates its failure", async () => {
+    const ok = children();
+    const okReport = await runIncrementalConnection({ scope }, ok.children);
+    expect(okReport.consent).toEqual({ state: "completed" });
+
+    const { children: fakes } = children({
+      runConsent: vi.fn(async () => {
+        throw new Error("consent start failed");
+      }),
+    });
+    const report = await runIncrementalConnection({ scope }, fakes);
+    expect(report.consent).toEqual({
+      state: "failed",
+      detail: "consent_failed",
+    });
+    expect(report.dimensions.state).toBe("completed");
+    expect(report.reports.state).toBe("completed");
+  });
+
+  it("records consent run completion, not dispatch — failed runs fail, live ones stay pending", async () => {
+    // Mirrors the claims-stage outcome mapping: the report reflects what
+    // the durable run row reached, not that a batch task was fired.
+    const failed = children({
+      runConsent: vi.fn(async () => ({ status: "failed" as const })),
+    });
+    expect(
+      (await runIncrementalConnection({ scope }, failed.children)).consent,
+    ).toEqual({ state: "failed", detail: "consent_failed" });
+
+    const live = children({
+      runConsent: vi.fn(async () => ({ status: "running" as const })),
+    });
+    const liveReport = await runIncrementalConnection({ scope }, live.children);
+    expect(liveReport.consent).toEqual({
+      state: "pending",
+      detail: "live_at_deadline",
+    });
+    // A non-completed consent stage still isolates: later enrichment runs.
+    expect(liveReport.dimensions.state).toBe("completed");
+    expect(liveReport.reports.state).toBe("completed");
+
+    const success = children({
+      runConsent: vi.fn(async () => ({ status: "success" as const })),
+    });
+    expect(
+      (await runIncrementalConnection({ scope }, success.children)).consent,
+    ).toEqual({ state: "completed" });
+  });
 });
 
 describe("klaviyo-incremental trigger source boundary", () => {
@@ -232,6 +321,12 @@ describe("klaviyo-incremental trigger source boundary", () => {
     expect(source).toContain(
       "`klaviyo:incremental:evidence:${scope.connectionId}:incremental_7d:${storeDay}`",
     );
+    // A resumed same-store-day run that the matcher's own predicate calls
+    // stale forces exactly one fresh pass under a deterministic supersede
+    // differentiator — never an unkeyed retry, never a retry loop.
+    expect(source).toContain("isEvidenceRunAcceptableForMatching");
+    expect(source).toContain("`${dayKey}:supersede:${attempt.evidenceRunId}`");
+    expect(source.match(/:supersede:/g)).toHaveLength(1);
   });
 
   it("hands Plan 1 evidence start its exact mode-only payload", () => {
