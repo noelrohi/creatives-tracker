@@ -22,6 +22,7 @@ export function isPrivilegedOrgRole(
 const MEMBER_PATH_PREFIXES = [
   "/creatives",
   "/teams",
+  "/meta",
   "/mer",
   "/campaigns",
   ...featureFlagDefs.map((def) => def.href),
