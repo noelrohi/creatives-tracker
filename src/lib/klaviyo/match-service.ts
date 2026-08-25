@@ -505,6 +505,29 @@ export async function loadShopifyProjection(
   };
 }
 
+/**
+ * The matcher's own evidence acceptability predicate, exposed as a boolean
+ * surface: exactly `loadShopifyProjection`'s acceptance (terminal coverage,
+ * per-order canonical content checksums, window membership), reported as a
+ * safe reason code instead of a thrown MatchInputStaleError. The incremental
+ * supervisor consults this before reusing a resumed same-store-day evidence
+ * run so it can never disagree with the matching stage about staleness.
+ */
+export async function isEvidenceRunAcceptableForMatching(
+  input: { scope: KlaviyoConnectionScope; shopifyEvidenceRunId: string },
+  executor: Executor = db,
+): Promise<{ acceptable: true } | { acceptable: false; reason: string }> {
+  try {
+    await loadShopifyProjection(input, executor);
+    return { acceptable: true };
+  } catch (error) {
+    if (error instanceof MatchInputStaleError) {
+      return { acceptable: false, reason: error.reason };
+    }
+    throw error;
+  }
+}
+
 export async function loadApprovedRules(
   scope: KlaviyoConnectionScope,
   executor: Executor = db,

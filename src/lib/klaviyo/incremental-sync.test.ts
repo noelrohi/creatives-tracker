@@ -321,6 +321,12 @@ describe("klaviyo-incremental trigger source boundary", () => {
     expect(source).toContain(
       "`klaviyo:incremental:evidence:${scope.connectionId}:incremental_7d:${storeDay}`",
     );
+    // A resumed same-store-day run that the matcher's own predicate calls
+    // stale forces exactly one fresh pass under a deterministic supersede
+    // differentiator — never an unkeyed retry, never a retry loop.
+    expect(source).toContain("isEvidenceRunAcceptableForMatching");
+    expect(source).toContain("`${dayKey}:supersede:${attempt.evidenceRunId}`");
+    expect(source.match(/:supersede:/g)).toHaveLength(1);
   });
 
   it("hands Plan 1 evidence start its exact mode-only payload", () => {

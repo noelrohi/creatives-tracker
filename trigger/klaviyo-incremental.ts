@@ -21,9 +21,13 @@ import {
   listEligibleConnections,
   runIncrementalConnection,
   type IncrementalChildren,
+  type ShopifyEvidenceOutcome,
 } from "@/lib/klaviyo/incremental-sync";
 import { triggerOrRepairMatchInvocation } from "@/lib/klaviyo/match-invocation";
-import { selectLatestMatchInputs } from "@/lib/klaviyo/match-service";
+import {
+  isEvidenceRunAcceptableForMatching,
+  selectLatestMatchInputs,
+} from "@/lib/klaviyo/match-service";
 import { startOrResumeReportSync } from "@/lib/klaviyo/report-repository";
 import { startOrResumeDimensionSync } from "@/lib/klaviyo/dimension-repository";
 import {
@@ -135,6 +139,70 @@ function trailingWeekWindow(storeTimezone: string): HalfOpenWindow {
   });
 }
 
+// One evidence handoff under one explicit idempotency key: trigger the
+// mode-only start child, then poll the durable evidence run row to a
+// terminal status.
+async function runEvidenceAttempt(key: string): Promise<ShopifyEvidenceOutcome> {
+  const idempotencyKey = await idempotencyKeys.create(key, { scope: "global" });
+  // Mode-only payload: the evidence task is bound to the environment
+  // store and rejects any extra keys by exact shape.
+  const result = await tasks.triggerAndWait(
+    "shopify-evidence-start",
+    { mode: "incremental_7d" },
+    { idempotencyKey, idempotencyKeyTTL: "7d" },
+  );
+  metadata.set("shopifyTriggerRunId", result.id);
+  await metadata.flush();
+  if (!result.ok) {
+    return {
+      ok: false,
+      evidenceRunId: null,
+      status: "failed" as const,
+      lineCompleteness: "unavailable" as const,
+    };
+  }
+  const output = result.output as { evidenceRunId?: string };
+  const evidenceRunId = output?.evidenceRunId ?? null;
+  if (evidenceRunId === null) {
+    return {
+      ok: false,
+      evidenceRunId: null,
+      status: "failed" as const,
+      lineCompleteness: "unavailable" as const,
+    };
+  }
+  await flushStage("shopify_evidence_wait", { evidenceRunId });
+  const terminal = await pollDatabase(async () => {
+    const [run] = await db
+      .select({
+        status: shopifyEvidenceSyncRuns.status,
+        lineCompleteness: shopifyEvidenceSyncRuns.lineCompleteness,
+      })
+      .from(shopifyEvidenceSyncRuns)
+      .where(eq(shopifyEvidenceSyncRuns.id, evidenceRunId))
+      .limit(1);
+    if (!run || run.status === "running") return null;
+    return run;
+  }, EVIDENCE_POLL_DEADLINE_MS);
+  if (terminal === null) {
+    return {
+      ok: true,
+      evidenceRunId,
+      status: "running" as const,
+      lineCompleteness: "unavailable" as const,
+    };
+  }
+  return {
+    ok: true,
+    evidenceRunId,
+    status: terminal.status as "success" | "partial" | "failed",
+    lineCompleteness: (terminal.lineCompleteness ?? "unavailable") as
+      | "complete"
+      | "partial"
+      | "unavailable",
+  };
+}
+
 function buildChildren(): IncrementalChildren {
   return {
     async runShopifyEvidence(scope) {
@@ -146,67 +214,37 @@ function buildChildren(): IncrementalChildren {
       const connection = await getConnectionRecord(scope);
       if (!connection) throw new Error("Klaviyo connection is outside scope");
       const storeDay = deriveDayInTimezone(new Date(), connection.storeTimezone);
-      const idempotencyKey = await idempotencyKeys.create(
-        `klaviyo:incremental:evidence:${scope.connectionId}:incremental_7d:${storeDay}`,
-        { scope: "global" },
+      const dayKey = `klaviyo:incremental:evidence:${scope.connectionId}:incremental_7d:${storeDay}`;
+      const attempt = await runEvidenceAttempt(dayKey);
+      const attemptAcceptable =
+        attempt.ok &&
+        attempt.evidenceRunId !== null &&
+        ((attempt.status === "success" &&
+          attempt.lineCompleteness === "complete") ||
+          (attempt.status === "partial" &&
+            attempt.lineCompleteness === "partial"));
+      if (!attemptAcceptable) return attempt;
+      // The same-store-day key can resume an evidence run that finished
+      // before later Shopify ingest mutated in-window orders; the matching
+      // stage would then reject it (shopify_content_mutated). Evaluate the
+      // matcher's own acceptability predicate here — resume if fresh,
+      // rerun if stale — so supervisor and matcher can never disagree.
+      const verdict = await isEvidenceRunAcceptableForMatching({
+        scope,
+        shopifyEvidenceRunId: attempt.evidenceRunId!,
+      });
+      if (verdict.acceptable) return attempt;
+      // Exactly one forced fresh pass, keyed deterministically off the
+      // stale run so supervisor replays dedupe to the same retry. If the
+      // fresh run is also staled by racing ingest, downstream matching
+      // records the failure exactly as before — never a retry loop.
+      await flushStage("shopify_evidence_supersede", {
+        staleEvidenceRunId: attempt.evidenceRunId,
+        reason: verdict.reason,
+      });
+      return runEvidenceAttempt(
+        `${dayKey}:supersede:${attempt.evidenceRunId}`,
       );
-      // Mode-only payload: the evidence task is bound to the environment
-      // store and rejects any extra keys by exact shape.
-      const result = await tasks.triggerAndWait(
-        "shopify-evidence-start",
-        { mode: "incremental_7d" },
-        { idempotencyKey, idempotencyKeyTTL: "7d" },
-      );
-      metadata.set("shopifyTriggerRunId", result.id);
-      await metadata.flush();
-      if (!result.ok) {
-        return {
-          ok: false,
-          evidenceRunId: null,
-          status: "failed" as const,
-          lineCompleteness: "unavailable" as const,
-        };
-      }
-      const output = result.output as { evidenceRunId?: string };
-      const evidenceRunId = output?.evidenceRunId ?? null;
-      if (evidenceRunId === null) {
-        return {
-          ok: false,
-          evidenceRunId: null,
-          status: "failed" as const,
-          lineCompleteness: "unavailable" as const,
-        };
-      }
-      await flushStage("shopify_evidence_wait", { evidenceRunId });
-      const terminal = await pollDatabase(async () => {
-        const [run] = await db
-          .select({
-            status: shopifyEvidenceSyncRuns.status,
-            lineCompleteness: shopifyEvidenceSyncRuns.lineCompleteness,
-          })
-          .from(shopifyEvidenceSyncRuns)
-          .where(eq(shopifyEvidenceSyncRuns.id, evidenceRunId))
-          .limit(1);
-        if (!run || run.status === "running") return null;
-        return run;
-      }, EVIDENCE_POLL_DEADLINE_MS);
-      if (terminal === null) {
-        return {
-          ok: true,
-          evidenceRunId,
-          status: "running" as const,
-          lineCompleteness: "unavailable" as const,
-        };
-      }
-      return {
-        ok: true,
-        evidenceRunId,
-        status: terminal.status as "success" | "partial" | "failed",
-        lineCompleteness: (terminal.lineCompleteness ?? "unavailable") as
-          | "complete"
-          | "partial"
-          | "unavailable",
-      };
     },
 
     async runOrderCore(scope) {
