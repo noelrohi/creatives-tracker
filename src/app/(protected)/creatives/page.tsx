@@ -155,6 +155,12 @@ export default function CreativesPage() {
     }
     if (status) labels.push({ label: "Status", value: status });
     if (healthFilter) labels.push({ label: "Health", value: healthFilter });
+    if (utmTracking) {
+      labels.push({
+        label: "UTM Tracking",
+        value: utmTracking === "set" ? "Set" : "Missing",
+      });
+    }
     return labels;
   })();
 
@@ -220,11 +226,14 @@ export default function CreativesPage() {
         />
         <FilterPill
           value={utmTracking ?? "all"}
-          onValueChange={(value) => setUtmTracking(
-            value === "all"
-              ? null
-              : value as (typeof UTM_TRACKING_FILTERS)[number],
-          )}
+          onValueChange={(value) => {
+            setRowSelection({});
+            setUtmTracking(
+              value === "all"
+                ? null
+                : value as (typeof UTM_TRACKING_FILTERS)[number],
+            );
+          }}
           placeholder="UTM Tracking"
           options={[
             { label: "All UTM Tracking", value: "all" },
@@ -366,6 +375,11 @@ export default function CreativesPage() {
           teamId: teamId || undefined,
         }}
         filterLabels={exportFilterLabels}
+        includedCreativeIds={
+          healthFilter || utmTracking
+            ? creativeRows.map((creative) => creative.id)
+            : undefined
+        }
       />
     </div>
   );
