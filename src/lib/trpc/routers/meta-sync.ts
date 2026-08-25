@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { adAccounts } from "@/schema/account";
@@ -607,12 +607,20 @@ export const metaSyncRouter = router({
           )
       )`;
 
+      const urlTagsNeedEnrichment = and(
+        isNull(ads.urlTagsCheckedAt),
+        or(
+          isNull(ads.enrichmentAttemptedAt),
+          sql`${ads.enrichmentAttemptedAt} < now() - interval '1 hour'`,
+        ),
+      );
+
       const needsEnrichment = and(
         eq(ads.accountId, input.accountId),
         eq(ads.organizationId, ctx.organizationId),
         isNotNull(ads.metaId),
         or(
-          isNull(ads.urlTagsCheckedAt),
+          urlTagsNeedEnrichment,
           and(
             isNull(ads.enrichmentAttemptedAt),
             or(
@@ -629,6 +637,7 @@ export const metaSyncRouter = router({
         .select({ metaId: ads.metaId })
         .from(ads)
         .where(needsEnrichment)
+        .orderBy(asc(ads.enrichmentAttemptedAt), asc(ads.id))
         .limit(input.limit);
 
       const adMetaIds = candidates
