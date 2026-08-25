@@ -40,7 +40,14 @@ describe("canAccessMemberPath", () => {
   });
 
   it("lets members reach the base read-only surfaces", () => {
-    for (const path of ["/", "/creatives", "/teams", "/mer", "/campaigns"]) {
+    for (const path of [
+      "/",
+      "/creatives",
+      "/teams",
+      "/meta",
+      "/mer",
+      "/campaigns",
+    ]) {
       expect(canAccessMemberPath("member", path)).toBe(true);
     }
   });
