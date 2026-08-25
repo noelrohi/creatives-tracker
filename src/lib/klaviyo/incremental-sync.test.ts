@@ -72,13 +72,13 @@ describe("runIncrementalConnection", () => {
     const { children: fakes, calls } = children();
     const report = await runIncrementalConnection({ scope }, fakes);
     expect(calls).toEqual([
+      "consent",
       "shopify_evidence",
       "order_core",
       "matching",
       "claims_start",
       "claims_graph",
       "journey",
-      "consent",
       "dimensions",
       "reports",
     ]);
@@ -215,7 +215,42 @@ describe("runIncrementalConnection", () => {
     expect(report.reports.state).toBe("completed");
   });
 
-  it("records the consent stage after journey and isolates its failure", async () => {
+  it("runs consent even when evidence is unacceptable", async () => {
+    // Consent consumes nothing from evidence or matching — a core-chain
+    // failure must never starve list health.
+    const { children: fakes } = children({
+      runShopifyEvidence: vi.fn(async () => ({
+        ok: false,
+        evidenceRunId: null,
+        status: "failed" as const,
+        lineCompleteness: "unavailable" as const,
+      })),
+    });
+    const report = await runIncrementalConnection({ scope }, fakes);
+    expect(fakes.runConsent).toHaveBeenCalledTimes(1);
+    expect(report.consent).toEqual({ state: "completed" });
+    expect(report.shopify_evidence.state).toBe("failed");
+    expect(fakes.runOrderCore).not.toHaveBeenCalled();
+  });
+
+  it("runs consent even when matching is not published", async () => {
+    const { children: fakes } = children({
+      runMatching: vi.fn(async () => ({
+        published: false,
+        matchRunId: null,
+      })),
+    });
+    const report = await runIncrementalConnection({ scope }, fakes);
+    expect(fakes.runConsent).toHaveBeenCalledTimes(1);
+    expect(report.consent).toEqual({ state: "completed" });
+    expect(report.matching).toEqual({
+      state: "failed",
+      detail: "not_published",
+    });
+    expect(fakes.runJourney).not.toHaveBeenCalled();
+  });
+
+  it("records the consent stage and isolates its failure", async () => {
     const ok = children();
     const okReport = await runIncrementalConnection({ scope }, ok.children);
     expect(okReport.consent).toEqual({ state: "completed" });
