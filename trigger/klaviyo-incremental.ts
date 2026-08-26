@@ -51,10 +51,12 @@ const SUPERVISOR_QUEUE = {
 };
 const POLL_INTERVAL_SECONDS = 20;
 const POLL_DEADLINE_MS = 8 * 60 * 1000;
-// Real evidence passes re-observe the full trailing window and routinely
-// run ~25-40 minutes on live stores. Durable waits freeze the run between
-// polls, so a long deadline costs wall clock only, never compute.
-const EVIDENCE_POLL_DEADLINE_MS = 60 * 60 * 1000;
+// Real evidence passes re-observe the full trailing window; measured on
+// the production store they run ~2 hours end to end (every recorded run:
+// 2h00-2h05), so the old 60-minute deadline expired mid-run on EVERY
+// pass and matching was never reached. Durable waits freeze the run
+// between polls, so a long deadline costs wall clock only, never compute.
+const EVIDENCE_POLL_DEADLINE_MS = 3 * 60 * 60 * 1000;
 // Same durable-wait doctrine: freezing between polls costs wall clock
 // only, never compute. 30 minutes covers the documented worst case for a
 // journey chain (6 pages x 300s) exactly, so consent waits out a live
