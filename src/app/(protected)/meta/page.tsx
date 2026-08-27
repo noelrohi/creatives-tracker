@@ -56,7 +56,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { ExportPreviewDialog } from "@/components/blocks/export-preview-dialog";
-import { FORMATS } from "@/components/blocks/creatives/creative-list-filters";
+import { ButtonGroup } from "@/components/ui/button-group";
+import {
+  AdSetCombobox,
+  CampaignCombobox,
+  FORMATS,
+} from "@/components/blocks/creatives/creative-list-filters";
 import { useState } from "react";
 
 const EXPORT_COLUMNS = [
@@ -74,6 +79,12 @@ const EXPORT_COLUMNS = [
   "country", "platform", "placement", "device", "age", "gender",
   "quality_ranking", "engagement_rate_ranking", "conversion_rate_ranking",
 ] as const;
+
+// The comboboxes are styled for the creatives filter bar (ghost, muted fill);
+// this header runs on bordered 28px controls, so the trigger is matched to the
+// selects standing beside it.
+const FILTER_TRIGGER_CLASS =
+  "h-7 rounded-[min(var(--radius-md),10px)] border border-solid border-input bg-transparent px-2.5 hover:bg-transparent dark:bg-input/30 dark:hover:bg-input/50";
 
 function downloadCsv(rows: Record<string, unknown>[], filename: string) {
   const csv = [EXPORT_COLUMNS.join(",")]
@@ -112,6 +123,8 @@ export default function MetaDashboardPage() {
   const [exportOpen, setExportOpen] = useState(false);
   const [accountId, setAccountId] = useQueryState("account", parseAsString.withDefault(""));
   const [teamId, setTeamId] = useQueryState("team", parseAsString.withDefault(""));
+  const [campaignIds, setCampaignIds] = useQueryState("campaign", parseAsString.withDefault(""));
+  const [adSetIds, setAdSetIds] = useQueryState("adSet", parseAsString.withDefault(""));
   const [format, setFormat] = useQueryState("format", parseAsString.withDefault(""));
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(""));
   const [to, setTo] = useQueryState("to", parseAsString.withDefault(""));
@@ -121,8 +134,27 @@ export default function MetaDashboardPage() {
   const selectedAccountId = accountId ? accountId : undefined;
   const selectedTeamId = teamId || undefined;
   const selectedFormat = FORMATS.find((value) => value === format);
+  const selectedCampaignIds = campaignIds ? campaignIds.split(",").filter(Boolean) : [];
+  const selectedAdSetIds = adSetIds ? adSetIds.split(",").filter(Boolean) : [];
+  const campaignFilter = selectedCampaignIds.length ? selectedCampaignIds : undefined;
+  const adSetFilter = selectedAdSetIds.length ? selectedAdSetIds : undefined;
 
   const accounts = useQuery(trpc.adAccount.list.queryOptions());
+  const campaignsQuery = useQuery(trpc.campaign.list.queryOptions());
+  const adSetsQuery = useQuery(trpc.adSet.list.queryOptions());
+
+  // The two lists cascade: picking an account narrows the campaigns on offer,
+  // and picking campaigns narrows the ad sets. A selection that falls outside
+  // the narrowed list is dropped by the change handlers below rather than left
+  // filtering invisibly.
+  const campaignOptions = (campaignsQuery.data ?? []).filter(
+    (campaign) => !selectedAccountId || campaign.accountId === selectedAccountId,
+  );
+  const adSetOptions = (adSetsQuery.data ?? []).filter(
+    (adSet) =>
+      (!selectedAccountId || adSet.accountId === selectedAccountId) &&
+      (!selectedCampaignIds.length || selectedCampaignIds.includes(adSet.campaignId)),
+  );
 
   /**
    * Meta buckets every daily row in the ad account's own timezone, so "today"
@@ -152,6 +184,8 @@ export default function MetaDashboardPage() {
       from: fromValue,
       to: toValue,
       accountId: selectedAccountId,
+      campaignIds: campaignFilter,
+      adSetIds: adSetFilter,
       teamId: selectedTeamId,
       format: selectedFormat,
     }),
@@ -162,6 +196,8 @@ export default function MetaDashboardPage() {
       from: fromValue,
       to: toValue,
       accountId: selectedAccountId,
+      campaignIds: campaignFilter,
+      adSetIds: adSetFilter,
       teamId: selectedTeamId,
       format: selectedFormat,
     }),
@@ -182,6 +218,8 @@ export default function MetaDashboardPage() {
       from: demoWindow.from,
       to: toValue,
       accountId: selectedAccountId,
+      campaignIds: campaignFilter,
+      adSetIds: adSetFilter,
       teamId: selectedTeamId,
       format: selectedFormat,
     }),
@@ -201,6 +239,8 @@ export default function MetaDashboardPage() {
   baseCreativesParams.set("from", fromValue);
   baseCreativesParams.set("to", toValue);
   if (accountId) baseCreativesParams.set("account", accountId);
+  if (campaignIds) baseCreativesParams.set("campaign", campaignIds);
+  if (adSetIds) baseCreativesParams.set("adSet", adSetIds);
   if (teamId) baseCreativesParams.set("team", teamId);
   if (selectedFormat) baseCreativesParams.set("format", selectedFormat);
   const baseHref = `/creatives${baseCreativesParams.toString() ? `?${baseCreativesParams}` : ""}`;
@@ -220,120 +260,161 @@ export default function MetaDashboardPage() {
   return (
     <div className="flex flex-col gap-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-lg font-semibold">Meta</h1>
-        <div className="flex items-center gap-2">
-          {dataTimeZone ? (
-            <span className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground/60">
-              {dataTimeZone}
-            </span>
-          ) : null}
-          <DateRangePicker
-            from={fromDate}
-            to={toDate}
-            onChange={(range) => {
-              if (range) {
-                setFrom(formatDateOnly(range.from));
-                setTo(formatDateOnly(range.to));
-              }
-            }}
-          />
-          <Select value={selectedFormat ?? "all"} onValueChange={(value) => setFormat(value === "all" ? "" : value)}>
-            <SelectTrigger className="h-7 w-auto gap-1 text-[13px] capitalize">
-              <SelectValue placeholder="All formats" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All formats</SelectItem>
-              {FORMATS.map((value) => (
-                <SelectItem key={value} value={value} className="capitalize">{value}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {accounts.data && accounts.data.length > 0 && (
-            <Select value={accountId || "all"} onValueChange={(v) => setAccountId(v === "all" ? "" : v)}>
-              <SelectTrigger className="h-7 w-auto gap-1 text-[13px]">
-                <SelectValue placeholder="All accounts" />
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {dataTimeZone ? (
+              <span className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground/60">
+                {dataTimeZone}
+              </span>
+            ) : null}
+            <DateRangePicker
+              from={fromDate}
+              to={toDate}
+              onChange={(range) => {
+                if (range) {
+                  setFrom(formatDateOnly(range.from));
+                  setTo(formatDateOnly(range.to));
+                }
+              }}
+            />
+            <Select value={selectedFormat ?? "all"} onValueChange={(value) => setFormat(value === "all" ? "" : value)}>
+              <SelectTrigger className="h-7 w-auto gap-1 text-[13px] capitalize">
+                <SelectValue placeholder="All formats" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All accounts</SelectItem>
-                {accounts.data.map((a) => (
-                  <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                <SelectItem value="all">All formats</SelectItem>
+                {FORMATS.map((value) => (
+                  <SelectItem key={value} value={value} className="capitalize">{value}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
-          )}
-          {teamsQuery.data && teamsQuery.data.length > 0 && (
-            <Select value={teamId || "all"} onValueChange={(v) => setTeamId(v === "all" ? "" : v)}>
-              <SelectTrigger className="h-7 w-auto gap-1 text-[13px]">
-                <SelectValue placeholder="All teams" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All teams</SelectItem>
-                {teamsQuery.data.map((t) => (
-                  <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 gap-1.5 text-[13px]"
-                disabled={exporting}
-              >
-                <Download className="size-3.5" /> {exporting ? "Exporting..." : "Export"}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => setExportOpen(true)}>
-                Export…
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => {
-                  startExport(async () => {
-                    try {
-                      const rows = await queryClient.fetchQuery(
-                        trpc.adCreative.dashboardExport.queryOptions({
-                          from: fromValue,
-                          to: toValue,
-                          accountId: selectedAccountId,
-                          teamId: selectedTeamId,
-                          format: selectedFormat,
-                          // Breakdown rows only exist for the last 14 days;
-                          // wider ranges export base rows instead of failing.
-                          scope: demoWindow.isClamped ? "base" : "all",
-                        }),
-                      );
-                      if (!rows.length) {
-                        toast.info("No data to export for this date range");
-                        return;
-                      }
-                      downloadCsv(rows, `dashboard_${fromValue}_${toValue}.csv`);
-                      toast.success(
-                        demoWindow.isClamped
-                          ? `Exported ${rows.length} base rows — breakdowns only go back ${BREAKDOWN_RETENTION_DAYS} days`
-                          : `Exported ${rows.length} rows`,
-                      );
-                    } catch (err) {
-                      console.error("Export failed:", err);
-                      toast.error(getUserFacingErrorMessage(err, "Export failed — check the console for details"));
-                    }
-                  });
+            {accounts.data && accounts.data.length > 0 && (
+              <Select
+                value={accountId || "all"}
+                onValueChange={(v) => {
+                  setAccountId(v === "all" ? "" : v);
+                  // Campaigns and ad sets belong to one account, so a selection
+                  // made under the old account can't survive the switch.
+                  setCampaignIds("");
+                  setAdSetIds("");
                 }}
               >
-                Raw perf logs
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          {canManageData ? (
-            <Button asChild size="sm" variant="outline" className="h-7 gap-1.5 text-[13px]">
-              <Link href="/import">
-                <Upload className="size-3.5" /> Import
-              </Link>
-            </Button>
-          ) : null}
+                <SelectTrigger className="h-7 w-auto gap-1 text-[13px]">
+                  <SelectValue placeholder="All accounts" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All accounts</SelectItem>
+                  {accounts.data.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            {campaignOptions.length > 0 && (
+              <CampaignCombobox
+                value={selectedCampaignIds}
+                onValueChange={(next) => {
+                  setCampaignIds(next.join(","));
+                  const allowed = new Set(
+                    (adSetsQuery.data ?? [])
+                      .filter((adSet) => !next.length || next.includes(adSet.campaignId))
+                      .map((adSet) => adSet.id),
+                  );
+                  const kept = selectedAdSetIds.filter((id) => allowed.has(id));
+                  if (kept.length !== selectedAdSetIds.length) setAdSetIds(kept.join(","));
+                }}
+                campaigns={campaignOptions}
+                triggerClassName={FILTER_TRIGGER_CLASS}
+              />
+            )}
+            {adSetOptions.length > 0 && (
+              <AdSetCombobox
+                value={selectedAdSetIds}
+                onValueChange={(next) => setAdSetIds(next.join(","))}
+                adSets={adSetOptions}
+                triggerClassName={FILTER_TRIGGER_CLASS}
+              />
+            )}
+            {teamsQuery.data && teamsQuery.data.length > 0 && (
+              <Select value={teamId || "all"} onValueChange={(v) => setTeamId(v === "all" ? "" : v)}>
+                <SelectTrigger className="h-7 w-auto gap-1 text-[13px]">
+                  <SelectValue placeholder="All teams" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All teams</SelectItem>
+                  {teamsQuery.data.map((t) => (
+                    <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+          <div aria-hidden className="hidden h-5 w-px bg-border sm:block" />
+          <ButtonGroup>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1.5 text-[13px]"
+                  disabled={exporting}
+                >
+                  <Download className="size-3.5" /> {exporting ? "Exporting..." : "Export"}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setExportOpen(true)}>
+                  Export…
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    startExport(async () => {
+                      try {
+                        const rows = await queryClient.fetchQuery(
+                          trpc.adCreative.dashboardExport.queryOptions({
+                            from: fromValue,
+                            to: toValue,
+                            accountId: selectedAccountId,
+                            campaignIds: campaignFilter,
+                            adSetIds: adSetFilter,
+                            teamId: selectedTeamId,
+                            format: selectedFormat,
+                            // Breakdown rows only exist for the last 14 days;
+                            // wider ranges export base rows instead of failing.
+                            scope: demoWindow.isClamped ? "base" : "all",
+                          }),
+                        );
+                        if (!rows.length) {
+                          toast.info("No data to export for this date range");
+                          return;
+                        }
+                        downloadCsv(rows, `dashboard_${fromValue}_${toValue}.csv`);
+                        toast.success(
+                          demoWindow.isClamped
+                            ? `Exported ${rows.length} base rows — breakdowns only go back ${BREAKDOWN_RETENTION_DAYS} days`
+                            : `Exported ${rows.length} rows`,
+                        );
+                      } catch (err) {
+                        console.error("Export failed:", err);
+                        toast.error(getUserFacingErrorMessage(err, "Export failed — check the console for details"));
+                      }
+                    });
+                  }}
+                >
+                  Raw perf logs
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {canManageData ? (
+              <Button asChild size="sm" variant="outline" className="h-7 gap-1.5 text-[13px]">
+                <Link href="/import">
+                  <Upload className="size-3.5" /> Import
+                </Link>
+              </Button>
+            ) : null}
+          </ButtonGroup>
         </div>
       </div>
 
@@ -463,6 +544,8 @@ export default function MetaDashboardPage() {
           from: fromValue,
           to: toValue,
           accountId: selectedAccountId,
+          campaignIds: campaignFilter,
+          adSetIds: adSetFilter,
           teamId: selectedTeamId,
           format: selectedFormat,
         }}
@@ -471,6 +554,22 @@ export default function MetaDashboardPage() {
             ? [{
                 label: "Account",
                 value: accounts.data?.find((a) => a.id === accountId)?.name ?? accountId,
+              }]
+            : []),
+          ...(selectedCampaignIds.length
+            ? [{
+                label: "Campaigns",
+                value: selectedCampaignIds.length === 1
+                  ? campaignsQuery.data?.find((c) => c.id === selectedCampaignIds[0])?.name ?? "1 selected"
+                  : `${selectedCampaignIds.length} selected`,
+              }]
+            : []),
+          ...(selectedAdSetIds.length
+            ? [{
+                label: "Ad sets",
+                value: selectedAdSetIds.length === 1
+                  ? adSetsQuery.data?.find((a) => a.id === selectedAdSetIds[0])?.name ?? "1 selected"
+                  : `${selectedAdSetIds.length} selected`,
               }]
             : []),
           ...(selectedFormat

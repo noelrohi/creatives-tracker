@@ -20,6 +20,7 @@ import { assertBreakdownRange } from "@/lib/retention/window-guard";
 import { computeCreativeHealthByCreativeId, type CreativeRollup } from "@/lib/creative-health-rollup";
 import { fetchAgentExportRows } from "@/lib/ad-export";
 import { effectiveAdActiveSql, effectiveAdStatusSql } from "@/lib/effective-ad-status";
+import { adSetScopeFilter, campaignScopeFilter } from "@/lib/ad-scope-sql";
 import { ANGLE_TYPES, MODES, VISUAL_STYLES } from "@/lib/creative-taxonomy";
 
 type CreativeAttributes = (typeof adCreatives.$inferSelect)["attributes"];
@@ -573,12 +574,8 @@ function buildDashboardAnalyticsFilters(input: DashboardAnalyticsInput, organiza
     ? sql`AND ac.format = ${input.format}`
     : sql``;
   const basePl = basePerformanceLogFilter("pl");
-  const campaignFilter = input?.campaignIds?.length
-    ? sql`AND ad.ad_set_id IN (SELECT ast.id FROM ad_set ast WHERE ast.campaign_id IN (${sql.join(input.campaignIds.map((id) => sql`${id}`), sql`, `)}))`
-    : sql``;
-  const adSetFilter = input?.adSetIds?.length
-    ? sql`AND ad.ad_set_id IN (${sql.join(input.adSetIds.map((id) => sql`${id}`), sql`, `)})`
-    : sql``;
+  const campaignFilter = campaignScopeFilter(input?.campaignIds);
+  const adSetFilter = adSetScopeFilter(input?.adSetIds);
   const statusFilter = input?.statuses?.length
     ? sql`AND ${effectiveAdStatusSql(sql`ad.status`, sql`ast.status`)} IN (${sql.join(input.statuses.map((s) => sql`${s}`), sql`, `)})`
     : sql``;
@@ -1539,6 +1536,8 @@ export const adCreativeRouter = router({
         from: z.string(),
         to: z.string(),
         accountId: z.string().optional(),
+        campaignIds: z.array(z.string()).optional(),
+        adSetIds: z.array(z.string()).optional(),
         ownership: z.enum(["ours", "theirs"]).optional(),
         teamId: z.string().optional(),
         format: creativeFormatSchema.optional(),
@@ -1567,6 +1566,8 @@ export const adCreativeRouter = router({
       const formatFilter = input.format
         ? sql`AND ac.format = ${input.format}`
         : sql``;
+      const campaignFilter = campaignScopeFilter(input.campaignIds);
+      const adSetFilter = adSetScopeFilter(input.adSetIds);
 
       const rows = await db.execute(sql`
         SELECT
@@ -1623,7 +1624,7 @@ export const adCreativeRouter = router({
         WHERE pl.date_start <= ${input.to}::date
           AND pl.date_end >= ${input.from}::date
           AND pl.organization_id = ${ctx.organizationId}
-          ${scopeFilter} ${accountFilter} ${ownershipFilter} ${teamFilter} ${formatFilter}
+          ${scopeFilter} ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter} ${formatFilter}
         ORDER BY pl.date_start DESC, ad.name
       `);
 
@@ -1638,6 +1639,8 @@ export const adCreativeRouter = router({
         from: z.string().optional(),
         to: z.string().optional(),
         accountId: z.string().optional(),
+        campaignIds: z.array(z.string()).optional(),
+        adSetIds: z.array(z.string()).optional(),
         ownership: z.enum(["ours", "theirs"]).optional(),
         teamId: z.string().optional(),
         format: creativeFormatSchema.optional(),
@@ -1658,6 +1661,8 @@ export const adCreativeRouter = router({
       const formatFilter = input?.format
         ? sql`AND ac.format = ${input.format}`
         : sql``;
+      const campaignFilter = campaignScopeFilter(input?.campaignIds);
+      const adSetFilter = adSetScopeFilter(input?.adSetIds);
       const basePl = basePerformanceLogFilter("pl");
 
       const today = new Date();
@@ -1703,7 +1708,7 @@ export const adCreativeRouter = router({
           AND pl.date_start <= ${toStr}::date
           AND ad.organization_id = ${ctx.organizationId}
           AND ${basePl}
-          ${accountFilter} ${ownershipFilter} ${teamFilter} ${formatFilter}
+          ${accountFilter} ${campaignFilter} ${adSetFilter} ${ownershipFilter} ${teamFilter} ${formatFilter}
         GROUP BY pl.date_start
         ORDER BY pl.date_start
       `);
