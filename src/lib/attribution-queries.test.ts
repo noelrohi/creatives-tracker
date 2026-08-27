@@ -744,15 +744,18 @@ describeWithDb("grouped-by-day reads agree with the per-day reads", () => {
     orderId: string;
     day: string;
     amount: string;
+    kind?: string;
   }) {
     const id = nextId("refund");
     await testDb?.execute(sql`
       INSERT INTO shopify_refund (
         id, organization_id, store_id, order_id, shopify_refund_id,
-        refund_day, amount
+        refund_day, amount${params.kind !== undefined ? sql`, kind` : sql``}
       ) VALUES (
         ${id}, ${ORG}, ${STORE}, ${params.orderId}, ${id},
-        ${params.day}, ${params.amount}
+        ${params.day}, ${params.amount}${
+          params.kind !== undefined ? sql`, ${params.kind}` : sql``
+        }
       )
     `);
   }
@@ -1081,7 +1084,14 @@ describeWithDb("grouped-by-day reads agree with the per-day reads", () => {
     it("sums refunds of every kind whose refund day is in range", async () => {
       await order({ id: "o-r1", day: "2026-08-10", netSales: "300.00" });
       await refund({ orderId: "o-r1", day: "2026-08-11", amount: "40.00" });
-      await refund({ orderId: "o-r1", day: "2026-08-12", amount: "10.50" });
+      await refund({
+        orderId: "o-r1",
+        day: "2026-08-12",
+        amount: "10.50",
+        kind: "cancellation",
+      });
+      // Exactly on dateTo — pins the BETWEEN upper bound as inclusive.
+      await refund({ orderId: "o-r1", day: "2026-08-13", amount: "4.50" });
       // Outside the queried range — must not count.
       await refund({ orderId: "o-r1", day: "2026-08-16", amount: "99.00" });
 
@@ -1092,8 +1102,8 @@ describeWithDb("grouped-by-day reads agree with the per-day reads", () => {
         dateTo: "2026-08-13",
       });
 
-      expect(result.refundedCents).toBe(5_050);
-      expect(result.count).toBe(2);
+      expect(result.refundedCents).toBe(5_500);
+      expect(result.count).toBe(3);
     });
 
     it("returns zeros for a range with no refunds", async () => {

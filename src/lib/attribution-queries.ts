@@ -385,6 +385,10 @@ export async function getBucketTotals(
  * Refunds of every kind whose refund day lands in the range — the same rows
  * (and the same `refundRangeWhere`) the ledger nets out of gross sales, so
  * the Refunds card always agrees with the tie-out.
+ *
+ * `count` is refund *events* — every row in `shopify_refund`, cancellations
+ * included — not the number of distinct orders refunded; an order refunded
+ * twice contributes 2.
  */
 export async function getRefundsTotal(
   scope: StoreScope,
