@@ -26,7 +26,7 @@
 - Modify: `src/lib/attribution-queries.ts`
 - Test: `src/lib/attribution-queries.test.ts` (extend the existing integration `describe`)
 
-- [ ] **Step 1: Write the failing integration tests**
+- [x] **Step 1: Write the failing integration tests**
 
 In `src/lib/attribution-queries.test.ts`:
 
@@ -149,12 +149,12 @@ In `src/lib/attribution-queries.test.ts`:
   });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `bun run test -- src/lib/attribution-queries.test.ts`
 Expected: FAIL — `getRefundsTotal` / `getHourlySales` are not exported.
 
-- [ ] **Step 3: Implement the helpers**
+- [x] **Step 3: Implement the helpers**
 
 In `src/lib/attribution-queries.ts`, below `getBucketTotals` (which shows the house refund-sum idiom and already provides `refundRangeWhere(scope)`):
 
@@ -222,12 +222,12 @@ export async function getHourlySales(params: {
 
 (`StoreScope`, `shopifyRefunds`, `shopifyOrders`, `toCents`, `and`, `eq`, and `sql` are all already imported/defined in this file — verify rather than re-import.)
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `bun run test -- src/lib/attribution-queries.test.ts`
 Expected: PASS, including all pre-existing tests in the file.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/lib/attribution-queries.ts src/lib/attribution-queries.test.ts
@@ -241,7 +241,7 @@ git commit -m "feat(attribution): refund totals and hourly sales reads"
 **Files:**
 - Modify: `src/lib/trpc/routers/attribution.ts`
 
-- [ ] **Step 1: Add the procedures**
+- [x] **Step 1: Add the procedures**
 
 (a) Extend the import from `@/lib/attribution-queries` with `getHourlySales, getRefundsTotal` (alphabetical position in the existing list).
 
@@ -327,12 +327,12 @@ const hourlySeriesOutputSchema = z.object({
 
 Check `rangeSchema` is the name the file's other output schemas use for the `{dateFrom, dateTo}` shape (it is used by `dailySeriesOutputSchema`); if the actual identifier differs, match the file. Confirm `store.ianaTimezone` exists on the `requireStore` result (the shared helper returns the `shopify_store` row, which has `iana_timezone`).
 
-- [ ] **Step 2: Typecheck**
+- [x] **Step 2: Typecheck**
 
 Run: `bunx tsc --noEmit`
 Expected: clean.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/lib/trpc/routers/attribution.ts
@@ -348,7 +348,7 @@ git commit -m "feat(attribution): refundsTotal and hourlySeries procedures"
 - Create: `src/components/blocks/attribution/shopify-summary.component.test.tsx`
 - Modify: `src/components/blocks/attribution/copy.ts`
 
-- [ ] **Step 1: Add the copy**
+- [x] **Step 1: Add the copy**
 
 In `src/components/blocks/attribution/copy.ts`, after the `headerRail` export:
 
@@ -371,7 +371,7 @@ export const shopifySummary = {
 };
 ```
 
-- [ ] **Step 2: Write the failing component test**
+- [x] **Step 2: Write the failing component test**
 
 Create `src/components/blocks/attribution/shopify-summary.component.test.tsx`:
 
@@ -517,12 +517,12 @@ describe("ShopifySummary", () => {
 });
 ```
 
-- [ ] **Step 3: Run the test to verify it fails**
+- [x] **Step 3: Run the test to verify it fails**
 
 Run: `bun run test:components -- src/components/blocks/attribution/shopify-summary.component.test.tsx`
 Expected: FAIL — cannot resolve `./shopify-summary`.
 
-- [ ] **Step 4: Implement the component**
+- [x] **Step 4: Implement the component**
 
 Create `src/components/blocks/attribution/shopify-summary.tsx`:
 
@@ -719,12 +719,12 @@ export function ShopifySummary({
 
 Verify `--attr-warning` is the CSS variable the attribution screens use for warning tones (it appears in `detail-folds.tsx`/`ledger` styles); if the actual token differs, match it. If `var(--chart-1)` isn't defined in this app's theme, use a literal color from the existing chart palette (`hsl(160, 84%, 39%)` — the green PerformanceChart uses for ROAS).
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `bun run test:components -- src/components/blocks/attribution/shopify-summary.component.test.tsx`
 Expected: PASS (5 tests).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/components/blocks/attribution/shopify-summary.tsx src/components/blocks/attribution/shopify-summary.component.test.tsx src/components/blocks/attribution/copy.ts
@@ -740,7 +740,7 @@ git commit -m "feat(attribution): Shopify-style summary cards and sales chart"
 - Modify: `src/components/blocks/attribution/copy.ts` (navLabel)
 - Modify: `src/components/app-sidebar.tsx`
 
-- [ ] **Step 1: Render the block on `/`**
+- [x] **Step 1: Render the block on `/`**
 
 In `src/app/(protected)/(dashboard)/page.tsx`:
 
@@ -767,13 +767,13 @@ import { ShopifySummary } from "@/components/blocks/attribution/shopify-summary"
 
 (`range`, `currency`, `data`, `orderCount`, and `overview` all already exist in the component — verify against the file rather than re-deriving.)
 
-- [ ] **Step 2: Rename the nav**
+- [x] **Step 2: Rename the nav**
 
 (a) `src/components/blocks/attribution/copy.ts`, in the `page` export: `navLabel: "Dashboard",` → `navLabel: "Shopify Dashboard",` (leave the doc comment truthful — adjust its wording if it still says the label reads "Dashboard").
 
 (b) `src/components/app-sidebar.tsx`, in the Dashboard collapsible: `tooltip="Dashboard"` → `tooltip="Shopify Dashboard"` and `<span>Dashboard</span>` → `<span>Shopify Dashboard</span>`.
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run: `bun run lint && bunx tsc --noEmit && bun run test:components && bun run test`
 Expected: lint 0 errors (baseline warnings in unrelated files are fine), tsc clean, all suites green.
@@ -781,7 +781,7 @@ Expected: lint 0 errors (baseline warnings in unrelated files are fine), tsc cle
 Run: `rm -rf .next && bun run build`
 Expected: build succeeds.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add "src/app/(protected)/(dashboard)/page.tsx" src/components/blocks/attribution/copy.ts src/components/app-sidebar.tsx
@@ -792,7 +792,7 @@ git commit -m "feat: Shopify summary tops the dashboard, nav renamed Shopify Das
 
 ### Task 5: Final verification, push, PR body
 
-- [ ] **Step 1: Full pass**
+- [x] **Step 1: Full pass**
 
 ```bash
 bun run lint && bun run test && bun run test:components && rm -rf .next && bun run build
@@ -800,14 +800,14 @@ bun run lint && bun run test && bun run test:components && rm -rf .next && bun r
 
 Expected: all green. (A known flaky DB-contention integration test occasionally fails in the full run — rerun the single file to confirm it passes in isolation before blaming the change.)
 
-- [ ] **Step 2: Manual smoke (bun dev)**
+- [x] **Step 2: Manual smoke (bun dev)**
 
 - `/` shows: cards row (Total sales / Orders / Average order / Refunds) + Total sales chart above the existing ledger card; breadcrumb reads "Shopify Dashboard".
 - Default "Yesterday" range → hourly chart (24 points); "Last 7 days" → daily chart.
 - Zero-order range → Average order shows the "no data yet" chip.
 - Sidebar first entry reads "Shopify Dashboard"; its dropdown children unchanged.
 
-- [ ] **Step 3: Push and write the PR body**
+- [x] **Step 3: Push and write the PR body**
 
 ```bash
 git push -u origin feat/shopify-dashboard
