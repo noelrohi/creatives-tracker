@@ -58,10 +58,12 @@ import {
   decodeOrderCursor,
   EMPTY_META_VERIFIED,
   encodeOrderCursor,
+  getHourlySales,
   getMetaClaims,
   getMetaClaimsByDay,
   getMetaVerified,
   getMetaVerifiedByDay,
+  getRefundsTotal,
   identityMatches,
   isConnectorStale,
   labeledClaimCents,
@@ -721,14 +723,16 @@ describeWithDb("grouped-by-day reads agree with the per-day reads", () => {
     verificationPending?: boolean;
     storeId?: string;
     organizationId?: string;
+    createdAt?: string;
   }) {
     await testDb?.execute(sql`
       INSERT INTO shopify_order (
-        id, organization_id, store_id, shopify_order_id, order_day,
-        net_sales, bucket, meta_verified, verification_pending
+        id, organization_id, store_id, shopify_order_id, order_created_at,
+        order_day, net_sales, bucket, meta_verified, verification_pending
       ) VALUES (
         ${params.id}, ${params.organizationId ?? ORG}, ${params.storeId ?? STORE},
-        ${params.id}, ${params.day}, ${params.netSales},
+        ${params.id}, ${params.createdAt ?? "2026-08-10T04:00:00Z"},
+        ${params.day}, ${params.netSales},
         ${(params.bucket ?? "meta") as string}::"attribution_bucket",
         ${params.metaVerified ?? true}, ${params.verificationPending ?? false}
       )
@@ -1071,5 +1075,82 @@ describeWithDb("grouped-by-day reads agree with the per-day reads", () => {
     expect(notReported.claims.spendCents).toBe(0);
     expect(reportedZero.claims.spendRowCount).toBe(1);
     expect(notReported.claims.spendRowCount).toBe(0);
+  });
+
+  describe("getRefundsTotal", () => {
+    it("sums refunds of every kind whose refund day is in range", async () => {
+      await order({ id: "o-r1", day: "2026-08-10", netSales: "300.00" });
+      await refund({ orderId: "o-r1", day: "2026-08-11", amount: "40.00" });
+      await refund({ orderId: "o-r1", day: "2026-08-12", amount: "10.50" });
+      // Outside the queried range — must not count.
+      await refund({ orderId: "o-r1", day: "2026-08-16", amount: "99.00" });
+
+      const result = await getRefundsTotal({
+        organizationId: ORG,
+        storeId: STORE,
+        dateFrom: "2026-08-10",
+        dateTo: "2026-08-13",
+      });
+
+      expect(result.refundedCents).toBe(5_050);
+      expect(result.count).toBe(2);
+    });
+
+    it("returns zeros for a range with no refunds", async () => {
+      const result = await getRefundsTotal({
+        organizationId: ORG,
+        storeId: STORE,
+        dateFrom: "2026-08-10",
+        dateTo: "2026-08-13",
+      });
+      expect(result.refundedCents).toBe(0);
+      expect(result.count).toBe(0);
+    });
+  });
+
+  describe("getHourlySales", () => {
+    it("buckets a day's orders by store-clock hour, zero-filled to 24 rows", async () => {
+      // 23:30 Bangkok on Aug 10 = 16:30 UTC; belongs to hour 23 of Aug 10.
+      await order({
+        id: "o-h1",
+        day: "2026-08-10",
+        netSales: "100.00",
+        createdAt: "2026-08-10T16:30:00Z",
+      });
+      // 00:10 Bangkok on Aug 11 (17:10 UTC Aug 10): a different order day —
+      // excluded even though its UTC timestamp is still Aug 10.
+      await order({
+        id: "o-h2",
+        day: "2026-08-11",
+        netSales: "50.00",
+        createdAt: "2026-08-10T17:10:00Z",
+      });
+      // 09:00 Bangkok on Aug 10 (02:00 UTC), plus a second order same hour.
+      await order({
+        id: "o-h3",
+        day: "2026-08-10",
+        netSales: "20.00",
+        createdAt: "2026-08-10T02:00:00Z",
+      });
+      await order({
+        id: "o-h4",
+        day: "2026-08-10",
+        netSales: "5.00",
+        createdAt: "2026-08-10T02:45:00Z",
+      });
+
+      const hours = await getHourlySales({
+        organizationId: ORG,
+        storeId: STORE,
+        day: "2026-08-10",
+        timeZone: "Asia/Bangkok",
+      });
+
+      expect(hours).toHaveLength(24);
+      expect(hours[23]).toEqual({ hour: 23, netCents: 10_000, orders: 1 });
+      expect(hours[9]).toEqual({ hour: 9, netCents: 2_500, orders: 2 });
+      expect(hours[0]).toEqual({ hour: 0, netCents: 0, orders: 0 });
+      expect(hours.reduce((sum, h) => sum + h.netCents, 0)).toBe(12_500);
+    });
   });
 });
