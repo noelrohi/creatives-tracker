@@ -44,7 +44,12 @@ function assertExactMatchPayload(value: unknown): asserts value is MatchPayload 
 export const klaviyoMatchTask = task({
   id: "klaviyo-match",
   retry: KLAVIYO_TASK_RETRY,
-  maxDuration: 600,
+  // Publication now writes its rows in chunked multi-row inserts, so the
+  // wall clock is dominated by computation rather than per-row round trips
+  // and this ceiling is generous even at production scale. It stays high so
+  // remoteness alone can never kill a run: a match that still exceeds thirty
+  // minutes is genuinely wedged, not merely far from the database.
+  maxDuration: 1_800,
   queue: KLAVIYO_MATCHING_QUEUE,
   run: async (payload: MatchPayload) => {
     assertExactMatchPayload(payload);

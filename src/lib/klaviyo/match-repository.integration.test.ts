@@ -361,6 +361,150 @@ describeIfDb("Klaviyo match publication on PostgreSQL", () => {
     });
   });
 
+  it("publishes a run whose groups span several insert chunks", async () => {
+    // PUBLICATION_INSERT_CHUNK is 500, so 600 extra matchable orders/events
+    // (601 with the seeded pair) forces every result group across a chunk
+    // boundary — the batched inserts must still write each row exactly once.
+    const EXTRA = 600;
+    await testPool!.query(
+      `INSERT INTO shopify_order
+         (id, organization_id, store_id, shopify_order_id, order_created_at,
+          order_day, net_sales)
+       SELECT 'bulk-order-' || lpad(g::text, 4, '0'), 'org-a', 'store-a',
+              (20000 + g)::text,
+              timestamp '2026-07-02 00:00:00' + (g * interval '1 hour'),
+              (timestamp '2026-07-02 00:00:00' + (g * interval '1 hour'))::date,
+              10.0
+         FROM generate_series(1, $1) AS g`,
+      [EXTRA],
+    );
+    await testPool!.query(
+      `INSERT INTO shopify_order_line
+         (id, organization_id, store_id, order_id, shopify_line_item_id,
+          shopify_product_id, shopify_variant_id, sku, product_title, quantity,
+          parent_order_updated_at)
+       SELECT 'bulk-line-' || lpad(g::text, 4, '0'), 'org-a', 'store-a',
+              'bulk-order-' || lpad(g::text, 4, '0'), 'bulk-li-' || g,
+              '77', '88', 'SKU-1', 'Product', 1, now()
+         FROM generate_series(1, $1) AS g`,
+      [EXTRA],
+    );
+    // Checksums must be the canonical ones the projection recomputes, so read
+    // the stored timestamps back exactly as drizzle will reparse them.
+    const stored = await testPool!.query<{
+      id: string;
+      shopify_order_id: string;
+      stored_text: string;
+      shopify_line_item_id: string;
+    }>(
+      `SELECT o.id, o.shopify_order_id, o.order_created_at::text AS stored_text,
+              l.shopify_line_item_id
+         FROM shopify_order o
+         JOIN shopify_order_line l ON l.order_id = o.id
+        WHERE o.id LIKE 'bulk-order-%'
+        ORDER BY o.id`,
+    );
+    expect(stored.rows).toHaveLength(EXTRA);
+    const checksums = stored.rows.map((row) =>
+      evidenceStore.canonicalContentChecksum({
+        order: {
+          id: row.id,
+          shopifyOrderId: row.shopify_order_id,
+          orderCreatedAt: new Date(`${row.stored_text.replace(" ", "T")}Z`),
+        },
+        lines: [
+          {
+            shopifyLineItemId: row.shopify_line_item_id,
+            shopifyProductId: "77",
+            shopifyVariantId: "88",
+            sku: "SKU-1",
+            quantity: 1,
+          },
+        ],
+        lineDisposition: "complete",
+        identityDisposition: "unavailable",
+      }),
+    );
+    await testPool!.query(
+      `INSERT INTO shopify_evidence_run_observation
+         (id, organization_id, store_id, evidence_run_id, order_id,
+          line_disposition, identity_disposition, observed_content_checksum)
+       SELECT 'obs-' || t.order_id, 'org-a', 'store-a', 'evidence-run-a',
+              t.order_id, 'complete', 'unavailable', t.checksum
+         FROM unnest($1::text[], $2::text[]) AS t(order_id, checksum)`,
+      [stored.rows.map((row) => row.id), checksums],
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_event
+         (id, organization_id, shopify_store_id, connection_id, metric_id,
+          external_event_id, occurred_at, explicit_order_id_candidate,
+          attribution_relationship_ids, redacted_properties,
+          key_type_fingerprint, warnings, product_evidence_completeness,
+          source_checksum, api_revision)
+       SELECT 'bulk-event-' || lpad(g::text, 4, '0'), 'org-a', 'store-a',
+              'connection-a', 'metric-placed', 'bulk-external-' || g,
+              timestamp '2026-07-02 00:00:00' + (g * interval '1 hour')
+                + interval '4 minute',
+              (20000 + g)::text, '[]', '{}', '[]', '[]', 'unavailable',
+              'bulk-checksum-' || g, '2026-07-15'
+         FROM generate_series(1, $1) AS g`,
+      [EXTRA],
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_event_run_observation
+         (organization_id, shopify_store_id, connection_id, sync_run_id,
+          event_id, observed_source_checksum)
+       SELECT 'org-a', 'store-a', 'connection-a', 'source-run-a',
+              'bulk-event-' || lpad(g::text, 4, '0'), 'bulk-checksum-' || g
+         FROM generate_series(1, $1) AS g`,
+      [EXTRA],
+    );
+
+    const published = await service.computeAndPublishMatches({
+      scope,
+      sourceRunId: "source-run-a",
+      shopifyEvidenceRunId: "evidence-run-a",
+    });
+    expect(published.replayed).toBe(false);
+    expect(published.counts).toEqual({
+      orders: EXTRA + 1,
+      events: EXTRA + 1,
+      candidates: EXTRA + 1,
+    });
+
+    // Every group crossed the 500-row boundary and landed exactly once.
+    const counts = await testPool!.query(
+      `SELECT
+         (SELECT count(*)::int FROM klaviyo_match_candidate WHERE run_id = $1) AS candidates,
+         (SELECT count(*)::int FROM klaviyo_event_match_result WHERE run_id = $1) AS events,
+         (SELECT count(*)::int FROM klaviyo_order_match_result WHERE run_id = $1) AS orders,
+         (SELECT count(*)::int FROM klaviyo_event_match_result
+            WHERE run_id = $1 AND status = 'confirmed') AS confirmed_events,
+         (SELECT count(DISTINCT selected_candidate_id)::int
+            FROM klaviyo_order_match_result WHERE run_id = $1) AS selected_edges,
+         (SELECT status FROM klaviyo_match_run WHERE id = $1) AS run_status`,
+      [published.runId],
+    );
+    expect(counts.rows[0]).toEqual({
+      candidates: EXTRA + 1,
+      events: EXTRA + 1,
+      orders: EXTRA + 1,
+      confirmed_events: EXTRA + 1,
+      selected_edges: EXTRA + 1,
+      run_status: "published",
+    });
+    // Selected edges resolve to candidates written in earlier chunks, so the
+    // generated-ID map stayed intact across the whole batch.
+    const dangling = await testPool!.query(
+      `SELECT count(*)::int AS count
+         FROM klaviyo_order_match_result r
+         LEFT JOIN klaviyo_match_candidate c ON c.id = r.selected_candidate_id
+        WHERE r.run_id = $1 AND c.id IS NULL`,
+      [published.runId],
+    );
+    expect(dangling.rows[0].count).toBe(0);
+  });
+
   it("keeps a zero-result publication fresh until an exact-scope successor", async () => {
     // Empty world: separate windows containing no orders or events.
     await testPool!.query(
