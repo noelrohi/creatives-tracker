@@ -40,4 +40,17 @@ describe("formatMoneyCompact", () => {
   it("handles negatives the same way", () => {
     expect(formatMoneyCompact(-2_500, "USD")).toBe("-$2.5K");
   });
+
+  /**
+   * The rounding carries: 999,999 scales to 999.999K, which rounds to 1,000.0
+   * and would print the un-compact "$1,000K" beside a neighbouring "$1M".
+   */
+  it("promotes to the next unit when rounding reaches a thousand", () => {
+    expect(formatMoneyCompact(999_999, "USD")).toBe("$1M");
+    expect(formatMoneyCompact(-999_999, "USD")).toBe("-$1M");
+    // Just below the carry — still the K unit, one decimal.
+    expect(formatMoneyCompact(999_949, "USD")).toBe("$999.9K");
+    // The same carry one magnitude up, rather than "$1,000M".
+    expect(formatMoneyCompact(999_999_999, "USD")).toBe("$1B");
+  });
 });

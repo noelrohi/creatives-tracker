@@ -42,7 +42,9 @@ export function formatMoney(
   return moneyFormatter(currency, digits).format(amount);
 }
 
+/** Descending: the first unit a figure clears is the one it prints in. */
 const compactUnits = [
+  { limit: 1_000_000_000, suffix: "B" },
   { limit: 1_000_000, suffix: "M" },
   { limit: 1_000, suffix: "K" },
 ] as const;
@@ -67,13 +69,30 @@ export function formatMoneyCompact(
   if (amount === null) return null;
 
   const magnitude = Math.abs(amount);
-  const unit = compactUnits.find((candidate) => magnitude >= candidate.limit);
-  if (!unit) return moneyFormatter(currency, 0).format(amount);
+  // Descending, so the first match is the largest unit that fits, and each
+  // step toward index 0 is a bigger one.
+  let index = compactUnits.findIndex((candidate) => magnitude >= candidate.limit);
+  if (index === -1) return moneyFormatter(currency, 0).format(amount);
 
+  /**
+   * The rounding can carry into the next unit: $999,999 scales to 999.999K,
+   * which rounds to 1,000.0 and would print "$1,000K" — not compact, and not
+   * what a reader expects beside "$1M". Promote until the rounded figure fits
+   * under a thousand, or until there is no larger unit left.
+   */
+  while (index > 0 && Math.abs(roundToTenth(amount / compactUnits[index].limit)) >= 1000) {
+    index -= 1;
+  }
+
+  const unit = compactUnits[index];
   const scaled = amount / unit.limit;
   // One decimal, but never a trailing ".0": "$18K", not "$18.0K".
-  const digits = Number.isInteger(Number(scaled.toFixed(1))) ? 0 : 1;
+  const digits = Number.isInteger(roundToTenth(scaled)) ? 0 : 1;
   return `${moneyFormatter(currency, digits).format(scaled)}${unit.suffix}`;
+}
+
+function roundToTenth(value: number): number {
+  return Number(value.toFixed(1));
 }
 
 /** Always two decimals — used for the "$1.63 back" and goal figures. */
