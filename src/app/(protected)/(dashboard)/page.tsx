@@ -366,6 +366,7 @@ export default function DashboardPage() {
           total={data?.total ?? null}
           orderCount={orderCount}
           loading={overview.isPending}
+          dimmed={frozen}
         />
       ) : null}
 

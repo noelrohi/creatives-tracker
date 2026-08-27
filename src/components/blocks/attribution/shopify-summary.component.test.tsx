@@ -72,6 +72,7 @@ function summary(overrides: {
   dateTo?: string;
   total?: string | null;
   orderCount?: number;
+  dimmed?: boolean;
 } = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -85,6 +86,7 @@ function summary(overrides: {
         total={overrides.total === undefined ? "350.00" : overrides.total}
         orderCount={overrides.orderCount ?? 5}
         loading={false}
+        dimmed={overrides.dimmed}
       />
     </QueryClientProvider>,
   );
@@ -156,5 +158,15 @@ describe("ShopifySummary", () => {
     expect(refundsFn).toHaveBeenCalledTimes(1);
     await user.click(retry);
     await waitFor(() => expect(refundsFn).toHaveBeenCalledTimes(2));
+  });
+
+  it("dims while numbers are frozen, and not by default", () => {
+    summary({ dimmed: true });
+    expect(screen.getByTestId("shopify-summary")).toHaveClass("opacity-60");
+  });
+
+  it("does not dim by default", () => {
+    summary();
+    expect(screen.getByTestId("shopify-summary")).not.toHaveClass("opacity-60");
   });
 });

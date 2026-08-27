@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toCents } from "@/lib/money";
+import { cn } from "@/lib/utils";
 import { useTRPC } from "@/lib/trpc/client";
 import { page, shopifySummary as copy } from "./copy";
 import { formatMoneyExact } from "./format";
@@ -71,6 +72,7 @@ export function ShopifySummary({
   total,
   orderCount,
   loading,
+  dimmed = false,
 }: {
   dateFrom: string;
   dateTo: string;
@@ -78,6 +80,7 @@ export function ShopifySummary({
   total: string | null;
   orderCount: number;
   loading: boolean;
+  dimmed?: boolean;
 }) {
   const trpc = useTRPC();
   const singleDay = dateFrom === dateTo;
@@ -112,7 +115,10 @@ export function ShopifySummary({
       }));
 
   return (
-    <div className="flex flex-col gap-2">
+    <div
+      data-testid="shopify-summary"
+      className={cn("flex flex-col gap-2", dimmed && "opacity-60")}
+    >
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         {loading ? (
           Array.from({ length: 4 }).map((_, index) => (
