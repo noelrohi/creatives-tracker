@@ -8,8 +8,10 @@ import {
   getBucketTotals,
   getCampaignLedger,
   getDailyBucketSeries,
+  getHourlySales,
   getMetaClaims,
   getMetaVerified,
+  getRefundsTotal,
   getRoasTarget,
   getSyncHealth,
   listBucketOrders,
@@ -129,6 +131,23 @@ const dailySeriesOutputSchema = z.object({
       buckets: z.record(bucketSchema, z.string()),
       pendingNet: z.string(),
       totalNet: z.string(),
+    }),
+  ),
+});
+
+const refundsTotalOutputSchema = z.object({
+  range: rangeSchema,
+  total: z.string(),
+  count: z.number().int(),
+});
+
+const hourlySeriesOutputSchema = z.object({
+  day: z.string(),
+  hours: z.array(
+    z.object({
+      hour: z.number().int(),
+      net: z.string(),
+      orders: z.number().int(),
     }),
   ),
 });
@@ -374,6 +393,61 @@ export const attributionRouter = router({
           ) as Record<(typeof ATTRIBUTION_BUCKETS)[number], string>,
           pendingNet: centsToAmount(point.pendingNetCents),
           totalNet: centsToAmount(point.totalNetCents),
+        })),
+      };
+    }),
+
+  refundsTotal: orgProcedure
+    .meta(
+      openApiQueryMeta(
+        "attribution",
+        "refundsTotal",
+        "Refund total for a range",
+        "Sum and count of Shopify refunds (all kinds) whose refund day falls in the range.",
+      ),
+    )
+    .input(dateRangeSchema)
+    .output(refundsTotalOutputSchema)
+    .query(async ({ input, ctx }) => {
+      const store = await requireStore(ctx.organizationId);
+      const refunds = await getRefundsTotal({
+        organizationId: ctx.organizationId,
+        storeId: store.id,
+        dateFrom: input.dateFrom,
+        dateTo: input.dateTo,
+      });
+      return {
+        range: { dateFrom: input.dateFrom, dateTo: input.dateTo },
+        total: centsToAmount(refunds.refundedCents),
+        count: refunds.count,
+      };
+    }),
+
+  hourlySeries: orgProcedure
+    .meta(
+      openApiQueryMeta(
+        "attribution",
+        "hourlySeries",
+        "Hourly net sales for one day",
+        "One store-day's net sales bucketed by the hour orders were placed, on the store's clock. 24 zero-filled rows.",
+      ),
+    )
+    .input(z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+    .output(hourlySeriesOutputSchema)
+    .query(async ({ input, ctx }) => {
+      const store = await requireStore(ctx.organizationId);
+      const hours = await getHourlySales({
+        organizationId: ctx.organizationId,
+        storeId: store.id,
+        day: input.day,
+        timeZone: store.ianaTimezone,
+      });
+      return {
+        day: input.day,
+        hours: hours.map((row) => ({
+          hour: row.hour,
+          net: centsToAmount(row.netCents),
+          orders: row.orders,
         })),
       };
     }),
