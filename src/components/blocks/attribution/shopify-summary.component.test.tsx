@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ShopifySummary } from "./shopify-summary";
 
 const queryState = vi.hoisted(() => ({
   refundsFn: (): Promise<unknown> => Promise.resolve(null),
-  dailyFn: (): Promise<unknown> => Promise.resolve(null),
+  dailyFn: vi.fn((): Promise<unknown> => Promise.resolve(null)),
   hourlyFn: vi.fn((): Promise<unknown> => Promise.resolve(null)),
 }));
 
@@ -92,7 +93,7 @@ function summary(overrides: {
 describe("ShopifySummary", () => {
   beforeEach(() => {
     queryState.refundsFn = () => Promise.resolve(refunds());
-    queryState.dailyFn = () => Promise.resolve(daily());
+    queryState.dailyFn = vi.fn(() => Promise.resolve(daily()));
     queryState.hourlyFn = vi.fn(() => Promise.resolve(hourly()));
   });
 
@@ -125,15 +126,35 @@ describe("ShopifySummary", () => {
     summary({ dateFrom: "2026-08-26", dateTo: "2026-08-26" });
     expect(await screen.findByTestId("shopify-sales-chart")).toBeInTheDocument();
     expect(queryState.hourlyFn).toHaveBeenCalled();
+    expect(queryState.dailyFn).not.toHaveBeenCalled();
   });
 
   it("a chart error keeps the cards and offers a retry", async () => {
-    queryState.dailyFn = () => Promise.reject(new Error("nope"));
+    queryState.dailyFn = vi.fn(() => Promise.reject(new Error("nope")));
     summary();
     expect(
       await screen.findByText("The sales summary didn't load."),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
     expect(screen.getByText("$350.00")).toBeInTheDocument();
+  });
+
+  it("a refunds error shows the no-data chip", async () => {
+    queryState.refundsFn = () => Promise.reject(new Error("boom"));
+    summary();
+    const refundsCard = screen.getByText("Refunds").parentElement!;
+    expect(await within(refundsCard).findByText("no data yet")).toBeInTheDocument();
+  });
+
+  it("a chart retry also recovers a failed refunds card", async () => {
+    const refundsFn = vi.fn(() => Promise.reject(new Error("boom")));
+    queryState.refundsFn = refundsFn;
+    queryState.dailyFn = vi.fn(() => Promise.reject(new Error("nope")));
+    const user = userEvent.setup();
+    summary();
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    expect(refundsFn).toHaveBeenCalledTimes(1);
+    await user.click(retry);
+    await waitFor(() => expect(refundsFn).toHaveBeenCalledTimes(2));
   });
 });

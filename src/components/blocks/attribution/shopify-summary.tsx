@@ -24,18 +24,22 @@ function Card({
   value,
   caption,
   tone,
+  loading,
 }: {
   label: string;
   value: string | null;
   caption?: string | null;
   tone?: "refund";
+  loading?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-1 rounded-md border border-border bg-card px-3 py-2.5">
       <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/55">
         {label}
       </span>
-      {value === null ? (
+      {loading ? (
+        <Skeleton className="h-[20px] w-16" />
+      ) : value === null ? (
         <span className="inline-flex w-fit items-center rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground/80">
           {page.noDataYet}
         </span>
@@ -131,26 +135,31 @@ export function ShopifySummary({
                 refunds.data ? formatMoneyExact(refunds.data.total, currency) : null
               }
               caption={refunds.data ? copy.refundCount(refunds.data.count) : null}
-              tone="refund"
+              tone={
+                refunds.data && refunds.data.count > 0 ? "refund" : undefined
+              }
+              loading={refunds.isPending}
             />
           </>
         )}
       </div>
 
-      <div
-        className="rounded-md border border-border bg-card px-3 py-2.5"
-        role="group"
-        aria-label={copy.chartTitle}
-      >
+      <div className="rounded-md border border-border bg-card px-3 py-2.5">
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/50">
+          {copy.chartTitle}
+        </span>
         {series.isPending || loading ? (
-          <Skeleton className="mt-2 h-[220px] w-full" />
+          <Skeleton className="h-[220px] w-full" />
         ) : series.isError ? (
           <p className="py-8 text-center text-[11px] text-muted-foreground">
             {copy.error}{" "}
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => void series.refetch()}
+              onClick={() => {
+                void series.refetch();
+                void refunds.refetch();
+              }}
             >
               {copy.retry}
             </Button>
@@ -170,8 +179,37 @@ export function ShopifySummary({
                 </defs>
                 <CartesianGrid vertical={false} />
                 <XAxis dataKey="label" tickLine={false} axisLine={false} />
-                <YAxis tickLine={false} axisLine={false} width={50} />
-                <ChartTooltip content={<ChartTooltipContent indicator="line" />} />
+                <YAxis
+                  tickLine={false}
+                  axisLine={false}
+                  width={60}
+                  tickFormatter={(value) =>
+                    formatMoneyExact(Number(value).toFixed(2), currency) ?? ""
+                  }
+                />
+                <ChartTooltip
+                  content={
+                    <ChartTooltipContent
+                      indicator="line"
+                      formatter={(value, name) => {
+                        const label =
+                          chartConfig[name as keyof typeof chartConfig]?.label ??
+                          name;
+                        const num = typeof value === "number" ? value : Number(value);
+                        const formatted =
+                          formatMoneyExact(num.toFixed(2), currency) ?? "";
+                        return (
+                          <div className="flex flex-1 items-center justify-between gap-2">
+                            <span className="text-muted-foreground">{label}</span>
+                            <span className="font-mono font-medium tabular-nums text-foreground">
+                              {formatted}
+                            </span>
+                          </div>
+                        );
+                      }}
+                    />
+                  }
+                />
                 <Area
                   type="monotone"
                   dataKey="net"

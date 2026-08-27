@@ -211,7 +211,7 @@ export const shopifySummary = {
   refunds: "Refunds",
   refundCount: (count: number) =>
     `${formatCount(count)} ${count === 1 ? "refund" : "refunds"}`,
-  chartTitle: "Total sales",
+  chartTitle: "Sales over time",
   error: "The sales summary didn't load.",
   retry: "Try again",
 };
