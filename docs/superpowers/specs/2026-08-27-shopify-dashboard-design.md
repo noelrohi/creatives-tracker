@@ -16,8 +16,8 @@ visible and guarded — no stored data changes.
 
 - Shopify-feel reading of the store at the top of `/`: cards + sales curve.
 - Rename the Dashboard nav entry (and breadcrumb) to "Shopify Dashboard".
-- Surface each screen's governing timezone and warn when the store and Meta
-  ad-account timezones diverge — the one case where daily figures misalign.
+- (Timezone sync was investigated and resolved as already-aligned; see the
+  decisions log — no app change ships for it.)
 
 ## Non-goals
 
@@ -71,19 +71,18 @@ if the page ever also reads it).
 - `page.navLabel` in attribution copy: "Dashboard" → "Shopify Dashboard"
   (breadcrumb follows). Children (Meta / Klaviyo / Google) unchanged.
 
-## 4. Timezone visibility + guard
+## 4. Timezone alignment (resolved, no change)
 
-- Stored data untouched: order days stay stamped in the store timezone; Meta
-  daily rows stay in the ad-account timezone (all Asia/Bangkok in prod today).
-- The `/` kicker already prints the store timezone; the Meta page prints the
-  account timezone. New: `TimezoneAlignment` (small client component on `/`,
-  under the freshness caption) compares `store.ianaTimezone` with the
-  `timezone` of every enabled ad account from `adAccount.list`:
-  - All aligned, or no synced account timezones → renders nothing.
-  - Any mismatch → one warning line naming the account and both zones:
-    "<account> counts days in <meta tz> — Shopify days are <store tz>, so
-    daily figures won't line up at the edges." Visible to all roles
-    (read-only information; `adAccount.list` is org-wide readable).
+Audited in prod (2026-08-27): Shopify order days (store TZ), Meta accounts,
+and the Klaviyo connection all read Asia/Bangkok; no Google connection exists
+yet. The requested "sync all sources to the Meta timezone" is therefore
+already the live setup, and no guard component ships. Two facts to carry
+forward instead of code:
+
+- Reviv 4's underlying Meta data is genuinely LA-bucketed (its `timezone`
+  column is a display override); fixing that requires changing the account
+  timezone inside Meta, which resets the ad account.
+- When Google Ads connects in prod, create/keep that account on Asia/Bangkok.
 
 ## 5. Testing
 
@@ -92,8 +91,7 @@ if the page ever also reads it).
   store-time lands in hour 23, one at 00:10 the next day is excluded).
 - Component tests (`*.component.test.tsx`, mocked tRPC): `ShopifySummary`
   cards + chart for single-day vs multi-day ranges, zero-orders AOV chip,
-  chart error keeps cards; `TimezoneAlignment` aligned (renders nothing) vs
-  diverged (names the account).
+  chart error keeps cards.
 - `bun run lint`, `bun run test`, `bun run test:components`, `bun run build`
   all green. No migrations, so no migration-guard concerns.
 
@@ -101,6 +99,8 @@ if the page ever also reads it).
 
 - KPI set: Sales / Orders / AOV / Refunds (discounts not synced).
 - 1-day ranges chart hourly via a new query; multi-day uses `dailySeries`.
-- Timezone item resolved as visibility + divergence guard; no re-stamping,
-  no display-clock switch.
+- Timezone item resolved as no-op after a prod audit: all connected sources
+  already bucket days in Asia/Bangkok (= Meta). The planned divergence guard
+  was dropped — the only real divergence (Reviv 4's LA-bucketed Meta data)
+  is a platform-side fact our stored columns can't see.
 - Additions fold into the attribution module (no new router/dir).
