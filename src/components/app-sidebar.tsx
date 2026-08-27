@@ -347,12 +347,12 @@ export function AppSidebar() {
                   <SidebarMenuItem>
                     <SidebarMenuButton
                       asChild
-                      tooltip="Dashboard"
+                      tooltip="Shopify Dashboard"
                       isActive={pathname === "/"}
                     >
                       <Link href="/">
                         <Icon icon="solar:widget-5-linear" className="size-4" />
-                        <span>Dashboard</span>
+                        <span>Shopify Dashboard</span>
                       </Link>
                     </SidebarMenuButton>
                     <CollapsibleTrigger asChild>

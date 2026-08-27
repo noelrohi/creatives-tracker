@@ -55,9 +55,9 @@ export type Severity = "critical" | "warning";
 export const page = {
   /**
    * The nav label and breadcrumb: this view is now the dashboard at `/`, so
-   * both read "Dashboard"; everything below the top bar is plain voice.
+   * both read "Shopify Dashboard"; everything below the top bar is plain voice.
    */
-  navLabel: "Dashboard",
+  navLabel: "Shopify Dashboard",
   title: "Where your sales came from",
   /**
    * Comparison lines. They sit on their own line under the figure they belong
