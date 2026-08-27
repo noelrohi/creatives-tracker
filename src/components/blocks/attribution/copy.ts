@@ -54,10 +54,11 @@ export type Severity = "critical" | "warning";
 
 export const page = {
   /**
-   * The nav label and breadcrumb: this view is now the dashboard at `/`, so
-   * both read "Dashboard"; everything below the top bar is plain voice.
+   * The nav label and breadcrumb: this view is the Shopify reading of the
+   * dashboard at `/`, and sits under the sidebar's "Dashboard" group label —
+   * so it names its source only. Everything below the top bar is plain voice.
    */
-  navLabel: "Dashboard",
+  navLabel: "Shopify",
   title: "Where your sales came from",
   /**
    * Comparison lines. They sit on their own line under the figure they belong
@@ -197,6 +198,34 @@ export const headerRail = {
   back: "back per $1 on Meta",
   orders: (orderCount: number) =>
     `${formatCount(orderCount)} ${orderCount === 1 ? "order" : "orders"}`,
+};
+
+/**
+ * The Shopify-style summary above the ledger: the store's own reading of the
+ * range, before any attribution. Figures come from the same orders the ledger
+ * ties out, so the two never disagree.
+ */
+export const shopifySummary = {
+  totalSales: "Total sales",
+  /**
+   * The number people compare against Shopify and find "wrong". It is not:
+   * it matches Shopify's Net sales to the penny. What differs is which
+   * figure they open in Shopify — the headline there adds discounts back and
+   * puts shipping and tax on top, which on a normal day is a few hundred to
+   * a thousand dollars more.
+   */
+  totalSalesHelp:
+    "Item prices after discounts, less refunds booked that day — no shipping, no tax. This matches the Net sales row in Shopify's Finances summary exactly. Shopify's headline \"Total sales\" adds shipping and tax on top, and \"Gross sales\" counts prices before discounts, so both read higher here.",
+  refundsHelp:
+    "What went back to shoppers on these days. A refund books on the day it happened, not the day the order came in, so it can belong to a sale from an earlier day — that is why the sales figure above is not simply this month's orders minus this figure.",
+  orders: "Orders",
+  averageOrder: "Average order",
+  refunds: "Refunds",
+  refundCount: (count: number) =>
+    `${formatCount(count)} ${count === 1 ? "refund" : "refunds"}`,
+  chartTitle: "Sales over time",
+  error: "The sales summary didn't load.",
+  retry: "Try again",
 };
 
 const CHANNEL_BUCKETS: readonly AttributionBucket[] = [

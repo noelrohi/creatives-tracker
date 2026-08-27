@@ -336,6 +336,7 @@ export function AppSidebar() {
         </SidebarHeader>
         <SidebarContent>
           <SidebarGroup>
+            <SidebarGroupLabel>Dashboard</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 <Collapsible
@@ -347,12 +348,12 @@ export function AppSidebar() {
                   <SidebarMenuItem>
                     <SidebarMenuButton
                       asChild
-                      tooltip="Dashboard"
+                      tooltip="Shopify"
                       isActive={pathname === "/"}
                     >
                       <Link href="/">
                         <Icon icon="solar:widget-5-linear" className="size-4" />
-                        <span>Dashboard</span>
+                        <span>Shopify</span>
                       </Link>
                     </SidebarMenuButton>
                     <CollapsibleTrigger asChild>

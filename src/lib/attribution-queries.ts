@@ -381,6 +381,74 @@ export async function getBucketTotals(
   };
 }
 
+/**
+ * Refunds of every kind whose refund day lands in the range — the same rows
+ * (and the same `refundRangeWhere`) the ledger nets out of gross sales, so
+ * the Refunds card always agrees with the tie-out.
+ *
+ * `count` is refund *events* — every row in `shopify_refund`, cancellations
+ * included — not the number of distinct orders refunded; an order refunded
+ * twice contributes 2.
+ */
+export async function getRefundsTotal(
+  scope: StoreScope,
+): Promise<{ refundedCents: number; count: number }> {
+  const [row] = await db
+    .select({
+      refunded: sql<string>`coalesce(sum(${shopifyRefunds.amount}), 0)`,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(shopifyRefunds)
+    .where(refundRangeWhere(scope));
+
+  return { refundedCents: toCents(row?.refunded ?? "0"), count: row?.count ?? 0 };
+}
+
+/**
+ * One store-day's orders bucketed by the hour they were placed, on the store's
+ * clock. `order_created_at` is a naive UTC timestamp, so the wall-clock hour
+ * needs the double conversion; the day filter is the already-stamped
+ * `order_day`, keeping "which orders belong to the day" identical to every
+ * other read. Always 24 rows, zero-filled.
+ */
+export async function getHourlySales(params: {
+  organizationId: string;
+  storeId: string;
+  day: string;
+  timeZone: string;
+}): Promise<Array<{ hour: number; netCents: number; orders: number }>> {
+  const hourExpression = sql<number>`extract(hour from ((${shopifyOrders.orderCreatedAt} at time zone 'utc') at time zone ${params.timeZone}))::int`;
+  const rows = await db
+    .select({
+      hour: hourExpression,
+      net: sql<string>`coalesce(sum(${shopifyOrders.netSales}), 0)`,
+      orders: sql<number>`count(*)::int`,
+    })
+    .from(shopifyOrders)
+    .where(
+      and(
+        eq(shopifyOrders.organizationId, params.organizationId),
+        eq(shopifyOrders.storeId, params.storeId),
+        eq(shopifyOrders.orderDay, params.day),
+      ),
+    )
+    // Group by ordinal position, not the expression a second time: Drizzle
+    // renders the same `sql` fragment differently in the select list (bare)
+    // than in GROUP BY (table-qualified), and Postgres then treats them as
+    // two different expressions and rejects the ungrouped select column.
+    .groupBy(sql`1`);
+
+  const byHour = new Map(rows.map((row) => [row.hour, row]));
+  return Array.from({ length: 24 }, (_, hour) => {
+    const row = byHour.get(hour);
+    return {
+      hour,
+      netCents: row ? toCents(row.net) : 0,
+      orders: row?.orders ?? 0,
+    };
+  });
+}
+
 /* ------------------------------------------------------------------ */
 /* Daily series                                                        */
 /* ------------------------------------------------------------------ */

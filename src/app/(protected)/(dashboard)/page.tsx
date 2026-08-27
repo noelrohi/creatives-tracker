@@ -33,6 +33,7 @@ import {
 } from "@/components/blocks/attribution/format";
 import { HeaderRail } from "@/components/blocks/attribution/header-rail";
 import { MobileFindingsSheet } from "@/components/blocks/attribution/mobile-findings-sheet";
+import { ShopifySummary } from "@/components/blocks/attribution/shopify-summary";
 import {
   connectionsUrl,
   merRangeUrl,
@@ -354,6 +355,18 @@ export default function DashboardPage() {
         <FirstLoadProgress
           daysLoaded={backfillProgress?.daysLoaded ?? 0}
           daysTotal={backfillProgress?.daysTotal ?? BACKFILL_DAYS}
+        />
+      ) : null}
+
+      {range ? (
+        <ShopifySummary
+          dateFrom={range.dateFrom}
+          dateTo={range.dateTo}
+          currency={currency}
+          total={data?.total ?? null}
+          orderCount={orderCount}
+          loading={overview.isPending}
+          dimmed={frozen}
         />
       ) : null}
 

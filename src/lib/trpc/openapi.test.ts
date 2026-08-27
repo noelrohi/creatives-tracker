@@ -120,6 +120,8 @@ const EXPECTED_PROCEDURES = {
     "metaCheck",
     "campaignLedger",
     "dailySeries",
+    "refundsTotal",
+    "hourlySeries",
     "syncStatus",
   ],
   findings: ["list", "checks"],
@@ -141,6 +143,8 @@ const NEW_PATHS = [
   "/api/openapi/performanceLog/demographicBreakdown",
   "/api/openapi/performanceLog/creativeDemographicBreakdown",
   "/api/openapi/performanceLog/exportByAccount",
+  "/api/openapi/attribution/refundsTotal",
+  "/api/openapi/attribution/hourlySeries",
 ];
 
 type Operation = {
@@ -236,8 +240,8 @@ describe("OpenAPI app inventory", () => {
     ({ path }) => !path.startsWith("/api/openapi/studio/"),
   );
 
-  it("contains exactly the expected 89 non-studio paths", () => {
-    expect(nonStudioOperations).toHaveLength(89);
+  it("contains exactly the expected 91 non-studio paths", () => {
+    expect(nonStudioOperations).toHaveLength(91);
     expect(
       Object.keys(document.paths)
         .filter((path) => !path.startsWith("/api/openapi/studio/"))
@@ -270,7 +274,7 @@ describe("OpenAPI app inventory", () => {
     ).toBe(false);
   });
 
-  it("contains all seven newly documented query paths", () => {
+  it("contains all nine newly documented query paths", () => {
     for (const path of NEW_PATHS) {
       expect(document.paths[path]).toBeDefined();
     }
