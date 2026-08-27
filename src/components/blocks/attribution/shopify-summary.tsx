@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { useTRPC } from "@/lib/trpc/client";
 import { page, shopifySummary as copy } from "./copy";
 import { formatMoneyCompact, formatMoneyExact } from "./format";
+import { HelpMark } from "./help-mark";
 
 const chartConfig: ChartConfig = {
   net: { label: "Total sales", color: "var(--chart-1)" },
@@ -26,17 +27,20 @@ function Card({
   caption,
   tone,
   loading,
+  help,
 }: {
   label: string;
   value: string | null;
   caption?: string | null;
   tone?: "refund";
   loading?: boolean;
+  help?: string;
 }) {
   return (
     <div className="flex flex-col gap-1 rounded-md border border-border bg-card px-3 py-2.5">
-      <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/55">
+      <span className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/55">
         {label}
+        {help ? <HelpMark text={help} /> : null}
       </span>
       {loading ? (
         <Skeleton className="h-[20px] w-16" />
@@ -129,6 +133,7 @@ export function ShopifySummary({
             <Card
               label={copy.totalSales}
               value={total !== null ? formatMoneyExact(total, currency) : null}
+              help={copy.totalSalesHelp}
             />
             <Card
               label={copy.orders}
@@ -141,6 +146,7 @@ export function ShopifySummary({
                 refunds.data ? formatMoneyExact(refunds.data.total, currency) : null
               }
               caption={refunds.data ? copy.refundCount(refunds.data.count) : null}
+              help={copy.refundsHelp}
               tone={
                 refunds.data && refunds.data.count > 0 ? "refund" : undefined
               }
