@@ -493,6 +493,8 @@ export default function MetaDashboardPage() {
             to={toValue}
             teamId={selectedTeamId}
             accountId={selectedAccountId}
+            campaignIds={campaignFilter}
+            adSetIds={adSetFilter}
             format={selectedFormat}
           />
           {isDailyPerfLoading ? (
@@ -515,6 +517,8 @@ export default function MetaDashboardPage() {
             to={toValue}
             teamId={selectedTeamId}
             accountId={selectedAccountId}
+            campaignIds={campaignFilter}
+            adSetIds={adSetFilter}
           />
         </TabsContent>
 

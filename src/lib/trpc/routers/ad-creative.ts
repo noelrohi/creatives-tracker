@@ -1767,6 +1767,8 @@ export const adCreativeRouter = router({
         to: z.string(),
         teamId: z.string().optional(),
         accountId: z.string().optional(),
+        campaignIds: z.array(z.string()).optional(),
+        adSetIds: z.array(z.string()).optional(),
       }),
     )
     .query(async ({ input, ctx }) => {
@@ -1776,6 +1778,10 @@ export const adCreativeRouter = router({
       const accountFilterAd = input.accountId
         ? sql`AND ad.account_id = ${input.accountId}`
         : sql``;
+      // Scoped to the `ad` rows only. The account list itself stays whole, so a
+      // campaign filter empties the other accounts' rows rather than hiding
+      // them — the table still says which accounts the filter left out.
+      const scopeFilters = sql`${campaignScopeFilter(input.campaignIds)} ${adSetScopeFilter(input.adSetIds)}`;
       const accountFilterAcc = input.accountId
         ? sql`AND acc.id = ${input.accountId}`
         : sql``;
@@ -1809,6 +1815,7 @@ export const adCreativeRouter = router({
             AND ad.organization_id = ${ctx.organizationId}
             ${teamFilter}
             ${accountFilterAd}
+            ${scopeFilters}
           GROUP BY ad.account_id
         ),
         prior_period AS (
@@ -1826,6 +1833,7 @@ export const adCreativeRouter = router({
             AND ad.organization_id = ${ctx.organizationId}
             ${teamFilter}
             ${accountFilterAd}
+            ${scopeFilters}
           GROUP BY ad.account_id
         ),
         days AS (
@@ -1847,6 +1855,7 @@ export const adCreativeRouter = router({
             AND ${basePl}
             ${teamFilter}
             ${accountFilterAd}
+            ${scopeFilters}
           GROUP BY ad.account_id, pl.date_start
         ),
         sparkline_rows AS (

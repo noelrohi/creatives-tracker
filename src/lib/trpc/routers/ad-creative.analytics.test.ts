@@ -421,6 +421,22 @@ describe("adCreative analytics procedures", () => {
 
       expect(compileSql(mockState.executedSql[0]).toLowerCase()).toContain("ac.format =");
     });
+
+    it("scopes to the selected campaigns and ad sets", async () => {
+      queueExecuteRows([]);
+
+      const caller = createMockCaller({ role: "admin", organizationId: "org_1" });
+      await caller.adCreative.dashboardExport({
+        from: BREAKDOWN_WINDOW_START,
+        to: TODAY,
+        campaignIds: ["camp_1"],
+        adSetIds: ["adset_1"],
+      });
+
+      const query = compileSql(mockState.executedSql[0]).toLowerCase();
+      expect(query).toContain("ast.campaign_id in");
+      expect(query).toContain("ad.ad_set_id in");
+    });
   });
 
   describe("getMerAccountBreakdown", () => {
@@ -462,6 +478,28 @@ describe("adCreative analytics procedures", () => {
           ],
         }),
       ]);
+    });
+
+    // The Charts tab reads MER from here, so it has to honour the same header
+    // filters as the rest of the page — otherwise the headline contradicts the
+    // KPI rail above it.
+    it("scopes every period to the selected campaigns and ad sets", async () => {
+      queueExecuteRows([]);
+
+      const caller = createMockCaller({ role: "admin" });
+      await caller.adCreative.getMerAccountBreakdown({
+        from: "2026-06-01",
+        to: "2026-06-04",
+        campaignIds: ["camp_1"],
+        adSetIds: ["adset_1"],
+      });
+
+      const query = compileSql(mockState.executedSql[0]).toLowerCase();
+      // current_period, prior_period and daily_per_account each need the scope;
+      // the ad_set predicate lands twice per CTE, once for the campaign
+      // subquery and once for the ad set filter itself.
+      expect(query.split("ast.campaign_id in").length - 1).toBe(3);
+      expect(query.split("ad.ad_set_id in").length - 1).toBe(6);
     });
   });
 
