@@ -233,8 +233,11 @@ export async function publishMatchRun(input: {
         // is fully populated while building the rows, before any consumer
         // below resolves a selected edge against it.
         const candidateIds = new Map<string, string>();
-        const candidateRows: PgInsertValue<typeof klaviyoMatchCandidates>[] =
-          input.computation.candidates.map((candidate) => {
+        // Annotating the callback's return type (rather than the array
+        // variable) keeps each row a fresh object literal, so an unknown
+        // column stays a compile error instead of a silently dropped write.
+        const candidateRows = input.computation.candidates.map(
+          (candidate): PgInsertValue<typeof klaviyoMatchCandidates> => {
             const id = crypto.randomUUID();
             candidateIds.set(`${candidate.eventId}:${candidate.orderId}`, id);
             return {
@@ -255,7 +258,8 @@ export async function publishMatchRun(input: {
               confidence: String(candidate.confidence),
               reasonCodes: candidate.reasonCodes,
             };
-          });
+          },
+        );
         await insertChunked(tx, klaviyoMatchCandidates, candidateRows);
 
         const affectedRunIds = new Set<string>();
@@ -358,8 +362,8 @@ export async function publishMatchRun(input: {
         // Row construction still runs the per-row edge resolution in order, so
         // a stale computation whose selected edge has no candidate throws here
         // and aborts the transaction exactly as the row-by-row inserts did.
-        const eventResultRows: PgInsertValue<typeof klaviyoEventMatchResults>[] =
-          input.computation.eventResults.map((result) => {
+        const eventResultRows = input.computation.eventResults.map(
+          (result): PgInsertValue<typeof klaviyoEventMatchResults> => {
             const selectedCandidateId =
               result.selectedEdge === null
                 ? null
@@ -384,11 +388,12 @@ export async function publishMatchRun(input: {
               reasonCodes: result.reasonCodes,
               publishedAt,
             };
-          });
+          },
+        );
         await insertChunked(tx, klaviyoEventMatchResults, eventResultRows);
 
-        const orderResultRows: PgInsertValue<typeof klaviyoOrderMatchResults>[] =
-          input.computation.orderResults.map((result) => {
+        const orderResultRows = input.computation.orderResults.map(
+          (result): PgInsertValue<typeof klaviyoOrderMatchResults> => {
             const selectedCandidateId =
               result.selectedEdge === null
                 ? null
@@ -414,25 +419,26 @@ export async function publishMatchRun(input: {
               matcherVersion: input.computation.matcherVersion,
               publishedAt,
             };
-          });
+          },
+        );
         await insertChunked(tx, klaviyoOrderMatchResults, orderResultRows);
 
-        const productLinkRows: PgInsertValue<
-          typeof klaviyoProductEvidenceLinks
-        >[] = input.computation.productLinks.map((link) => ({
-          organizationId: input.scope.organizationId,
-          storeId: input.scope.storeId,
-          connectionId: input.scope.connectionId,
-          runId: input.runId,
-          runStatus: "published",
-          orderedProductEventId: link.orderedProductEventId,
-          placedOrderEventId: link.placedOrderEventId,
-          shopifyOrderId: link.shopifyOrderId,
-          method: link.method,
-          matcherVersion: input.computation.matcherVersion,
-          status: link.status,
-          reasonCodes: link.reasonCodes,
-        }));
+        const productLinkRows = input.computation.productLinks.map(
+          (link): PgInsertValue<typeof klaviyoProductEvidenceLinks> => ({
+            organizationId: input.scope.organizationId,
+            storeId: input.scope.storeId,
+            connectionId: input.scope.connectionId,
+            runId: input.runId,
+            runStatus: "published",
+            orderedProductEventId: link.orderedProductEventId,
+            placedOrderEventId: link.placedOrderEventId,
+            shopifyOrderId: link.shopifyOrderId,
+            method: link.method,
+            matcherVersion: input.computation.matcherVersion,
+            status: link.status,
+            reasonCodes: link.reasonCodes,
+          }),
+        );
         await insertChunked(tx, klaviyoProductEvidenceLinks, productLinkRows);
 
         // A later exact-scope publication explicitly supersedes an earlier

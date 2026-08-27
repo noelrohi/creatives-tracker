@@ -49,6 +49,12 @@ export const klaviyoMatchTask = task({
   // and this ceiling is generous even at production scale. It stays high so
   // remoteness alone can never kill a run: a match that still exceeds thirty
   // minutes is genuinely wedged, not merely far from the database.
+  //
+  // The tradeoff: publication holds SELECT ... FOR UPDATE locks on the store
+  // and connection rows for the life of its transaction, so this triples the
+  // worst-case lock-hold ceiling for a run that does wedge. That is accepted
+  // because batching drives the typical hold time sharply down, and the
+  // matching queue is single-concurrency anyway.
   maxDuration: 1_800,
   queue: KLAVIYO_MATCHING_QUEUE,
   run: async (payload: MatchPayload) => {

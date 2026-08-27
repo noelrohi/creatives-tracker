@@ -363,8 +363,11 @@ describeIfDb("Klaviyo match publication on PostgreSQL", () => {
 
   it("publishes a run whose groups span several insert chunks", async () => {
     // PUBLICATION_INSERT_CHUNK is 500, so 600 extra matchable orders/events
-    // (601 with the seeded pair) forces every result group across a chunk
-    // boundary — the batched inserts must still write each row exactly once.
+    // (601 with the seeded pair) pushes the candidate, event-result, and
+    // order-result groups across a chunk boundary — the batched inserts must
+    // still write each row exactly once. Product-evidence links stay empty
+    // here (no ordered-product events in this fixture), but they go through
+    // the same insertChunked path those three groups exercise.
     const EXTRA = 600;
     await testPool!.query(
       `INSERT INTO shopify_order
