@@ -42,6 +42,38 @@ export function formatMoney(
   return moneyFormatter(currency, digits).format(amount);
 }
 
+const compactFormatters = new Map<string, Intl.NumberFormat>();
+
+/**
+ * Short money for axis ticks: `$18K`, `$1.2M`. A chart axis has a few
+ * characters of room, and the figure only has to say roughly how high the
+ * line is — the tooltip carries the exact number. Under $1,000 it prints
+ * whole dollars, since "$0.9K" reads worse than "$900".
+ */
+export function formatMoneyCompact(
+  value: string | number | null | undefined,
+  currency: string,
+): string | null {
+  const amount = toNumber(value);
+  if (amount === null) return null;
+
+  if (Math.abs(amount) < 1000) {
+    return moneyFormatter(currency, 0).format(amount);
+  }
+
+  const cached = compactFormatters.get(currency);
+  const formatter =
+    cached ??
+    new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency,
+      notation: "compact",
+      maximumFractionDigits: 1,
+    });
+  if (!cached) compactFormatters.set(currency, formatter);
+  return formatter.format(amount);
+}
+
 /** Always two decimals — used for the "$1.63 back" and goal figures. */
 export function formatMoneyExact(
   value: string | number | null | undefined,

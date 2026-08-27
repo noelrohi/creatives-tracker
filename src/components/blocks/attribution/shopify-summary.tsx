@@ -14,7 +14,7 @@ import { toCents } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { useTRPC } from "@/lib/trpc/client";
 import { page, shopifySummary as copy } from "./copy";
-import { formatMoneyExact } from "./format";
+import { formatMoneyCompact, formatMoneyExact } from "./format";
 
 const chartConfig: ChartConfig = {
   net: { label: "Total sales", color: "var(--chart-1)" },
@@ -188,9 +188,9 @@ export function ShopifySummary({
                 <YAxis
                   tickLine={false}
                   axisLine={false}
-                  width={60}
+                  width={48}
                   tickFormatter={(value) =>
-                    formatMoneyExact(Number(value).toFixed(2), currency) ?? ""
+                    formatMoneyCompact(Number(value), currency) ?? ""
                   }
                 />
                 <ChartTooltip
