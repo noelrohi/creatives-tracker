@@ -42,13 +42,22 @@ export function formatMoney(
   return moneyFormatter(currency, digits).format(amount);
 }
 
-const compactFormatters = new Map<string, Intl.NumberFormat>();
+const compactUnits = [
+  { limit: 1_000_000, suffix: "M" },
+  { limit: 1_000, suffix: "K" },
+] as const;
 
 /**
- * Short money for axis ticks: `$18K`, `$1.2M`. A chart axis has a few
- * characters of room, and the figure only has to say roughly how high the
- * line is — the tooltip carries the exact number. Under $1,000 it prints
- * whole dollars, since "$0.9K" reads worse than "$900".
+ * Short money for axis ticks: `$18K`, `$13.5K`, `$1.2M`. A chart axis has a
+ * few characters of room, and the figure only has to say roughly how high the
+ * line is — the tooltip carries the exact number. Under $1,000 it prints whole
+ * dollars, since "$0.9K" reads worse than "$900".
+ *
+ * The scaling is done here rather than with `Intl`'s compact notation, which
+ * disagrees with itself across ICU versions — the same call returns "$18K" on
+ * one machine and "$18.0K" on another, which is a test that passes locally and
+ * fails in CI. Scaling by hand and formatting the small number in standard
+ * notation is the same reading everywhere.
  */
 export function formatMoneyCompact(
   value: string | number | null | undefined,
@@ -57,21 +66,14 @@ export function formatMoneyCompact(
   const amount = toNumber(value);
   if (amount === null) return null;
 
-  if (Math.abs(amount) < 1000) {
-    return moneyFormatter(currency, 0).format(amount);
-  }
+  const magnitude = Math.abs(amount);
+  const unit = compactUnits.find((candidate) => magnitude >= candidate.limit);
+  if (!unit) return moneyFormatter(currency, 0).format(amount);
 
-  const cached = compactFormatters.get(currency);
-  const formatter =
-    cached ??
-    new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency,
-      notation: "compact",
-      maximumFractionDigits: 1,
-    });
-  if (!cached) compactFormatters.set(currency, formatter);
-  return formatter.format(amount);
+  const scaled = amount / unit.limit;
+  // One decimal, but never a trailing ".0": "$18K", not "$18.0K".
+  const digits = Number.isInteger(Number(scaled.toFixed(1))) ? 0 : 1;
+  return `${moneyFormatter(currency, digits).format(scaled)}${unit.suffix}`;
 }
 
 /** Always two decimals — used for the "$1.63 back" and goal figures. */
