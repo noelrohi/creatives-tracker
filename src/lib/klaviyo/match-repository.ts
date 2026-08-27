@@ -1,6 +1,7 @@
 import "server-only";
 
 import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import type { PgInsertValue, PgTable } from "drizzle-orm/pg-core";
 import { db } from "@/db";
 import { recountMatchRunCurrentness } from "@/lib/klaviyo/match-currentness";
 import type { MATCHER_VERSION } from "@/lib/klaviyo/match-types";
@@ -22,6 +23,39 @@ import {
   klaviyoProductEvidenceLinks,
 } from "@/schema/klaviyo-match";
 import { shopifyStores } from "@/schema/shopify";
+
+/**
+ * Rows per multi-row INSERT inside a publication.
+ *
+ * Postgres caps one statement at 65535 bind parameters. These publication rows
+ * carry ~16 wide columns each (several of them jsonb), so 500 rows is ~8k
+ * parameters — far under the cap with room for the widest table. It also turns
+ * the ~30k sequential round trips a production-scale publication used to issue
+ * into ~60: on a remote managed database at ~13ms per round trip that is the
+ * difference between blowing the task's maxDuration and finishing in seconds.
+ */
+const PUBLICATION_INSERT_CHUNK = 500;
+
+/**
+ * Insert `rows` as chunked multi-row statements. An empty array inserts
+ * nothing — drizzle rejects `.values([])`, and a zero-row group is legal
+ * (a zero-candidate publication, for instance).
+ */
+async function insertChunked<TTable extends PgTable>(
+  tx: KlaviyoStoreTransaction,
+  table: TTable,
+  rows: PgInsertValue<TTable>[],
+): Promise<void> {
+  for (
+    let offset = 0;
+    offset < rows.length;
+    offset += PUBLICATION_INSERT_CHUNK
+  ) {
+    await tx
+      .insert(table)
+      .values(rows.slice(offset, offset + PUBLICATION_INSERT_CHUNK));
+  }
+}
 
 function isUniqueViolation(error: unknown): boolean {
   let current: unknown = error;
@@ -195,30 +229,38 @@ export async function publishMatchRun(input: {
           publishedAt,
         });
 
-        // Candidates with generated IDs keyed by (eventId, orderId).
+        // Candidates with generated IDs keyed by (eventId, orderId). The map
+        // is fully populated while building the rows, before any consumer
+        // below resolves a selected edge against it.
         const candidateIds = new Map<string, string>();
-        for (const candidate of input.computation.candidates) {
-          const id = crypto.randomUUID();
-          candidateIds.set(`${candidate.eventId}:${candidate.orderId}`, id);
-          await tx.insert(klaviyoMatchCandidates).values({
-            id,
-            organizationId: input.scope.organizationId,
-            storeId: input.scope.storeId,
-            connectionId: input.scope.connectionId,
-            runId: input.runId,
-            runStatus: "published",
-            eventId: candidate.eventId,
-            orderId: candidate.orderId,
-            candidateClass: candidate.candidateClass,
-            method: candidate.method,
-            featureVector: candidate.featureVector as Record<string, never>,
-            weights: candidate.weights as Record<string, never>,
-            tolerances: candidate.tolerances as Record<string, never>,
-            score: String(candidate.score),
-            confidence: String(candidate.confidence),
-            reasonCodes: candidate.reasonCodes,
-          });
-        }
+        // Annotating the callback's return type (rather than the array
+        // variable) keeps each row a fresh object literal, so an unknown
+        // column stays a compile error instead of a silently dropped write.
+        const candidateRows = input.computation.candidates.map(
+          (candidate): PgInsertValue<typeof klaviyoMatchCandidates> => {
+            const id = crypto.randomUUID();
+            candidateIds.set(`${candidate.eventId}:${candidate.orderId}`, id);
+            return {
+              id,
+              organizationId: input.scope.organizationId,
+              storeId: input.scope.storeId,
+              connectionId: input.scope.connectionId,
+              runId: input.runId,
+              runStatus: "published",
+              eventId: candidate.eventId,
+              orderId: candidate.orderId,
+              candidateClass: candidate.candidateClass,
+              method: candidate.method,
+              featureVector: candidate.featureVector as Record<string, never>,
+              weights: candidate.weights as Record<string, never>,
+              tolerances: candidate.tolerances as Record<string, never>,
+              score: String(candidate.score),
+              confidence: String(candidate.confidence),
+              reasonCodes: candidate.reasonCodes,
+            };
+          },
+        );
+        await insertChunked(tx, klaviyoMatchCandidates, candidateRows);
 
         const affectedRunIds = new Set<string>();
         const supersede = async (
@@ -317,61 +359,72 @@ export async function publishMatchRun(input: {
         }
 
 
-        for (const result of input.computation.eventResults) {
-          const selectedCandidateId =
-            result.selectedEdge === null
-              ? null
-              : (candidateIds.get(
-                  `${result.selectedEdge.eventId}:${result.selectedEdge.orderId}`,
-                ) ?? null);
-          if (result.selectedEdge !== null && selectedCandidateId === null) {
-            throw new MatchInputStaleError("selected_edge_missing_candidate");
-          }
-          await tx.insert(klaviyoEventMatchResults).values({
-            organizationId: input.scope.organizationId,
-            storeId: input.scope.storeId,
-            connectionId: input.scope.connectionId,
-            runId: input.runId,
-            runStatus: "published",
-            eventId: result.eventId,
-            status: result.status,
-            selectedCandidateId,
-            selectedClass: result.selectedClass,
-            candidateCount: result.candidateCount,
-            duplicateWarning: result.duplicateWarning ? 1 : 0,
-            reasonCodes: result.reasonCodes,
-            publishedAt,
-          });
-        }
-        for (const result of input.computation.orderResults) {
-          const selectedCandidateId =
-            result.selectedEdge === null
-              ? null
-              : (candidateIds.get(
-                  `${result.selectedEdge.eventId}:${result.selectedEdge.orderId}`,
-                ) ?? null);
-          if (result.selectedEdge !== null && selectedCandidateId === null) {
-            throw new MatchInputStaleError("selected_edge_missing_candidate");
-          }
-          await tx.insert(klaviyoOrderMatchResults).values({
-            organizationId: input.scope.organizationId,
-            storeId: input.scope.storeId,
-            connectionId: input.scope.connectionId,
-            runId: input.runId,
-            runStatus: "published",
-            orderId: result.orderId,
-            status: result.status,
-            selectedCandidateId,
-            selectedClass: result.selectedClass,
-            selectedEventId: result.selectedEventId,
-            productStatus: result.productStatus,
-            reasonCodes: result.reasonCodes,
-            matcherVersion: input.computation.matcherVersion,
-            publishedAt,
-          });
-        }
-        for (const link of input.computation.productLinks) {
-          await tx.insert(klaviyoProductEvidenceLinks).values({
+        // Row construction still runs the per-row edge resolution in order, so
+        // a stale computation whose selected edge has no candidate throws here
+        // and aborts the transaction exactly as the row-by-row inserts did.
+        const eventResultRows = input.computation.eventResults.map(
+          (result): PgInsertValue<typeof klaviyoEventMatchResults> => {
+            const selectedCandidateId =
+              result.selectedEdge === null
+                ? null
+                : (candidateIds.get(
+                    `${result.selectedEdge.eventId}:${result.selectedEdge.orderId}`,
+                  ) ?? null);
+            if (result.selectedEdge !== null && selectedCandidateId === null) {
+              throw new MatchInputStaleError("selected_edge_missing_candidate");
+            }
+            return {
+              organizationId: input.scope.organizationId,
+              storeId: input.scope.storeId,
+              connectionId: input.scope.connectionId,
+              runId: input.runId,
+              runStatus: "published",
+              eventId: result.eventId,
+              status: result.status,
+              selectedCandidateId,
+              selectedClass: result.selectedClass,
+              candidateCount: result.candidateCount,
+              duplicateWarning: result.duplicateWarning ? 1 : 0,
+              reasonCodes: result.reasonCodes,
+              publishedAt,
+            };
+          },
+        );
+        await insertChunked(tx, klaviyoEventMatchResults, eventResultRows);
+
+        const orderResultRows = input.computation.orderResults.map(
+          (result): PgInsertValue<typeof klaviyoOrderMatchResults> => {
+            const selectedCandidateId =
+              result.selectedEdge === null
+                ? null
+                : (candidateIds.get(
+                    `${result.selectedEdge.eventId}:${result.selectedEdge.orderId}`,
+                  ) ?? null);
+            if (result.selectedEdge !== null && selectedCandidateId === null) {
+              throw new MatchInputStaleError("selected_edge_missing_candidate");
+            }
+            return {
+              organizationId: input.scope.organizationId,
+              storeId: input.scope.storeId,
+              connectionId: input.scope.connectionId,
+              runId: input.runId,
+              runStatus: "published",
+              orderId: result.orderId,
+              status: result.status,
+              selectedCandidateId,
+              selectedClass: result.selectedClass,
+              selectedEventId: result.selectedEventId,
+              productStatus: result.productStatus,
+              reasonCodes: result.reasonCodes,
+              matcherVersion: input.computation.matcherVersion,
+              publishedAt,
+            };
+          },
+        );
+        await insertChunked(tx, klaviyoOrderMatchResults, orderResultRows);
+
+        const productLinkRows = input.computation.productLinks.map(
+          (link): PgInsertValue<typeof klaviyoProductEvidenceLinks> => ({
             organizationId: input.scope.organizationId,
             storeId: input.scope.storeId,
             connectionId: input.scope.connectionId,
@@ -384,8 +437,9 @@ export async function publishMatchRun(input: {
             matcherVersion: input.computation.matcherVersion,
             status: link.status,
             reasonCodes: link.reasonCodes,
-          });
-        }
+          }),
+        );
+        await insertChunked(tx, klaviyoProductEvidenceLinks, productLinkRows);
 
         // A later exact-scope publication explicitly supersedes an earlier
         // zero-result publication.
