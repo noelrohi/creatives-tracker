@@ -1,6 +1,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
+import { DAY_PATTERN } from "@/lib/day";
 import { shopifySyncRuns } from "@/schema/shopify";
 import {
   ATTRIBUTION_BUCKETS,
@@ -432,7 +433,9 @@ export const attributionRouter = router({
         "One store-day's net sales bucketed by the hour orders were placed, on the store's clock. 24 zero-filled rows.",
       ),
     )
-    .input(z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+    .input(
+      z.object({ day: z.string().regex(DAY_PATTERN, "Expected YYYY-MM-DD") }),
+    )
     .output(hourlySeriesOutputSchema)
     .query(async ({ input, ctx }) => {
       const store = await requireStore(ctx.organizationId);
