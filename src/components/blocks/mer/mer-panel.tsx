@@ -28,6 +28,8 @@ export type MerFilters = {
   to: string;
   teamId?: string;
   accountId?: string;
+  campaignIds?: string[];
+  adSetIds?: string[];
 };
 
 function InlineDelta({
@@ -68,6 +70,8 @@ export function MerSummary({
   to,
   teamId,
   accountId,
+  campaignIds,
+  adSetIds,
   format,
 }: MerFilters & { format?: (typeof FORMATS)[number] }) {
   const trpc = useTRPC();
@@ -78,6 +82,8 @@ export function MerSummary({
       to,
       teamId,
       accountId,
+      campaignIds,
+      adSetIds,
       format,
     }),
   );
@@ -88,6 +94,8 @@ export function MerSummary({
       to,
       teamId,
       accountId,
+      campaignIds,
+      adSetIds,
       format,
     }),
   );
@@ -279,7 +287,14 @@ export function MerSummary({
  * (`getMerAccountBreakdown` has no creative-format filter, so this table
  * always shows all formats.)
  */
-export function MerAccountBreakdown({ from, to, teamId, accountId }: MerFilters) {
+export function MerAccountBreakdown({
+  from,
+  to,
+  teamId,
+  accountId,
+  campaignIds,
+  adSetIds,
+}: MerFilters) {
   const trpc = useTRPC();
 
   const breakdown = useQuery(
@@ -288,6 +303,8 @@ export function MerAccountBreakdown({ from, to, teamId, accountId }: MerFilters)
       to,
       teamId,
       accountId,
+      campaignIds,
+      adSetIds,
     }),
   );
 

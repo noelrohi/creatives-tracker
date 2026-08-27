@@ -253,6 +253,7 @@ export function MultiSelectCombobox({
   placeholder,
   noun,
   nounPlural,
+  triggerClassName,
 }: {
   value: string[];
   onValueChange: (v: string[]) => void;
@@ -260,6 +261,7 @@ export function MultiSelectCombobox({
   placeholder: string;
   noun: string;
   nounPlural: string;
+  triggerClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   const sortedItems = [...items].sort((a, b) => a.name.localeCompare(b.name));
@@ -285,7 +287,10 @@ export function MultiSelectCombobox({
           role="combobox"
           aria-expanded={open}
           aria-label={`Filter by ${noun}`}
-          className="h-8 w-auto gap-1 border-none bg-muted/40 px-3 text-[13px] shadow-none hover:bg-muted/60"
+          className={cn(
+            "h-8 w-auto gap-1 border-none bg-muted/40 px-3 text-[13px] shadow-none hover:bg-muted/60",
+            triggerClassName,
+          )}
         >
           <span className="max-w-[200px] truncate">{label}</span>
           <ChevronsUpDown className="size-3 shrink-0 opacity-50" />
@@ -330,10 +335,12 @@ export function AdSetCombobox({
   value,
   onValueChange,
   adSets,
+  triggerClassName,
 }: {
   value: string[];
   onValueChange: (v: string[]) => void;
   adSets: { id: string; name: string }[];
+  triggerClassName?: string;
 }) {
   return (
     <MultiSelectCombobox
@@ -343,6 +350,7 @@ export function AdSetCombobox({
       placeholder="Ad Set"
       noun="ad set"
       nounPlural="ad sets"
+      triggerClassName={triggerClassName}
     />
   );
 }
@@ -351,10 +359,12 @@ export function CampaignCombobox({
   value,
   onValueChange,
   campaigns,
+  triggerClassName,
 }: {
   value: string[];
   onValueChange: (v: string[]) => void;
   campaigns: { id: string; name: string }[];
+  triggerClassName?: string;
 }) {
   return (
     <MultiSelectCombobox
@@ -364,6 +374,7 @@ export function CampaignCombobox({
       placeholder="Campaign"
       noun="campaign"
       nounPlural="campaigns"
+      triggerClassName={triggerClassName}
     />
   );
 }

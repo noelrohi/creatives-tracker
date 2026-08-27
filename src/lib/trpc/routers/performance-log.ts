@@ -8,6 +8,7 @@ import { ads } from "@/schema/ad";
 import { adSets } from "@/schema/ad-set";
 import { campaigns } from "@/schema/campaign";
 import { basePerformanceRowsOnly } from "@/lib/performance-rows";
+import { adSetScopeFilter, campaignScopeFilter } from "@/lib/ad-scope-sql";
 import {
   assertBaseDate,
   assertBreakdownRange,
@@ -311,6 +312,8 @@ export const performanceLogRouter = router({
         from: z.string(),
         to: z.string(),
         accountId: z.string().optional(),
+        campaignIds: z.array(z.string()).optional(),
+        adSetIds: z.array(z.string()).optional(),
         teamId: z.string().optional(),
         format: z.enum(["static", "video", "ugc", "carousel"]).optional(),
       }),
@@ -331,6 +334,8 @@ export const performanceLogRouter = router({
       const joinCreative = input.teamId || input.format
         ? sql`JOIN ad_creative ac ON ac.id = ad.ad_creative_id`
         : sql``;
+      const campaignFilter = campaignScopeFilter(input.campaignIds);
+      const adSetFilter = adSetScopeFilter(input.adSetIds);
 
       type Row = {
         label: string;
@@ -356,6 +361,8 @@ export const performanceLogRouter = router({
           AND ${dim} IS NOT NULL
           AND ${dim} != ''
           ${accountFilter}
+          ${campaignFilter}
+          ${adSetFilter}
           ${teamFilter}
           ${formatFilter}
         GROUP BY ${dim}
