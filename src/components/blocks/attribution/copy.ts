@@ -199,6 +199,23 @@ export const headerRail = {
     `${formatCount(orderCount)} ${orderCount === 1 ? "order" : "orders"}`,
 };
 
+/**
+ * The Shopify-style summary above the ledger: the store's own reading of the
+ * range, before any attribution. Figures come from the same orders the ledger
+ * ties out, so the two never disagree.
+ */
+export const shopifySummary = {
+  totalSales: "Total sales",
+  orders: "Orders",
+  averageOrder: "Average order",
+  refunds: "Refunds",
+  refundCount: (count: number) =>
+    `${formatCount(count)} ${count === 1 ? "refund" : "refunds"}`,
+  chartTitle: "Total sales",
+  error: "The sales summary didn't load.",
+  retry: "Try again",
+};
+
 const CHANNEL_BUCKETS: readonly AttributionBucket[] = [
   "meta",
   "google",

@@ -9,4 +9,14 @@ vi.mock("@iconify/react", () => ({
   Icon: () => null,
 }));
 
+// jsdom has no layout engine, so it doesn't implement ResizeObserver. Recharts'
+// ResponsiveContainer needs one to mount at all — this no-op stub is enough for
+// components under test to render without a real observer ever firing.
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+vi.stubGlobal("ResizeObserver", ResizeObserverStub);
+
 afterEach(() => cleanup());
