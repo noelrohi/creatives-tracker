@@ -457,6 +457,7 @@ export default function MetaDashboardPage() {
             <LeaderboardTable
               title="Top Performers"
               icon={<Trophy className="size-3.5 text-emerald-500" />}
+              description="Active creatives with at least $50 spend and 1.0x ROAS in the selected window."
               rows={topPerformers}
               isLoading={stats.isLoading}
               emptyMessage="No creatives with enough spend data yet"
@@ -467,6 +468,7 @@ export default function MetaDashboardPage() {
             <LeaderboardTable
               title="Needs Attention"
               icon={<AlertTriangle className="size-3.5 text-red-400" />}
+              description="Active ads with at least $25 spend and no conversions or ROAS below 1.0x. Only ads with enough spend or runtime to judge are shown."
               rows={bottomPerformers}
               isLoading={stats.isLoading}
               emptyMessage="Nothing urgent in this window"
@@ -478,6 +480,7 @@ export default function MetaDashboardPage() {
           <LeaderboardTable
             title="Surviving Creatives"
             icon={<Shield className="size-3.5 text-blue-500" />}
+            description="Active creatives with at least $50 lifetime spend, 1.0x ROAS, and 14 or more days of delivery. Top Performers are excluded."
             rows={survivingCreatives}
             isLoading={stats.isLoading}
             emptyMessage="No long-running creatives with profitable ROAS yet"
