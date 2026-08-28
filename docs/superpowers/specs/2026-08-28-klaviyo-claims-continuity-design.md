@@ -21,12 +21,22 @@ Two independent causes, both quantified:
 
 | Decision | Choice |
 | --- | --- |
-| Approach | **Rebind on supersession** (surgical) — not the full standing-backlog rewrite, not throughput-only. |
+| Approach | **Narrow the claims predicate (§0) + rebind on supersession (§1)** — not the full standing-backlog rewrite, not throughput-only. |
 | Cursor on rebind | Continue from the existing cursor; never reset. |
 | Refresh window | `CLAIM_REPLAY_LOOKBACK_DAYS` 14 → **3**. |
 | Coverage honesty | Panel caption **and** a distinct `claimsPending` gap bucket. |
 | Observability | Structured log on rebind; no schema change, no migration. |
 | Sync → matching | No change (see Out of scope). |
+
+## 0. Correction after recon (2026-08-28)
+
+The rebind rule below is necessary but **not sufficient**, discovered while planning:
+
+`verifyCurrentClaimAnchor` itself calls `verifyPublishedMatchFreshness` first (`match-freshness.ts:213-220`), so every claims gate runs the full publication predicate — which re-derives the Shopify projection and compares checksums, and therefore fails the moment any in-window order is mutated. Production's hourly ingest guarantees that: 1,308 orders were measured as touched since the latest evidence run, so **the current publication is already not-fresh**, and a rebind would find nothing fresher to rebind onto.
+
+**Root cause restated:** the claims flow enforces the wrong invariant. Publication freshness answers *"is it safe to publish new matching?"* — necessarily strict, because publishing writes authoritative attribution. Claims answer *"for this conversion event that a published run confirmed, what does Klaviyo say attributed it?"* — an immutable fact about a **Klaviyo event**. Whether Shopify orders mutated afterwards is irrelevant to it, and nothing downstream is endangered: the panel joins claims to *current* order results at read time, so a drifted Shopify projection cannot corrupt a claim.
+
+**Therefore the claims flow gates on a narrower predicate:** the bound match run is `published`, and this conversion's `klaviyo_event_match_result` in that run is unsuperseded (the check already at `match-freshness.ts:222-240`). The projection/checksum/fingerprint gate is dropped **for claims only** — `verifyPublishedMatchFreshness` keeps its current strictness for publication, which is its real job. Rebinding (below) is retained for the case it genuinely serves: a new publication supersedes the old run's results.
 
 ## 1. The rebind rule
 
