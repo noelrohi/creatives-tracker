@@ -406,6 +406,21 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
     expect(different).toEqual({ kind: "conflict" });
   });
 
+  it("rebinds a live graph to the requested current publication instead of conflicting", async () => {
+    const first = await publishMatchWorld();
+    const claimReplayId = await startGraph(first.matchRunId);
+    const second = await publishSecondMatchWorld();
+    const result = await repository.startOrResumeClaimReplay({
+      scope,
+      sourceRunId: "source-run-b",
+      matchRunId: second.runId,
+      now: new Date(),
+    });
+    expect(result).toEqual({ kind: "pending", claimReplayId });
+    const row = await graphRow(claimReplayId);
+    expect(row.checkpoint.matchRunId).toBe(second.runId);
+  });
+
   it("creates no graph for a missing or stale publication", async () => {
     const stale = await repository.startOrResumeClaimReplay({
       scope,

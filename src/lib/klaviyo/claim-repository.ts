@@ -249,6 +249,7 @@ export async function startOrResumeClaimReplay(input: {
         sourceRunId: klaviyoClaimReplayRuns.sourceRunId,
         matchRunId: klaviyoClaimReplayRuns.matchRunId,
         heartbeatAt: klaviyoClaimReplayRuns.heartbeatAt,
+        checkpoint: klaviyoClaimReplayRuns.checkpoint,
       })
       .from(klaviyoClaimReplayRuns)
       .where(
@@ -264,6 +265,21 @@ export async function startOrResumeClaimReplay(input: {
           running.sourceRunId === input.sourceRunId &&
           running.matchRunId === input.matchRunId
         ) {
+          return { kind: "pending" as const, claimReplayId: running.id };
+        }
+        // A live graph pointed at a replaced publication is healthy, just
+        // behind: rebind it to the requested run rather than reporting a
+        // conflict the supervisor would record as a failed stage.
+        assertExactClaimReplayCheckpoint(running.checkpoint);
+        const rebound = await rebindGraphLocked(
+          tx,
+          input.scope,
+          running.id,
+          running.checkpoint,
+          "start_rebind",
+          now,
+        );
+        if (rebound !== null && rebound.matchRunId === input.matchRunId) {
           return { kind: "pending" as const, claimReplayId: running.id };
         }
         return { kind: "conflict" as const };
