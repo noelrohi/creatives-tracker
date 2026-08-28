@@ -290,6 +290,42 @@ async function seedClaim(input: {
   );
 }
 
+/**
+ * Marks one conversion as already asked: a COMPLETE claim replay state,
+ * which is what the loader's coverage probe reads. Its result-anchor FK
+ * needs a klaviyo_event_match_result row for (match_run_id,
+ * conversion_event_id), and that row's selected-edge FK reuses the order
+ * result's candidate — for a confirmed conversion the event result and the
+ * order result select the very same edge, and the candidate table is
+ * unique on (run, event, order) so a second one cannot be inserted.
+ */
+async function seedCoveredConversion(input: {
+  eventId: string;
+  candidateId: string;
+  runId?: string;
+}): Promise<void> {
+  const runId = input.runId ?? "match-run-1";
+  await testPool!.query(
+    `INSERT INTO klaviyo_event_match_result
+       (id, organization_id, shopify_store_id, connection_id, run_id, event_id,
+        status, selected_candidate_id, selected_class, reason_codes,
+        published_at)
+     VALUES ($1 || '-evres', 'org-a', 'store-a', 'connection-a', $2, $1,
+       'confirmed', $3, 'deterministic', '[]', now())`,
+    [input.eventId, runId, input.candidateId],
+  );
+  await testPool!.query(
+    `INSERT INTO klaviyo_claim_replay_state
+       (id, organization_id, shopify_store_id, connection_id, source_run_id,
+        match_run_id, conversion_event_id, source_checksum, status,
+        reason_codes, attempted_at, completed_at)
+     VALUES ($1 || '-claim-state', 'org-a', 'store-a', 'connection-a',
+       'source-run-a', $2, $1, $1 || '-state-checksum', 'complete', '[]',
+       now(), now())`,
+    [input.eventId, runId],
+  );
+}
+
 async function seedMarketingObject(
   id: string,
   objectType: "campaign" | "flow",
@@ -310,7 +346,8 @@ async function seedMarketingObject(
  * - order-a  42.50 confirmed + campaign claim            -> email (campaign)
  * - order-f  30.00 confirmed + flow claim (last touch),
  *            older campaign claim, newer BOT campaign    -> email (flow)
- * - order-b  10.00 confirmed, no claims                  -> no_email_link
+ * - order-b  10.00 confirmed, no claims AND no claim
+ *            replay state — never asked                 -> claims_pending
  * - order-c  20.00 no current result                     -> not_evaluated
  * - order-d   5.00 no_klaviyo_event                      -> no_klaviyo_event
  * - order-e   7.25 duplicate_conversion_events           -> duplicate_flagged
@@ -413,7 +450,9 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
       campaignsRevenue: "42.50",
       flowsRevenue: "30.00",
     });
-    expect(summary.gaps.noEmailLink).toEqual({ orders: 1, revenue: "10.00" });
+    // order-b was never asked for claims, so it is pending, not no-link.
+    expect(summary.gaps.claimsPending).toEqual({ orders: 1, revenue: "10.00" });
+    expect(summary.gaps.noEmailLink).toEqual({ orders: 0, revenue: "0.00" });
     expect(summary.gaps.notEvaluated).toEqual({ orders: 1, revenue: "20.00" });
     expect(summary.gaps.noKlaviyoEvent).toEqual({ orders: 1, revenue: "5.00" });
     expect(summary.gaps.duplicateFlagged).toEqual({ orders: 1, revenue: "7.25" });
@@ -422,10 +461,48 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
     const total =
       Number(summary.email.revenue) +
       Number(summary.gaps.noEmailLink.revenue) +
+      Number(summary.gaps.claimsPending.revenue) +
       Number(summary.gaps.notEvaluated.revenue) +
       Number(summary.gaps.noKlaviyoEvent.revenue) +
       Number(summary.gaps.duplicateFlagged.revenue);
     expect(total).toBeCloseTo(114.75, 2);
+  });
+
+  it("separates orders whose claims have not been fetched from real no-link orders", async () => {
+    await seedAggregateWorld();
+    // order-b is confirmed with a conversion event and no claims at all —
+    // it used to be reported as "no email link"; it is really "not asked
+    // yet", and reporting the two together overstated the no-link bucket by
+    // the whole claims backlog.
+    let summary = await loadEmailAttribution({ scope, window, days });
+    expect(summary.gaps.claimsPending.orders).toBeGreaterThan(0);
+    expect(summary.claimCoverage.covered).toBeLessThan(
+      summary.claimCoverage.total,
+    );
+    // order-a, order-b and order-f are the confirmed orders carrying a
+    // conversion event; none of them has been asked yet.
+    expect(summary.claimCoverage).toEqual({ covered: 0, total: 3 });
+
+    const partitionTotal =
+      Number(summary.email.revenue) +
+      Number(summary.gaps.noEmailLink.revenue) +
+      Number(summary.gaps.claimsPending.revenue) +
+      Number(summary.gaps.notEvaluated.revenue) +
+      Number(summary.gaps.noKlaviyoEvent.revenue) +
+      Number(summary.gaps.duplicateFlagged.revenue);
+    expect(partitionTotal).toBeCloseTo(114.75, 2);
+
+    // Once order-b's conversion HAS been asked and came back with no
+    // campaign or flow, it becomes a genuine no-link order and coverage
+    // moves — the money never leaves the partition.
+    await seedCoveredConversion({
+      eventId: "event-b",
+      candidateId: "res-b-cand",
+    });
+    summary = await loadEmailAttribution({ scope, window, days });
+    expect(summary.gaps.claimsPending).toEqual({ orders: 0, revenue: "0.00" });
+    expect(summary.gaps.noEmailLink).toEqual({ orders: 1, revenue: "10.00" });
+    expect(summary.claimCoverage).toEqual({ covered: 1, total: 3 });
   });
 
   it("nets in-window refunds against the parent order's bucket and source", async () => {
@@ -454,6 +531,7 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
     const total =
       Number(summary.email.revenue) +
       Number(summary.gaps.noEmailLink.revenue) +
+      Number(summary.gaps.claimsPending.revenue) +
       Number(summary.gaps.notEvaluated.revenue) +
       Number(summary.gaps.noKlaviyoEvent.revenue) +
       Number(summary.gaps.duplicateFlagged.revenue);
@@ -552,6 +630,7 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
     const total =
       Number(summary.email.revenue) +
       Number(summary.gaps.noEmailLink.revenue) +
+      Number(summary.gaps.claimsPending.revenue) +
       Number(summary.gaps.notEvaluated.revenue) +
       Number(summary.gaps.noKlaviyoEvent.revenue) +
       Number(summary.gaps.duplicateFlagged.revenue);
@@ -560,12 +639,14 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
 
   it("nets a refund on a non-email-linked order against its gap bucket", async () => {
     await seedAggregateWorld();
-    // order-b (confirmed but claimless -> no_email_link) gives back 2.00.
+    // order-b (confirmed, never asked for claims -> claims_pending) gives
+    // back 2.00. The refund mirror shares BUCKET_CASE with the order
+    // partition, so it lands in the same pending bucket as its parent.
     await seedRefund("refund-b", "order-b", "2026-07-23", "2.00");
     const summary = await loadEmailAttribution({ scope, window, days });
 
     // 10.00 - 2.00 = 8.00; email revenue is untouched.
-    expect(summary.gaps.noEmailLink).toEqual({ orders: 1, revenue: "8.00" });
+    expect(summary.gaps.claimsPending).toEqual({ orders: 1, revenue: "8.00" });
     expect(summary.email.revenue).toBe("72.50");
   });
 
@@ -661,9 +742,18 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
       interactionOccurredAt: "2026-07-20T09:00:00Z",
       botClick: 1,
     });
+    // The conversion WAS asked (a complete claim state exists) — Klaviyo
+    // just answered with nothing but a bot click. That is a real no-link
+    // order, not a pending one.
+    await seedCoveredConversion({
+      eventId: "event-a",
+      candidateId: "res-a-cand",
+    });
     const summary = await loadEmailAttribution({ scope, window, days });
     expect(summary.email.orderCount).toBe(0);
     expect(summary.gaps.noEmailLink).toEqual({ orders: 1, revenue: "42.50" });
+    expect(summary.gaps.claimsPending).toEqual({ orders: 0, revenue: "0.00" });
+    expect(summary.claimCoverage).toEqual({ covered: 1, total: 1 });
   });
 
   it("returns empty aggregates for a window with no orders", async () => {

@@ -215,8 +215,10 @@ beforeEach(() => {
     klaviyoSays: null,
     sources: [],
     products: [],
+    claimCoverage: { covered: 0, total: 0 },
     gaps: {
       noEmailLink: { orders: 0, revenue: "0.00" },
+      claimsPending: { orders: 0, revenue: "0.00" },
       notEvaluated: { orders: 0, revenue: "0.00" },
       noKlaviyoEvent: { orders: 0, revenue: "0.00" },
       duplicateFlagged: { orders: 0, revenue: "0.00" },
