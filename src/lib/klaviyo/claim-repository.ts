@@ -136,6 +136,48 @@ async function finishGraphLocked(
 }
 
 /**
+ * Whether the bound run can still hand this graph anchors: it is published,
+ * and at least one of its event match results is unsuperseded. Both halves
+ * matter. The first covers a run that is missing or was never published; the
+ * second is the precise signal that a newer publication replaced this run's
+ * results — the run row itself keeps `status = 'published'` and only gains
+ * `superseded_at` when recountMatchRunCurrentness happens to have run, so
+ * status alone never notices, and the graph would walk an empty enumeration
+ * (selectNextConversion filters `run_id = checkpoint.matchRunId`) and finish
+ * "success" having done nothing.
+ *
+ * Deliberately NOT "a different run is now current": several published,
+ * unsuperseded runs coexist normally (rolling sync windows give consecutive
+ * passes different scope fingerprints), and an older run legitimately keeps
+ * current results for events outside the newer window. Yanking an in-flight
+ * graph off such a run would forfeit its post-cursor tail — conversions
+ * confirmed only there become unreachable.
+ */
+async function boundRunYieldsAnchors(
+  tx: KlaviyoStoreTransaction,
+  scope: KlaviyoConnectionScope,
+  matchRunId: string,
+): Promise<boolean> {
+  const published = await verifyClaimPublication({
+    scope,
+    matchRunId,
+    executor: tx,
+  });
+  if (!published) return false;
+  const [anchors] = await tx
+    .select({ count: sql<number>`count(*)::int` })
+    .from(klaviyoEventMatchResults)
+    .where(
+      and(
+        eq(klaviyoEventMatchResults.runId, matchRunId),
+        eq(klaviyoEventMatchResults.connectionId, scope.connectionId),
+        isNull(klaviyoEventMatchResults.supersededAt),
+      ),
+    );
+  return (anchors?.count ?? 0) > 0;
+}
+
+/**
  * Claims are immutable per-conversion facts keyed by conversion_event_id,
  * never by publication — so a graph whose run was replaced is not invalid,
  * merely pointed at yesterday's run. Rebind it to the current publication
@@ -154,6 +196,7 @@ async function rebindGraphLocked(
   claimReplayId: string,
   current: ClaimReplayCheckpoint,
   reason: string,
+  now: Date,
 ): Promise<ClaimReplayCheckpoint | null> {
   const target = await resolveCurrentPublishedMatchRun({ scope, executor: tx });
   if (target === null || target.id === current.matchRunId) return null;
@@ -168,7 +211,7 @@ async function rebindGraphLocked(
       sourceRunId: target.sourceRunId,
       matchRunId: target.id,
       checkpoint: rebound as unknown as Record<string, never>,
-      heartbeatAt: new Date(),
+      heartbeatAt: now,
     })
     .where(eq(klaviyoClaimReplayRuns.id, claimReplayId));
   console.info("klaviyo claim replay rebound", {
@@ -476,6 +519,16 @@ async function selectNextConversion(
   return row ? loadConversion(tx, scope, row.eventId) : null;
 }
 
+/**
+ * Known consequence of a mid-run rebind: this count, like both retry
+ * phases, filters on the graph's CURRENT binding, so states written under
+ * the binding it left are invisible here and the graph can report success
+ * while incomplete or failed conversions from before the rebind remain.
+ * Nothing is lost — a state that is not `complete` keeps its conversion in
+ * scope for the next graph, which refetches it — so this stays a reporting
+ * optimism, not a data gap, and is deliberately not widened: counting
+ * across bindings would also count states from unrelated older runs.
+ */
 async function unresolvedStateCount(
   tx: KlaviyoStoreTransaction,
   scope: KlaviyoConnectionScope,
@@ -626,31 +679,26 @@ export async function processClaimBatch(
         }
         assertExactClaimReplayCheckpoint(graph.checkpoint);
         let current = graph.checkpoint;
-        // Anchors are enumerated on the bound run, so a graph left pointed
-        // at a replaced publication walks an empty set and finishes having
-        // done no work — the replaced run keeps status 'published', so a
-        // publication check alone never notices. Move to the current
-        // publication whenever it differs, keeping the cursor, and stale
-        // only when the bound run is not published and there is nothing to
-        // move onto.
-        const rebound = await rebindGraphLocked(
-          tx,
-          input.scope,
-          input.claimReplayId,
-          current,
-          "publication_replaced",
-        );
-        if (rebound !== null) {
-          current = rebound;
-        } else if (
-          !(await verifyClaimPublication({
-            scope: input.scope,
-            matchRunId: current.matchRunId,
-            executor: tx,
-          }))
+        // A bound run that can no longer yield anchors is not a dead graph,
+        // only one pointed at yesterday's run: move it to the current
+        // publication, keeping the cursor, and stale only when there is
+        // nothing to move onto.
+        if (
+          !(await boundRunYieldsAnchors(tx, input.scope, current.matchRunId))
         ) {
-          await finishGraphLocked(tx, input.claimReplayId, "stale", null);
-          return { kind: "stale" as const };
+          const rebound = await rebindGraphLocked(
+            tx,
+            input.scope,
+            input.claimReplayId,
+            current,
+            "bound_run_yields_no_anchors",
+            now(),
+          );
+          if (rebound === null) {
+            await finishGraphLocked(tx, input.claimReplayId, "stale", null);
+            return { kind: "stale" as const };
+          }
+          current = rebound;
         }
 
         if (current.stage === "handoff") {
@@ -711,13 +759,20 @@ export async function processClaimBatch(
         });
         if (!anchor.fresh) {
           // A replaced publication re-confirms the same events; rebind and
-          // re-ask before concluding this conversion is gone.
+          // re-ask before concluding this conversion is gone. Defence in
+          // depth rather than a live path: selectNextConversion already
+          // filters superseded results, and publishing takes the same
+          // store→connection locks this transaction holds, so an anchor
+          // cannot be superseded between enumeration and this check. The
+          // reachable equivalents are the preflight and commit arms below,
+          // which run in later transactions.
           const rebound = await rebindGraphLocked(
             tx,
             input.scope,
             input.claimReplayId,
             current,
             anchor.reason,
+            now(),
           );
           if (rebound !== null) {
             current = rebound;
@@ -872,6 +927,7 @@ export async function processClaimBatch(
               input.claimReplayId,
               bound,
               "publication_not_published",
+              now(),
             );
             if (rebound === null) return { ok: false as const };
             bound = rebound;
@@ -889,6 +945,7 @@ export async function processClaimBatch(
               input.claimReplayId,
               bound,
               anchor.reason,
+              now(),
             );
             if (rebound === null) return { ok: false as const };
             bound = rebound;
@@ -980,6 +1037,7 @@ export async function processClaimBatch(
             input.claimReplayId,
             current,
             "publication_not_published",
+            now(),
           );
           if (rebound === null) {
             await finishGraphLocked(tx, input.claimReplayId, "stale", null);
@@ -987,12 +1045,35 @@ export async function processClaimBatch(
           }
           current = rebound;
         }
-        const anchor = await verifyCurrentClaimAnchor({
+        let anchor = await verifyCurrentClaimAnchor({
           scope: input.scope,
           matchRunId: current.matchRunId,
           conversionEventRowId: conversion.eventRowId,
           executor: tx,
         });
+        if (!anchor.fresh) {
+          // A publication that landed while this conversion was being
+          // fetched supersedes the old run's event result; rebind and
+          // re-ask, or the claims just fetched are discarded even though
+          // the current publication still confirms the conversion.
+          const rebound = await rebindGraphLocked(
+            tx,
+            input.scope,
+            input.claimReplayId,
+            current,
+            anchor.reason,
+            now(),
+          );
+          if (rebound !== null) {
+            current = rebound;
+            anchor = await verifyCurrentClaimAnchor({
+              scope: input.scope,
+              matchRunId: current.matchRunId,
+              conversionEventRowId: conversion.eventRowId,
+              executor: tx,
+            });
+          }
+        }
         if (!anchor.fresh) {
           const skipped: ClaimReplayCheckpoint = {
             ...current,
