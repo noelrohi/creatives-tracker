@@ -141,10 +141,14 @@ async function finishGraphLocked(
  * matter. The first covers a run that is missing or was never published; the
  * second is the precise signal that a newer publication replaced this run's
  * results — the run row itself keeps `status = 'published'` and only gains
- * `superseded_at` when recountMatchRunCurrentness happens to have run, so
- * status alone never notices, and the graph would walk an empty enumeration
- * (selectNextConversion filters `run_id = checkpoint.matchRunId`) and finish
- * "success" having done nothing.
+ * `superseded_at` once recountMatchRunCurrentness runs, which it always does,
+ * unconditionally, at the end of every publishMatchRun (match-repository.ts).
+ * That makes the run-row flag reliable in practice, but this function
+ * deliberately doesn't lean on it — it probes the event results directly, so
+ * nothing here depends on that invariant holding, and the graph would
+ * otherwise walk an empty enumeration (selectNextConversion filters
+ * `run_id = checkpoint.matchRunId`) and finish "success" having done
+ * nothing.
  *
  * Deliberately NOT "a different run is now current": several published,
  * unsuperseded runs coexist normally (rolling sync windows give consecutive
@@ -164,8 +168,12 @@ async function boundRunYieldsAnchors(
     executor: tx,
   });
   if (!published) return false;
-  const [anchors] = await tx
-    .select({ count: sql<number>`count(*)::int` })
+  // Neither available index lets the planner jump straight to "this run's
+  // unsuperseded rows", so a plain count(*) would scan every event result
+  // the run has — thousands in production — on every selection transaction
+  // (up to 25 per batch). An existence probe stops at the first match.
+  const [anchor] = await tx
+    .select({ exists: sql<number>`1` })
     .from(klaviyoEventMatchResults)
     .where(
       and(
@@ -173,8 +181,9 @@ async function boundRunYieldsAnchors(
         eq(klaviyoEventMatchResults.connectionId, scope.connectionId),
         isNull(klaviyoEventMatchResults.supersededAt),
       ),
-    );
-  return (anchors?.count ?? 0) > 0;
+    )
+    .limit(1);
+  return anchor !== undefined;
 }
 
 /**
@@ -780,8 +789,12 @@ export async function processClaimBatch(
           // filters superseded results, and publishing takes the same
           // store→connection locks this transaction holds, so an anchor
           // cannot be superseded between enumeration and this check. The
-          // reachable equivalents are the preflight and commit arms below,
-          // which run in later transactions.
+          // same lock ordering rules out the other way an event result goes
+          // missing: privacy erasure (shopify-privacy.ts) takes `FOR UPDATE`
+          // on klaviyo_connection before it deletes an event's match results
+          // outright, so an anchor cannot be erased out from under this
+          // check either. The reachable equivalents are the preflight and
+          // commit arms below, which run in later transactions.
           const rebound = await rebindGraphLocked(
             tx,
             input.scope,
