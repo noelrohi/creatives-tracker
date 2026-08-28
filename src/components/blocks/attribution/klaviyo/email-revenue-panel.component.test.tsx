@@ -90,8 +90,10 @@ function summary(
         orderRevenue: "430.00",
       },
     ],
+    claimCoverage: { covered: 542, total: 579 },
     gaps: {
       noEmailLink: { orders: 480, revenue: "8300.00" },
+      claimsPending: { orders: 37, revenue: "640.00" },
       notEvaluated: { orders: 22, revenue: "410.00" },
       noKlaviyoEvent: { orders: 14, revenue: "290.00" },
       duplicateFlagged: { orders: 2, revenue: "18.00" },
@@ -128,6 +130,36 @@ describe("EmailRevenueHeadline", () => {
     expect(screen.getByTestId("klaviyo-says-delta")).toHaveTextContent(
       "unconfirmed",
     );
+  });
+
+  it("captions the email KPI while claim coverage is partial", () => {
+    // The figure is still filling in; saying so beats letting the owner
+    // read a partial number as a finished one.
+    render(
+      <EmailRevenueHeadline
+        summary={summary({ claimCoverage: { covered: 124, total: 1184 } })}
+        shopifyTotal="10000.00"
+        currency="USD"
+        dateFrom="2026-06-01"
+        dateTo="2026-08-01"
+      />,
+    );
+    expect(screen.getByTestId("email-coverage")).toHaveTextContent(
+      "124/1,184 checked",
+    );
+  });
+
+  it("drops the caption once coverage is complete", () => {
+    render(
+      <EmailRevenueHeadline
+        summary={summary({ claimCoverage: { covered: 1184, total: 1184 } })}
+        shopifyTotal="10000.00"
+        currency="USD"
+        dateFrom="2026-06-01"
+        dateTo="2026-08-01"
+      />,
+    );
+    expect(screen.queryByTestId("email-coverage")).toBeNull();
   });
 
   it("survives report timestamps arriving as ISO strings off the wire", () => {
@@ -305,6 +337,24 @@ describe("EmailRevenueGaps", () => {
     expect(
       screen.getByTestId("gap-unmatched-href").getAttribute("href"),
     ).toContain("view=unmatched");
+  });
+
+  it("reports pending-claim orders separately from no-link orders", () => {
+    // "Not asked yet" is not a finding about the email program; showing it
+    // inside the no-link bucket read as one.
+    render(
+      <EmailRevenueGaps
+        summary={summary()}
+        currency="USD"
+        dateFrom="2026-08-01"
+        dateTo="2026-08-24"
+      />,
+    );
+    const pending = screen.getByTestId("gap-claims-pending");
+    expect(pending).toBeInTheDocument();
+    expect(pending).toHaveTextContent("37 orders not checked for email links yet");
+    expect(pending).toHaveTextContent("$640.00");
+    expect(screen.getByTestId("gap-no-email-link")).toHaveTextContent("480");
   });
 });
 

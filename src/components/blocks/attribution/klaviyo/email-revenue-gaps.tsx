@@ -49,6 +49,14 @@ export function EmailRevenueGaps({
       ),
     },
     {
+      key: "claims-pending",
+      text: copy.gapClaimsPending(gaps.claimsPending.orders),
+      revenue: gaps.claimsPending.revenue,
+      // No Lab filter expresses "claims not fetched"; confirmed orders is
+      // the closest honest slice to land on.
+      href: labUrl({ view: "orders", orderStatus: "confirmed" }, range),
+    },
+    {
       key: "not-evaluated",
       text: copy.gapNotEvaluated(gaps.notEvaluated.orders),
       revenue: gaps.notEvaluated.revenue,

@@ -55,8 +55,15 @@ export type EmailAttributionSummary = {
   } | null;
   sources: EmailAttributionSource[];
   products: EmailAttributionProduct[];
+  /**
+   * Of the confirmed orders in range carrying a conversion event, how many
+   * have had their claims fetched. `covered < total` means the panel's
+   * email figure is still filling in, not that email did nothing.
+   */
+  claimCoverage: { covered: number; total: number };
   gaps: {
     noEmailLink: EmailAttributionBucket;
+    claimsPending: EmailAttributionBucket;
     notEvaluated: EmailAttributionBucket;
     noKlaviyoEvent: EmailAttributionBucket;
     duplicateFlagged: EmailAttributionBucket;
@@ -77,6 +84,18 @@ const QUALIFYING_CLAIM = sql`
      and c.conversion_event_id = r.selected_event_id
      and (c.campaign_object_id is not null or c.flow_object_id is not null)
      and c.bot_click is distinct from 1`;
+
+/**
+ * A conversion whose claims have never been fetched. Distinguishing this
+ * from a real "no campaign/flow link" matters: an unfetched order is not
+ * evidence that email did nothing, and conflating them overstated the
+ * no-link bucket by the size of the claims backlog.
+ */
+const CLAIMS_COVERED = sql`
+  select 1 from klaviyo_claim_replay_state s
+   where s.connection_id = r.connection_id
+     and s.conversion_event_id = r.selected_event_id
+     and s.status = 'complete'`;
 
 /**
  * Last non-bot touch decides campaign-vs-flow assignment. Ties on
@@ -109,6 +128,11 @@ const BUCKET_CASE = sql`
     when r.status = 'confirmed'
          and r.selected_event_id is not null
          and exists (${QUALIFYING_CLAIM}) then 'email_linked'
+    -- Below email_linked deliberately: a qualifying claim is proof Klaviyo
+    -- credited a campaign, and proof outranks coverage status.
+    when r.status = 'confirmed'
+         and r.selected_event_id is not null
+         and not exists (${CLAIMS_COVERED}) then 'claims_pending'
     else 'no_email_link'
   end`;
 
@@ -436,6 +460,26 @@ export async function loadEmailAttribution(input: {
        and e.occurred_at < ${utcTimestamp(window.to)}
        and (er.status is null or er.status <> 'confirmed')`);
 
+  // 7. Claim coverage over the range's confirmed orders: how many have been
+  // asked at all. Served by the partial index
+  // (connection_id, conversion_event_id) WHERE status = 'complete'.
+  const coverage = await db.execute<{ covered: number; total: number }>(sql`
+    select count(*) filter (where exists (${CLAIMS_COVERED}))::int as covered,
+           count(*)::int as total
+      from shopify_order o
+      join klaviyo_order_match_result r
+        on r.organization_id = o.organization_id
+       and r.shopify_store_id = o.store_id
+       and r.connection_id = ${scope.connectionId}
+       and r.order_id = o.id
+       and r.superseded_at is null
+       and r.status = 'confirmed'
+       and r.selected_event_id is not null
+     where o.organization_id = ${scope.organizationId}
+       and o.store_id = ${scope.storeId}
+       and o.order_created_at >= ${utcTimestamp(window.from)}
+       and o.order_created_at < ${utcTimestamp(window.to)}`);
+
   return {
     email: {
       revenue: head?.revenue ?? "0.00",
@@ -482,8 +526,13 @@ export async function loadEmailAttribution(input: {
       orderCount: row.order_count,
       orderRevenue: row.order_revenue,
     })),
+    claimCoverage: {
+      covered: coverage.rows[0]?.covered ?? 0,
+      total: coverage.rows[0]?.total ?? 0,
+    },
     gaps: {
       noEmailLink: bucket("no_email_link"),
+      claimsPending: bucket("claims_pending"),
       notEvaluated: bucket("not_evaluated"),
       noKlaviyoEvent: bucket("no_klaviyo_event"),
       duplicateFlagged: bucket("duplicate_flagged"),

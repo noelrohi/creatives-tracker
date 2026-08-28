@@ -23,8 +23,9 @@ import {
   type RedactedInteractionDetail,
 } from "@/lib/klaviyo/claims";
 import {
+  resolveCurrentPublishedMatchRun,
+  verifyClaimPublication,
   verifyCurrentClaimAnchor,
-  verifyPublishedMatchFreshness,
   type SafeMatchStaleReason,
 } from "@/lib/klaviyo/match-freshness";
 import {
@@ -41,6 +42,7 @@ import {
 } from "@/schema/klaviyo-claim";
 import {
   klaviyoEventMatchResults,
+  klaviyoMatchRuns,
   klaviyoOrderMatchResults,
 } from "@/schema/klaviyo-match";
 
@@ -134,12 +136,111 @@ async function finishGraphLocked(
 }
 
 /**
+ * Whether the bound run can still hand this graph anchors: it is published,
+ * and at least one of its event match results is unsuperseded. Both halves
+ * matter. The first covers a run that is missing or was never published; the
+ * second is the precise signal that a newer publication replaced this run's
+ * results — the run row itself keeps `status = 'published'` and only gains
+ * `superseded_at` once recountMatchRunCurrentness runs, which it always does,
+ * unconditionally, at the end of every publishMatchRun (match-repository.ts).
+ * That makes the run-row flag reliable in practice, but this function
+ * deliberately doesn't lean on it — it probes the event results directly, so
+ * nothing here depends on that invariant holding, and the graph would
+ * otherwise walk an empty enumeration (selectNextConversion filters
+ * `run_id = checkpoint.matchRunId`) and finish "success" having done
+ * nothing.
+ *
+ * Deliberately NOT "a different run is now current": several published,
+ * unsuperseded runs coexist normally (rolling sync windows give consecutive
+ * passes different scope fingerprints), and an older run legitimately keeps
+ * current results for events outside the newer window. Yanking an in-flight
+ * graph off such a run would forfeit its post-cursor tail — conversions
+ * confirmed only there become unreachable.
+ */
+async function boundRunYieldsAnchors(
+  tx: KlaviyoStoreTransaction,
+  scope: KlaviyoConnectionScope,
+  matchRunId: string,
+): Promise<boolean> {
+  const published = await verifyClaimPublication({
+    scope,
+    matchRunId,
+    executor: tx,
+  });
+  if (!published) return false;
+  // Neither available index lets the planner jump straight to "this run's
+  // unsuperseded rows", so a plain count(*) would scan every event result
+  // the run has — thousands in production — on every selection transaction
+  // (up to 25 per batch). An existence probe stops at the first match.
+  const [anchor] = await tx
+    .select({ exists: sql<number>`1` })
+    .from(klaviyoEventMatchResults)
+    .where(
+      and(
+        eq(klaviyoEventMatchResults.runId, matchRunId),
+        eq(klaviyoEventMatchResults.connectionId, scope.connectionId),
+        isNull(klaviyoEventMatchResults.supersededAt),
+      ),
+    )
+    .limit(1);
+  return anchor !== undefined;
+}
+
+/**
+ * Claims are immutable per-conversion facts keyed by conversion_event_id,
+ * never by publication — so a graph whose run was replaced is not invalid,
+ * merely pointed at yesterday's run. Rebind it to the current publication
+ * and continue from the same cursor. Returns null when there is nothing
+ * fresher to rebind onto, and the caller must stale.
+ *
+ * The cursor is deliberately preserved: an event the new publication
+ * confirms behind the cursor is skipped by THIS graph but stays in scope
+ * for the next one, because "no complete claim state" is always in scope
+ * regardless of age. Resetting instead would re-walk from the start on
+ * every publication and never finish.
+ */
+async function rebindGraphLocked(
+  tx: KlaviyoStoreTransaction,
+  scope: KlaviyoConnectionScope,
+  claimReplayId: string,
+  current: ClaimReplayCheckpoint,
+  reason: string,
+  now: Date,
+): Promise<ClaimReplayCheckpoint | null> {
+  const target = await resolveCurrentPublishedMatchRun({ scope, executor: tx });
+  if (target === null || target.id === current.matchRunId) return null;
+  const rebound: ClaimReplayCheckpoint = {
+    ...current,
+    sourceRunId: target.sourceRunId,
+    matchRunId: target.id,
+  };
+  await tx
+    .update(klaviyoClaimReplayRuns)
+    .set({
+      sourceRunId: target.sourceRunId,
+      matchRunId: target.id,
+      checkpoint: rebound as unknown as Record<string, never>,
+      heartbeatAt: now,
+    })
+    .where(eq(klaviyoClaimReplayRuns.id, claimReplayId));
+  console.info("klaviyo claim replay rebound", {
+    connectionId: scope.connectionId,
+    claimReplayId,
+    fromMatchRunId: current.matchRunId,
+    toMatchRunId: target.id,
+    reason,
+  });
+  return rebound;
+}
+
+/**
  * Store→connection-locked start: inspects the one-running graph before any
  * no-work return, fixed-code reconciles an expired graph, reuses a live
- * identical graph, proves full dual-source publication freshness, and only
- * then creates a database-owned claim replay ID. A fresh empty publication
- * returns typed no_work without provider work; a stale or fully replaced
- * nonempty match creates no graph.
+ * identical graph, proves the claims predicate — the run is published and
+ * still holds an unsuperseded anchor — and only then creates a
+ * database-owned claim replay ID. An empty publication returns typed
+ * no_work without provider work; an unpublished, missing, or fully replaced
+ * match creates no graph.
  */
 export async function startOrResumeClaimReplay(input: {
   scope: KlaviyoConnectionScope;
@@ -158,6 +259,7 @@ export async function startOrResumeClaimReplay(input: {
         sourceRunId: klaviyoClaimReplayRuns.sourceRunId,
         matchRunId: klaviyoClaimReplayRuns.matchRunId,
         heartbeatAt: klaviyoClaimReplayRuns.heartbeatAt,
+        checkpoint: klaviyoClaimReplayRuns.checkpoint,
       })
       .from(klaviyoClaimReplayRuns)
       .where(
@@ -175,25 +277,67 @@ export async function startOrResumeClaimReplay(input: {
         ) {
           return { kind: "pending" as const, claimReplayId: running.id };
         }
+        // A live graph pointed at a replaced publication is healthy, just
+        // behind: rebind it to the requested run rather than reporting a
+        // conflict the supervisor would record as a failed stage.
+        assertExactClaimReplayCheckpoint(running.checkpoint);
+        const rebound = await rebindGraphLocked(
+          tx,
+          input.scope,
+          running.id,
+          running.checkpoint,
+          "start_rebind",
+          now,
+        );
+        if (rebound !== null && rebound.matchRunId === input.matchRunId) {
+          return { kind: "pending" as const, claimReplayId: running.id };
+        }
         return { kind: "conflict" as const };
       }
       await finishGraphLocked(tx, running.id, "failed", CLAIM_LEASE_ERROR);
     }
 
-    const freshness = await verifyPublishedMatchFreshness({
-      scope: input.scope,
-      matchRunId: input.matchRunId,
-      executor: tx,
-    });
-    if (!freshness.fresh) {
-      return { kind: "stale" as const, reason: freshness.reason };
+    // Creation is part of the CLAIMS flow, so it gates on the claims
+    // predicate (spec §0), not the publication one: the run is published,
+    // and — the guard immediately below — it still has an unsuperseded
+    // conversion anchor. Claims are immutable facts about a Klaviyo event,
+    // so a Shopify projection that drifted after publication cannot
+    // invalidate them; in production hourly ingest drifts it continuously,
+    // so re-deriving the projection here would let a graph be created only
+    // in the seconds right after matching publishes and would otherwise
+    // record `claims: stale`, costing the whole night's backlog — which the
+    // design routes through one graph. Everything creation actually needs is
+    // three plain columns on the run row, none of which the derivation
+    // touches.
+    const [matchRun] = await tx
+      .select({
+        status: klaviyoMatchRuns.status,
+        sourceRunId: klaviyoMatchRuns.sourceRunId,
+        expectedOrderCount: klaviyoMatchRuns.expectedOrderCount,
+        expectedEventCount: klaviyoMatchRuns.expectedEventCount,
+      })
+      .from(klaviyoMatchRuns)
+      .where(
+        and(
+          eq(klaviyoMatchRuns.id, input.matchRunId),
+          eq(klaviyoMatchRuns.organizationId, input.scope.organizationId),
+          eq(klaviyoMatchRuns.storeId, input.scope.storeId),
+          eq(klaviyoMatchRuns.connectionId, input.scope.connectionId),
+        ),
+      )
+      .limit(1);
+    if (!matchRun) {
+      return { kind: "stale" as const, reason: "run_missing" as const };
     }
-    if (freshness.matchRun.sourceRunId !== input.sourceRunId) {
+    if (matchRun.status !== "published") {
+      return { kind: "stale" as const, reason: "run_not_published" as const };
+    }
+    if (matchRun.sourceRunId !== input.sourceRunId) {
       return { kind: "stale" as const, reason: "fingerprint_mismatch" as const };
     }
     if (
-      freshness.matchRun.expectedEventCount === 0 &&
-      freshness.matchRun.expectedOrderCount === 0
+      (matchRun.expectedEventCount ?? 0) === 0 &&
+      (matchRun.expectedOrderCount ?? 0) === 0
     ) {
       return { kind: "no_work" as const, matchRunId: input.matchRunId };
     }
@@ -428,6 +572,16 @@ async function selectNextConversion(
   return row ? loadConversion(tx, scope, row.eventId) : null;
 }
 
+/**
+ * Known consequence of a mid-run rebind: this count, like both retry
+ * phases, filters on the graph's CURRENT binding, so states written under
+ * the binding it left are invisible here and the graph can report success
+ * while incomplete or failed conversions from before the rebind remain.
+ * Nothing is lost — a state that is not `complete` keeps its conversion in
+ * scope for the next graph, which refetches it — so this stays a reporting
+ * optimism, not a data gap, and is deliberately not widened: counting
+ * across bindings would also count states from unrelated older runs.
+ */
 async function unresolvedStateCount(
   tx: KlaviyoStoreTransaction,
   scope: KlaviyoConnectionScope,
@@ -578,14 +732,26 @@ export async function processClaimBatch(
         }
         assertExactClaimReplayCheckpoint(graph.checkpoint);
         let current = graph.checkpoint;
-        const freshness = await verifyPublishedMatchFreshness({
-          scope: input.scope,
-          matchRunId: current.matchRunId,
-          executor: tx,
-        });
-        if (!freshness.fresh) {
-          await finishGraphLocked(tx, input.claimReplayId, "stale", null);
-          return { kind: "stale" as const };
+        // A bound run that can no longer yield anchors is not a dead graph,
+        // only one pointed at yesterday's run: move it to the current
+        // publication, keeping the cursor, and stale only when there is
+        // nothing to move onto.
+        if (
+          !(await boundRunYieldsAnchors(tx, input.scope, current.matchRunId))
+        ) {
+          const rebound = await rebindGraphLocked(
+            tx,
+            input.scope,
+            input.claimReplayId,
+            current,
+            "bound_run_yields_no_anchors",
+            now(),
+          );
+          if (rebound === null) {
+            await finishGraphLocked(tx, input.claimReplayId, "stale", null);
+            return { kind: "stale" as const };
+          }
+          current = rebound;
         }
 
         if (current.stage === "handoff") {
@@ -638,12 +804,43 @@ export async function processClaimBatch(
           conversion = await selectNextConversion(tx, input.scope, current);
         }
 
-        const anchor = await verifyCurrentClaimAnchor({
+        let anchor = await verifyCurrentClaimAnchor({
           scope: input.scope,
           matchRunId: current.matchRunId,
           conversionEventRowId: conversion.eventRowId,
           executor: tx,
         });
+        if (!anchor.fresh) {
+          // A replaced publication re-confirms the same events; rebind and
+          // re-ask before concluding this conversion is gone. Defence in
+          // depth rather than a live path: selectNextConversion already
+          // filters superseded results, and publishing takes the same
+          // store→connection locks this transaction holds, so an anchor
+          // cannot be superseded between enumeration and this check. The
+          // same lock ordering rules out the other way an event result goes
+          // missing: privacy erasure (shopify-privacy.ts) takes `FOR UPDATE`
+          // on klaviyo_connection before it deletes an event's match results
+          // outright, so an anchor cannot be erased out from under this
+          // check either. The reachable equivalents are the preflight and
+          // commit arms below, which run in later transactions.
+          const rebound = await rebindGraphLocked(
+            tx,
+            input.scope,
+            input.claimReplayId,
+            current,
+            anchor.reason,
+            now(),
+          );
+          if (rebound !== null) {
+            current = rebound;
+            anchor = await verifyCurrentClaimAnchor({
+              scope: input.scope,
+              matchRunId: current.matchRunId,
+              conversionEventRowId: conversion.eventRowId,
+              executor: tx,
+            });
+          }
+        }
         if (!anchor.fresh) {
           if (anchor.reason === "publication_stale") {
             await finishGraphLocked(tx, input.claimReplayId, "stale", null);
@@ -768,18 +965,54 @@ export async function processClaimBatch(
           ) {
             return { ok: false as const };
           }
-          const freshness = await verifyPublishedMatchFreshness({
+          // Non-terminal by design: a stop only ends this conversion's
+          // referenced fetches. It still rebinds, because otherwise a
+          // publication that lands mid-fetch strips every interaction
+          // detail and hands the commit an anchor it would skip on,
+          // discarding work the new publication still confirms.
+          let bound = graph.checkpoint;
+          if (
+            !(await verifyClaimPublication({
+              scope: input.scope,
+              matchRunId: bound.matchRunId,
+              executor: tx,
+            }))
+          ) {
+            const rebound = await rebindGraphLocked(
+              tx,
+              input.scope,
+              input.claimReplayId,
+              bound,
+              "publication_not_published",
+              now(),
+            );
+            if (rebound === null) return { ok: false as const };
+            bound = rebound;
+          }
+          let anchor = await verifyCurrentClaimAnchor({
             scope: input.scope,
-            matchRunId: graph.checkpoint.matchRunId,
-            executor: tx,
-          });
-          if (!freshness.fresh) return { ok: false as const };
-          const anchor = await verifyCurrentClaimAnchor({
-            scope: input.scope,
-            matchRunId: graph.checkpoint.matchRunId,
+            matchRunId: bound.matchRunId,
             conversionEventRowId: conversion.eventRowId,
             executor: tx,
           });
+          if (!anchor.fresh) {
+            const rebound = await rebindGraphLocked(
+              tx,
+              input.scope,
+              input.claimReplayId,
+              bound,
+              anchor.reason,
+              now(),
+            );
+            if (rebound === null) return { ok: false as const };
+            bound = rebound;
+            anchor = await verifyCurrentClaimAnchor({
+              scope: input.scope,
+              matchRunId: bound.matchRunId,
+              conversionEventRowId: conversion.eventRowId,
+              executor: tx,
+            });
+          }
           if (!anchor.fresh) return { ok: false as const };
           const gate = await verifyGate(input.scope);
           return { ok: gate.ready };
@@ -841,28 +1074,63 @@ export async function processClaimBatch(
           throw new Error("Klaviyo claim graph is not running");
         }
         assertExactClaimReplayCheckpoint(graph.checkpoint);
-        const current = graph.checkpoint;
+        let current = graph.checkpoint;
         if (
           current.stage !== "fetching" ||
           current.attemptingConversionEventId !== conversion.eventRowId
         ) {
           throw new Error("Klaviyo claim attempt tuple moved");
         }
-        const freshness = await verifyPublishedMatchFreshness({
-          scope: input.scope,
-          matchRunId: current.matchRunId,
-          executor: tx,
-        });
-        if (!freshness.fresh) {
-          await finishGraphLocked(tx, input.claimReplayId, "stale", null);
-          return { kind: "stale" as const };
+        if (
+          !(await verifyClaimPublication({
+            scope: input.scope,
+            matchRunId: current.matchRunId,
+            executor: tx,
+          }))
+        ) {
+          const rebound = await rebindGraphLocked(
+            tx,
+            input.scope,
+            input.claimReplayId,
+            current,
+            "publication_not_published",
+            now(),
+          );
+          if (rebound === null) {
+            await finishGraphLocked(tx, input.claimReplayId, "stale", null);
+            return { kind: "stale" as const };
+          }
+          current = rebound;
         }
-        const anchor = await verifyCurrentClaimAnchor({
+        let anchor = await verifyCurrentClaimAnchor({
           scope: input.scope,
           matchRunId: current.matchRunId,
           conversionEventRowId: conversion.eventRowId,
           executor: tx,
         });
+        if (!anchor.fresh) {
+          // A publication that landed while this conversion was being
+          // fetched supersedes the old run's event result; rebind and
+          // re-ask, or the claims just fetched are discarded even though
+          // the current publication still confirms the conversion.
+          const rebound = await rebindGraphLocked(
+            tx,
+            input.scope,
+            input.claimReplayId,
+            current,
+            anchor.reason,
+            now(),
+          );
+          if (rebound !== null) {
+            current = rebound;
+            anchor = await verifyCurrentClaimAnchor({
+              scope: input.scope,
+              matchRunId: current.matchRunId,
+              conversionEventRowId: conversion.eventRowId,
+              executor: tx,
+            });
+          }
+        }
         if (!anchor.fresh) {
           const skipped: ClaimReplayCheckpoint = {
             ...current,
@@ -1232,12 +1500,15 @@ export async function recoverExhaustedClaimBatch(input: {
     assertExactClaimReplayCheckpoint(graph.checkpoint);
     const current = graph.checkpoint;
 
-    const freshness = await verifyPublishedMatchFreshness({
-      scope: input.scope,
-      matchRunId: current.matchRunId,
-      executor: tx,
-    });
-    if (!freshness.fresh) {
+    // Terminal by design: retries are already exhausted, so this path never
+    // rebinds — it only records the exact attempt's fate and finalizes.
+    if (
+      !(await verifyClaimPublication({
+        scope: input.scope,
+        matchRunId: current.matchRunId,
+        executor: tx,
+      }))
+    ) {
       await finishGraphLocked(tx, input.claimReplayId, "stale", null);
       return { kind: "stale" as const };
     }

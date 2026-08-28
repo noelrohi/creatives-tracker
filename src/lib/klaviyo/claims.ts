@@ -304,11 +304,16 @@ export type ClaimReplayCheckpoint = {
 };
 
 export const MAX_CLAIM_CONVERSIONS_PER_BATCH = 5;
-// Klaviyo attribution for a conversion is immutable once its attribution
-// windows close; 14 days is a conservative bound on that closure. Anchors
+// Klaviyo attribution for a conversion is fixed once its attribution
+// windows close; 3 days is a generous bound on a late-resolving
+// attribution link, and ~5x cheaper than the 14 days it replaces — at
+// production volume the old window re-fetched ~2,450 conversions per pass
+// (~3.5 hours) and starved the backlog it was meant to serve. Anchors
 // older than the lookback are replayed only while the connection has no
-// complete replay state for them (never successfully covered).
-export const CLAIM_REPLAY_LOOKBACK_DAYS = 14;
+// complete replay state for them (never successfully covered). Follow-up:
+// if re-fetches are observed never to change a stored source_checksum,
+// refresh can be dropped entirely.
+export const CLAIM_REPLAY_LOOKBACK_DAYS = 3;
 export const MAX_CLAIM_REMOTE_CALLS_PER_BATCH = 25;
 export const MAX_REFERENCED_EVENT_FETCHES_PER_CONVERSION = 10;
 export const CLAIM_BATCH_SOFT_DEADLINE_MS = 480_000;

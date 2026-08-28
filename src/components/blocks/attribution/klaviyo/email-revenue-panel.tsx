@@ -108,6 +108,15 @@ export function EmailRevenueHeadline({
               percentOf(email.revenue, shopifyTotal),
               email.orderCount,
             )}
+            {summary.claimCoverage.covered < summary.claimCoverage.total ? (
+              <span className="ml-1 text-amber-600" data-testid="email-coverage">
+                ·{" "}
+                {copy.coverage(
+                  summary.claimCoverage.covered.toLocaleString(),
+                  summary.claimCoverage.total.toLocaleString(),
+                )}
+              </span>
+            ) : null}
           </p>
         </div>
         {klaviyoSays !== null ? (

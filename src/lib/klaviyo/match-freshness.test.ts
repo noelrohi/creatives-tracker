@@ -100,12 +100,38 @@ describeIfDb("Klaviyo match freshness on PostgreSQL", () => {
       matchRunId: runId,
     });
     expect(result).toEqual({ fresh: false, reason: "source_projection_stale" });
+    // Publication staleness no longer reaches the claim anchor: the anchor
+    // gates on publication status only, so a drifted source projection
+    // leaves the claim — a fact about the Klaviyo event — intact.
     const anchor = await freshness.verifyCurrentClaimAnchor({
       scope,
       matchRunId: runId,
       conversionEventRowId: "event-a",
     });
-    expect(anchor).toEqual({ fresh: false, reason: "publication_stale" });
+    expect(anchor.fresh).toBe(true);
+  });
+
+  it("keeps a claim anchor valid when only the Shopify projection drifted", async () => {
+    // Claims are facts about a Klaviyo event; a later Shopify order edit
+    // cannot change what Klaviyo attributed a conversion to.
+    const runId = await publish();
+    await testPool!.query(
+      `UPDATE shopify_order_line SET quantity = quantity + 1 WHERE order_id = 'order-a'`,
+    );
+    const publication = await freshness.verifyPublishedMatchFreshness({
+      scope,
+      matchRunId: runId,
+    });
+    expect(publication).toEqual({
+      fresh: false,
+      reason: "source_projection_stale",
+    });
+    const anchor = await freshness.verifyCurrentClaimAnchor({
+      scope,
+      matchRunId: runId,
+      conversionEventRowId: "event-a",
+    });
+    expect(anchor.fresh).toBe(true);
   });
 
   it("goes stale when approved rules change", async () => {

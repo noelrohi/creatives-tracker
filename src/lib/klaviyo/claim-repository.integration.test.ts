@@ -149,6 +149,79 @@ async function startGraph(matchRunId: string): Promise<string> {
   return start.claimReplayId;
 }
 
+/**
+ * Publish a second, genuinely different match run over the same world. The
+ * invocation fingerprint carries the source run id, so republishing under
+ * `source-run-a` would replay the first run instead of superseding it; a new
+ * sync run carrying the same event observations produces a distinct
+ * publication that supersedes the first run's results.
+ *
+ * `narrow` restricts which events and orders the new run observes, modelling
+ * a rolling window: entities left out keep their unsuperseded results on the
+ * first run, which therefore stays a live anchor source for them. Both sides
+ * must be narrowed together — publication supersedes event results through
+ * their candidate orders as well as directly.
+ */
+async function publishSecondMatchWorld(
+  narrow: {
+    eventIds?: readonly string[];
+    orderIds?: readonly string[];
+  } = {},
+): Promise<{ runId: string }> {
+  await testPool!.query(
+    `INSERT INTO klaviyo_sync_run
+       (id, organization_id, shopify_store_id, connection_id, operation,
+        trigger_type, status, checkpoint, request_parameters,
+        requested_from, requested_to)
+     VALUES ('source-run-b', 'org-a', 'store-a', 'connection-a', 'events',
+       'manual', 'success', NULL,
+       '{"sourceMode":"order_core","metricKinds":["placed_order","ordered_product"]}',
+       '2026-07-01T00:00:00Z', '2026-07-30T00:00:00Z')`,
+  );
+  await testPool!.query(
+    `INSERT INTO klaviyo_event_run_observation
+       (organization_id, shopify_store_id, connection_id, sync_run_id,
+        event_id, observed_source_checksum)
+     SELECT organization_id, shopify_store_id, connection_id, 'source-run-b',
+            event_id, observed_source_checksum
+       FROM klaviyo_event_run_observation
+      WHERE sync_run_id = 'source-run-a'
+        AND ($1::text[] IS NULL OR event_id = ANY($1::text[]))`,
+    [narrow.eventIds ? [...narrow.eventIds] : null],
+  );
+  let evidenceRunId = "evidence-run-a";
+  if (narrow.orderIds) {
+    evidenceRunId = "evidence-run-b";
+    await testPool!.query(
+      `INSERT INTO shopify_evidence_sync_run
+         (id, start_trigger_run_id, organization_id, store_id, mode,
+          store_timezone, anchor_store_day, requested_from, requested_to,
+          status, identity_capability, line_completeness)
+       VALUES ('evidence-run-b', 'trigger-b', 'org-a', 'store-a', 'initial_90d',
+         'America/New_York', '2026-07-30', '2026-07-01T00:00:00Z',
+         '2026-07-30T00:00:00Z', 'success', 'unavailable', 'complete')`,
+    );
+    await testPool!.query(
+      `INSERT INTO shopify_evidence_run_observation
+         (id, organization_id, store_id, evidence_run_id, order_id,
+          line_disposition, identity_disposition, observed_content_checksum)
+       SELECT 'obs-b-' || order_id, organization_id, store_id,
+              'evidence-run-b', order_id, line_disposition,
+              identity_disposition, observed_content_checksum
+         FROM shopify_evidence_run_observation
+        WHERE evidence_run_id = 'evidence-run-a'
+          AND order_id = ANY($1::text[])`,
+      [[...narrow.orderIds]],
+    );
+  }
+  const result = await matchService.computeAndPublishMatches({
+    scope,
+    sourceRunId: "source-run-b",
+    shopifyEvidenceRunId: evidenceRunId,
+  });
+  return { runId: result.runId };
+}
+
 async function graphRow(claimReplayId: string) {
   const result = await testPool!.query(
     `SELECT status, failure_code, checkpoint, superseded_skipped,
@@ -333,6 +406,21 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
     expect(different).toEqual({ kind: "conflict" });
   });
 
+  it("rebinds a live graph to the requested current publication instead of conflicting", async () => {
+    const first = await publishMatchWorld();
+    const claimReplayId = await startGraph(first.matchRunId);
+    const second = await publishSecondMatchWorld();
+    const result = await repository.startOrResumeClaimReplay({
+      scope,
+      sourceRunId: "source-run-b",
+      matchRunId: second.runId,
+      now: new Date(),
+    });
+    expect(result).toEqual({ kind: "pending", claimReplayId });
+    const row = await graphRow(claimReplayId);
+    expect(row.checkpoint.matchRunId).toBe(second.runId);
+  });
+
   it("creates no graph for a missing or stale publication", async () => {
     const stale = await repository.startOrResumeClaimReplay({
       scope,
@@ -345,6 +433,36 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
       `SELECT count(*)::int AS count FROM klaviyo_claim_replay_run`,
     );
     expect(graphs.rows[0].count).toBe(0);
+  });
+
+  it("creates a graph while the Shopify projection has drifted", async () => {
+    const { matchRunId } = await publishMatchWorld();
+    // Hourly Shopify ingest mutates in-window orders continuously, so the
+    // full publication predicate is not-fresh almost all of the time in
+    // production. Claims are facts about the Klaviyo event (spec §0), so
+    // creation gates only on "run is published" plus an unsuperseded
+    // conversion anchor — a drifted order line cannot deny the whole night's
+    // backlog its one graph.
+    await testPool!.query(
+      `UPDATE shopify_order_line SET quantity = quantity + 1
+        WHERE order_id = 'order-a'`,
+    );
+    const result = await repository.startOrResumeClaimReplay({
+      scope,
+      sourceRunId: "source-run-a",
+      matchRunId,
+      now: new Date(),
+    });
+    expect(result).toEqual({
+      kind: "started",
+      claimReplayId: expect.any(String),
+    });
+    const graphs = await testPool!.query(
+      `SELECT count(*)::int AS count FROM klaviyo_claim_replay_run
+        WHERE status = 'running' AND match_run_id = $1`,
+      [matchRunId],
+    );
+    expect(graphs.rows[0].count).toBe(1);
   });
 
   it("replays a complete conversion end to end and sets only claimCount", async () => {
@@ -565,6 +683,292 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
       `SELECT count(*)::int AS count FROM klaviyo_claim_replay_state`,
     );
     expect(states.rows[0].count).toBe(0);
+  });
+
+  it("rebinds a superseded graph to the current publication and keeps going", async () => {
+    const first = await publishMatchWorld();
+    const claimReplayId = await startGraph(first.matchRunId);
+    // A second publication supersedes the first run's results; the graph is
+    // pointed at yesterday's run, not invalid.
+    const second = await publishSecondMatchWorld();
+    expect(second.runId).not.toBe(first.matchRunId);
+
+    const client = fakeClaimClient();
+    const result = await repository.processClaimBatch(
+      { scope, claimReplayId },
+      {
+        createClient: () => client,
+        credentialProvider: fakeCredentialProvider,
+        verifyWriterReadiness: gateOpen,
+      },
+    );
+
+    expect(result.outcome).not.toBe("stale");
+    expect(result.processed).toBe(1);
+    const row = await graphRow(claimReplayId);
+    // The graph ran to its own completion instead of dying on the rebind.
+    expect(row.status).toBe("success");
+    expect((row.checkpoint as ClaimReplayCheckpoint).matchRunId).toBe(
+      second.runId,
+    );
+    const bindings = await testPool!.query(
+      `SELECT match_run_id, source_run_id FROM klaviyo_claim_replay_run
+        WHERE id = $1`,
+      [claimReplayId],
+    );
+    expect(bindings.rows[0]).toEqual({
+      match_run_id: second.runId,
+      source_run_id: "source-run-b",
+    });
+    const order = await testPool!.query(
+      `SELECT claim_count FROM klaviyo_order_match_result WHERE run_id = $1`,
+      [second.runId],
+    );
+    expect(order.rows[0].claim_count).toBe(1);
+  });
+
+  it("rebinds at commit when the publication is replaced mid-conversion", async () => {
+    const first = await publishMatchWorld();
+    const claimReplayId = await startGraph(first.matchRunId);
+    // No attributed-event relationship means no referenced fetch and so no
+    // preflight: the commit transaction is the first gate to meet the
+    // publication that lands while this conversion is being fetched.
+    const base = fakeClaimClient({
+      attributions: [
+        {
+          type: "attribution",
+          id: "attribution-1",
+          relationships: {
+            campaign: { data: { type: "campaign", id: "campaign-ext-1" } },
+          },
+        },
+      ],
+    });
+    let second: { runId: string } | null = null;
+    const client = {
+      getEventById: vi
+        .fn<
+          (input: {
+            externalEventId: string;
+            request: KlaviyoSingleEventRequest;
+          }) => Promise<KlaviyoSingleEventResult>
+        >()
+        .mockImplementation(async (input) => {
+          second ??= await publishSecondMatchWorld();
+          return base.getEventById(input);
+        }),
+    };
+
+    const result = await repository.processClaimBatch(
+      { scope, claimReplayId },
+      {
+        createClient: () => client,
+        credentialProvider: fakeCredentialProvider,
+        verifyWriterReadiness: gateOpen,
+      },
+    );
+
+    expect(result.outcome).not.toBe("stale");
+    expect(result.processed).toBe(1);
+    expect(result.supersededSkipped).toBe(0);
+    // The claims fetched under the replaced run were written, not discarded.
+    const claims = await testPool!.query(
+      `SELECT klaviyo_attribution_id FROM klaviyo_attribution_claim
+        WHERE conversion_event_id = 'event-a'`,
+    );
+    expect(claims.rows).toEqual([{ klaviyo_attribution_id: "attribution-1" }]);
+    const state = await testPool!.query(
+      `SELECT status, match_run_id FROM klaviyo_claim_replay_state
+        WHERE conversion_event_id = 'event-a'`,
+    );
+    expect(state.rows[0]).toEqual({
+      status: "complete",
+      match_run_id: second!.runId,
+    });
+    const row = await graphRow(claimReplayId);
+    expect((row.checkpoint as ClaimReplayCheckpoint).matchRunId).toBe(
+      second!.runId,
+    );
+  });
+
+  it("rebinds at the referenced-fetch preflight instead of stopping it", async () => {
+    const first = await publishMatchWorld();
+    const claimReplayId = await startGraph(first.matchRunId);
+    // The default client claims an attributed event, so a preflight runs
+    // before the referenced fetch — and meets the publication that landed
+    // during the primary fetch.
+    const base = fakeClaimClient();
+    let second: { runId: string } | null = null;
+    const client = {
+      getEventById: vi
+        .fn<
+          (input: {
+            externalEventId: string;
+            request: KlaviyoSingleEventRequest;
+          }) => Promise<KlaviyoSingleEventResult>
+        >()
+        .mockImplementation(async (input) => {
+          if (input.request.purpose === "attribution_claim") {
+            second ??= await publishSecondMatchWorld();
+          }
+          return base.getEventById(input);
+        }),
+    };
+
+    const result = await repository.processClaimBatch(
+      { scope, claimReplayId },
+      {
+        createClient: () => client,
+        credentialProvider: fakeCredentialProvider,
+        verifyWriterReadiness: gateOpen,
+      },
+    );
+
+    expect(result.outcome).not.toBe("stale");
+    expect(result.processed).toBe(1);
+    // The preflight let the referenced fetch through, so the interaction
+    // detail resolved and no preflight-stop reason was recorded.
+    const claims = await testPool!.query(
+      `SELECT interaction_type, interaction_host, unknown_reason_codes
+         FROM klaviyo_attribution_claim WHERE conversion_event_id = 'event-a'`,
+    );
+    expect(claims.rows).toHaveLength(1);
+    expect(claims.rows[0].interaction_type).toBe("click");
+    expect(claims.rows[0].interaction_host).toBe("shop.example.com");
+    expect(claims.rows[0].unknown_reason_codes).not.toContain(
+      "referenced_fetch_preflight_stopped",
+    );
+    const row = await graphRow(claimReplayId);
+    expect((row.checkpoint as ClaimReplayCheckpoint).matchRunId).toBe(
+      second!.runId,
+    );
+  });
+
+  it("leaves conversions already complete untouched across a rebind", async () => {
+    await seedOldConversionWorld();
+    const first = await publishMatchWorld();
+    // event-old is outside the lookback and already fully covered by an
+    // earlier graph, so no rebind may cause it to be fetched again.
+    await testPool!.query(
+      `INSERT INTO klaviyo_claim_replay_state
+         (id, organization_id, shopify_store_id, connection_id, source_run_id,
+          match_run_id, conversion_event_id, source_checksum, status,
+          reason_codes, attempt_count, attempted_at, completed_at)
+       VALUES ('state-event-old', 'org-a', 'store-a', 'connection-a',
+         'source-run-a', $1, 'event-old', 'event-old-checksum', 'complete',
+         '[]', 1, now(), now())`,
+      [first.matchRunId],
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_attribution_claim
+         (id, organization_id, shopify_store_id, connection_id,
+          conversion_event_id, klaviyo_attribution_id, unknown_reason_codes,
+          source_checksum, api_revision)
+       VALUES ('claim-old', 'org-a', 'store-a', 'connection-a', 'event-old',
+         'attribution-old', '[]', 'checksum-old', '2026-07-15')`,
+    );
+    const claimReplayId = await startGraph(first.matchRunId);
+    const second = await publishSecondMatchWorld();
+
+    const client = fakeClaimClient();
+    const result = await repository.processClaimBatch(
+      { scope, claimReplayId },
+      {
+        createClient: () => client,
+        credentialProvider: fakeCredentialProvider,
+        verifyWriterReadiness: gateOpen,
+      },
+    );
+
+    expect(result.outcome).not.toBe("stale");
+    const fetched = client.getEventById.mock.calls.map(
+      ([{ externalEventId }]) => externalEventId,
+    );
+    expect(fetched).toContain("external-event-a");
+    expect(fetched).not.toContain("external-event-old");
+    const preserved = await testPool!.query(
+      `SELECT klaviyo_attribution_id, source_checksum
+         FROM klaviyo_attribution_claim WHERE conversion_event_id = 'event-old'`,
+    );
+    expect(preserved.rows).toEqual([
+      { klaviyo_attribution_id: "attribution-old", source_checksum: "checksum-old" },
+    ]);
+    const row = await graphRow(claimReplayId);
+    expect((row.checkpoint as ClaimReplayCheckpoint).matchRunId).toBe(
+      second.runId,
+    );
+  });
+
+  it("keeps a partially superseded run so its own tail still completes", async () => {
+    await seedOldConversionWorld();
+    const first = await publishMatchWorld();
+    const claimReplayId = await startGraph(first.matchRunId);
+    // The new publication covers only event-a/order-a, so the first run
+    // still holds event-old's current result. A graph yanked onto the newer
+    // run would lose that conversion outright: it has no anchor there.
+    await publishSecondMatchWorld({
+      eventIds: ["event-a"],
+      orderIds: ["order-a"],
+    });
+
+    const client = fakeClaimClient();
+    const result = await repository.processClaimBatch(
+      { scope, claimReplayId },
+      {
+        createClient: () => client,
+        credentialProvider: fakeCredentialProvider,
+        verifyWriterReadiness: gateOpen,
+      },
+    );
+
+    expect(result.outcome).not.toBe("stale");
+    expect(result.processed).toBe(1);
+    const fetched = client.getEventById.mock.calls.map(
+      ([{ externalEventId }]) => externalEventId,
+    );
+    expect(fetched).toContain("external-event-old");
+    const row = await graphRow(claimReplayId);
+    expect((row.checkpoint as ClaimReplayCheckpoint).matchRunId).toBe(
+      first.matchRunId,
+    );
+    // event-a moved to the newer publication, where this graph has no
+    // anchor: it keeps no complete state, so the next graph picks it up.
+    const states = await testPool!.query(
+      `SELECT conversion_event_id, match_run_id FROM klaviyo_claim_replay_state
+        ORDER BY conversion_event_id`,
+    );
+    expect(states.rows).toEqual([
+      { conversion_event_id: "event-old", match_run_id: first.matchRunId },
+    ]);
+  });
+
+  it("stales only when the connection has no published run to rebind onto", async () => {
+    const { matchRunId } = await publishMatchWorld();
+    const claimReplayId = await startGraph(matchRunId);
+    // The bound run is gone and the connection's only publication is
+    // superseded, so there is nothing current left to continue against.
+    await testPool!.query(
+      `UPDATE klaviyo_claim_replay_run
+          SET checkpoint = jsonb_set(checkpoint, '{matchRunId}',
+                                     '"match-run-gone"')
+        WHERE id = $1`,
+      [claimReplayId],
+    );
+    await testPool!.query(
+      `UPDATE klaviyo_match_run
+          SET superseded_at = greatest(published_at, now()) WHERE id = $1`,
+      [matchRunId],
+    );
+    const result = await repository.processClaimBatch(
+      { scope, claimReplayId },
+      {
+        createClient: () => fakeClaimClient(),
+        credentialProvider: fakeCredentialProvider,
+        verifyWriterReadiness: gateOpen,
+      },
+    );
+    expect(result.outcome).toBe("stale");
+    expect((await graphRow(claimReplayId)).status).toBe("stale");
   });
 
   it("reaps only an expired lease and preserves checkpoint and claims", async () => {
@@ -796,6 +1200,25 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
       expect(recentClaims.rows[0].count).toBe(1);
     });
 
+    it("skips a covered conversion older than the three-day refresh window", async () => {
+      // 5 days old: inside the old 14-day refresh, outside the new 3-day one.
+      const occurredAt = new Date(Date.now() - 5 * DAY_MS);
+      await seedExtraConversionEvent("event-5d", "external-5d", occurredAt);
+      const { matchRunId } = await publishMatchWorld();
+      await insertCoverageState({
+        conversionEventId: "event-5d",
+        status: "complete",
+        matchRunId,
+      });
+      const claimReplayId = await startGraph(matchRunId);
+      const client = fakeClaimClient();
+      await repository.processClaimBatch(
+        { scope, claimReplayId },
+        dependenciesFor(client),
+      );
+      expect(fetchedExternalIds(client)).not.toContain("external-5d");
+    });
+
     it("completes success with zero conversions when every anchor is old and covered", async () => {
       const { matchRunId } = await publishMatchWorld();
       await insertCoverageState({
@@ -833,7 +1256,7 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
       expect(typeof initial.lookbackCutoff).toBe("string");
       expect(
         Math.abs(
-          Date.parse(initial.lookbackCutoff) - (startedAt - 14 * DAY_MS),
+          Date.parse(initial.lookbackCutoff) - (startedAt - 3 * DAY_MS),
         ),
       ).toBeLessThan(60_000);
 
