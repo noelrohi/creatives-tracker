@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   approvedRuleChecksum,
@@ -189,6 +189,65 @@ export async function verifyPublishedMatchFreshness(input: {
   };
 }
 
+/**
+ * Proves only that a match run is published — the claims flow's gate.
+ * Deliberately weaker than verifyPublishedMatchFreshness: claims are
+ * immutable facts about a Klaviyo event, so a Shopify projection that
+ * drifted after publication cannot invalidate them, and the panel
+ * re-joins claims to current order results at read time.
+ */
+export async function verifyClaimPublication(input: {
+  scope: KlaviyoConnectionScope;
+  matchRunId: string;
+  executor?: Executor;
+}): Promise<boolean> {
+  const executor = input.executor ?? db;
+  const [run] = await executor
+    .select({ status: klaviyoMatchRuns.status })
+    .from(klaviyoMatchRuns)
+    .where(
+      and(
+        eq(klaviyoMatchRuns.id, input.matchRunId),
+        eq(klaviyoMatchRuns.organizationId, input.scope.organizationId),
+        eq(klaviyoMatchRuns.storeId, input.scope.storeId),
+        eq(klaviyoMatchRuns.connectionId, input.scope.connectionId),
+      ),
+    )
+    .limit(1);
+  return run?.status === "published";
+}
+
+/**
+ * The connection's newest published, unsuperseded match run — the target a
+ * claim graph rebinds onto when its own run is replaced. Returns null when
+ * the connection has no such run, leaving the caller nothing to continue
+ * against.
+ */
+export async function resolveCurrentPublishedMatchRun(input: {
+  scope: KlaviyoConnectionScope;
+  executor?: Executor;
+}): Promise<{ id: string; sourceRunId: string } | null> {
+  const executor = input.executor ?? db;
+  const [run] = await executor
+    .select({
+      id: klaviyoMatchRuns.id,
+      sourceRunId: klaviyoMatchRuns.sourceRunId,
+    })
+    .from(klaviyoMatchRuns)
+    .where(
+      and(
+        eq(klaviyoMatchRuns.organizationId, input.scope.organizationId),
+        eq(klaviyoMatchRuns.storeId, input.scope.storeId),
+        eq(klaviyoMatchRuns.connectionId, input.scope.connectionId),
+        eq(klaviyoMatchRuns.status, "published"),
+        isNull(klaviyoMatchRuns.supersededAt),
+      ),
+    )
+    .orderBy(desc(klaviyoMatchRuns.publishedAt))
+    .limit(1);
+  return run ?? null;
+}
+
 export type ClaimAnchorResult =
   | {
       fresh: true;
@@ -198,8 +257,8 @@ export type ClaimAnchorResult =
   | { fresh: false; reason: "publication_stale" | "event_result_superseded" };
 
 /**
- * Claim-anchor proof for Plan 4: full publication freshness plus the exact
- * run/event result remaining unsuperseded. A canonical order attaches only
+ * Claim-anchor proof for Plan 4: the run is published and the exact
+ * run/event result remains unsuperseded. A canonical order attaches only
  * through the same run's confirmed, unsuperseded order result selecting the
  * identical deterministic edge.
  */
@@ -210,12 +269,17 @@ export async function verifyCurrentClaimAnchor(input: {
   executor?: Executor;
 }): Promise<ClaimAnchorResult> {
   const executor = input.executor ?? db;
-  const publication = await verifyPublishedMatchFreshness({
-    scope: input.scope,
-    matchRunId: input.matchRunId,
-    executor,
-  });
-  if (!publication.fresh) {
+  // Claims need only that the run published and this conversion's event
+  // result is still current — never that the Shopify projection still
+  // matches, which hourly ingest breaks continuously and which has no
+  // bearing on what Klaviyo attributed a conversion to.
+  if (
+    !(await verifyClaimPublication({
+      scope: input.scope,
+      matchRunId: input.matchRunId,
+      executor,
+    }))
+  ) {
     return { fresh: false, reason: "publication_stale" };
   }
 
