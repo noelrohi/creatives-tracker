@@ -1170,6 +1170,25 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
       expect(recentClaims.rows[0].count).toBe(1);
     });
 
+    it("skips a covered conversion older than the three-day refresh window", async () => {
+      // 5 days old: inside the old 14-day refresh, outside the new 3-day one.
+      const occurredAt = new Date(Date.now() - 5 * DAY_MS);
+      await seedExtraConversionEvent("event-5d", "external-5d", occurredAt);
+      const { matchRunId } = await publishMatchWorld();
+      await insertCoverageState({
+        conversionEventId: "event-5d",
+        status: "complete",
+        matchRunId,
+      });
+      const claimReplayId = await startGraph(matchRunId);
+      const client = fakeClaimClient();
+      await repository.processClaimBatch(
+        { scope, claimReplayId },
+        dependenciesFor(client),
+      );
+      expect(fetchedExternalIds(client)).not.toContain("external-5d");
+    });
+
     it("completes success with zero conversions when every anchor is old and covered", async () => {
       const { matchRunId } = await publishMatchWorld();
       await insertCoverageState({
@@ -1207,7 +1226,7 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
       expect(typeof initial.lookbackCutoff).toBe("string");
       expect(
         Math.abs(
-          Date.parse(initial.lookbackCutoff) - (startedAt - 14 * DAY_MS),
+          Date.parse(initial.lookbackCutoff) - (startedAt - 3 * DAY_MS),
         ),
       ).toBeLessThan(60_000);
 
