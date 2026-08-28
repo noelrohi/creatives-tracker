@@ -49,3 +49,5 @@ next-env.d.ts
 
 # eslint
 .eslintcache
+
+cli/dist/
