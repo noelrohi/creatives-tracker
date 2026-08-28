@@ -505,6 +505,50 @@ describeIfDb("Klaviyo email attribution aggregates on PostgreSQL", () => {
     expect(summary.claimCoverage).toEqual({ covered: 1, total: 3 });
   });
 
+  it("keeps a qualifying claim email-linked ahead of claims-pending when no claim state exists", async () => {
+    // Reachable state: a graph wrote the claim and then died before its
+    // replay state reached 'complete' — a qualifying claim with no complete
+    // state anywhere on the connection. `email_linked` is evaluated BEFORE
+    // `claims_pending` on purpose: the claim is positive proof Klaviyo
+    // credited a campaign, and filing proven email revenue under "not
+    // checked yet" would understate email — the exact error the pending
+    // bucket exists to prevent.
+    await seedPublishedRun();
+    await seedMarketingObject("campaign-row-1", "campaign", "Summer Sale");
+    await seedOrderResult("res-a", "order-a", "confirmed", "event-a");
+    await seedClaim({
+      id: "claim-a",
+      conversionEventId: "event-a",
+      attributionId: "attr-a",
+      campaignObjectId: "campaign-row-1",
+      interactionOccurredAt: "2026-07-20T09:00:00Z",
+    });
+
+    const summary = await loadEmailAttribution({ scope, window, days });
+
+    expect(summary.email).toEqual({
+      revenue: "42.50",
+      orderCount: 1,
+      campaignsRevenue: "42.50",
+      flowsRevenue: "0.00",
+    });
+    expect(summary.gaps.claimsPending).toEqual({ orders: 0, revenue: "0.00" });
+    expect(summary.gaps.noEmailLink).toEqual({ orders: 0, revenue: "0.00" });
+    // Coverage still reports the conversion as unasked — the caption stays
+    // honest without moving the money out of the email bucket.
+    expect(summary.claimCoverage).toEqual({ covered: 0, total: 1 });
+
+    // Partition invariant: order-a is the world's only in-window order.
+    const total =
+      Number(summary.email.revenue) +
+      Number(summary.gaps.noEmailLink.revenue) +
+      Number(summary.gaps.claimsPending.revenue) +
+      Number(summary.gaps.notEvaluated.revenue) +
+      Number(summary.gaps.noKlaviyoEvent.revenue) +
+      Number(summary.gaps.duplicateFlagged.revenue);
+    expect(total).toBeCloseTo(42.5, 2);
+  });
+
   it("nets in-window refunds against the parent order's bucket and source", async () => {
     await seedAggregateWorld();
     // order-a (email-linked via campaign) gives back 5.00 inside the window.

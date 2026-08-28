@@ -128,6 +128,8 @@ const BUCKET_CASE = sql`
     when r.status = 'confirmed'
          and r.selected_event_id is not null
          and exists (${QUALIFYING_CLAIM}) then 'email_linked'
+    -- Below email_linked deliberately: a qualifying claim is proof Klaviyo
+    -- credited a campaign, and proof outranks coverage status.
     when r.status = 'confirmed'
          and r.selected_event_id is not null
          and not exists (${CLAIMS_COVERED}) then 'claims_pending'
