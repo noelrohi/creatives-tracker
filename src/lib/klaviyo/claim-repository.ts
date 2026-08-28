@@ -26,7 +26,6 @@ import {
   resolveCurrentPublishedMatchRun,
   verifyClaimPublication,
   verifyCurrentClaimAnchor,
-  verifyPublishedMatchFreshness,
   type SafeMatchStaleReason,
 } from "@/lib/klaviyo/match-freshness";
 import {
@@ -43,6 +42,7 @@ import {
 } from "@/schema/klaviyo-claim";
 import {
   klaviyoEventMatchResults,
+  klaviyoMatchRuns,
   klaviyoOrderMatchResults,
 } from "@/schema/klaviyo-match";
 
@@ -236,10 +236,11 @@ async function rebindGraphLocked(
 /**
  * Store→connection-locked start: inspects the one-running graph before any
  * no-work return, fixed-code reconciles an expired graph, reuses a live
- * identical graph, proves full dual-source publication freshness, and only
- * then creates a database-owned claim replay ID. A fresh empty publication
- * returns typed no_work without provider work; a stale or fully replaced
- * nonempty match creates no graph.
+ * identical graph, proves the claims predicate — the run is published and
+ * still holds an unsuperseded anchor — and only then creates a
+ * database-owned claim replay ID. An empty publication returns typed
+ * no_work without provider work; an unpublished, missing, or fully replaced
+ * match creates no graph.
  */
 export async function startOrResumeClaimReplay(input: {
   scope: KlaviyoConnectionScope;
@@ -296,20 +297,47 @@ export async function startOrResumeClaimReplay(input: {
       await finishGraphLocked(tx, running.id, "failed", CLAIM_LEASE_ERROR);
     }
 
-    const freshness = await verifyPublishedMatchFreshness({
-      scope: input.scope,
-      matchRunId: input.matchRunId,
-      executor: tx,
-    });
-    if (!freshness.fresh) {
-      return { kind: "stale" as const, reason: freshness.reason };
+    // Creation is part of the CLAIMS flow, so it gates on the claims
+    // predicate (spec §0), not the publication one: the run is published,
+    // and — the guard immediately below — it still has an unsuperseded
+    // conversion anchor. Claims are immutable facts about a Klaviyo event,
+    // so a Shopify projection that drifted after publication cannot
+    // invalidate them; in production hourly ingest drifts it continuously,
+    // so re-deriving the projection here would let a graph be created only
+    // in the seconds right after matching publishes and would otherwise
+    // record `claims: stale`, costing the whole night's backlog — which the
+    // design routes through one graph. Everything creation actually needs is
+    // three plain columns on the run row, none of which the derivation
+    // touches.
+    const [matchRun] = await tx
+      .select({
+        status: klaviyoMatchRuns.status,
+        sourceRunId: klaviyoMatchRuns.sourceRunId,
+        expectedOrderCount: klaviyoMatchRuns.expectedOrderCount,
+        expectedEventCount: klaviyoMatchRuns.expectedEventCount,
+      })
+      .from(klaviyoMatchRuns)
+      .where(
+        and(
+          eq(klaviyoMatchRuns.id, input.matchRunId),
+          eq(klaviyoMatchRuns.organizationId, input.scope.organizationId),
+          eq(klaviyoMatchRuns.storeId, input.scope.storeId),
+          eq(klaviyoMatchRuns.connectionId, input.scope.connectionId),
+        ),
+      )
+      .limit(1);
+    if (!matchRun) {
+      return { kind: "stale" as const, reason: "run_missing" as const };
     }
-    if (freshness.matchRun.sourceRunId !== input.sourceRunId) {
+    if (matchRun.status !== "published") {
+      return { kind: "stale" as const, reason: "run_not_published" as const };
+    }
+    if (matchRun.sourceRunId !== input.sourceRunId) {
       return { kind: "stale" as const, reason: "fingerprint_mismatch" as const };
     }
     if (
-      freshness.matchRun.expectedEventCount === 0 &&
-      freshness.matchRun.expectedOrderCount === 0
+      (matchRun.expectedEventCount ?? 0) === 0 &&
+      (matchRun.expectedOrderCount ?? 0) === 0
     ) {
       return { kind: "no_work" as const, matchRunId: input.matchRunId };
     }

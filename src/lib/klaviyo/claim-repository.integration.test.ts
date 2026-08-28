@@ -435,6 +435,36 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
     expect(graphs.rows[0].count).toBe(0);
   });
 
+  it("creates a graph while the Shopify projection has drifted", async () => {
+    const { matchRunId } = await publishMatchWorld();
+    // Hourly Shopify ingest mutates in-window orders continuously, so the
+    // full publication predicate is not-fresh almost all of the time in
+    // production. Claims are facts about the Klaviyo event (spec §0), so
+    // creation gates only on "run is published" plus an unsuperseded
+    // conversion anchor — a drifted order line cannot deny the whole night's
+    // backlog its one graph.
+    await testPool!.query(
+      `UPDATE shopify_order_line SET quantity = quantity + 1
+        WHERE order_id = 'order-a'`,
+    );
+    const result = await repository.startOrResumeClaimReplay({
+      scope,
+      sourceRunId: "source-run-a",
+      matchRunId,
+      now: new Date(),
+    });
+    expect(result).toEqual({
+      kind: "started",
+      claimReplayId: expect.any(String),
+    });
+    const graphs = await testPool!.query(
+      `SELECT count(*)::int AS count FROM klaviyo_claim_replay_run
+        WHERE status = 'running' AND match_run_id = $1`,
+      [matchRunId],
+    );
+    expect(graphs.rows[0].count).toBe(1);
+  });
+
   it("replays a complete conversion end to end and sets only claimCount", async () => {
     const { matchRunId } = await publishMatchWorld();
     const before = await testPool!.query(
