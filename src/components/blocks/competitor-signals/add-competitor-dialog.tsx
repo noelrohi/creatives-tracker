@@ -2,8 +2,9 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
+import { ExternalLink } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,13 +14,31 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field, FieldLabel } from "@/components/ui/field";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { useTRPC } from "@/lib/trpc/client";
+import {
+  adLibrarySearchUrl,
+  parseMetaAdLibraryPageUrl,
+} from "./ad-library";
 
 interface CompetitorForm {
   name: string;
-  metaPageId: string;
+  metaAdLibraryUrl: string;
+}
+
+function adLibraryUrlError(value: string): true | string {
+  const result = parseMetaAdLibraryPageUrl(value);
+  if (result.error === null) return true;
+  if (result.error === "individual_ad") {
+    return "Open the advertiser's page in Meta Ad Library, then copy that page URL.";
+  }
+  return "Paste a Meta Ad Library advertiser page URL.";
 }
 
 export function AddCompetitorDialog({
@@ -36,8 +55,9 @@ export function AddCompetitorDialog({
   const [formError, setFormError] = useState<string | null>(null);
 
   const form = useForm<CompetitorForm>({
-    defaultValues: { name: "", metaPageId: "" },
+    defaultValues: { name: "", metaAdLibraryUrl: "" },
   });
+  const competitorName = useWatch({ control: form.control, name: "name" });
 
   const addMutation = useMutation(
     trpc.signals.addCompetitor.mutationOptions({
@@ -53,16 +73,19 @@ export function AddCompetitorDialog({
   );
 
   function close() {
-    form.reset({ name: "", metaPageId: "" });
+    form.reset({ name: "", metaAdLibraryUrl: "" });
     setFormError(null);
     onOpenChange(false);
   }
 
   function onSubmit(values: CompetitorForm) {
+    const parsed = parseMetaAdLibraryPageUrl(values.metaAdLibraryUrl);
+    if (parsed.error !== null) return;
+
     setFormError(null);
     addMutation.mutate({
       name: values.name.trim(),
-      metaPageId: values.metaPageId.trim(),
+      metaPageId: parsed.pageId,
     });
   }
 
@@ -78,6 +101,7 @@ export function AddCompetitorDialog({
         </DialogHeader>
 
         <form
+          noValidate
           onSubmit={form.handleSubmit(onSubmit)}
           className="flex flex-col gap-4"
         >
@@ -90,12 +114,45 @@ export function AddCompetitorDialog({
             />
           </Field>
 
-          <Field>
-            <FieldLabel htmlFor="competitor-page-id">Meta page ID</FieldLabel>
+          <Field
+            data-invalid={Boolean(form.formState.errors.metaAdLibraryUrl)}
+          >
+            <FieldLabel htmlFor="competitor-ad-library-url">
+              Meta Ad Library page URL
+            </FieldLabel>
             <Input
-              id="competitor-page-id"
-              placeholder="123456789012345"
-              {...form.register("metaPageId", { required: true })}
+              id="competitor-ad-library-url"
+              type="url"
+              inputMode="url"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder="https://www.facebook.com/ads/library/?view_all_page_id=…"
+              aria-invalid={Boolean(form.formState.errors.metaAdLibraryUrl)}
+              {...form.register("metaAdLibraryUrl", {
+                required: "Paste a Meta Ad Library advertiser page URL.",
+                validate: adLibraryUrlError,
+              })}
+            />
+            <FieldDescription className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+              <span>
+                Search for the advertiser, open its page, then copy the URL.
+              </span>
+              <a
+                href={adLibrarySearchUrl(competitorName)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex shrink-0 items-center gap-1 font-medium"
+              >
+                Open Meta Ad Library <ExternalLink className="size-3.5" />
+              </a>
+            </FieldDescription>
+            <FieldError
+              errors={
+                form.formState.errors.metaAdLibraryUrl
+                  ? [form.formState.errors.metaAdLibraryUrl]
+                  : undefined
+              }
             />
           </Field>
 
