@@ -2,6 +2,7 @@ import Link from "next/link";
 import {
   ArrowRight,
   ImageIcon,
+  Info,
   Leaf,
   Sparkles,
   Upload,
@@ -45,6 +46,41 @@ export type LeaderboardRow = {
   tier?: "pause_now" | "watch" | null;
   isEvergreen?: boolean;
 };
+
+function LeaderboardHeading({
+  title,
+  icon,
+  description,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  description?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      {icon}
+      <h2 className="text-[13px] font-medium uppercase tracking-wider text-muted-foreground/50">
+        {title}
+      </h2>
+      {description ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label={`How ${title} are selected`}
+              className="inline-flex size-4 cursor-help items-center justify-center rounded-full text-muted-foreground/40 transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Info className="size-3" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-xs">
+            {description}
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
+    </div>
+  );
+}
 
 const HEALTH_STYLES: Record<CreativeHealth, { label: string; className: string }> = {
   healthy: { label: "Healthy", className: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" },
@@ -210,6 +246,7 @@ function MediaPreview({ row }: { row: LeaderboardRow }) {
 export function LeaderboardTable({
   title,
   icon,
+  description,
   rows,
   isLoading,
   emptyMessage,
@@ -219,6 +256,7 @@ export function LeaderboardTable({
 }: {
   title: string;
   icon: React.ReactNode;
+  description?: React.ReactNode;
   rows: LeaderboardRow[];
   isLoading: boolean;
   emptyMessage: string;
@@ -229,11 +267,8 @@ export function LeaderboardTable({
   if (isLoading) {
     return (
       <div>
-        <div className="mb-3 flex items-center gap-2">
-          {icon}
-          <h2 className="text-[13px] font-medium uppercase tracking-wider text-muted-foreground/50">
-            {title}
-          </h2>
+        <div className="mb-3">
+          <LeaderboardHeading title={title} icon={icon} description={description} />
         </div>
         <div className="rounded-lg border divide-y">
           {Array.from({ length: 5 }).map((_, i) => (
@@ -252,11 +287,8 @@ export function LeaderboardTable({
   if (rows.length === 0) {
     return (
       <div>
-        <div className="mb-3 flex items-center gap-2">
-          {icon}
-          <h2 className="text-[13px] font-medium uppercase tracking-wider text-muted-foreground/50">
-            {title}
-          </h2>
+        <div className="mb-3">
+          <LeaderboardHeading title={title} icon={icon} description={description} />
         </div>
         <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border py-12">
           <p className="text-sm text-muted-foreground">{emptyMessage}</p>
@@ -275,12 +307,7 @@ export function LeaderboardTable({
   return (
     <div>
       <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          {icon}
-          <h2 className="text-[13px] font-medium uppercase tracking-wider text-muted-foreground/50">
-            {title}
-          </h2>
-        </div>
+        <LeaderboardHeading title={title} icon={icon} description={description} />
         <Button variant="ghost" size="sm" asChild className="text-[13px] text-muted-foreground">
           <Link href={viewAllHref}>
             View All <ArrowRight className="ml-1 size-3" />
