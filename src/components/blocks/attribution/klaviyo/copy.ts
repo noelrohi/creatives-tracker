@@ -78,6 +78,7 @@ export const emailRevenue = {
   netSales: "Shopify net sales",
   linked: (percent: string, orders: number) =>
     `Tied to email · ${percent} · ${orders} order${orders === 1 ? "" : "s"}`,
+  coverage: (covered: string, total: string) => `${covered}/${total} checked`,
   says: "Klaviyo says",
   saysUnconfirmed: (amount: string) => `+${amount} unconfirmed`,
   saysWindow: (range: string) => `their ${range} report`,
@@ -94,6 +95,8 @@ export const emailRevenue = {
   gapsLead: "Where the rest is:",
   gapNoEmailLink: (orders: number) =>
     `${orders} order${orders === 1 ? "" : "s"} had a Klaviyo event but no campaign/flow link`,
+  gapClaimsPending: (orders: number) =>
+    `${orders} order${orders === 1 ? "" : "s"} not checked for email links yet`,
   gapNotEvaluated: (orders: number) =>
     `${orders} not evaluated yet (newer than evidence)`,
   gapNoEvent: (orders: number) =>
