@@ -23,6 +23,8 @@ import {
   type RedactedInteractionDetail,
 } from "@/lib/klaviyo/claims";
 import {
+  resolveCurrentPublishedMatchRun,
+  verifyClaimPublication,
   verifyCurrentClaimAnchor,
   verifyPublishedMatchFreshness,
   type SafeMatchStaleReason,
@@ -131,6 +133,52 @@ async function finishGraphLocked(
   if (finished.length !== 1) {
     throw new Error("Klaviyo claim graph finish raced");
   }
+}
+
+/**
+ * Claims are immutable per-conversion facts keyed by conversion_event_id,
+ * never by publication — so a graph whose run was replaced is not invalid,
+ * merely pointed at yesterday's run. Rebind it to the current publication
+ * and continue from the same cursor. Returns null when there is nothing
+ * fresher to rebind onto, and the caller must stale.
+ *
+ * The cursor is deliberately preserved: an event the new publication
+ * confirms behind the cursor is skipped by THIS graph but stays in scope
+ * for the next one, because "no complete claim state" is always in scope
+ * regardless of age. Resetting instead would re-walk from the start on
+ * every publication and never finish.
+ */
+async function rebindGraphLocked(
+  tx: KlaviyoStoreTransaction,
+  scope: KlaviyoConnectionScope,
+  claimReplayId: string,
+  current: ClaimReplayCheckpoint,
+  reason: string,
+): Promise<ClaimReplayCheckpoint | null> {
+  const target = await resolveCurrentPublishedMatchRun({ scope, executor: tx });
+  if (target === null || target.id === current.matchRunId) return null;
+  const rebound: ClaimReplayCheckpoint = {
+    ...current,
+    sourceRunId: target.sourceRunId,
+    matchRunId: target.id,
+  };
+  await tx
+    .update(klaviyoClaimReplayRuns)
+    .set({
+      sourceRunId: target.sourceRunId,
+      matchRunId: target.id,
+      checkpoint: rebound as unknown as Record<string, never>,
+      heartbeatAt: new Date(),
+    })
+    .where(eq(klaviyoClaimReplayRuns.id, claimReplayId));
+  console.info("klaviyo claim replay rebound", {
+    connectionId: scope.connectionId,
+    claimReplayId,
+    fromMatchRunId: current.matchRunId,
+    toMatchRunId: target.id,
+    reason,
+  });
+  return rebound;
 }
 
 /**
@@ -578,12 +626,29 @@ export async function processClaimBatch(
         }
         assertExactClaimReplayCheckpoint(graph.checkpoint);
         let current = graph.checkpoint;
-        const freshness = await verifyPublishedMatchFreshness({
-          scope: input.scope,
-          matchRunId: current.matchRunId,
-          executor: tx,
-        });
-        if (!freshness.fresh) {
+        // Anchors are enumerated on the bound run, so a graph left pointed
+        // at a replaced publication walks an empty set and finishes having
+        // done no work — the replaced run keeps status 'published', so a
+        // publication check alone never notices. Move to the current
+        // publication whenever it differs, keeping the cursor, and stale
+        // only when the bound run is not published and there is nothing to
+        // move onto.
+        const rebound = await rebindGraphLocked(
+          tx,
+          input.scope,
+          input.claimReplayId,
+          current,
+          "publication_replaced",
+        );
+        if (rebound !== null) {
+          current = rebound;
+        } else if (
+          !(await verifyClaimPublication({
+            scope: input.scope,
+            matchRunId: current.matchRunId,
+            executor: tx,
+          }))
+        ) {
           await finishGraphLocked(tx, input.claimReplayId, "stale", null);
           return { kind: "stale" as const };
         }
@@ -638,12 +703,32 @@ export async function processClaimBatch(
           conversion = await selectNextConversion(tx, input.scope, current);
         }
 
-        const anchor = await verifyCurrentClaimAnchor({
+        let anchor = await verifyCurrentClaimAnchor({
           scope: input.scope,
           matchRunId: current.matchRunId,
           conversionEventRowId: conversion.eventRowId,
           executor: tx,
         });
+        if (!anchor.fresh) {
+          // A replaced publication re-confirms the same events; rebind and
+          // re-ask before concluding this conversion is gone.
+          const rebound = await rebindGraphLocked(
+            tx,
+            input.scope,
+            input.claimReplayId,
+            current,
+            anchor.reason,
+          );
+          if (rebound !== null) {
+            current = rebound;
+            anchor = await verifyCurrentClaimAnchor({
+              scope: input.scope,
+              matchRunId: current.matchRunId,
+              conversionEventRowId: conversion.eventRowId,
+              executor: tx,
+            });
+          }
+        }
         if (!anchor.fresh) {
           if (anchor.reason === "publication_stale") {
             await finishGraphLocked(tx, input.claimReplayId, "stale", null);
@@ -768,18 +853,52 @@ export async function processClaimBatch(
           ) {
             return { ok: false as const };
           }
-          const freshness = await verifyPublishedMatchFreshness({
+          // Non-terminal by design: a stop only ends this conversion's
+          // referenced fetches. It still rebinds, because otherwise a
+          // publication that lands mid-fetch strips every interaction
+          // detail and hands the commit an anchor it would skip on,
+          // discarding work the new publication still confirms.
+          let bound = graph.checkpoint;
+          if (
+            !(await verifyClaimPublication({
+              scope: input.scope,
+              matchRunId: bound.matchRunId,
+              executor: tx,
+            }))
+          ) {
+            const rebound = await rebindGraphLocked(
+              tx,
+              input.scope,
+              input.claimReplayId,
+              bound,
+              "publication_not_published",
+            );
+            if (rebound === null) return { ok: false as const };
+            bound = rebound;
+          }
+          let anchor = await verifyCurrentClaimAnchor({
             scope: input.scope,
-            matchRunId: graph.checkpoint.matchRunId,
-            executor: tx,
-          });
-          if (!freshness.fresh) return { ok: false as const };
-          const anchor = await verifyCurrentClaimAnchor({
-            scope: input.scope,
-            matchRunId: graph.checkpoint.matchRunId,
+            matchRunId: bound.matchRunId,
             conversionEventRowId: conversion.eventRowId,
             executor: tx,
           });
+          if (!anchor.fresh) {
+            const rebound = await rebindGraphLocked(
+              tx,
+              input.scope,
+              input.claimReplayId,
+              bound,
+              anchor.reason,
+            );
+            if (rebound === null) return { ok: false as const };
+            bound = rebound;
+            anchor = await verifyCurrentClaimAnchor({
+              scope: input.scope,
+              matchRunId: bound.matchRunId,
+              conversionEventRowId: conversion.eventRowId,
+              executor: tx,
+            });
+          }
           if (!anchor.fresh) return { ok: false as const };
           const gate = await verifyGate(input.scope);
           return { ok: gate.ready };
@@ -841,21 +960,32 @@ export async function processClaimBatch(
           throw new Error("Klaviyo claim graph is not running");
         }
         assertExactClaimReplayCheckpoint(graph.checkpoint);
-        const current = graph.checkpoint;
+        let current = graph.checkpoint;
         if (
           current.stage !== "fetching" ||
           current.attemptingConversionEventId !== conversion.eventRowId
         ) {
           throw new Error("Klaviyo claim attempt tuple moved");
         }
-        const freshness = await verifyPublishedMatchFreshness({
-          scope: input.scope,
-          matchRunId: current.matchRunId,
-          executor: tx,
-        });
-        if (!freshness.fresh) {
-          await finishGraphLocked(tx, input.claimReplayId, "stale", null);
-          return { kind: "stale" as const };
+        if (
+          !(await verifyClaimPublication({
+            scope: input.scope,
+            matchRunId: current.matchRunId,
+            executor: tx,
+          }))
+        ) {
+          const rebound = await rebindGraphLocked(
+            tx,
+            input.scope,
+            input.claimReplayId,
+            current,
+            "publication_not_published",
+          );
+          if (rebound === null) {
+            await finishGraphLocked(tx, input.claimReplayId, "stale", null);
+            return { kind: "stale" as const };
+          }
+          current = rebound;
         }
         const anchor = await verifyCurrentClaimAnchor({
           scope: input.scope,
@@ -1232,12 +1362,15 @@ export async function recoverExhaustedClaimBatch(input: {
     assertExactClaimReplayCheckpoint(graph.checkpoint);
     const current = graph.checkpoint;
 
-    const freshness = await verifyPublishedMatchFreshness({
-      scope: input.scope,
-      matchRunId: current.matchRunId,
-      executor: tx,
-    });
-    if (!freshness.fresh) {
+    // Terminal by design: retries are already exhausted, so this path never
+    // rebinds — it only records the exact attempt's fate and finalizes.
+    if (
+      !(await verifyClaimPublication({
+        scope: input.scope,
+        matchRunId: current.matchRunId,
+        executor: tx,
+      }))
+    ) {
       await finishGraphLocked(tx, input.claimReplayId, "stale", null);
       return { kind: "stale" as const };
     }

@@ -149,6 +149,41 @@ async function startGraph(matchRunId: string): Promise<string> {
   return start.claimReplayId;
 }
 
+/**
+ * Publish a second, genuinely different match run over the same world. The
+ * invocation fingerprint carries the source run id, so republishing under
+ * `source-run-a` would replay the first run instead of superseding it; a new
+ * sync run carrying the same event observations produces a distinct
+ * publication that supersedes the first run's results.
+ */
+async function publishSecondMatchWorld(): Promise<{ runId: string }> {
+  await testPool!.query(
+    `INSERT INTO klaviyo_sync_run
+       (id, organization_id, shopify_store_id, connection_id, operation,
+        trigger_type, status, checkpoint, request_parameters,
+        requested_from, requested_to)
+     VALUES ('source-run-b', 'org-a', 'store-a', 'connection-a', 'events',
+       'manual', 'success', NULL,
+       '{"sourceMode":"order_core","metricKinds":["placed_order","ordered_product"]}',
+       '2026-07-01T00:00:00Z', '2026-07-30T00:00:00Z')`,
+  );
+  await testPool!.query(
+    `INSERT INTO klaviyo_event_run_observation
+       (organization_id, shopify_store_id, connection_id, sync_run_id,
+        event_id, observed_source_checksum)
+     SELECT organization_id, shopify_store_id, connection_id, 'source-run-b',
+            event_id, observed_source_checksum
+       FROM klaviyo_event_run_observation
+      WHERE sync_run_id = 'source-run-a'`,
+  );
+  const result = await matchService.computeAndPublishMatches({
+    scope,
+    sourceRunId: "source-run-b",
+    shopifyEvidenceRunId: "evidence-run-a",
+  });
+  return { runId: result.runId };
+}
+
 async function graphRow(claimReplayId: string) {
   const result = await testPool!.query(
     `SELECT status, failure_code, checkpoint, superseded_skipped,
@@ -565,6 +600,77 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
       `SELECT count(*)::int AS count FROM klaviyo_claim_replay_state`,
     );
     expect(states.rows[0].count).toBe(0);
+  });
+
+  it("rebinds a superseded graph to the current publication and keeps going", async () => {
+    const first = await publishMatchWorld();
+    const claimReplayId = await startGraph(first.matchRunId);
+    // A second publication supersedes the first run's results; the graph is
+    // pointed at yesterday's run, not invalid.
+    const second = await publishSecondMatchWorld();
+    expect(second.runId).not.toBe(first.matchRunId);
+
+    const client = fakeClaimClient();
+    const result = await repository.processClaimBatch(
+      { scope, claimReplayId },
+      {
+        createClient: () => client,
+        credentialProvider: fakeCredentialProvider,
+        verifyWriterReadiness: gateOpen,
+      },
+    );
+
+    expect(result.outcome).not.toBe("stale");
+    expect(result.processed).toBe(1);
+    const row = await graphRow(claimReplayId);
+    // The graph ran to its own completion instead of dying on the rebind.
+    expect(row.status).toBe("success");
+    expect((row.checkpoint as ClaimReplayCheckpoint).matchRunId).toBe(
+      second.runId,
+    );
+    const bindings = await testPool!.query(
+      `SELECT match_run_id, source_run_id FROM klaviyo_claim_replay_run
+        WHERE id = $1`,
+      [claimReplayId],
+    );
+    expect(bindings.rows[0]).toEqual({
+      match_run_id: second.runId,
+      source_run_id: "source-run-b",
+    });
+    const order = await testPool!.query(
+      `SELECT claim_count FROM klaviyo_order_match_result WHERE run_id = $1`,
+      [second.runId],
+    );
+    expect(order.rows[0].claim_count).toBe(1);
+  });
+
+  it("stales only when the connection has no published run to rebind onto", async () => {
+    const { matchRunId } = await publishMatchWorld();
+    const claimReplayId = await startGraph(matchRunId);
+    // The bound run is gone and the connection's only publication is
+    // superseded, so there is nothing current left to continue against.
+    await testPool!.query(
+      `UPDATE klaviyo_claim_replay_run
+          SET checkpoint = jsonb_set(checkpoint, '{matchRunId}',
+                                     '"match-run-gone"')
+        WHERE id = $1`,
+      [claimReplayId],
+    );
+    await testPool!.query(
+      `UPDATE klaviyo_match_run
+          SET superseded_at = greatest(published_at, now()) WHERE id = $1`,
+      [matchRunId],
+    );
+    const result = await repository.processClaimBatch(
+      { scope, claimReplayId },
+      {
+        createClient: () => fakeClaimClient(),
+        credentialProvider: fakeCredentialProvider,
+        verifyWriterReadiness: gateOpen,
+      },
+    );
+    expect(result.outcome).toBe("stale");
+    expect((await graphRow(claimReplayId)).status).toBe("stale");
   });
 
   it("reaps only an expired lease and preserves checkpoint and claims", async () => {

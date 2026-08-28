@@ -195,6 +195,12 @@ export async function verifyPublishedMatchFreshness(input: {
  * immutable facts about a Klaviyo event, so a Shopify projection that
  * drifted after publication cannot invalidate them, and the panel
  * re-joins claims to current order results at read time.
+ *
+ * The run's own `supersededAt` is deliberately NOT checked: a superseded
+ * publication is still a true record of what Klaviyo attributed, and every
+ * caller separately validates the specific conversion's event result
+ * through verifyCurrentClaimAnchor. (resolveCurrentPublishedMatchRun does
+ * filter it, because picking a rebind target is a different question.)
  */
 export async function verifyClaimPublication(input: {
   scope: KlaviyoConnectionScope;
@@ -243,7 +249,13 @@ export async function resolveCurrentPublishedMatchRun(input: {
         isNull(klaviyoMatchRuns.supersededAt),
       ),
     )
-    .orderBy(desc(klaviyoMatchRuns.publishedAt))
+    // A connection normally holds several published, unsuperseded runs, so
+    // the id tiebreaker is load-bearing: without it equal timestamps order
+    // arbitrarily and consecutive batches would rebind graphs back and
+    // forth. Correctness of the DESC ordering (Postgres sorts NULLs first)
+    // relies on status='published' implying published_at is not null, which
+    // klaviyo_match_run_terminal_shape_check guarantees.
+    .orderBy(desc(klaviyoMatchRuns.publishedAt), desc(klaviyoMatchRuns.id))
     .limit(1);
   return run ?? null;
 }
@@ -272,7 +284,10 @@ export async function verifyCurrentClaimAnchor(input: {
   // Claims need only that the run published and this conversion's event
   // result is still current — never that the Shopify projection still
   // matches, which hourly ingest breaks continuously and which has no
-  // bearing on what Klaviyo attributed a conversion to.
+  // bearing on what Klaviyo attributed a conversion to. The dropped gate
+  // also covered rule_or_config_changed and fingerprint_mismatch; both are
+  // benign here for the same reason — they say the next publication would
+  // match differently, not that this published run's event result lies.
   if (
     !(await verifyClaimPublication({
       scope: input.scope,
