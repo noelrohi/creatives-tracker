@@ -176,7 +176,7 @@ async function publishSecondMatchWorld(
      VALUES ('source-run-b', 'org-a', 'store-a', 'connection-a', 'events',
        'manual', 'success', NULL,
        '{"sourceMode":"order_core","metricKinds":["placed_order","ordered_product"]}',
-       '2026-07-01T00:00:00Z', '2026-07-30T00:00:00Z')`,
+       '2026-07-20T00:00:00Z', '2026-07-21T00:00:00Z')`,
   );
   await testPool!.query(
     `INSERT INTO klaviyo_event_run_observation
@@ -198,8 +198,8 @@ async function publishSecondMatchWorld(
           store_timezone, anchor_store_day, requested_from, requested_to,
           status, identity_capability, line_completeness)
        VALUES ('evidence-run-b', 'trigger-b', 'org-a', 'store-a', 'initial_90d',
-         'America/New_York', '2026-07-30', '2026-07-01T00:00:00Z',
-         '2026-07-30T00:00:00Z', 'success', 'unavailable', 'complete')`,
+         'America/New_York', '2026-07-20', '2026-07-20T00:00:00Z',
+         '2026-07-21T00:00:00Z', 'success', 'unavailable', 'complete')`,
     );
     await testPool!.query(
       `INSERT INTO shopify_evidence_run_observation
