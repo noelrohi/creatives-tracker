@@ -126,6 +126,7 @@ const MIGRATION_PATHS = [
   "drizzle/0055_klaviyo_shopify_evidence.sql",
   "drizzle/0056_klaviyo_source_core.sql",
   "drizzle/0057_klaviyo_advisory_matching.sql",
+  "drizzle/0070_majestic_peter_parker.sql",
 ].map((file) => path.resolve(process.cwd(), file));
 
 async function createFixtureSchema(pool: Pool): Promise<void> {
@@ -358,6 +359,9 @@ async function startCommitRun(): Promise<string> {
     startTriggerRunId: `privacy-${crypto.randomUUID()}`,
     scope,
     mode: "initial_90d",
+    refreshPlan: { strategy: "full", baselineEvidenceRunId: null },
+    matchingKeyVersion: "v1",
+    suppressionKeyVersion: "e1",
     storeTimezone: "UTC",
     anchorStoreDay: "2026-07-31",
     window: {

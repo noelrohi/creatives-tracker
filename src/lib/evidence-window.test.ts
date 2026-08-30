@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertValidIanaTimezone,
   assertValidStoreDay,
+  deriveShopifyEvidenceRefreshPreference,
   deriveShopifyEvidenceWindow,
   formatStoreDayAtInstant,
   inclusiveStoreDaysToHalfOpenUtc,
@@ -94,6 +95,18 @@ describe("Shopify evidence windows", () => {
     });
     expect(window.from.toISOString()).toBe("2026-07-29T16:00:00.000Z");
     expect(window.to.toISOString()).toBe("2026-07-31T16:00:00.000Z");
+  });
+
+  it("chooses full refreshes for initial and Sunday runs", () => {
+    expect(
+      deriveShopifyEvidenceRefreshPreference("initial_90d", "2026-08-29"),
+    ).toBe("full");
+    expect(
+      deriveShopifyEvidenceRefreshPreference("incremental_7d", "2026-08-30"),
+    ).toBe("full");
+    expect(
+      deriveShopifyEvidenceRefreshPreference("incremental_7d", "2026-08-31"),
+    ).toBe("changed");
   });
 
   it("derives exact inclusive 90-day and 7-day anchor ranges", () => {

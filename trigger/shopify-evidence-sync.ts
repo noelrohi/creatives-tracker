@@ -20,6 +20,7 @@ import {
   recordFirstBatchTriggerRunId,
   renewShopifyEvidenceRunHeartbeat,
   resolveConfiguredEvidenceStore,
+  resolveShopifyEvidenceRefreshPlan,
   startShopifyEvidenceRun,
   type EvidenceOrderCursor,
 } from "@/lib/shopify-evidence-store";
@@ -29,6 +30,7 @@ import {
   type ShopifyEvidenceBatchResult,
 } from "@/lib/shopify-evidence-runner";
 import {
+  deriveShopifyEvidenceRefreshPreference,
   deriveShopifyEvidenceWindow,
   formatStoreDayAtInstant,
   type ShopifyEvidenceMode,
@@ -126,7 +128,7 @@ export type ShopifyEvidenceBatchOrchestrationDependencies = {
   ) => Promise<ShopifyEvidenceBatchResult>;
   enqueue: typeof enqueueBatch;
   finishRun: typeof finishShopifyEvidenceRun;
-  setMetadata: (key: string, value: string) => void;
+  setMetadata: (key: string, value: string | number) => void;
 };
 
 function productionBatchDependencies(): ShopifyEvidenceBatchOrchestrationDependencies {
@@ -141,7 +143,14 @@ function productionBatchDependencies(): ShopifyEvidenceBatchOrchestrationDepende
         ensureCryptoPolicy: ensureIdentityCryptoPolicy,
         loadStore: loadEvidenceStore,
         graphql: shopifyGraphql,
-        listOrderBatch: listEvidenceOrderBatch,
+        listOrderBatch: (scope, window, cursor, baselineEvidenceRunId) =>
+          listEvidenceOrderBatch(
+            scope,
+            window,
+            cursor,
+            25,
+            baselineEvidenceRunId,
+          ),
         fetchLines: fetchCompleteShopifyOrderLines,
         fetchIdentity: fetchShopifyIdentityEvidence,
         commitOrder: commitShopifyEvidenceOrder,
@@ -181,6 +190,10 @@ export async function executeShopifyEvidenceBatch(
   const scope = run.scope;
   await deps.renewHeartbeat(scope, run.id, now);
   deps.setMetadata("evidenceRunId", run.id);
+  deps.setMetadata("refreshStrategy", run.refreshStrategy);
+  if (run.baselineEvidenceRunId) {
+    deps.setMetadata("baselineEvidenceRunId", run.baselineEvidenceRunId);
+  }
   deps.setMetadata("status", "enriching");
   const result = await deps.runBatch({
     ...scope,
@@ -190,6 +203,7 @@ export async function executeShopifyEvidenceBatch(
     counts: run.counts,
     identityCapability: run.identityCapability,
     lineCompleteness: run.lineCompleteness,
+    baselineEvidenceRunId: run.baselineEvidenceRunId,
   });
 
   if (result.kind === "continue") {
@@ -204,7 +218,7 @@ export async function executeShopifyEvidenceBatch(
     return { kind: "continue" as const, runId: run.id };
   }
 
-  await deps.finishRun({
+  const summary = await deps.finishRun({
     scope,
     runId: run.id,
     expectedCursor: result.committedCursor,
@@ -217,6 +231,11 @@ export async function executeShopifyEvidenceBatch(
     error: result.status === "partial" ? "incomplete_line_set" : null,
     now,
   });
+  deps.setMetadata("ordersFetched", result.counts.ordersRead);
+  if (summary) {
+    deps.setMetadata("ordersCarriedForward", summary.ordersCarriedForward);
+    deps.setMetadata("finalSnapshotOrderCount", summary.snapshotOrderCount);
+  }
   deps.setMetadata("status", result.status);
   return { kind: "terminal" as const, runId: run.id, status: result.status };
 }
@@ -225,14 +244,17 @@ export type ShopifyEvidenceStartOrchestrationDependencies = {
   loadByStartTriggerId: typeof loadEvidenceRunByStartTriggerId;
   loadRun: typeof loadShopifyEvidenceRun;
   failExpiredRun: typeof failExpiredShopifyEvidenceRun;
-  captureSecretPolicy: () => (
-    scope: { organizationId: string; storeId: string },
-  ) => void;
+  captureSecretPolicy: () => {
+    validateScope: (scope: { organizationId: string; storeId: string }) => void;
+    matchingKeyVersion: string;
+    suppressionKeyVersion: string;
+  };
   getConfiguredDomain: () => string;
   resolveStore: typeof resolveConfiguredEvidenceStore;
   reconcileStore: typeof reconcileShopifyEvidenceStoreForStart;
   probeCapabilities: typeof probeShopifyEvidenceCapabilities;
   countOrders: typeof countEvidenceOrders;
+  resolveRefreshPlan: typeof resolveShopifyEvidenceRefreshPlan;
   startRun: typeof startShopifyEvidenceRun;
   enqueue: typeof enqueueBatch;
   recordFirstBatch: typeof recordFirstBatchTriggerRunId;
@@ -247,8 +269,12 @@ function productionStartDependencies(): ShopifyEvidenceStartOrchestrationDepende
     captureSecretPolicy: () => {
       const keyring = parseIdentityHmacKeyring();
       const suppressionKey = parseErasureSuppressionKey();
-      return (scope) => {
-        computeIdentityCryptoKeyChecks({ scope, keyring, suppressionKey });
+      return {
+        matchingKeyVersion: keyring.current.version,
+        suppressionKeyVersion: suppressionKey.version,
+        validateScope: (scope) => {
+          computeIdentityCryptoKeyChecks({ scope, keyring, suppressionKey });
+        },
       };
     },
     getConfiguredDomain: getShopifyShopDomain,
@@ -257,6 +283,7 @@ function productionStartDependencies(): ShopifyEvidenceStartOrchestrationDepende
     probeCapabilities: () =>
       probeShopifyEvidenceCapabilities(shopifyGraphql),
     countOrders: countEvidenceOrders,
+    resolveRefreshPlan: resolveShopifyEvidenceRefreshPlan,
     startRun: startShopifyEvidenceRun,
     enqueue: enqueueBatch,
     recordFirstBatch: recordFirstBatchTriggerRunId,
@@ -366,13 +393,13 @@ export async function executeShopifyEvidenceStart(
     );
   }
 
-  const validateSecretPolicy = deps.captureSecretPolicy();
+  const secretPolicy = deps.captureSecretPolicy();
   const store = await deps.resolveStore(deps.getConfiguredDomain());
   const scope = {
     organizationId: store.organizationId,
     storeId: store.id,
   };
-  validateSecretPolicy(scope);
+  secretPolicy.validateScope(scope);
   await deps.reconcileStore(scope, now);
 
   const anchorStoreDay = formatStoreDayAtInstant(now, store.ianaTimezone);
@@ -388,6 +415,19 @@ export async function executeShopifyEvidenceStart(
     capabilities.orderScope === "available" &&
     (payload.mode !== "initial_90d" ||
       capabilities.historicalOrders === "available");
+  const preferredStrategy = deriveShopifyEvidenceRefreshPreference(
+    payload.mode,
+    anchorStoreDay,
+  );
+  const refreshPlan = orderAccessAvailable
+    ? await deps.resolveRefreshPlan({
+        scope,
+        window,
+        preferredStrategy,
+        matchingKeyVersion: secretPolicy.matchingKeyVersion,
+        suppressionKeyVersion: secretPolicy.suppressionKeyVersion,
+      })
+    : { strategy: "full" as const, baselineEvidenceRunId: null };
 
   let disposition: Parameters<typeof startShopifyEvidenceRun>[0]["disposition"];
   if (orderAccessAvailable) {
@@ -413,6 +453,9 @@ export async function executeShopifyEvidenceStart(
     startTriggerRunId: triggerRunId,
     scope,
     mode: payload.mode,
+    refreshPlan,
+    matchingKeyVersion: secretPolicy.matchingKeyVersion,
+    suppressionKeyVersion: secretPolicy.suppressionKeyVersion,
     storeTimezone: store.ianaTimezone,
     anchorStoreDay,
     window,

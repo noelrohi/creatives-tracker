@@ -45,6 +45,11 @@ export const shopifyEvidenceCompletenessEnum = pgEnum(
   ["unknown", "complete", "partial", "unavailable"],
 );
 
+export const shopifyEvidenceRefreshStrategyEnum = pgEnum(
+  "shopify_evidence_refresh_strategy",
+  ["full", "changed"],
+);
+
 export const shopifyOrderLines = pgTable(
   "shopify_order_line",
   {
@@ -327,6 +332,12 @@ export const shopifyEvidenceSyncRuns = pgTable(
     organizationId: text("organization_id").notNull(),
     storeId: text("store_id").notNull(),
     mode: text("mode").notNull(),
+    refreshStrategy: shopifyEvidenceRefreshStrategyEnum("refresh_strategy")
+      .default("full")
+      .notNull(),
+    baselineEvidenceRunId: text("baseline_evidence_run_id"),
+    matchingKeyVersion: text("matching_key_version"),
+    suppressionKeyVersion: text("suppression_key_version"),
     storeTimezone: text("store_timezone").notNull(),
     anchorStoreDay: text("anchor_store_day").notNull(),
     requestedFrom: timestamp("requested_from").notNull(),
@@ -345,6 +356,8 @@ export const shopifyEvidenceSyncRuns = pgTable(
     ordersEnriched: integer("orders_enriched").default(0).notNull(),
     ordersPartial: integer("orders_partial").default(0).notNull(),
     ordersUnavailable: integer("orders_unavailable").default(0).notNull(),
+    ordersCarriedForward: integer("orders_carried_forward").default(0).notNull(),
+    snapshotOrderCount: integer("snapshot_order_count").default(0).notNull(),
     warnings: integer("warnings").default(0).notNull(),
     failures: integer("failures").default(0).notNull(),
     error: text("error"),
@@ -366,6 +379,10 @@ export const shopifyEvidenceSyncRuns = pgTable(
       "shopify_evidence_sync_run_mode_check",
       sql`${table.mode} IN ('initial_90d', 'incremental_7d')`,
     ),
+    check(
+      "shopify_evidence_sync_run_snapshot_counts_nonnegative",
+      sql`${table.ordersCarriedForward} >= 0 AND ${table.snapshotOrderCount} >= 0`,
+    ),
     unique("shopify_evidence_sync_run_start_trigger_uniq").on(
       table.startTriggerRunId,
     ),
@@ -381,6 +398,9 @@ export const shopifyEvidenceSyncRuns = pgTable(
       table.organizationId,
       table.storeId,
       table.startedAt,
+    ),
+    index("shopify_evidence_sync_run_baseline_idx").on(
+      table.baselineEvidenceRunId,
     ),
   ],
 );
@@ -398,6 +418,7 @@ export const shopifyEvidenceRunObservations = pgTable(
     lineDisposition: text("line_disposition").notNull(),
     identityDisposition: text("identity_disposition").notNull(),
     observedContentChecksum: text("observed_content_checksum").notNull(),
+    sourceOrderUpdatedAt: timestamp("source_order_updated_at"),
     observedAt: timestamp("observed_at").defaultNow().notNull(),
   },
   (table) => [

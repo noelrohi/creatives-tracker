@@ -55,6 +55,7 @@ const ORDER = {
   id: "order_internal_1",
   shopifyOrderId: "gid://shopify/Order/1",
   orderCreatedAt: NOW,
+  orderUpdatedAt: NOW,
 };
 const ORDER_CURSOR = {
   orderCreatedAt: NOW,
@@ -748,6 +749,10 @@ function orchestrationRun(
     organizationId: "org_a",
     storeId: "store_a",
     mode: "incremental_7d" as const,
+    refreshStrategy: "full" as const,
+    baselineEvidenceRunId: null,
+    matchingKeyVersion: "matching-v2",
+    suppressionKeyVersion: "erasure-v1",
     storeTimezone: "UTC",
     anchorStoreDay: "2026-07-31",
     requestedFrom: new Date("2026-07-25T00:00:00.000Z"),
@@ -786,6 +791,10 @@ function orchestrationRun(
 function batchOrchestrationDeps(input: {
   run?: ReturnType<typeof orchestrationRun> | null;
   result?: Awaited<ReturnType<typeof runShopifyEvidenceBatch>>;
+  finishSummary?: {
+    ordersCarriedForward: number;
+    snapshotOrderCount: number;
+  };
 } = {}) {
   const run = input.run === undefined ? orchestrationRun() : input.run;
   const result =
@@ -804,7 +813,7 @@ function batchOrchestrationDeps(input: {
     renewHeartbeat: vi.fn(async () => undefined),
     runBatch: vi.fn(async () => result),
     enqueue: vi.fn(async () => ({ id: "next_trigger" })),
-    finishRun: vi.fn(async () => undefined),
+    finishRun: vi.fn(async () => input.finishSummary),
     setMetadata: vi.fn(),
   };
   return {
@@ -833,7 +842,11 @@ function startOrchestrationDeps(input: {
     loadByStartTriggerId: vi.fn(async () => existing),
     loadRun: vi.fn(async () => reloaded),
     failExpiredRun: vi.fn(async () => ({ changed: input.expired ?? false })),
-    captureSecretPolicy: vi.fn(() => validateSecretPolicy),
+    captureSecretPolicy: vi.fn(() => ({
+      validateScope: validateSecretPolicy,
+      matchingKeyVersion: "matching-v2",
+      suppressionKeyVersion: "erasure-v1",
+    })),
     validateSecretPolicy,
     getConfiguredDomain: vi.fn(() => "store-a.myshopify.com"),
     resolveStore: vi.fn(async () => ({
@@ -853,6 +866,10 @@ function startOrchestrationDeps(input: {
         },
     ),
     countOrders: vi.fn(async () => 3),
+    resolveRefreshPlan: vi.fn(async () => ({
+      strategy: "full" as const,
+      baselineEvidenceRunId: null,
+    })),
     startRun: vi.fn(async () => ({
       id: "evidence_run_1",
       status: input.insertedStatus ?? ("running" as const),
@@ -915,6 +932,7 @@ describe("Shopify evidence Trigger orchestration", () => {
       counts: orchestrationRun().counts,
       identityCapability: "available",
       lineCompleteness: "complete",
+      baselineEvidenceRunId: null,
     });
   });
 
@@ -997,6 +1015,10 @@ describe("Shopify evidence Trigger orchestration", () => {
         lineCompleteness: "unknown",
         counts,
       }),
+      finishSummary: {
+        ordersCarriedForward: 42,
+        snapshotOrderCount: 100,
+      },
       result: {
         kind: "terminal",
         status: "success",
@@ -1022,6 +1044,9 @@ describe("Shopify evidence Trigger orchestration", () => {
       error: null,
       now: NOW,
     });
+    expect(mocks.setMetadata).toHaveBeenCalledWith("ordersFetched", 4);
+    expect(mocks.setMetadata).toHaveBeenCalledWith("ordersCarriedForward", 42);
+    expect(mocks.setMetadata).toHaveBeenCalledWith("finalSnapshotOrderCount", 100);
     expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
@@ -1033,11 +1058,24 @@ describe("Shopify evidence Trigger orchestration", () => {
       new Date("2026-07-31T23:59:00.000Z"),
       deps,
     );
+    expect(mocks.resolveRefreshPlan).toHaveBeenCalledWith({
+      scope: { organizationId: "org_a", storeId: "store_a" },
+      window: {
+        from: new Date("2026-07-25T00:00:00.000Z"),
+        to: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      preferredStrategy: "changed",
+      matchingKeyVersion: "matching-v2",
+      suppressionKeyVersion: "erasure-v1",
+    });
     expect(mocks.startRun).toHaveBeenCalledWith(
       expect.objectContaining({
         startTriggerRunId: "trigger_start_1",
         scope: { organizationId: "org_a", storeId: "store_a" },
         mode: "incremental_7d",
+        refreshPlan: { strategy: "full", baselineEvidenceRunId: null },
+        matchingKeyVersion: "matching-v2",
+        suppressionKeyVersion: "erasure-v1",
         storeTimezone: "UTC",
         anchorStoreDay: "2026-07-31",
         window: {
@@ -1094,9 +1132,13 @@ describe("Shopify evidence Trigger orchestration", () => {
     mocks.captureSecretPolicy.mockImplementation(() => {
       const capturedSecretSet = activeSecretSet;
       observedSecretSets.push(`validated:${capturedSecretSet}`);
-      return vi.fn(() => {
-        observedSecretSets.push(`policy:${capturedSecretSet}`);
-      });
+      return {
+        matchingKeyVersion: "matching-v2",
+        suppressionKeyVersion: "erasure-v1",
+        validateScope: vi.fn(() => {
+          observedSecretSets.push(`policy:${capturedSecretSet}`);
+        }),
+      };
     });
     mocks.resolveStore.mockImplementation(async () => {
       activeSecretSet = "keys-b";

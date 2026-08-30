@@ -174,6 +174,23 @@ export function assertValidIanaTimezone(value: string): void {
   }
 }
 
+export type ShopifyEvidenceRefreshStrategy = "full" | "changed";
+
+export function deriveShopifyEvidenceRefreshPreference(
+  mode: ShopifyEvidenceMode,
+  anchorStoreDay: string,
+): ShopifyEvidenceRefreshStrategy {
+  const day = parseStoreDay(anchorStoreDay);
+  if (mode === "initial_90d") return "full";
+  if (mode !== "incremental_7d") {
+    throw new Error("Unsupported Shopify evidence mode");
+  }
+  const weekday = new Date(
+    Date.UTC(day.year, day.month - 1, day.day),
+  ).getUTCDay();
+  return weekday === 0 ? "full" : "changed";
+}
+
 export function formatStoreDayAtInstant(
   instant: Date,
   timeZone: string,

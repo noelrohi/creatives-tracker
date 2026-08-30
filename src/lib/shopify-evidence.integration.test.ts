@@ -58,6 +58,7 @@ const {
   reconcileShopifyEvidenceStoreForStart,
   recordFirstBatchTriggerRunId,
   resolveConfiguredEvidenceStore,
+  resolveShopifyEvidenceRefreshPlan,
   renewShopifyEvidenceRunHeartbeat,
   replaceCompleteShopifyLineSet,
   startShopifyEvidenceRun,
@@ -134,6 +135,7 @@ const MIGRATION_PATHS = [
   "drizzle/0055_klaviyo_shopify_evidence.sql",
   "drizzle/0056_klaviyo_source_core.sql",
   "drizzle/0057_klaviyo_advisory_matching.sql",
+  "drizzle/0070_majestic_peter_parker.sql",
 ].map((file) => path.resolve(process.cwd(), file));
 
 async function createFixtureSchema(pool: Pool): Promise<void> {
@@ -267,6 +269,9 @@ async function startRun(
     startTriggerRunId,
     scope: runScope,
     mode: "incremental_7d",
+    refreshPlan: { strategy: "full", baselineEvidenceRunId: null },
+    matchingKeyVersion: "v1",
+    suppressionKeyVersion: "e1",
     storeTimezone: "UTC",
     anchorStoreDay: "2026-07-31",
     window: {
@@ -457,6 +462,225 @@ describeIfDb("Shopify evidence persistence", () => {
     expect(second.nextCursor).toBeNull();
     await expect(countEvidenceOrders(scope, window)).resolves.toBe(2);
     await expect(countEvidenceOrders(otherScope, window)).resolves.toBe(1);
+  });
+
+  it("selects only new or source-updated orders against a compatible baseline", async () => {
+    const baseline = await startShopifyEvidenceRun({
+      startTriggerRunId: "trigger-baseline-selection",
+      scope,
+      mode: "incremental_7d",
+      refreshPlan: { strategy: "full", baselineEvidenceRunId: null },
+      matchingKeyVersion: "v1",
+      suppressionKeyVersion: "e1",
+      storeTimezone: "UTC",
+      anchorStoreDay: "2026-07-31",
+      window: {
+        from: new Date("2026-07-25T00:00:00.000Z"),
+        to: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      disposition: { kind: "running", identityCapability: "unknown" },
+      now: new Date("2026-08-01T00:00:00.000Z"),
+    });
+    const progress = {
+      counts: { ...ZERO_COUNTS, ordersRead: 1, ordersEnriched: 1 },
+      identityCapability: "unknown" as const,
+      lineCompleteness: "complete" as const,
+    };
+    await commitShopifyEvidenceOrder({
+      scope,
+      evidenceRunId: baseline.id,
+      orderId: "order_a",
+      shopifyOrderId: "gid://shopify/Order/1",
+      expectedCursor: null,
+      nextCursor: FIRST_CURSOR,
+      lines: firstCompleteSet,
+      lineDisposition: "complete",
+      identity: { status: "not_refreshed" },
+      progress,
+      sourceOrderUpdatedAt: new Date("2026-07-30T02:00:00.000Z"),
+    });
+    await finishShopifyEvidenceRun({
+      scope,
+      runId: baseline.id,
+      expectedCursor: FIRST_CURSOR,
+      status: "success",
+      progress,
+    });
+
+    const window = {
+      from: new Date("2026-07-25T00:00:00.000Z"),
+      to: new Date("2026-08-01T00:00:00.000Z"),
+    };
+    const plan = await resolveShopifyEvidenceRefreshPlan({
+      scope,
+      window,
+      preferredStrategy: "changed",
+      matchingKeyVersion: "v1",
+      suppressionKeyVersion: "e1",
+    });
+    expect(plan).toEqual({
+      strategy: "changed",
+      baselineEvidenceRunId: baseline.id,
+    });
+    await expect(
+      resolveShopifyEvidenceRefreshPlan({
+        scope,
+        window,
+        preferredStrategy: "changed",
+        matchingKeyVersion: "v2",
+        suppressionKeyVersion: "e1",
+      }),
+    ).resolves.toEqual({ strategy: "full", baselineEvidenceRunId: null });
+    const initial = await listEvidenceOrderBatch(
+      scope,
+      window,
+      null,
+      100,
+      baseline.id,
+    );
+    expect(initial.orders.map((order) => order.id)).toEqual([
+      "order_a2",
+      "order_a3",
+    ]);
+
+    await testPool!.query(
+      `UPDATE shopify_order SET order_updated_at = '2026-07-31 06:00:00'
+       WHERE id = 'order_a'`,
+    );
+    const changed = await listEvidenceOrderBatch(
+      scope,
+      window,
+      null,
+      100,
+      baseline.id,
+    );
+    expect(changed.orders.map((order) => order.id)).toEqual([
+      "order_a",
+      "order_a2",
+      "order_a3",
+    ]);
+
+    await testPool!.query(
+      `UPDATE shopify_evidence_run_observation
+       SET source_order_updated_at = NULL
+       WHERE evidence_run_id = $1 AND order_id = 'order_a'`,
+      [baseline.id],
+    );
+    await expect(
+      resolveShopifyEvidenceRefreshPlan({
+        scope,
+        window,
+        preferredStrategy: "changed",
+        matchingKeyVersion: "v1",
+        suppressionKeyVersion: "e1",
+      }),
+    ).resolves.toEqual({ strategy: "full", baselineEvidenceRunId: null });
+  });
+
+  it("carries unchanged observations into a complete changed snapshot", async () => {
+    await testPool!.query(`DELETE FROM shopify_order WHERE id IN ('order_a2', 'order_a3')`);
+    const baseline = await startShopifyEvidenceRun({
+      startTriggerRunId: "trigger-baseline-carry",
+      scope,
+      mode: "incremental_7d",
+      refreshPlan: { strategy: "full", baselineEvidenceRunId: null },
+      matchingKeyVersion: "v1",
+      suppressionKeyVersion: "e1",
+      storeTimezone: "UTC",
+      anchorStoreDay: "2026-07-31",
+      window: {
+        from: new Date("2026-07-25T00:00:00.000Z"),
+        to: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      disposition: { kind: "running", identityCapability: "unknown" },
+      now: new Date("2026-08-01T00:00:00.000Z"),
+    });
+    const baselineProgress = {
+      counts: { ...ZERO_COUNTS, ordersRead: 1, ordersEnriched: 1 },
+      identityCapability: "available" as const,
+      lineCompleteness: "complete" as const,
+    };
+    await commitShopifyEvidenceOrder({
+      scope,
+      evidenceRunId: baseline.id,
+      orderId: "order_a",
+      shopifyOrderId: "gid://shopify/Order/1",
+      expectedCursor: null,
+      nextCursor: FIRST_CURSOR,
+      lines: firstCompleteSet,
+      lineDisposition: "complete",
+      identity: availableIdentity(),
+      progress: baselineProgress,
+      sourceOrderUpdatedAt: new Date("2026-07-30T02:00:00.000Z"),
+    });
+    await finishShopifyEvidenceRun({
+      scope,
+      runId: baseline.id,
+      expectedCursor: FIRST_CURSOR,
+      status: "success",
+      progress: baselineProgress,
+    });
+
+    const changed = await startShopifyEvidenceRun({
+      startTriggerRunId: "trigger-changed-carry",
+      scope,
+      mode: "incremental_7d",
+      refreshPlan: {
+        strategy: "changed",
+        baselineEvidenceRunId: baseline.id,
+      },
+      matchingKeyVersion: "v1",
+      suppressionKeyVersion: "e1",
+      storeTimezone: "UTC",
+      anchorStoreDay: "2026-08-01",
+      window: {
+        from: new Date("2026-07-26T00:00:00.000Z"),
+        to: new Date("2026-08-02T00:00:00.000Z"),
+      },
+      disposition: { kind: "running", identityCapability: "unknown" },
+      now: new Date("2026-08-02T00:00:00.000Z"),
+    });
+    const zeroProgress = {
+      counts: ZERO_COUNTS,
+      identityCapability: "unknown" as const,
+      lineCompleteness: "unknown" as const,
+    };
+    await finishShopifyEvidenceRun({
+      scope,
+      runId: changed.id,
+      expectedCursor: null,
+      status: "success",
+      progress: zeroProgress,
+    });
+
+    const persisted = await loadShopifyEvidenceRun(changed.id);
+    expect(persisted).toMatchObject({
+      status: "success",
+      lineCompleteness: "complete",
+      ordersCarriedForward: 1,
+      snapshotOrderCount: 1,
+    });
+    const [snapshot, identities] = await Promise.all([
+      testPool!.query(
+        `SELECT order_id, source_order_updated_at::text
+         FROM shopify_evidence_run_observation
+         WHERE evidence_run_id = $1`,
+        [changed.id],
+      ),
+      testPool!.query(
+        `SELECT count(*)::int AS count
+         FROM shopify_evidence_run_identity_observation
+         WHERE evidence_run_id = $1`,
+        [changed.id],
+      ),
+    ]);
+    expect(snapshot.rows).toEqual([
+      {
+        order_id: "order_a",
+        source_order_updated_at: "2026-07-30 02:00:00",
+      },
+    ]);
+    expect(identities.rows).toEqual([{ count: 1 }]);
   });
 
   it("resolves exactly one normalized configured store and fails closed otherwise", async () => {
@@ -1231,6 +1455,7 @@ describeIfDb("Shopify evidence persistence", () => {
       "identity_disposition",
       "observed_content_checksum",
       "observed_at",
+      "source_order_updated_at",
     ]);
     expect(columnAllowlists[1].rows.map((row) => row.column_name)).toEqual([
       "id",
@@ -2504,6 +2729,9 @@ describeIfDb("Shopify evidence persistence", () => {
         startTriggerRunId: "trigger-stable-conflict",
         scope: conflict.scope,
         mode: conflict.mode,
+        refreshPlan: { strategy: "full", baselineEvidenceRunId: null },
+        matchingKeyVersion: "v1",
+        suppressionKeyVersion: "e1",
         storeTimezone: conflict.storeTimezone,
         anchorStoreDay: conflict.anchorStoreDay,
         window: conflict.window,
@@ -3095,6 +3323,9 @@ describeIfDb("Shopify evidence persistence", () => {
         startTriggerRunId: "trigger-invalid-zone",
         scope,
         mode: "incremental_7d",
+        refreshPlan: { strategy: "full", baselineEvidenceRunId: null },
+        matchingKeyVersion: "v1",
+        suppressionKeyVersion: "e1",
         storeTimezone: "Not/A_Zone",
         anchorStoreDay: "2026-07-31",
         window: {
@@ -3110,6 +3341,9 @@ describeIfDb("Shopify evidence persistence", () => {
         startTriggerRunId: "trigger-invalid-day",
         scope,
         mode: "incremental_7d",
+        refreshPlan: { strategy: "full", baselineEvidenceRunId: null },
+        matchingKeyVersion: "v1",
+        suppressionKeyVersion: "e1",
         storeTimezone: "UTC",
         anchorStoreDay: "2026-02-30",
         window: {
@@ -3125,6 +3359,9 @@ describeIfDb("Shopify evidence persistence", () => {
         startTriggerRunId: "trigger-invalid-mode",
         scope,
         mode: "unsupported" as "incremental_7d",
+        refreshPlan: { strategy: "full", baselineEvidenceRunId: null },
+        matchingKeyVersion: "v1",
+        suppressionKeyVersion: "e1",
         storeTimezone: "UTC",
         anchorStoreDay: "2026-07-31",
         window: {
@@ -3146,6 +3383,9 @@ describeIfDb("Shopify evidence persistence", () => {
       startTriggerRunId: "trigger-unavailable",
       scope,
       mode: "initial_90d",
+      refreshPlan: { strategy: "full", baselineEvidenceRunId: null },
+      matchingKeyVersion: "v1",
+      suppressionKeyVersion: "e1",
       storeTimezone: "UTC",
       anchorStoreDay: "2026-07-31",
       window: {

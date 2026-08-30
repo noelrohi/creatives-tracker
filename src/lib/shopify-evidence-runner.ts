@@ -27,6 +27,7 @@ export type ShopifyEvidenceBatchPayload = IdentityScope &
     counts: ShopifyEvidenceRunCounts;
     identityCapability: "unknown" | "available" | "unavailable";
     lineCompleteness: "unknown" | "complete" | "partial" | "unavailable";
+    baselineEvidenceRunId?: string | null;
   };
 
 type ShopifyEvidenceCheckpointProgress = {
@@ -64,6 +65,7 @@ export type ShopifyEvidenceRunnerDependencies = {
     scope: IdentityScope,
     window: HalfOpenWindow,
     cursor: EvidenceOrderCursor | null,
+    baselineEvidenceRunId: string | null,
   ) => Promise<EvidenceOrderBatch>;
   fetchLines: (
     graphql: ShopifyGraphql,
@@ -89,6 +91,7 @@ export type ShopifyEvidenceRunnerDependencies = {
       | NormalizedShopifyIdentityEvidence
       | { status: "not_refreshed" };
     progress: ShopifyEvidenceCheckpointProgress;
+    sourceOrderUpdatedAt: Date | null;
   }) => Promise<{
     observedContentChecksum: string;
     identityHmacId: string | null;
@@ -137,6 +140,7 @@ export async function runShopifyEvidenceBatch(
     scope,
     { from: payload.from, to: payload.to },
     payload.cursor,
+    payload.baselineEvidenceRunId ?? null,
   );
   const counts = { ...payload.counts };
   let identityCapability = payload.identityCapability;
@@ -206,6 +210,8 @@ export async function runShopifyEvidenceBatch(
       lineDisposition,
       identity,
       progress: { counts, identityCapability, lineCompleteness },
+      sourceOrderUpdatedAt:
+        lines?.orderUpdatedAt ?? order.orderUpdatedAt ?? null,
     });
     lastCommittedCursor = nextCommittedCursor;
 

@@ -5,6 +5,7 @@ import {
   and,
   asc,
   count,
+  desc,
   eq,
   gt,
   gte,
@@ -21,6 +22,7 @@ import {
   deriveShopifyEvidenceWindow,
   type HalfOpenWindow,
   type ShopifyEvidenceMode,
+  type ShopifyEvidenceRefreshStrategy,
 } from "@/lib/evidence-window";
 import type { IdentityCryptoKeyChecks, IdentityScope } from "@/lib/identity-hmac";
 import type {
@@ -49,6 +51,7 @@ export type EvidenceOrderBatch = {
     id: string;
     shopifyOrderId: string;
     orderCreatedAt: Date;
+    orderUpdatedAt?: Date | null;
   }>;
   nextCursor: EvidenceOrderCursor | null;
 };
@@ -362,11 +365,84 @@ export async function resolveConfiguredEvidenceStore(shopDomain: string) {
   return store;
 }
 
+export type ShopifyEvidenceRefreshPlan = {
+  strategy: ShopifyEvidenceRefreshStrategy;
+  baselineEvidenceRunId: string | null;
+};
+
+export async function resolveShopifyEvidenceRefreshPlan(input: {
+  scope: IdentityScope;
+  window: HalfOpenWindow;
+  preferredStrategy: ShopifyEvidenceRefreshStrategy;
+  matchingKeyVersion: string;
+  suppressionKeyVersion: string;
+}): Promise<ShopifyEvidenceRefreshPlan> {
+  assertValidWindow(input.window);
+  if (input.preferredStrategy === "full") {
+    return { strategy: "full", baselineEvidenceRunId: null };
+  }
+  const [baseline] = await db
+    .select({ id: shopifyEvidenceSyncRuns.id })
+    .from(shopifyEvidenceSyncRuns)
+    .where(
+      and(
+        eq(shopifyEvidenceSyncRuns.organizationId, input.scope.organizationId),
+        eq(shopifyEvidenceSyncRuns.storeId, input.scope.storeId),
+        eq(shopifyEvidenceSyncRuns.status, "success"),
+        eq(shopifyEvidenceSyncRuns.lineCompleteness, "complete"),
+        eq(shopifyEvidenceSyncRuns.matchingKeyVersion, input.matchingKeyVersion),
+        eq(
+          shopifyEvidenceSyncRuns.suppressionKeyVersion,
+          input.suppressionKeyVersion,
+        ),
+        lt(shopifyEvidenceSyncRuns.requestedFrom, input.window.to),
+        gt(shopifyEvidenceSyncRuns.requestedTo, input.window.from),
+      ),
+    )
+    .orderBy(desc(shopifyEvidenceSyncRuns.finishedAt))
+    .limit(1);
+  if (!baseline) return { strategy: "full", baselineEvidenceRunId: null };
+
+  const [legacy] = await db
+    .select({ value: count() })
+    .from(shopifyEvidenceRunObservations)
+    .innerJoin(
+      shopifyOrders,
+      and(
+        eq(
+          shopifyOrders.organizationId,
+          shopifyEvidenceRunObservations.organizationId,
+        ),
+        eq(shopifyOrders.storeId, shopifyEvidenceRunObservations.storeId),
+        eq(shopifyOrders.id, shopifyEvidenceRunObservations.orderId),
+      ),
+    )
+    .where(
+      and(
+        eq(
+          shopifyEvidenceRunObservations.organizationId,
+          input.scope.organizationId,
+        ),
+        eq(shopifyEvidenceRunObservations.storeId, input.scope.storeId),
+        eq(shopifyEvidenceRunObservations.evidenceRunId, baseline.id),
+        gte(shopifyOrders.orderCreatedAt, input.window.from),
+        lt(shopifyOrders.orderCreatedAt, input.window.to),
+        sql`${shopifyOrders.orderUpdatedAt} is not null`,
+        isNull(shopifyEvidenceRunObservations.sourceOrderUpdatedAt),
+      ),
+    );
+  if (Number(legacy?.value ?? 0) > 0) {
+    return { strategy: "full", baselineEvidenceRunId: null };
+  }
+  return { strategy: "changed", baselineEvidenceRunId: baseline.id };
+}
+
 export async function listEvidenceOrderBatch(
   scope: IdentityScope,
   window: HalfOpenWindow,
   cursor: EvidenceOrderCursor | null,
   requestedLimit = 25,
+  baselineEvidenceRunId: string | null = null,
 ): Promise<EvidenceOrderBatch> {
   assertValidWindow(window);
   if (!Number.isFinite(requestedLimit)) {
@@ -383,11 +459,37 @@ export async function listEvidenceOrderBatch(
         ),
       )
     : undefined;
+  const changedWhere = baselineEvidenceRunId
+    ? or(
+        isNull(shopifyOrders.orderUpdatedAt),
+        sql`not exists (
+          select 1
+          from ${shopifyEvidenceRunObservations} baseline_observation
+          where baseline_observation.organization_id = ${scope.organizationId}
+            and baseline_observation.store_id = ${scope.storeId}
+            and baseline_observation.evidence_run_id = ${baselineEvidenceRunId}
+            and baseline_observation.order_id = ${shopifyOrders.id}
+            and baseline_observation.source_order_updated_at is not distinct from ${shopifyOrders.orderUpdatedAt}
+            and (
+              baseline_observation.identity_disposition <> 'available'
+              or exists (
+                select 1
+                from ${shopifyEvidenceRunIdentityObservations} baseline_identity
+                where baseline_identity.organization_id = ${scope.organizationId}
+                  and baseline_identity.store_id = ${scope.storeId}
+                  and baseline_identity.evidence_run_id = ${baselineEvidenceRunId}
+                  and baseline_identity.order_id = ${shopifyOrders.id}
+              )
+            )
+        )`,
+      )
+    : undefined;
   const rows = await db
     .select({
       id: shopifyOrders.id,
       shopifyOrderId: shopifyOrders.shopifyOrderId,
       orderCreatedAt: shopifyOrders.orderCreatedAt,
+      orderUpdatedAt: shopifyOrders.orderUpdatedAt,
     })
     .from(shopifyOrders)
     .where(
@@ -397,6 +499,7 @@ export async function listEvidenceOrderBatch(
         gte(shopifyOrders.orderCreatedAt, window.from),
         lt(shopifyOrders.orderCreatedAt, window.to),
         cursorWhere,
+        changedWhere,
       ),
     )
     .orderBy(asc(shopifyOrders.orderCreatedAt), asc(shopifyOrders.id))
@@ -910,6 +1013,7 @@ export type CommitShopifyEvidenceOrderInput = {
   lineDisposition: "complete" | "preserved_partial";
   identity: CommitIdentityEvidence;
   progress: ShopifyEvidenceRunProgress;
+  sourceOrderUpdatedAt?: Date | null;
   now?: Date;
 };
 
@@ -1013,6 +1117,10 @@ async function loadLockedRunningRun(
   const [run] = await executor
     .select({
       id: shopifyEvidenceSyncRuns.id,
+      organizationId: shopifyEvidenceSyncRuns.organizationId,
+      storeId: shopifyEvidenceSyncRuns.storeId,
+      refreshStrategy: shopifyEvidenceSyncRuns.refreshStrategy,
+      baselineEvidenceRunId: shopifyEvidenceSyncRuns.baselineEvidenceRunId,
       cursor: shopifyEvidenceSyncRuns.cursor,
       status: shopifyEvidenceSyncRuns.status,
       ordersRead: shopifyEvidenceSyncRuns.ordersRead,
@@ -1045,6 +1153,8 @@ export async function commitShopifyEvidenceOrder(
   input: CommitShopifyEvidenceOrderInput,
 ): Promise<CommitShopifyEvidenceOrderResult> {
   const now = input.now ?? new Date();
+  const sourceOrderUpdatedAt =
+    input.sourceOrderUpdatedAt ?? input.lines?.orderUpdatedAt ?? null;
   assertValidDate(now, "Shopify evidence commit time");
   assertForwardEvidenceCursor(input.expectedCursor, input.nextCursor);
   if (
@@ -1110,6 +1220,8 @@ export async function commitShopifyEvidenceOrder(
             shopifyEvidenceRunObservations.identityDisposition,
           observedContentChecksum:
             shopifyEvidenceRunObservations.observedContentChecksum,
+          sourceOrderUpdatedAt:
+            shopifyEvidenceRunObservations.sourceOrderUpdatedAt,
         })
         .from(shopifyEvidenceRunObservations)
         .where(
@@ -1161,7 +1273,9 @@ export async function commitShopifyEvidenceOrder(
         !constantTimeTextEqual(
           observation.observedContentChecksum,
           replayChecksum,
-        )
+        ) ||
+        observation.sourceOrderUpdatedAt?.getTime() !==
+          sourceOrderUpdatedAt?.getTime()
       ) {
         throw new Error("Shopify evidence observation replay conflicts");
       }
@@ -1318,6 +1432,8 @@ export async function commitShopifyEvidenceOrder(
         identityDisposition: shopifyEvidenceRunObservations.identityDisposition,
         observedContentChecksum:
           shopifyEvidenceRunObservations.observedContentChecksum,
+        sourceOrderUpdatedAt:
+          shopifyEvidenceRunObservations.sourceOrderUpdatedAt,
       })
       .from(shopifyEvidenceRunObservations)
       .where(
@@ -1343,7 +1459,9 @@ export async function commitShopifyEvidenceOrder(
         !constantTimeTextEqual(
           existingObservation.observedContentChecksum,
           observedContentChecksum,
-        )
+        ) ||
+        existingObservation.sourceOrderUpdatedAt?.getTime() !==
+          sourceOrderUpdatedAt?.getTime()
       ) {
         throw new Error("Shopify evidence observation replay conflicts");
       }
@@ -1356,6 +1474,7 @@ export async function commitShopifyEvidenceOrder(
         lineDisposition: input.lineDisposition,
         identityDisposition,
         observedContentChecksum,
+        sourceOrderUpdatedAt,
         observedAt: now,
       });
     }
@@ -1460,6 +1579,20 @@ function decodePersistedEvidenceRun(run: PersistedEvidenceRun) {
     throw new Error("Shopify evidence persisted window is invalid");
   }
   if (
+    (run.refreshStrategy === "full" && run.baselineEvidenceRunId !== null) ||
+    (run.refreshStrategy === "changed" && !run.baselineEvidenceRunId)
+  ) {
+    throw new Error("Shopify evidence persisted refresh plan is invalid");
+  }
+  if (
+    !Number.isSafeInteger(run.ordersCarriedForward) ||
+    run.ordersCarriedForward < 0 ||
+    !Number.isSafeInteger(run.snapshotOrderCount) ||
+    run.snapshotOrderCount < 0
+  ) {
+    throw new Error("Shopify evidence persisted snapshot counts are invalid");
+  }
+  if (
     run.status !== "running" &&
     run.status !== "success" &&
     run.status !== "partial" &&
@@ -1561,6 +1694,9 @@ function assertSameEvidenceStart(
   params: {
     scope: IdentityScope;
     mode: ShopifyEvidenceMode;
+    refreshPlan: ShopifyEvidenceRefreshPlan;
+    matchingKeyVersion: string;
+    suppressionKeyVersion: string;
     storeTimezone: string;
     anchorStoreDay: string;
     window: HalfOpenWindow;
@@ -1570,6 +1706,10 @@ function assertSameEvidenceStart(
     existing.organizationId !== params.scope.organizationId ||
     existing.storeId !== params.scope.storeId ||
     existing.mode !== params.mode ||
+    existing.refreshStrategy !== params.refreshPlan.strategy ||
+    existing.baselineEvidenceRunId !== params.refreshPlan.baselineEvidenceRunId ||
+    existing.matchingKeyVersion !== params.matchingKeyVersion ||
+    existing.suppressionKeyVersion !== params.suppressionKeyVersion ||
     existing.storeTimezone !== params.storeTimezone ||
     existing.anchorStoreDay !== params.anchorStoreDay ||
     existing.requestedFrom.getTime() !== params.window.from.getTime() ||
@@ -1645,6 +1785,9 @@ export async function startShopifyEvidenceRun(params: {
   startTriggerRunId: string;
   scope: IdentityScope;
   mode: ShopifyEvidenceMode;
+  refreshPlan: ShopifyEvidenceRefreshPlan;
+  matchingKeyVersion: string;
+  suppressionKeyVersion: string;
   storeTimezone: string;
   anchorStoreDay: string;
   window: HalfOpenWindow;
@@ -1665,7 +1808,16 @@ export async function startShopifyEvidenceRun(params: {
   ) {
     throw new Error("Shopify evidence start trigger ID is invalid");
   }
+  const { refreshPlan, matchingKeyVersion, suppressionKeyVersion } = params;
   assertValidDate(params.now, "Shopify evidence start time");
+  if (
+    (refreshPlan.strategy === "full" &&
+      refreshPlan.baselineEvidenceRunId !== null) ||
+    (refreshPlan.strategy === "changed" &&
+      !refreshPlan.baselineEvidenceRunId)
+  ) {
+    throw new Error("Shopify evidence refresh plan is invalid");
+  }
   assertStartDisposition(params.disposition);
   assertValidStoreDay(params.anchorStoreDay);
   assertValidIanaTimezone(params.storeTimezone);
@@ -1693,7 +1845,12 @@ export async function startShopifyEvidenceRun(params: {
       )
       .limit(1);
     if (existing) {
-      assertSameEvidenceStart(existing, params);
+      assertSameEvidenceStart(existing, {
+        ...params,
+        refreshPlan,
+        matchingKeyVersion,
+        suppressionKeyVersion,
+      });
       return {
         id: existing.id,
         status: existing.status,
@@ -1736,6 +1893,10 @@ export async function startShopifyEvidenceRun(params: {
         organizationId: params.scope.organizationId,
         storeId: params.scope.storeId,
         mode: params.mode,
+        refreshStrategy: refreshPlan.strategy,
+        baselineEvidenceRunId: refreshPlan.baselineEvidenceRunId,
+        matchingKeyVersion,
+        suppressionKeyVersion,
         storeTimezone: params.storeTimezone,
         anchorStoreDay: params.anchorStoreDay,
         requestedFrom: params.window.from,
@@ -1901,6 +2062,146 @@ export async function checkpointShopifyEvidenceRun(
   });
 }
 
+async function materializeChangedEvidenceSnapshot(
+  tx: EvidenceTransaction,
+  run: {
+    id: string;
+    organizationId: string;
+    storeId: string;
+    refreshStrategy: ShopifyEvidenceRefreshStrategy;
+    baselineEvidenceRunId: string | null;
+    requestedFrom: Date;
+    requestedTo: Date;
+  },
+): Promise<{
+  ordersCarriedForward: number;
+  snapshotOrderCount: number;
+  lineCompleteness: "complete" | "partial";
+}> {
+  if (!run.baselineEvidenceRunId) {
+    throw new Error("Changed Shopify evidence run has no baseline");
+  }
+  const [before] = await tx
+    .select({ value: count() })
+    .from(shopifyEvidenceRunObservations)
+    .where(
+      and(
+        eq(shopifyEvidenceRunObservations.organizationId, run.organizationId),
+        eq(shopifyEvidenceRunObservations.storeId, run.storeId),
+        eq(shopifyEvidenceRunObservations.evidenceRunId, run.id),
+      ),
+    );
+
+  await tx.execute(sql`
+    insert into ${shopifyEvidenceRunObservations} (
+      id, organization_id, store_id, evidence_run_id, order_id,
+      line_disposition, identity_disposition, observed_content_checksum,
+      source_order_updated_at, observed_at
+    )
+    select
+      gen_random_uuid()::text, baseline.organization_id, baseline.store_id,
+      ${run.id}, baseline.order_id, baseline.line_disposition,
+      baseline.identity_disposition, baseline.observed_content_checksum,
+      baseline.source_order_updated_at, baseline.observed_at
+    from ${shopifyEvidenceRunObservations} baseline
+    inner join ${shopifyOrders} candidate
+      on candidate.organization_id = baseline.organization_id
+      and candidate.store_id = baseline.store_id
+      and candidate.id = baseline.order_id
+    where baseline.organization_id = ${run.organizationId}
+      and baseline.store_id = ${run.storeId}
+      and baseline.evidence_run_id = ${run.baselineEvidenceRunId}
+      and candidate.order_created_at >= ${run.requestedFrom}
+      and candidate.order_created_at < ${run.requestedTo}
+      and not exists (
+        select 1 from ${shopifyEvidenceRunObservations} current_observation
+        where current_observation.organization_id = ${run.organizationId}
+          and current_observation.store_id = ${run.storeId}
+          and current_observation.evidence_run_id = ${run.id}
+          and current_observation.order_id = baseline.order_id
+      )
+  `);
+
+  await tx.execute(sql`
+    insert into ${shopifyEvidenceRunIdentityObservations} (
+      id, organization_id, store_id, evidence_run_id, order_id,
+      identity_hmac_id, observed_at
+    )
+    select
+      gen_random_uuid()::text, baseline_identity.organization_id,
+      baseline_identity.store_id, ${run.id}, baseline_identity.order_id,
+      baseline_identity.identity_hmac_id, baseline_identity.observed_at
+    from ${shopifyEvidenceRunIdentityObservations} baseline_identity
+    inner join ${shopifyEvidenceRunObservations} baseline_content
+      on baseline_content.organization_id = baseline_identity.organization_id
+      and baseline_content.store_id = baseline_identity.store_id
+      and baseline_content.evidence_run_id = baseline_identity.evidence_run_id
+      and baseline_content.order_id = baseline_identity.order_id
+    inner join ${shopifyEvidenceRunObservations} current_content
+      on current_content.organization_id = baseline_content.organization_id
+      and current_content.store_id = baseline_content.store_id
+      and current_content.evidence_run_id = ${run.id}
+      and current_content.order_id = baseline_content.order_id
+      and current_content.observed_content_checksum = baseline_content.observed_content_checksum
+      and current_content.identity_disposition = baseline_content.identity_disposition
+      and current_content.observed_at = baseline_content.observed_at
+    where baseline_identity.organization_id = ${run.organizationId}
+      and baseline_identity.store_id = ${run.storeId}
+      and baseline_identity.evidence_run_id = ${run.baselineEvidenceRunId}
+      and not exists (
+        select 1 from ${shopifyEvidenceRunIdentityObservations} current_identity
+        where current_identity.organization_id = ${run.organizationId}
+          and current_identity.store_id = ${run.storeId}
+          and current_identity.evidence_run_id = ${run.id}
+          and current_identity.order_id = baseline_identity.order_id
+      )
+  `);
+
+  const [orderCount] = await tx
+    .select({ value: count() })
+    .from(shopifyOrders)
+    .where(
+      and(
+        eq(shopifyOrders.organizationId, run.organizationId),
+        eq(shopifyOrders.storeId, run.storeId),
+        gte(shopifyOrders.orderCreatedAt, run.requestedFrom),
+        lt(shopifyOrders.orderCreatedAt, run.requestedTo),
+      ),
+    );
+  const [observationCount] = await tx
+    .select({ value: count() })
+    .from(shopifyEvidenceRunObservations)
+    .where(
+      and(
+        eq(shopifyEvidenceRunObservations.organizationId, run.organizationId),
+        eq(shopifyEvidenceRunObservations.storeId, run.storeId),
+        eq(shopifyEvidenceRunObservations.evidenceRunId, run.id),
+      ),
+    );
+  const [partialCount] = await tx
+    .select({ value: count() })
+    .from(shopifyEvidenceRunObservations)
+    .where(
+      and(
+        eq(shopifyEvidenceRunObservations.organizationId, run.organizationId),
+        eq(shopifyEvidenceRunObservations.storeId, run.storeId),
+        eq(shopifyEvidenceRunObservations.evidenceRunId, run.id),
+        eq(shopifyEvidenceRunObservations.lineDisposition, "preserved_partial"),
+      ),
+    );
+  const expected = Number(orderCount?.value ?? 0);
+  const actual = Number(observationCount?.value ?? 0);
+  if (actual !== expected) {
+    throw new Error("Shopify evidence snapshot materialization is incomplete");
+  }
+  return {
+    ordersCarriedForward: actual - Number(before?.value ?? 0),
+    snapshotOrderCount: actual,
+    lineCompleteness:
+      Number(partialCount?.value ?? 0) > 0 ? "partial" : "complete",
+  };
+}
+
 export async function finishShopifyEvidenceRun(params: {
   scope: IdentityScope;
   runId: string;
@@ -1909,7 +2210,10 @@ export async function finishShopifyEvidenceRun(params: {
   progress: ShopifyEvidenceRunProgress;
   error?: string | null;
   now?: Date;
-}): Promise<void> {
+}): Promise<{
+  ordersCarriedForward: number;
+  snapshotOrderCount: number;
+}> {
   if (!(["success", "partial", "failed"] as const).includes(params.status)) {
     throw new Error("Shopify evidence finish status is invalid");
   }
@@ -1918,7 +2222,7 @@ export async function finishShopifyEvidenceRun(params: {
   }
   const now = params.now ?? new Date();
   assertValidDate(now, "Shopify evidence finish time");
-  await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
     const current = await loadLockedRunningRun(tx, params.scope, params.runId);
     const expectedEncoded = params.expectedCursor
       ? encodeEvidenceOrderCursor(params.expectedCursor)
@@ -1931,13 +2235,38 @@ export async function finishShopifyEvidenceRun(params: {
       params.progress,
       "Shopify evidence finish progress conflicts",
     );
+    const materialized =
+      current.refreshStrategy === "changed"
+        ? await materializeChangedEvidenceSnapshot(tx, current)
+        : null;
+    const finalLineCompleteness =
+      materialized?.lineCompleteness ?? params.progress.lineCompleteness;
+    const [fullSnapshotCount] = materialized
+      ? [null]
+      : await tx
+          .select({ value: count() })
+          .from(shopifyEvidenceRunObservations)
+          .where(
+            and(
+              eq(
+                shopifyEvidenceRunObservations.organizationId,
+                current.organizationId,
+              ),
+              eq(shopifyEvidenceRunObservations.storeId, current.storeId),
+              eq(shopifyEvidenceRunObservations.evidenceRunId, current.id),
+            ),
+          );
+    const snapshotOrderCount =
+      materialized?.snapshotOrderCount ?? Number(fullSnapshotCount?.value ?? 0);
     const updated = await tx
       .update(shopifyEvidenceSyncRuns)
       .set({
         status: params.status,
         ...params.progress.counts,
         identityCapability: params.progress.identityCapability,
-        lineCompleteness: params.progress.lineCompleteness,
+        lineCompleteness: finalLineCompleteness,
+        ordersCarriedForward: materialized?.ordersCarriedForward ?? 0,
+        snapshotOrderCount,
         error: params.error ?? null,
         heartbeatAt: now,
         finishedAt: now,
@@ -1952,6 +2281,10 @@ export async function finishShopifyEvidenceRun(params: {
       )
       .returning({ id: shopifyEvidenceSyncRuns.id });
     if (updated.length !== 1) throw new Error("Shopify evidence finish failed");
+    return {
+      ordersCarriedForward: materialized?.ordersCarriedForward ?? 0,
+      snapshotOrderCount,
+    };
   });
 }
 
