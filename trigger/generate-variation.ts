@@ -325,7 +325,7 @@ export const generateVariationTask = task({
                 "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second, when present, is the advertiser's real product photo.",
                 "Checklist (all must hold for pass = true):",
                 "- The product matches the product photo in shape, openings, material, and markings; no invented logos or text on it.",
-                "- Every word visible in the image is legible and matches the quoted copy in the prompt; no garbled or extra text.",
+                "- Every line of ad copy (headline, subhead, badges, CTA, tile labels) is legible and matches the quoted copy in the prompt, with no garbled or invented copy. Incidental labels on props and packaging inside the scene (a shampoo bottle, a book spine) are fine and are not ad copy.",
                 `- No logos or brand marks other than ${brand?.brandName ?? "the advertiser's"}; no platform UI, no watermarks.`,
                 "- The palette is consistent with a clean brand look: no clashing neon, no split panels unless the prompt asked for them.",
                 brand?.prohibitedClaims.length
