@@ -457,7 +457,7 @@ export function sectionDocument(mimeType: string, content: string): ContextSecti
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `bun run test -- src/lib/studio-context-sections.test.ts`
-Expected: PASS (9 tests).
+Expected: PASS (8 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -697,7 +697,7 @@ describe("planContextSeed", () => {
         { file: "images/r3.png", title: "a", description: "b", kind: "product" },
         { file: "images/r3.png", title: "a", description: "b", kind: "product" },
         { file: "other-documents/brand.json", title: "x", description: "y", kind: "guideline" },
-        { file: "other-documents/testimonials.md", title: "x", description: "y", kind: "product" as never },
+        { file: "other-documents/testimonials.md", title: "x", description: "y", kind: "logo" as never },
       ],
       files,
     );
@@ -707,7 +707,7 @@ describe("planContextSeed", () => {
       "nope.md: file not found",
       "images/r3.png: listed more than once",
       "other-documents/brand.json: documents need a tier (core or reference)",
-      "other-documents/testimonials.md: kind \"product\" is not a document kind",
+      "other-documents/testimonials.md: kind \"logo\" is not a document kind",
     ]);
   });
 
