@@ -2892,8 +2892,8 @@ function VariationCard({ item, steps, pending, onMark, onRetry, onUpdate, onStep
 }) {
   const aspectRatio = studioAspectRatio(item.format as StudioFormat);
   const { variant } = item;
-  const plan = variant.plan as VariationPlan | null;
-  const attempts = variant.attempts as VariationAttempt[] | null;
+  const plan = variant.plan;
+  const attempts = variant.attempts;
   return (
     <article className="space-y-2">
       {item.realtime ? <RunSteps runId={item.realtime.runId} accessToken={item.realtime.publicAccessToken} onUpdate={onUpdate} onSteps={onSteps} /> : null}
