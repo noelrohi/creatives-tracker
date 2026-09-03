@@ -3131,4 +3131,4 @@ Then open the PR with the `creating-pr` skill, linking the spec.
 - **§6 Errors**: covered in Tasks 6–10 as listed.
 - **§7 Testing**: pure seams (Tasks 2, 3, 4, 6), tRPC seam (Tasks 8, 9), seeding planning (Task 4). The trigger task is untested directly, per convention.
 
-Deviation worth stating: `ctr` is passed as `null` in the source performance block because `fetchCreativePerformanceRows` does not aggregate clicks or impressions; spend, ROAS, and purchases are present. Adding CTR means extending that helper and is out of scope here.
+Conformance notes (post-execution): CTR is computed in the task from a windowed sum of `link_clicks` over `impressions` (the shared helper carries neither); the vision review fails closed so an unreviewed attempt never becomes ready on its own; a section listing obeys the same 8,000-character cap as a section read; the task keeps the inherited retry config and exits early on a retry when the variant is already ready; format follows the spec (portrait when taller than 1:1, square otherwise); Variations write controls stay disabled until the role is known and for members.
