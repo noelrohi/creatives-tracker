@@ -2796,7 +2796,7 @@ Run (with `DATABASE_URL` and `BLOB_READ_WRITE_TOKEN` set, `<org>` = the Reviv or
 bun run studio:seed-context -- --org <org> --dir rands/reviv-context
 ```
 
-Expected: one `document core …` line per core file (8), two `document reference …` lines, ~20 `image …` lines with dimensions, three `skipped` warnings (`other-documents/testimonials.pdf`, `other-documents/reviv-youtube-videos-transcripts.pdf`, `other-documents/json-exports/_index.json`), and a final `Done. core=8 reference=2 sections=<n> images=20 skipped=3 imageFailures=0`.
+Expected: one `document core …` line per core file (8), two `document reference …` lines, 20 `image …` lines with dimensions, four `skipped` warnings (`other-documents/testimonials.pdf`, `other-documents/reviv-youtube-videos-transcripts.pdf`, `other-documents/json-exports/_index.json`, and `other-documents/reviv-target-audience-pain-points.png`, a chart rather than an ad asset), and a final `Done. core=8 reference=2 sections=880 images=20 skipped=4 imageFailures=0`. Add `--dry-run` to see the same summary without a database.
 
 Run it a second time and confirm the same counts with no duplicate rows:
 
