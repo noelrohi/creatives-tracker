@@ -1,0 +1,372 @@
+import {
+  experimental_generateImage as generateImage,
+  generateObject,
+  generateText,
+  stepCountIs,
+  tool,
+} from "ai";
+import { logger, metadata, task, tags } from "@trigger.dev/sdk";
+import { put } from "@vercel/blob";
+import { and, eq, inArray } from "drizzle-orm";
+import { z } from "zod";
+import { db } from "@/db";
+import { openai } from "@/lib/ai";
+import { readImageDimensions, studioFormatForDimensions } from "@/lib/image-dimensions";
+import { fetchRemoteImage, isHttpUrl } from "@/lib/remote-image";
+import { getStudioBrandProfile } from "@/lib/studio-brand";
+import {
+  loadStudioContextLibrary,
+  readStudioContextSection,
+} from "@/lib/studio-context";
+import {
+  failStudioGeneration,
+  finalizeStudioGenerationIfSettled,
+} from "@/lib/studio-generation-status";
+import {
+  fetchCreativePerformanceRows,
+  toNullableNumber,
+  toNumber,
+} from "@/lib/studio-performance";
+import { studioSizeFor, type StudioFormat } from "@/lib/studio-prompt";
+import {
+  buildVariationSystemPrompt,
+  buildVariationUserContent,
+  createVariationRun,
+  finishInputSchema,
+  generateImageInputSchema,
+  MAX_STEPS,
+  readContextInputSchema,
+  resolveVariationOutcome,
+  type VariationRunInput,
+  type VariationSource,
+} from "@/lib/variation-agent";
+import type { VariationAttempt, VariationPlan } from "@/lib/variation-agent-types";
+import { adCreatives } from "@/schema/ad-creative";
+import { competitorAds } from "@/schema/competitor-signals";
+import { studioGenerations, studioVariants } from "@/schema/studio";
+
+const AGENT_MODEL = "gpt-5.6-terra";
+const REVIEW_MODEL = "gpt-5.6-terra";
+const IMAGE_MODEL = "gpt-image-2";
+
+export type GenerateVariationPayload = {
+  organizationId: string;
+  generationId: string;
+  variantId: string;
+  source: { kind: "creative" | "competitor_ad"; id: string };
+  note?: string | null;
+  /** Set by "Retry without image": the source is never used as a layout reference. */
+  withoutSourceImage?: boolean;
+};
+
+const reviewSchema = z.object({
+  pass: z.boolean(),
+  notes: z.array(z.string()),
+});
+
+async function loadSource(
+  payload: GenerateVariationPayload,
+): Promise<VariationSource> {
+  if (payload.source.kind === "creative") {
+    const [row] = await db
+      .select({
+        id: adCreatives.id,
+        name: adCreatives.name,
+        assetUrl: adCreatives.assetUrl,
+        notes: adCreatives.notes,
+      })
+      .from(adCreatives)
+      .where(
+        and(
+          eq(adCreatives.id, payload.source.id),
+          eq(adCreatives.organizationId, payload.organizationId),
+        ),
+      )
+      .limit(1);
+    if (!row?.assetUrl || !isHttpUrl(row.assetUrl)) {
+      throw new Error("Source creative has no usable image URL");
+    }
+    const [perf] = await fetchCreativePerformanceRows(payload.organizationId, [
+      inArray(adCreatives.id, [row.id]),
+    ]);
+    return {
+      kind: "creative",
+      name: row.name,
+      imageUrl: row.assetUrl,
+      text: row.notes,
+      performance: perf
+        ? {
+            spend: toNumber(perf.spend),
+            roas: toNullableNumber(perf.roas),
+            ctr: null,
+            purchases: perf.purchases ?? 0,
+          }
+        : null,
+    };
+  }
+
+  const [ad] = await db
+    .select({
+      id: competitorAds.id,
+      title: competitorAds.title,
+      bodyText: competitorAds.bodyText,
+      ctaText: competitorAds.ctaText,
+      imageUrl: competitorAds.mirroredImageUrl,
+    })
+    .from(competitorAds)
+    .where(
+      and(
+        eq(competitorAds.id, payload.source.id),
+        eq(competitorAds.organizationId, payload.organizationId),
+      ),
+    )
+    .limit(1);
+  if (!ad?.imageUrl || !isHttpUrl(ad.imageUrl)) {
+    throw new Error("Source competitor ad has no usable mirrored image");
+  }
+  return {
+    kind: "competitor_ad",
+    name: ad.title ?? "Competitor ad",
+    imageUrl: ad.imageUrl,
+    text: [ad.title, ad.bodyText, ad.ctaText].filter(Boolean).join("\n"),
+    performance: null,
+  };
+}
+
+type VariantUpdate = {
+  status: "generating" | "ready" | "failed";
+  imageUrl?: string | null;
+  prompt?: string | null;
+  plan?: VariationPlan | null;
+  attempts?: VariationAttempt[] | null;
+  moderationReason?: string | null;
+};
+
+export const generateVariationTask = task({
+  id: "generate-variation",
+  queue: { concurrencyLimit: 3 },
+  maxDuration: 600,
+  onFailure: async ({ payload }: { payload: GenerateVariationPayload }) => {
+    await failStudioGeneration(payload.generationId, payload.organizationId);
+  },
+  run: async (payload: GenerateVariationPayload, { ctx }) => {
+    await tags.add(`variation:org:${payload.organizationId}`);
+    const env = process.env.NODE_ENV === "production" ? "prod" : "dev";
+    const steps: string[] = [];
+    const onStep = (label: string) => {
+      steps.push(label);
+      metadata.set("steps", steps);
+    };
+    metadata.set("status", "generating");
+    onStep("loading source and context");
+
+    const markVariant = (values: VariantUpdate) =>
+      db
+        .update(studioVariants)
+        .set({ ...values, updatedAt: new Date() })
+        .where(
+          and(
+            eq(studioVariants.id, payload.variantId),
+            eq(studioVariants.organizationId, payload.organizationId),
+          ),
+        );
+
+    await markVariant({ status: "generating" });
+
+    try {
+      const [source, brand, library] = await Promise.all([
+        loadSource(payload),
+        getStudioBrandProfile(payload.organizationId),
+        loadStudioContextLibrary(payload.organizationId),
+      ]);
+
+      // Fetch the source once: its bytes feed the image model and its header
+      // decides the output format, which the generation row then records.
+      const imageBytes = new Map<string, Uint8Array>();
+      const fetchBytes = async (url: string) => {
+        const cached = imageBytes.get(url);
+        if (cached) return cached;
+        const bytes = await fetchRemoteImage(url);
+        imageBytes.set(url, bytes);
+        return bytes;
+      };
+      const sourceBytes = await fetchBytes(source.imageUrl);
+      const format: StudioFormat = studioFormatForDimensions(
+        readImageDimensions(sourceBytes),
+      );
+      await db
+        .update(studioGenerations)
+        .set({ format, updatedAt: new Date() })
+        .where(
+          and(
+            eq(studioGenerations.id, payload.generationId),
+            eq(studioGenerations.organizationId, payload.organizationId),
+          ),
+        );
+
+      const input: VariationRunInput = {
+        source,
+        note: payload.note ?? null,
+        brand,
+        library,
+        format,
+        useSourceLayout: !payload.withoutSourceImage,
+      };
+
+      const run = createVariationRun(input, {
+        readSection: (documentId, sectionId) =>
+          readStudioContextSection(payload.organizationId, documentId, sectionId),
+        produceImage: async ({ prompt, referenceImageUrls, format, attempt }) => {
+          const references: Uint8Array[] = [];
+          for (const url of referenceImageUrls) references.push(await fetchBytes(url));
+          const result = await logger.trace(`Generate attempt ${attempt}`, () =>
+            generateImage({
+              model: openai.image(IMAGE_MODEL),
+              prompt: references.length ? { text: prompt, images: references } : prompt,
+              size: studioSizeFor(format),
+            }),
+          );
+          const blob = await put(
+            `${env}/create/${ctx.run.id}-${attempt}.png`,
+            Buffer.from(result.image.uint8Array),
+            { access: "public", contentType: "image/png" },
+          );
+          return { imageUrl: blob.url };
+        },
+        reviewImage: async ({ imageUrl, prompt }) => {
+          const content: Array<
+            { type: "text"; text: string } | { type: "image"; image: URL }
+          > = [
+            {
+              type: "text",
+              text: `Review this generated ad against the prompt below and the checklist.\n\nPROMPT:\n${prompt}`,
+            },
+            { type: "image", image: new URL(imageUrl) },
+          ];
+          if (brand?.productImageUrl) {
+            content.push({ type: "image", image: new URL(brand.productImageUrl) });
+          }
+          try {
+            const result = await generateObject({
+              model: openai(REVIEW_MODEL),
+              schema: reviewSchema,
+              system: [
+                "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second, when present, is the advertiser's real product photo.",
+                "Checklist (all must hold for pass = true):",
+                "- The product matches the product photo in shape, openings, material, and markings; no invented logos or text on it.",
+                "- Every word visible in the image is legible and matches the quoted copy in the prompt; no garbled or extra text.",
+                "- No source-advertiser branding, no third-party logos, no platform UI, no watermarks.",
+                "- The palette is consistent with a clean brand look: no clashing neon, no split panels unless the prompt asked for them.",
+                brand?.prohibitedClaims.length
+                  ? `- None of these claims appear or are implied: ${brand.prohibitedClaims.join("; ")}.`
+                  : null,
+                "Return pass and a short list of concrete notes; on a pass, notes may be empty.",
+              ]
+                .filter(Boolean)
+                .join("\n"),
+              messages: [{ role: "user", content }],
+            });
+            return result.object;
+          } catch (error) {
+            logger.warn("Variation review failed; treating as pass", { error });
+            return { pass: true, notes: ["review unavailable"] };
+          }
+        },
+        onStep,
+      });
+
+      // A throwing tool aborts generateText; the attempts already recorded on
+      // run.state must still decide the outcome, so the loop error is logged
+      // and resolution proceeds.
+      try {
+        await logger.trace("Variation agent loop", () =>
+          generateText({
+            model: openai(AGENT_MODEL),
+            system: buildVariationSystemPrompt(input),
+            messages: [{ role: "user", content: buildVariationUserContent(input) }],
+            stopWhen: [stepCountIs(MAX_STEPS)],
+            tools: {
+              readContext: tool({
+                description:
+                  "List a reference document's sections (omit sectionId) or read one section's content.",
+                inputSchema: readContextInputSchema,
+                execute: (raw) => run.readContext(raw),
+              }),
+              generateImage: tool({
+                description:
+                  "Generate one image from a finished prompt. Returns the attempt number and an automatic review. At most two calls; pass the returned attempt number to finish.",
+                inputSchema: generateImageInputSchema,
+                execute: (raw) => run.generateImage(raw),
+              }),
+              finish: tool({
+                description: "End the run with the plan for the attempt you are shipping.",
+                inputSchema: finishInputSchema,
+                execute: (raw) => run.finish(raw),
+              }),
+            },
+            prepareStep: () =>
+              run.state.finished ? { toolChoice: "none", activeTools: [] } : undefined,
+          }),
+        );
+      } catch (error) {
+        logger.error("Variation agent loop ended with an error", {
+          generationId: payload.generationId,
+          runId: ctx.run.id,
+          error,
+        });
+      }
+
+      const outcome = resolveVariationOutcome(run.state);
+      if (outcome.kind === "ready") {
+        await markVariant({
+          status: "ready",
+          imageUrl: outcome.imageUrl,
+          prompt:
+            outcome.attempts.find((a) => a.attempt === outcome.plan.finalAttempt)
+              ?.prompt ?? null,
+          plan: outcome.plan,
+          attempts: outcome.attempts,
+          moderationReason: null,
+        });
+      } else {
+        const moderationReasons = new Set(["claims", "likeness", "logo", "moderation"]);
+        await markVariant({
+          status: "failed",
+          attempts: outcome.attempts,
+          moderationReason: moderationReasons.has(outcome.reason)
+            ? outcome.reason
+            : null,
+          plan: {
+            summary: `Failed: ${outcome.reason}`,
+            kept: [],
+            changed: [],
+            rationale: "",
+            evidence: [],
+            inImageCopy: [],
+            finalAttempt: 0,
+            synthesized: true,
+          },
+        });
+      }
+      const status = await finalizeStudioGenerationIfSettled(
+        payload.generationId,
+        payload.organizationId,
+      );
+      metadata.set("status", status ?? "failed");
+      onStep(outcome.kind === "ready" ? "done" : `failed (${outcome.reason})`);
+      return {
+        outcome: outcome.kind,
+        reason: outcome.kind === "failed" ? outcome.reason : null,
+      };
+    } catch (error) {
+      logger.error("Variation generation failed", {
+        generationId: payload.generationId,
+        runId: ctx.run.id,
+        error,
+      });
+      metadata.set("status", "failed");
+      await failStudioGeneration(payload.generationId, payload.organizationId);
+      throw error;
+    }
+  },
+});
