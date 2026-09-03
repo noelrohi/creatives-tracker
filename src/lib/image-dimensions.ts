@@ -56,18 +56,24 @@ function readWebp(b: Uint8Array): ImageDimensions | null {
   return null;
 }
 
+function positive(dimensions: ImageDimensions | null): ImageDimensions | null {
+  if (!dimensions) return null;
+  return dimensions.width > 0 && dimensions.height > 0 ? dimensions : null;
+}
+
 /** Reads width/height from the header of a PNG, JPEG, GIF, or WebP. */
 export function readImageDimensions(bytes: Uint8Array): ImageDimensions | null {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (isPng(bytes)) return { width: view.getUint32(16), height: view.getUint32(20) };
-  if (isGif(bytes)) return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
-  if (isJpeg(bytes)) return readJpeg(bytes);
-  if (isWebp(bytes)) return readWebp(bytes);
+  if (isPng(bytes)) return positive({ width: view.getUint32(16), height: view.getUint32(20) });
+  if (isGif(bytes)) return positive({ width: view.getUint16(6, true), height: view.getUint16(8, true) });
+  if (isJpeg(bytes)) return positive(readJpeg(bytes));
+  if (isWebp(bytes)) return positive(readWebp(bytes));
   return null;
 }
 
 /**
- * Picks the Studio preset closest to the source's shape. Ratios within 10% of
+ * Picks the closest of the three primary Studio presets (the variations spec
+ * pins output to portrait, square, or landscape). Ratios within 10% of
  * square count as square; the fallback is portrait, the client's default for
  * statics.
  */
