@@ -109,7 +109,7 @@ export const studioContextDocuments = pgTable(
       .$defaultFn(() => crypto.randomUUID()),
     organizationId: text("organization_id").notNull(),
     title: text("title").notNull(),
-    // One line; the agent picks reads from this in the reference index.
+    // One line; the agent uses it to decide which reference documents to read.
     description: text("description").notNull(),
     kind: text("kind").$type<StudioContextDocumentKind>().notNull(),
     // core: inlined into every run. reference: index only, read on demand.
@@ -140,7 +140,7 @@ export const studioContextSections = pgTable(
       .references(() => studioContextDocuments.id, { onDelete: "cascade" }),
     ordinal: integer("ordinal").notNull(),
     heading: text("heading").notNull(),
-    // Heading chain, e.g. "Athletic Performance > Unknown 13 (part 2)".
+    // Heading chain, e.g. "Athletic Performance > Recovery (part 2)".
     path: text("path").notNull(),
     content: text("content").notNull(),
   },
@@ -278,9 +278,13 @@ export const studioGenerations = pgTable(
     ),
     // "generation" for composer/suggestion output; "variation" when the
     // variation agent produced it from a source creative or competitor ad.
-    kind: text("kind").notNull().default("generation"),
-    // Phase 2 source; nullable text with no FK so the competitor schema file
-    // does not have to import this one.
+    kind: text("kind")
+      .$type<"generation" | "variation">()
+      .notNull()
+      .default("generation"),
+    // Provenance only: the id the variation agent was run from. No FK on
+    // purpose, so a competitor ad that is later deleted neither cascades into
+    // nor nulls out a finished variation's record.
     sourceCompetitorAdId: text("source_competitor_ad_id"),
     // The user's optional steering note for a variation.
     note: text("note"),
