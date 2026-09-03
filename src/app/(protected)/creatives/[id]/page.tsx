@@ -70,10 +70,7 @@ import {
   type CreativeFormValues,
 } from "@/lib/creative-form";
 import type { MetaCreativePreview } from "@/lib/meta-creative-assets";
-
-function isVideoFileUrl(value: string | null | undefined) {
-  return Boolean(value?.match(/\.(mp4|webm|mov)(\?|$)/i));
-}
+import { isStaticImageCreative, isVideoFile } from "@/lib/studio-assets";
 
 export default function CreativeDetailPage() {
   const trpc = useTRPC();
@@ -217,14 +214,14 @@ export default function CreativeDetailPage() {
   const displayAssetUrl = assetUrl ?? metaPreview?.assetUrl ?? null;
   const previewFormat = format ?? metaPreview?.format ?? creative.data?.format ?? null;
   const playableVideoUrl = metaPreview?.videoUrl
-    ?? (isVideoFileUrl(assetUrl) ? assetUrl : creative.data?.videoUrl ?? null);
+    ?? (isVideoFile(assetUrl) ? assetUrl : creative.data?.videoUrl ?? null);
   const adPreviewUrl = adPreviewQuery.data?.previewUrl ?? null;
   const isLoadingVideo = wantsVideo && adPreviewQuery.isLoading;
   const canFetchMetaPreview = (!displayAssetUrl || (previewFormat === "video" && !playableVideoUrl));
-  const canMakeVariations =
-    creative.data?.format === "static" &&
-    Boolean(creative.data.assetUrl) &&
-    !isVideoFileUrl(creative.data.assetUrl);
+  const canMakeVariations = isStaticImageCreative(creative.data);
+  // A shared ?tab=variations link can point at a creative that is no longer a
+  // static image; fall back rather than rendering an empty tab body.
+  const activeTab = creativeTab === "variations" && !canMakeVariations ? "performance" : creativeTab;
 
   if (creative.isLoading) {
     return (
@@ -333,7 +330,7 @@ export default function CreativeDetailPage() {
             className="w-full max-h-[400px]"
           />
         ) : displayAssetUrl ? (
-          isVideoFileUrl(displayAssetUrl) ? (
+          isVideoFile(displayAssetUrl) ? (
             <video
               src={displayAssetUrl}
               controls
@@ -422,7 +419,7 @@ export default function CreativeDetailPage() {
         />
       </div>
 
-      <Tabs value={creativeTab} onValueChange={setCreativeTab}>
+      <Tabs value={activeTab} onValueChange={setCreativeTab}>
         <TabsList variant="line">
           <TabsTrigger value="performance">Performance</TabsTrigger>
           <TabsTrigger value="details">Details</TabsTrigger>

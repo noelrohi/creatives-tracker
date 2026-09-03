@@ -17,7 +17,7 @@ import {
 import { AWARENESS_LEVELS, type AwarenessLevel } from "@/lib/awareness";
 import { isImageStudioEnabled } from "@/lib/feature-flags.server";
 import { isHttpUrl } from "@/lib/remote-image";
-import { isVideoFile } from "@/lib/studio-assets";
+import { isStaticImageCreative } from "@/lib/studio-assets";
 import { getStudioBrandProfile } from "@/lib/studio-brand";
 import {
   fetchCreativePerformanceRows,
@@ -413,7 +413,7 @@ export async function createVariationGeneration(
   if (!source) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Source creative not found" });
   }
-  if (source.format !== "static" || !source.assetUrl || isVideoFile(source.assetUrl)) {
+  if (!isStaticImageCreative(source)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: "Variations need a static image creative",
