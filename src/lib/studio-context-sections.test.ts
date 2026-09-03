@@ -72,6 +72,11 @@ describe("sectionJson", () => {
     const sections = sectionJson("not json");
     expect(sections).toEqual([{ ordinal: 0, heading: "Document", path: "Document", content: "not json" }]);
   });
+
+  it("falls back to top-level keys when pages is empty", () => {
+    const sections = sectionJson(JSON.stringify({ pages: [], other: "x" }));
+    expect(sections.map((s) => s.path)).toEqual(["other"]);
+  });
 });
 
 describe("sectionDocument", () => {

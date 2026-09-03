@@ -80,7 +80,7 @@ export function sectionJson(json: string): ContextSection[] {
   if (parsed && typeof parsed === "object") {
     const record = parsed as Record<string, unknown>;
     const pages = record.pages;
-    if (Array.isArray(pages) && pages.every((p) => p && typeof p === "object" && "text" in p)) {
+    if (Array.isArray(pages) && pages.length > 0 && pages.every((p) => p && typeof p === "object" && "text" in p)) {
       return splitOversized(
         (pages as Array<{ page?: number; text: unknown }>).map((page, index) => {
           const label = `Page ${page.page ?? index + 1}`;
@@ -89,11 +89,13 @@ export function sectionJson(json: string): ContextSection[] {
       );
     }
     return splitOversized(
-      Object.entries(record).map(([key, value]) => ({
-        heading: key,
-        path: key,
-        content: stringify(value),
-      })),
+      Object.entries(record)
+        .filter(([, value]) => !(Array.isArray(value) && value.length === 0))
+        .map(([key, value]) => ({
+          heading: key,
+          path: key,
+          content: stringify(value),
+        })),
     );
   }
   return splitOversized([{ heading: "Document", path: "Document", content: json }]);
