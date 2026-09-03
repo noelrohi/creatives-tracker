@@ -33,6 +33,7 @@ import type {
   generateStaticAdsTask,
   generateStaticAdVariantTask,
 } from "../../../../trigger/generate-static-ads";
+import type { generateVariationTask } from "../../../../trigger/generate-variation";
 import {
   createStudioGeneration,
   extendStudioWinner,
@@ -781,6 +782,10 @@ export const studioGenerationProcedures = {
             count: studioGenerations.count,
             format: studioGenerations.format,
             referenceImageUrls: studioGenerations.referenceImageUrls,
+            kind: studioGenerations.kind,
+            note: studioGenerations.note,
+            sourceCreativeId: studioGenerations.sourceCreativeId,
+            sourceCompetitorAdId: studioGenerations.sourceCompetitorAdId,
           })
           .from(studioVariants)
           .innerJoin(studioGenerations, eq(studioGenerations.id, studioVariants.generationId))
@@ -819,6 +824,39 @@ export const studioGenerationProcedures = {
           .where(eq(studioGenerations.id, variant.generationId));
         return variant;
       });
+      if (claimed.kind === "variation") {
+        const source = claimed.sourceCreativeId
+          ? { kind: "creative" as const, id: claimed.sourceCreativeId }
+          : claimed.sourceCompetitorAdId
+            ? { kind: "competitor_ad" as const, id: claimed.sourceCompetitorAdId }
+            : null;
+        if (!source) {
+          await db
+            .update(studioVariants)
+            .set({ status: "failed", updatedAt: new Date() })
+            .where(eq(studioVariants.id, claimed.id));
+          await finalizeStudioGenerationIfSettled(claimed.generationId, ctx.organizationId);
+          throw new TRPCError({ code: "CONFLICT", message: "This variation has no source to retry from" });
+        }
+        try {
+          await tasks.trigger<typeof generateVariationTask>("generate-variation", {
+            organizationId: ctx.organizationId,
+            generationId: claimed.generationId,
+            variantId: claimed.id,
+            source,
+            note: claimed.note,
+            withoutSourceImage: input.withoutReferenceImage,
+          });
+        } catch (error) {
+          await db
+            .update(studioVariants)
+            .set({ status: "failed", updatedAt: new Date() })
+            .where(eq(studioVariants.id, claimed.id));
+          await finalizeStudioGenerationIfSettled(claimed.generationId, ctx.organizationId);
+          throw error;
+        }
+        return { ok: true as const, generationId: claimed.generationId, variantId: claimed.id };
+      }
       const brand = await getStudioBrandProfile(ctx.organizationId);
       const layoutReferenceUrls = input.withoutReferenceImage
         ? []

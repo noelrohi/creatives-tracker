@@ -211,4 +211,43 @@ describe("studio.variations", () => {
     expect(dbState.inserted[0]).toMatchObject({ note: null });
     expect(triggerMock.trigger).toHaveBeenCalledWith("generate-variation", expect.objectContaining({ note: null }));
   });
+
+  it("retryVariant: re-runs generate-variation with withoutSourceImage for a variation generation", async () => {
+    const caller = createMockCaller({ role: "owner" });
+    dbState.selectRows.push([
+      {
+        id: "var_1",
+        index: 0,
+        generationId: "gen_1",
+        status: "failed",
+        moderationReason: "likeness",
+        prompt: "p",
+        brief: "Variation of One nightly habit",
+        angle: null,
+        persona: null,
+        awarenessLevel: null,
+        count: 1,
+        format: "portrait",
+        referenceImageUrls: ["https://cdn.test/one.png"],
+        kind: "variation",
+        note: "blue",
+        sourceCreativeId: "cr_1",
+        sourceCompetitorAdId: null,
+      },
+    ]);
+    // brand profile lookup
+    dbState.selectRows.push([]);
+
+    await caller.studio.retryVariant({ variantId: "var_1", withoutReferenceImage: true });
+
+    expect(triggerMock.trigger).toHaveBeenCalledWith("generate-variation", {
+      organizationId: "test-org-id",
+      generationId: "gen_1",
+      variantId: "var_1",
+      source: { kind: "creative", id: "cr_1" },
+      note: "blue",
+      withoutSourceImage: true,
+    });
+    expect(dbState.updated[0]).toMatchObject({ status: "pending", retryWithoutImageAt: expect.any(Date) });
+  });
 });
