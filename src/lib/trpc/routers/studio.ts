@@ -5,6 +5,7 @@ import { studioPackageProcedures } from "./studio.packages";
 import { studioSuggestionProcedures } from "./studio.suggestions";
 import { studioSwipeProcedures } from "./studio.swipes";
 import { studioTaxonomyProcedures } from "./studio.taxonomy";
+import { studioVariationProcedures } from "./studio.variations";
 import { studioWinnerProcedures } from "./studio.winners";
 
 // One flat `studio.*` namespace assembled from per-domain procedure files so
@@ -17,4 +18,5 @@ export const studioRouter = router({
   ...studioSuggestionProcedures,
   ...studioGenerationProcedures,
   ...studioWinnerProcedures,
+  ...studioVariationProcedures,
 });
