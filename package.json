@@ -11,6 +11,7 @@
     "trigger:dev": "trigger dev",
     "trigger:deploy": "trigger deploy",
     "klaviyo:bootstrap": "bun scripts/klaviyo-bootstrap-wizard.ts",
+    "studio:seed-context": "bun scripts/seed-studio-context.ts",
     "retention:report": "bun scripts/retention-report.ts",
     "db:push": "node ./scripts/disallow-db-push.mjs local",
     "db:push:prod": "node ./scripts/disallow-db-push.mjs production",
