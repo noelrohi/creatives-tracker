@@ -1308,7 +1308,7 @@ describe("resolveVariationOutcome", () => {
     expect(outcome).toMatchObject({ kind: "ready", imageUrl: "https://blob.test/1.png", plan: { finalAttempt: 1, synthesized: true } });
   });
 
-  it("fails with no_image when nothing passed review", () => {
+  it("fails with review or no_image when nothing passed review", () => {
     expect(resolveVariationOutcome({ attempts: [attempt(1, false)], plan: null, finished: false, contextReads: 0, claimsFlags: 0, moderationReason: null })).toEqual({ kind: "failed", reason: "review", attempts: [attempt(1, false)] });
     expect(resolveVariationOutcome({ attempts: [], plan: null, finished: false, contextReads: 0, claimsFlags: 0, moderationReason: null })).toEqual({ kind: "failed", reason: "no_image", attempts: [] });
   });
@@ -1444,7 +1444,7 @@ const PROCEDURE = [
 ].join("\n");
 
 const REBRAND_MODE = [
-  "REBRAND MODE: the source is a competitor's ad. Keep its layout, composition, and visual hierarchy. In the prompt, state that all source branding, logos, products, recognizable people, and copy are replaced with ours, and write short exact replacement copy in quotes for every text block the source shows. Never reuse the source's words or marks.",
+  "REBRAND MODE: the source is a competitor's ad. Keep its layout, composition, and visual hierarchy. In the prompt, state that you replace all source branding, logos, products, recognizable people, and copy with ours, and write short exact replacement copy in quotes for every text block the source shows. Never reuse the source's words or marks.",
 ].join("\n");
 
 const TOOLS_NOTE = [
