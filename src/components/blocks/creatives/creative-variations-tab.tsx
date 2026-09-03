@@ -80,6 +80,8 @@ function VariationCard({ item, steps, pending, readOnly, onMark, onRetry, onUpda
   const { variant } = item;
   const plan = variant.plan;
   const attempts = variant.attempts;
+  // The agent may finish with an attempt the review rejected; say so on the card.
+  const shippedReview = plan ? attempts?.find((a) => a.attempt === plan.finalAttempt)?.review : undefined;
   return (
     <article className="space-y-2">
       {item.realtime ? <RunSteps runId={item.realtime.runId} accessToken={item.realtime.publicAccessToken} onUpdate={onUpdate} onSteps={onSteps} /> : null}
@@ -106,6 +108,11 @@ function VariationCard({ item, steps, pending, readOnly, onMark, onRetry, onUpda
             <Button size="sm" variant={variant.mark === "good" ? "default" : "outline"} className="flex-1" disabled={pending || readOnly} onClick={() => onMark(variant.mark === "good" ? null : "good")}><Check /> Good</Button>
             <Button size="sm" variant={variant.mark === "bad" ? "destructive" : "outline"} className="flex-1" disabled={pending || readOnly} onClick={() => onMark(variant.mark === "bad" ? null : "bad")}><X /> Bad</Button>
           </div>
+          {shippedReview && !shippedReview.pass ? (
+            <p className="line-clamp-4 rounded-lg border border-amber-300/60 bg-amber-50 px-3 py-2 text-[11px] text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+              Review flagged this image: {shippedReview.notes.join("; ") || "no notes"}
+            </p>
+          ) : null}
           {plan ? <PlanDisclosure plan={plan} /> : null}
           <Button asChild size="sm" variant="ghost" className="w-full"><Link href={`/studio/${item.id}`}>Open in Studio</Link></Button>
         </>

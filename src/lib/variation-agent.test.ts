@@ -224,13 +224,13 @@ describe("createVariationRun.generateImage", () => {
     expect(resolveVariationOutcome(run.state)).toEqual({ kind: "failed", reason: "claims", attempts: [] });
   });
 
-  it("passes references in order (source, chosen context images, product photo last), records the attempt with its review, and reports steps", async () => {
+  it("passes references in order (product photo, chosen context images, source last), records the attempt with its review, and reports steps", async () => {
     const d = deps();
     const run = createVariationRun(input, d);
     const result = await run.generateImage({ prompt: "Product on a blue background", referenceImageIds: ["img_r3", "unknown"], keepSourceLayout: true });
     expect(d.produceImage).toHaveBeenCalledWith({
       prompt: "Product on a blue background",
-      referenceImageUrls: ["https://cdn.test/source.png", "https://blob.test/r3.png", "https://blob.test/product.png"],
+      referenceImageUrls: ["https://blob.test/product.png", "https://blob.test/r3.png", "https://cdn.test/source.png"],
       format: "portrait",
       attempt: 1,
     });
@@ -358,7 +358,8 @@ describe("resolveVariationOutcome", () => {
 
 describe("variationPlanSchema", () => {
   it("accepts the finish payload shape", () => {
-    expect(variationPlanSchema.safeParse({ summary: "s", kept: [], changed: ["x"], rationale: "r", evidence: [], inImageCopy: [], finalAttempt: 1 }).success).toBe(true);
+    expect(variationPlanSchema.safeParse({ summary: "s", kept: [], changed: ["x"], rationale: "r", evidence: [{ documentId: "doc_log", title: "Resolution log" }], inImageCopy: [], finalAttempt: 1 }).success).toBe(true);
+    expect(variationPlanSchema.safeParse({ summary: "s", kept: [], changed: ["x"], rationale: "r", evidence: [], inImageCopy: [], finalAttempt: 1 }).success).toBe(false);
     expect(variationPlanSchema.safeParse({ summary: "s" }).success).toBe(false);
   });
 });

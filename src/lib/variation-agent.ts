@@ -102,13 +102,15 @@ export const variationPlanSchema = z.object({
   kept: z.array(z.string()),
   changed: z.array(z.string()).min(1),
   rationale: z.string().min(1),
-  evidence: z.array(
-    z.object({
-      documentId: z.string(),
-      sectionId: z.string().optional(),
-      title: z.string(),
-    }),
-  ),
+  evidence: z
+    .array(
+      z.object({
+        documentId: z.string(),
+        sectionId: z.string().optional(),
+        title: z.string(),
+      }),
+    )
+    .min(1, "Cite at least one document you used"),
   inImageCopy: z.array(z.string()),
   finalAttempt: z.number().int().positive(),
 });
@@ -150,7 +152,7 @@ const PROCEDURE = [
   "",
   "Rules:",
   "- Any CONSTRAINT FROM THE USER is a hard constraint, not a suggestion.",
-  "- Cite in evidence only documents and sections you actually read.",
+  "- Cite in evidence at least one document you actually used (core documents count; use their documentId), and only documents and sections you actually read.",
   "- Never quote a testimonial verbatim if it states a definitive medical outcome; soften it while keeping it authentic.",
 ].join("\n");
 
@@ -170,7 +172,7 @@ function brandBlock(brand: StudioBrandProfile | null) {
     brand.offer ? `Offer: ${brand.offer}` : null,
     brand.productNotes ? `Product notes: ${brand.productNotes}` : null,
     brand.productImageUrl
-      ? "A product photo is attached as the last reference on every image call. The product in the image must match it exactly; render only the markings the product notes describe."
+      ? "A product photo is attached as the first reference on every image call; when the source image is attached it comes last. The product in the ad must match the product photo exactly, and when the source already shows the product, tell the image model to reuse the product exactly as it appears in the source rather than re-rendering it. Render only the markings the product notes describe."
       : null,
   ].filter(Boolean);
   const claims = buildClaimsConstraint({
@@ -363,19 +365,21 @@ export function createVariationRun(
     // Counted before the call: a blocked attempt still spent an image-model call.
     state.imageCalls += 1;
     const attempt = state.imageCalls;
+    // Reference order: product photo first, chosen context images, source
+    // last. The image model leans on the first reference for the product and
+    // the last for layout, and the source already shows the product the way
+    // the ad needs it.
     const referenceImageUrls: string[] = [];
-    if (raw.keepSourceLayout && input.useSourceLayout) {
-      referenceImageUrls.push(input.source.imageUrl);
-    }
+    const productImageUrl = input.brand?.productImageUrl;
+    if (productImageUrl) referenceImageUrls.push(productImageUrl);
     const ignoredReferenceIds: string[] = [];
     for (const id of raw.referenceImageIds) {
       const image = imageById.get(id);
-      if (image) referenceImageUrls.push(image.imageUrl);
-      else ignoredReferenceIds.push(id);
+      if (!image) ignoredReferenceIds.push(id);
+      else if (!referenceImageUrls.includes(image.imageUrl)) referenceImageUrls.push(image.imageUrl);
     }
-    const productImageUrl = input.brand?.productImageUrl;
-    if (productImageUrl && !referenceImageUrls.includes(productImageUrl)) {
-      referenceImageUrls.push(productImageUrl);
+    if (raw.keepSourceLayout && input.useSourceLayout) {
+      referenceImageUrls.push(input.source.imageUrl);
     }
 
     deps.onStep(`generating image (attempt ${attempt})`);
