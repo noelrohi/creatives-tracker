@@ -23,6 +23,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CreativeAdsTab } from "@/components/blocks/creatives/creative-ads-tab";
 import { CreativePerformanceTab } from "@/components/blocks/creatives/creative-performance-tab";
+import { CreativeVariationsTab } from "@/components/blocks/creatives/creative-variations-tab";
 import { DateRangePicker } from "@/components/blocks/dashboard/date-range-picker";
 import { DemographicBreakdownChart } from "@/components/blocks/dashboard/demographic-chart";
 import { Field, FieldContent, FieldError, FieldLabel } from "@/components/ui/field";
@@ -220,6 +221,10 @@ export default function CreativeDetailPage() {
   const adPreviewUrl = adPreviewQuery.data?.previewUrl ?? null;
   const isLoadingVideo = wantsVideo && adPreviewQuery.isLoading;
   const canFetchMetaPreview = (!displayAssetUrl || (previewFormat === "video" && !playableVideoUrl));
+  const canMakeVariations =
+    creative.data?.format === "static" &&
+    Boolean(creative.data.assetUrl) &&
+    !isVideoFileUrl(creative.data.assetUrl);
 
   if (creative.isLoading) {
     return (
@@ -430,6 +435,7 @@ export default function CreativeDetailPage() {
             )}
           </TabsTrigger>
           <TabsTrigger value="demographics">Demographics</TabsTrigger>
+          {canMakeVariations ? <TabsTrigger value="variations">Variations</TabsTrigger> : null}
         </TabsList>
 
         {/* Performance tab */}
@@ -724,6 +730,13 @@ export default function CreativeDetailPage() {
             />
           ) : null}
         </TabsContent>
+
+        {/* Variations tab */}
+        {canMakeVariations ? (
+          <TabsContent value="variations" className="pt-4">
+            <CreativeVariationsTab creativeId={id} readOnly={isReadOnly} />
+          </TabsContent>
+        ) : null}
       </Tabs>
 
       {/* Delete dialog */}
