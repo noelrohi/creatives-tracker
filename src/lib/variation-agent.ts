@@ -21,6 +21,7 @@ export const MAX_IMAGE_ATTEMPTS = 2;
 export const MAX_READ_CHARS = 8_000;
 
 const MAX_INDEXED_SECTIONS = 40;
+const MAX_LISTED_SECTIONS = 200;
 
 export type VariationSource = {
   kind: "creative" | "competitor_ad";
@@ -65,6 +66,8 @@ export type VariationRunDeps = {
 
 export type VariationRunState = {
   contextReads: number;
+  /** Image-model calls made, including ones the model blocked: each one cost a call. */
+  imageCalls: number;
   claimsFlags: number;
   attempts: VariationAttempt[];
   plan: VariationPlan | null;
@@ -120,7 +123,14 @@ export const finishInputSchema = z.object({ plan: variationPlanSchema });
 
 /** Neutralizes anything that could close or open an XML-ish section in the prompt. */
 export function escapeContextText(text: string) {
-  return text.replace(/<(?=\/?[a-zA-Z])/g, "&lt;");
+  return text.replace(/<(?=\s*\/?\s*[a-zA-Z])/g, "&lt;");
+}
+
+/** Escapes a value used inside an XML-ish attribute or a pipe-delimited index row. */
+function escapeContextField(text: string) {
+  return escapeContextText(text)
+    .replace(/"/g, "&quot;")
+    .replace(/\s*[\r\n]+\s*/g, " ");
 }
 
 const PROCEDURE = [
@@ -134,14 +144,13 @@ const PROCEDURE = [
   "5. Read the review. If it failed, fix the specific problems and try once more. Then call finish with the attempt you are shipping.",
   "",
   "Rules:",
-  "- The product in the image must match the attached product photo exactly; render only the markings the product notes describe.",
   "- Any CONSTRAINT FROM THE USER is a hard constraint, not a suggestion.",
   "- Cite in evidence only documents and sections you actually read.",
   "- Never quote a testimonial verbatim if it states a definitive medical outcome; soften it while keeping it authentic.",
 ].join("\n");
 
 const REBRAND_MODE = [
-  "REBRAND MODE: the source is a competitor's ad. Keep its layout, composition, and visual hierarchy. In the prompt, state that you replace all source branding, logos, products, recognizable people, and copy with ours, and write short exact replacement copy in quotes for every text block the source shows. Never reuse the source's words or marks.",
+  "REBRAND MODE: the source is a competitor's ad. Keep its layout, composition, and visual hierarchy. In the prompt, state that you replace all source branding, logos, products, recognizable people, and copy with ours, and write short exact replacement copy in quotes for every text block the source shows. Never reuse the source's words or marks. In this mode the rebrand is the one change; the single-change rule in step 3 does not apply.",
 ].join("\n");
 
 const TOOLS_NOTE = [
@@ -156,7 +165,7 @@ function brandBlock(brand: StudioBrandProfile | null) {
     brand.offer ? `Offer: ${brand.offer}` : null,
     brand.productNotes ? `Product notes: ${brand.productNotes}` : null,
     brand.productImageUrl
-      ? "A product photo is attached as the last reference on every image call."
+      ? "A product photo is attached as the last reference on every image call. The product in the image must match it exactly; render only the markings the product notes describe."
       : null,
   ].filter(Boolean);
   const claims = buildClaimsConstraint({
@@ -164,7 +173,12 @@ function brandBlock(brand: StudioBrandProfile | null) {
     requiredDisclaimers: brand.requiredDisclaimers,
   });
 
-  return ["<brand>", escapeContextText(lines.join("\n")), claims, "</brand>"]
+  return [
+    "<brand>",
+    escapeContextText(lines.join("\n")),
+    claims ? escapeContextText(claims) : "",
+    "</brand>",
+  ]
     .filter(Boolean)
     .join("\n");
 }
@@ -174,7 +188,7 @@ export function buildVariationSystemPrompt(input: VariationRunInput) {
 
   const core = library.core.map((doc) =>
     [
-      `<context kind="${doc.kind}" title="${escapeContextText(doc.title)}">`,
+      `<context kind="${doc.kind}" title="${escapeContextField(doc.title)}">`,
       escapeContextText(doc.content),
       "</context>",
     ].join("\n"),
@@ -185,10 +199,10 @@ export function buildVariationSystemPrompt(input: VariationRunInput) {
         "<reference-index>",
         "Read on demand with readContext. Format: documentId | title | description | section count",
         ...library.reference.flatMap((doc) => [
-          `${doc.id} | ${escapeContextText(doc.title)} | ${escapeContextText(doc.description)} | ${doc.sections.length} sections`,
+          `${doc.id} | ${escapeContextField(doc.title)} | ${escapeContextField(doc.description)} | ${doc.sections.length} sections`,
           ...doc.sections
             .slice(0, MAX_INDEXED_SECTIONS)
-            .map((section) => `  ${section.id} | ${escapeContextText(section.path)}`),
+            .map((section) => `  ${section.id} | ${escapeContextField(section.path)}`),
           ...(doc.sections.length > MAX_INDEXED_SECTIONS
             ? [
                 `  … ${doc.sections.length - MAX_INDEXED_SECTIONS} more; call readContext({ documentId }) for the full list`,
@@ -205,7 +219,7 @@ export function buildVariationSystemPrompt(input: VariationRunInput) {
         "Attach by id through generateImage.referenceImageIds. Format: imageId | kind | title | description",
         ...library.images.map(
           (img) =>
-            `${img.id} | ${img.kind} | ${escapeContextText(img.title)} | ${escapeContextText(img.description)}`,
+            `${img.id} | ${img.kind} | ${escapeContextField(img.title)} | ${escapeContextField(img.description)}`,
         ),
         "</image-index>",
       ].join("\n")
@@ -214,6 +228,9 @@ export function buildVariationSystemPrompt(input: VariationRunInput) {
   return [
     `<role>\n${PROCEDURE}\n</role>`,
     input.source.kind === "competitor_ad" ? `<mode>\n${REBRAND_MODE}\n</mode>` : null,
+    input.useSourceLayout
+      ? null
+      : "<mode>\nThe source image is NOT sent to the image model on this run (the user retried without it), and keepSourceLayout has no effect. Describe the layout, composition, and every element the image needs in the prompt itself.\n</mode>",
     brandBlock(input.brand),
     ...core,
     reference,
@@ -257,6 +274,7 @@ export function createVariationRun(
 ) {
   const state: VariationRunState = {
     contextReads: 0,
+    imageCalls: 0,
     claimsFlags: 0,
     attempts: [],
     plan: null,
@@ -277,23 +295,29 @@ export function createVariationRun(
     const doc = referenceById.get(raw.documentId);
     if (!doc) return { error: `Unknown document id: ${raw.documentId}` };
 
-    state.contextReads += 1;
-
     if (!raw.sectionId) {
+      state.contextReads += 1;
       deps.onStep(`listing ${doc.title.toLowerCase()}`);
+      const listed = doc.sections.slice(0, MAX_LISTED_SECTIONS);
       return {
         documentId: doc.id,
-        sections: doc.sections.map((section) => ({
+        sections: listed.map((section) => ({
           sectionId: section.id,
           path: section.path,
         })),
+        ...(doc.sections.length > MAX_LISTED_SECTIONS
+          ? { truncated: true, totalSections: doc.sections.length }
+          : {}),
       };
     }
 
+    // An id the index never offered is a typo, not a read: it costs nothing.
+    // A real id whose lookup comes back empty already hit the database.
     if (!doc.sections.some((section) => section.id === raw.sectionId)) {
       return { error: `Unknown section id: ${raw.sectionId}` };
     }
 
+    state.contextReads += 1;
     deps.onStep(`reading ${doc.title.toLowerCase()}`);
     const section = await deps.readSection(doc.id, raw.sectionId);
     if (!section) return { error: `Unknown section id: ${raw.sectionId}` };
@@ -309,7 +333,7 @@ export function createVariationRun(
   }
 
   async function generateImage(raw: z.infer<typeof generateImageInputSchema>) {
-    if (state.attempts.length >= MAX_IMAGE_ATTEMPTS) {
+    if (state.imageCalls >= MAX_IMAGE_ATTEMPTS) {
       return {
         error: `Image attempt budget of ${MAX_IMAGE_ATTEMPTS} reached. Call finish with the best attempt.`,
       };
@@ -325,7 +349,9 @@ export function createVariationRun(
       };
     }
 
-    const attempt = state.attempts.length + 1;
+    // Counted before the call: a blocked attempt still spent an image-model call.
+    state.imageCalls += 1;
+    const attempt = state.imageCalls;
     const referenceImageUrls: string[] = [];
     if (raw.keepSourceLayout && input.useSourceLayout) {
       referenceImageUrls.push(input.source.imageUrl);
@@ -364,7 +390,13 @@ export function createVariationRun(
     deps.onStep(`reviewing attempt ${attempt}`);
     const review = await deps.reviewImage({ imageUrl, prompt: raw.prompt });
     state.attempts.push({ attempt, imageUrl, prompt: raw.prompt, review });
-    return { attempt, imageUrl, review, ignoredReferenceIds };
+    return {
+      attempt,
+      imageUrl,
+      review,
+      attemptsRemaining: MAX_IMAGE_ATTEMPTS - state.imageCalls,
+      ...(ignoredReferenceIds.length > 0 ? { ignoredReferenceIds } : {}),
+    };
   }
 
   async function finish(raw: z.infer<typeof finishInputSchema>) {
@@ -419,6 +451,7 @@ export function resolveVariationOutcome(state: VariationRunState): VariationOutc
     };
   }
 
+  // Two consecutive flagged prompts end the run: the threshold comes from the spec.
   if (state.claimsFlags >= 2 && state.attempts.length === 0) {
     return { kind: "failed", reason: "claims", attempts: state.attempts };
   }
