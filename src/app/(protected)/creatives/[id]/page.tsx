@@ -106,6 +106,10 @@ export default function CreativeDetailPage() {
   }, [fromValue, toValue]);
 
   const creative = useQuery(trpc.adCreative.getById.queryOptions({ id }));
+  // Shares the sidebar's query, so this costs no extra request.
+  const { data: featureFlags } = useQuery(
+    trpc.orgSettings.getFeatureFlags.queryOptions(),
+  );
   const perf = useQuery(trpc.adCreative.getPerformance.queryOptions(dateParams));
   const dailyPerf = useQuery(trpc.adCreative.getDailyPerformance.queryOptions(dateParams));
   const linkedAds = useQuery(trpc.ad.listByCreative.queryOptions({
@@ -218,9 +222,10 @@ export default function CreativeDetailPage() {
   const adPreviewUrl = adPreviewQuery.data?.previewUrl ?? null;
   const isLoadingVideo = wantsVideo && adPreviewQuery.isLoading;
   const canFetchMetaPreview = (!displayAssetUrl || (previewFormat === "video" && !playableVideoUrl));
-  const canMakeVariations = isStaticImageCreative(creative.data);
+  const canMakeVariations = isStaticImageCreative(creative.data) && (featureFlags?.imageStudio ?? false);
   // A shared ?tab=variations link can point at a creative that is no longer a
-  // static image; fall back rather than rendering an empty tab body.
+  // static image, or arrive after Image Studio was turned off; fall back rather
+  // than rendering an empty tab body.
   const activeTab = creativeTab === "variations" && !canMakeVariations ? "performance" : creativeTab;
 
   if (creative.isLoading) {
