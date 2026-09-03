@@ -3,6 +3,7 @@ import { auth as triggerAuth } from "@trigger.dev/sdk";
 import type { TRPCRouterRecord } from "@trpc/server";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
+import type { VariationAttempt, VariationPlan } from "@/lib/variation-agent-types";
 import { studioGenerations, studioVariants } from "@/schema/studio";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import {
@@ -26,8 +27,8 @@ const variationListItemSchema = z.object({
     id: z.string(),
     status: z.string(),
     imageUrl: z.string().nullable(),
-    plan: z.unknown().nullable(),
-    attempts: z.unknown().nullable(),
+    plan: z.custom<VariationPlan>().nullable(),
+    attempts: z.custom<VariationAttempt[]>().nullable(),
     mark: z.string().nullable(),
     publishedAt: z.date().nullable(),
     moderationReason: z.string().nullable(),
@@ -57,14 +58,21 @@ export const studioVariationProcedures = {
       .output(z.object({
         generationId: z.string(),
         variantId: z.string(),
-        realtime: realtimeSchema,
+        // A freshly queued run always has a run id, so this token is never null.
+        realtime: realtimeSchema.unwrap(),
       }))
       .mutation(async ({ input, ctx }) => {
         const queued = await createVariationGeneration(ctx.organizationId, input);
         return {
           generationId: queued.generationId,
           variantId: queued.variantId,
-          realtime: await realtimeFor("generating", queued.runId),
+          realtime: {
+            runId: queued.runId,
+            publicAccessToken: await triggerAuth.createPublicToken({
+              scopes: { read: { runs: [queued.runId] } },
+              expirationTime: "1h",
+            }),
+          },
         };
       }),
 
@@ -97,7 +105,10 @@ export const studioVariationProcedures = {
           .from(studioGenerations)
           .innerJoin(
             studioVariants,
-            eq(studioVariants.generationId, studioGenerations.id),
+            and(
+              eq(studioVariants.generationId, studioGenerations.id),
+              eq(studioVariants.organizationId, ctx.organizationId),
+            ),
           )
           .where(
             and(

@@ -134,7 +134,7 @@ describe("studio.variations", () => {
     expect(triggerMock.trigger).not.toHaveBeenCalled();
   });
 
-  it("create: rejects a creative outside the org (query returns nothing)", async () => {
+  it("create: rejects a source the query does not return", async () => {
     const caller = createMockCaller({ role: "owner" });
     dbState.selectRows.push([]);
     await expect(caller.studio.variations.create({ sourceCreativeId: "cr_other" })).rejects.toMatchObject({ code: "NOT_FOUND" });
@@ -153,7 +153,7 @@ describe("studio.variations", () => {
     await expect(caller.studio.variations.create({ sourceCreativeId: "cr_1" })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
-  it("listForCreative: returns that source's variations newest first with a token only for generating rows", async () => {
+  it("listForCreative: returns that source's variations in query order with a token only for generating rows", async () => {
     const caller = createMockCaller({ role: "member" });
     const now = new Date();
     dbState.selectRows.push([
@@ -186,5 +186,29 @@ describe("studio.variations", () => {
       }),
     ]);
     expect(triggerMock.createPublicToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("listForCreative: marks a generating row stale after 15 minutes and drops its token", async () => {
+    const caller = createMockCaller({ role: "member" });
+    const stale = new Date(Date.now() - 16 * 60 * 1000);
+    dbState.selectRows.push([
+      {
+        id: "gen_stale", status: "generating", runId: "run_stale", note: null, format: "portrait",
+        createdAt: stale, updatedAt: stale,
+        variantId: "var_stale", variantStatus: "pending", imageUrl: null, plan: null, attempts: null,
+        mark: null, publishedAt: null, moderationReason: null,
+      },
+    ]);
+    const [row] = await caller.studio.variations.listForCreative({ creativeId: "cr_1" });
+    expect(row).toMatchObject({ id: "gen_stale", status: "failed", realtime: null, variant: expect.objectContaining({ id: "var_stale", status: "failed" }) });
+    expect(triggerMock.createPublicToken).not.toHaveBeenCalled();
+  });
+
+  it("create: stores a whitespace-only note as null", async () => {
+    const caller = createMockCaller({ role: "owner" });
+    dbState.selectRows.push([staticCreative]);
+    await caller.studio.variations.create({ sourceCreativeId: "cr_1", note: "   " });
+    expect(dbState.inserted[0]).toMatchObject({ note: null });
+    expect(triggerMock.trigger).toHaveBeenCalledWith("generate-variation", expect.objectContaining({ note: null }));
   });
 });
