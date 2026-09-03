@@ -7,7 +7,7 @@ import {
 } from "ai";
 import { logger, metadata, task, tags } from "@trigger.dev/sdk";
 import { put } from "@vercel/blob";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, gte } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { openai } from "@/lib/ai";
@@ -37,17 +37,27 @@ import {
   MAX_STEPS,
   readContextInputSchema,
   resolveVariationOutcome,
+  type VariationFailureReason,
   type VariationRunInput,
   type VariationSource,
 } from "@/lib/variation-agent";
 import type { VariationAttempt, VariationPlan } from "@/lib/variation-agent-types";
 import { adCreatives } from "@/schema/ad-creative";
 import { competitorAds } from "@/schema/competitor-signals";
+import { performanceLogs } from "@/schema/performance-log";
 import { studioGenerations, studioVariants } from "@/schema/studio";
 
 const AGENT_MODEL = "gpt-5.6-terra";
 const REVIEW_MODEL = "gpt-5.6-terra";
 const IMAGE_MODEL = "gpt-image-2";
+const PERFORMANCE_WINDOW_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MODERATION_REASONS = [
+  "claims",
+  "likeness",
+  "logo",
+  "moderation",
+] as const satisfies readonly VariationFailureReason[];
 
 export type GenerateVariationPayload = {
   organizationId: string;
@@ -86,8 +96,12 @@ async function loadSource(
     if (!row?.assetUrl || !isHttpUrl(row.assetUrl)) {
       throw new Error("Source creative has no usable image URL");
     }
+    const windowStart = new Date(Date.now() - PERFORMANCE_WINDOW_DAYS * DAY_MS)
+      .toISOString()
+      .slice(0, 10);
     const [perf] = await fetchCreativePerformanceRows(payload.organizationId, [
-      inArray(adCreatives.id, [row.id]),
+      eq(adCreatives.id, row.id),
+      gte(performanceLogs.dateStart, windowStart),
     ]);
     return {
       kind: "creative",
@@ -146,6 +160,13 @@ export const generateVariationTask = task({
   id: "generate-variation",
   queue: { concurrencyLimit: 3 },
   maxDuration: 600,
+  // One attempt only. A retry re-runs the whole agent loop and re-spends up to
+  // MAX_IMAGE_ATTEMPTS image-model calls, including when the only thing that
+  // failed was a persistence write after the images were already made. The UI
+  // offers a deliberate per-variant retry instead.
+  retry: { maxAttempts: 1 },
+  // Covers what the run's own catch cannot: a maxDuration timeout or a crash
+  // that ends the run before the catch executes.
   onFailure: async ({ payload }: { payload: GenerateVariationPayload }) => {
     await failStudioGeneration(payload.generationId, payload.organizationId);
   },
@@ -227,26 +248,26 @@ export const generateVariationTask = task({
             }),
           );
           const blob = await put(
-            `${env}/create/${ctx.run.id}-${attempt}.png`,
+            `${env}/create/${ctx.run.id}-${ctx.attempt.number}-${attempt}.png`,
             Buffer.from(result.image.uint8Array),
             { access: "public", contentType: "image/png" },
           );
           return { imageUrl: blob.url };
         },
         reviewImage: async ({ imageUrl, prompt }) => {
-          const content: Array<
-            { type: "text"; text: string } | { type: "image"; image: URL }
-          > = [
-            {
-              type: "text",
-              text: `Review this generated ad against the prompt below and the checklist.\n\nPROMPT:\n${prompt}`,
-            },
-            { type: "image", image: new URL(imageUrl) },
-          ];
-          if (brand?.productImageUrl) {
-            content.push({ type: "image", image: new URL(brand.productImageUrl) });
-          }
           try {
+            const content: Array<
+              { type: "text"; text: string } | { type: "image"; image: URL }
+            > = [
+              {
+                type: "text",
+                text: `Review this generated ad against the prompt below and the checklist.\n\nPROMPT:\n${prompt}`,
+              },
+              { type: "image", image: new URL(imageUrl) },
+            ];
+            if (brand?.productImageUrl) {
+              content.push({ type: "image", image: new URL(brand.productImageUrl) });
+            }
             const result = await generateObject({
               model: openai(REVIEW_MODEL),
               schema: reviewSchema,
@@ -255,7 +276,7 @@ export const generateVariationTask = task({
                 "Checklist (all must hold for pass = true):",
                 "- The product matches the product photo in shape, openings, material, and markings; no invented logos or text on it.",
                 "- Every word visible in the image is legible and matches the quoted copy in the prompt; no garbled or extra text.",
-                "- No source-advertiser branding, no third-party logos, no platform UI, no watermarks.",
+                `- No logos or brand marks other than ${brand?.brandName ?? "the advertiser's"}; no platform UI, no watermarks.`,
                 "- The palette is consistent with a clean brand look: no clashing neon, no split panels unless the prompt asked for them.",
                 brand?.prohibitedClaims.length
                   ? `- None of these claims appear or are implied: ${brand.prohibitedClaims.join("; ")}.`
@@ -268,7 +289,12 @@ export const generateVariationTask = task({
             });
             return result.object;
           } catch (error) {
-            logger.warn("Variation review failed; treating as pass", { error });
+            // Fail open: an unreviewed image can still ship as ready, with the
+            // "review unavailable" note persisted in attempts as the record.
+            logger.warn("Variation review failed; treating as pass", {
+              error:
+                error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+            });
             return { pass: true, notes: ["review unavailable"] };
           }
         },
@@ -304,6 +330,9 @@ export const generateVariationTask = task({
                 execute: (raw) => run.finish(raw),
               }),
             },
+            // finish does not close the loop by itself: the model gets one more
+            // step after it. Disarming the tools there stops a post-finish
+            // generateImage call from spending another image-model call.
             prepareStep: () =>
               run.state.finished ? { toolChoice: "none", activeTools: [] } : undefined,
           }),
@@ -311,8 +340,13 @@ export const generateVariationTask = task({
       } catch (error) {
         logger.error("Variation agent loop ended with an error", {
           generationId: payload.generationId,
+          variantId: payload.variantId,
           runId: ctx.run.id,
-          error,
+          imageCalls: run.state.imageCalls,
+          contextReads: run.state.contextReads,
+          attempts: run.state.attempts.length,
+          error:
+            error instanceof Error ? `${error.name}: ${error.message}` : String(error),
         });
       }
 
@@ -329,11 +363,12 @@ export const generateVariationTask = task({
           moderationReason: null,
         });
       } else {
-        const moderationReasons = new Set(["claims", "likeness", "logo", "moderation"]);
         await markVariant({
           status: "failed",
           attempts: outcome.attempts,
-          moderationReason: moderationReasons.has(outcome.reason)
+          moderationReason: (MODERATION_REASONS as readonly string[]).includes(
+            outcome.reason,
+          )
             ? outcome.reason
             : null,
           plan: {
@@ -352,7 +387,7 @@ export const generateVariationTask = task({
         payload.generationId,
         payload.organizationId,
       );
-      metadata.set("status", status ?? "failed");
+      metadata.set("status", status ?? "generating");
       onStep(outcome.kind === "ready" ? "done" : `failed (${outcome.reason})`);
       return {
         outcome: outcome.kind,
@@ -361,8 +396,10 @@ export const generateVariationTask = task({
     } catch (error) {
       logger.error("Variation generation failed", {
         generationId: payload.generationId,
+        variantId: payload.variantId,
         runId: ctx.run.id,
-        error,
+        error:
+          error instanceof Error ? `${error.name}: ${error.message}` : String(error),
       });
       metadata.set("status", "failed");
       await failStudioGeneration(payload.generationId, payload.organizationId);
