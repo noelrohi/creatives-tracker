@@ -104,7 +104,7 @@ export const studioGenerationProcedures = {
     .input(z.object({ id: z.string() }))
     .output(queuedGenerationSchema)
     .mutation(async ({ input, ctx }) => {
-      const generation = await db.transaction(async (tx) => {
+      const claim = await db.transaction(async (tx) => {
         const [claimed] = await tx
           .update(studioGenerations)
           .set({ status: "generating", runId: null, updatedAt: new Date() })
@@ -117,7 +117,7 @@ export const studioGenerationProcedures = {
           )
           .returning();
         if (!claimed) return null;
-        await tx
+        const reset = await tx
           .update(studioVariants)
           .set({
             status: "pending",
@@ -127,6 +127,10 @@ export const studioGenerationProcedures = {
             markedAt: null,
             publishedAt: null,
             moderationReason: null,
+            // Variation agent output belongs to the run that produced it; a
+            // retry must not describe itself with the previous run's plan.
+            plan: null,
+            attempts: null,
             updatedAt: new Date(),
           })
           .where(
@@ -134,11 +138,49 @@ export const studioGenerationProcedures = {
               eq(studioVariants.generationId, claimed.id),
               eq(studioVariants.organizationId, ctx.organizationId),
             ),
-          );
-        return claimed;
+          )
+          .returning({ id: studioVariants.id, index: studioVariants.index });
+        return { generation: claimed, variants: reset };
       });
-      if (!generation) {
+      if (!claim) {
         throw new TRPCError({ code: "CONFLICT", message: "Only failed generations can be retried" });
+      }
+      const { generation, variants } = claim;
+      // A variation is one agent run, not a batch of static ads: "Retry all"
+      // has to re-run the agent that produced it.
+      if (generation.kind === "variation") {
+        const source = generation.sourceCreativeId
+          ? { kind: "creative" as const, id: generation.sourceCreativeId }
+          : generation.sourceCompetitorAdId
+            ? { kind: "competitor_ad" as const, id: generation.sourceCompetitorAdId }
+            : null;
+        const variantId = variants[0]?.id;
+        if (!source || !variantId) {
+          await failStudioGeneration(generation.id, ctx.organizationId);
+          throw new TRPCError({ code: "CONFLICT", message: "This variation has no source to retry from" });
+        }
+        try {
+          const handle = await tasks.trigger<typeof generateVariationTask>("generate-variation", {
+            organizationId: ctx.organizationId,
+            generationId: generation.id,
+            variantId,
+            source,
+            note: generation.note,
+          });
+          await db
+            .update(studioGenerations)
+            .set({ runId: handle.id, updatedAt: new Date() })
+            .where(
+              and(
+                eq(studioGenerations.id, generation.id),
+                eq(studioGenerations.organizationId, ctx.organizationId),
+              ),
+            );
+          return { runId: handle.id, generationId: generation.id };
+        } catch (error) {
+          await failStudioGeneration(generation.id, ctx.organizationId);
+          throw error;
+        }
       }
       try {
         const handle = await tasks.trigger<typeof generateStaticAdsTask>(

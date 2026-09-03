@@ -455,11 +455,13 @@ export function resolveVariationOutcome(state: VariationRunState): VariationOutc
   if (state.claimsFlags >= 2 && state.attempts.length === 0) {
     return { kind: "failed", reason: "claims", attempts: state.attempts };
   }
-  if (state.attempts.length > 0) {
-    return { kind: "failed", reason: "review", attempts: state.attempts };
-  }
+  // A moderation block is the more specific story: when the last image call was
+  // refused, say so even if an earlier attempt also failed review.
   if (state.moderationReason) {
     return { kind: "failed", reason: state.moderationReason, attempts: state.attempts };
+  }
+  if (state.attempts.length > 0) {
+    return { kind: "failed", reason: "review", attempts: state.attempts };
   }
   return { kind: "failed", reason: "no_image", attempts: state.attempts };
 }

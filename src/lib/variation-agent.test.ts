@@ -340,6 +340,10 @@ describe("resolveVariationOutcome", () => {
   it("reports the moderation reason when that is why nothing was produced", () => {
     expect(resolveVariationOutcome({ attempts: [], plan: null, finished: false, contextReads: 0, imageCalls: 1, claimsFlags: 0, moderationReason: "logo" })).toEqual({ kind: "failed", reason: "logo", attempts: [] });
   });
+
+  it("prefers the moderation reason when a later attempt was blocked after a failed review", () => {
+    expect(resolveVariationOutcome({ attempts: [attempt(1, false)], plan: null, finished: false, contextReads: 0, claimsFlags: 0, imageCalls: 2, moderationReason: "likeness" })).toEqual({ kind: "failed", reason: "likeness", attempts: [attempt(1, false)] });
+  });
 });
 
 describe("variationPlanSchema", () => {

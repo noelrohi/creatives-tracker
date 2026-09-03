@@ -7,6 +7,22 @@ const dbState = {
   inserted: [] as Array<Record<string, unknown> | Record<string, unknown>[]>,
   updated: [] as Array<Record<string, unknown>>,
   featureFlags: {} as FeatureFlags,
+  generationRow: {} as Record<string, unknown>,
+};
+
+const variationGenerationRow = {
+  id: "gen_1",
+  kind: "variation",
+  note: "blue",
+  sourceCreativeId: "cr_1",
+  sourceCompetitorAdId: null,
+  brief: "Variation of One nightly habit",
+  angle: null,
+  persona: null,
+  awarenessLevel: null,
+  count: 1,
+  format: "portrait",
+  referenceImageUrls: ["https://cdn.test/one.png"],
 };
 
 const mockDb = {
@@ -44,13 +60,22 @@ const mockDb = {
     return chain;
   }),
   update: vi.fn(() => {
+    let lastSet: Record<string, unknown> = {};
     const chain: Record<string, unknown> = {
       set: vi.fn((row: Record<string, unknown>) => {
+        lastSet = row;
         dbState.updated.push(row);
         return chain;
       }),
       where: vi.fn(() => chain),
-      returning: vi.fn(async () => []),
+      // studio.retry claims the generation and resets its variants with two
+      // updates in one transaction, so which row shape to hand back depends on
+      // the payload: only the claim clears runId.
+      returning: vi.fn(async () =>
+        "runId" in lastSet && lastSet.runId === null
+          ? [{ ...dbState.generationRow, ...lastSet }]
+          : [{ id: "variant_1", index: 0, ...lastSet }],
+      ),
     };
     return chain;
   }),
@@ -81,6 +106,7 @@ describe("studio.variations", () => {
     dbState.inserted = [];
     dbState.updated = [];
     dbState.featureFlags = { imageStudio: true };
+    dbState.generationRow = { ...variationGenerationRow };
     vi.clearAllMocks();
     triggerMock.trigger.mockResolvedValue({ id: "run_var_1" });
     triggerMock.createPublicToken.mockResolvedValue("public_token_xyz");
@@ -253,5 +279,18 @@ describe("studio.variations", () => {
       attempts: null,
     });
     expect(dbState.updated.at(-1)).toMatchObject({ runId: "run_var_1" });
+  });
+
+  it("retry: re-runs generate-variation for a failed variation generation", async () => {
+    const caller = createMockCaller({ role: "owner" });
+    await caller.studio.retry({ id: "gen_1" });
+    expect(triggerMock.trigger).toHaveBeenCalledWith("generate-variation", expect.objectContaining({
+      organizationId: "test-org-id",
+      variantId: "variant_1",
+      source: { kind: "creative", id: "cr_1" },
+      note: "blue",
+    }));
+    expect(triggerMock.trigger).not.toHaveBeenCalledWith("generate-static-ads", expect.anything());
+    expect(dbState.updated.some((row) => row.status === "pending" && row.plan === null && row.attempts === null)).toBe(true);
   });
 });
