@@ -2641,11 +2641,11 @@ async function main() {
   const summary = { core: 0, reference: 0, sections: 0, images: 0, imageFailures: [] as string[] };
 
   for (const doc of plan.documents) {
-    const content = await readFile(join(dir!, doc.file), "utf8");
+    const content = await readFile(join(dir!, doc.sourceFilename), "utf8");
     const [existing] = await db
       .select({ id: studioContextDocuments.id })
       .from(studioContextDocuments)
-      .where(and(eq(studioContextDocuments.organizationId, organizationId!), eq(studioContextDocuments.sourceFilename, doc.file)))
+      .where(and(eq(studioContextDocuments.organizationId, organizationId!), eq(studioContextDocuments.sourceFilename, doc.sourceFilename)))
       .limit(1);
     const values = {
       title: doc.title,
@@ -2664,7 +2664,7 @@ async function main() {
     } else {
       const [inserted] = await db
         .insert(studioContextDocuments)
-        .values({ organizationId: organizationId!, sourceFilename: doc.file, ...values })
+        .values({ organizationId: organizationId!, sourceFilename: doc.sourceFilename, ...values })
         .returning({ id: studioContextDocuments.id });
       documentId = inserted.id;
     }
@@ -2680,17 +2680,17 @@ async function main() {
     } else {
       summary.core += 1;
     }
-    console.log(`document ${doc.tier.padEnd(9)} ${doc.file}`);
+    console.log(`document ${doc.tier.padEnd(9)} ${doc.sourceFilename}`);
   }
 
   for (const image of plan.images) {
     try {
-      const bytes = await readFile(join(dir!, image.file));
+      const bytes = await readFile(join(dir!, image.sourceFilename));
       const dimensions = readImageDimensions(new Uint8Array(bytes));
       if (!dimensions) throw new Error("could not read image dimensions");
-      const extension = image.file.toLowerCase().split(".").pop() ?? "png";
+      const extension = image.sourceFilename.toLowerCase().split(".").pop() ?? "png";
       const blob = await put(
-        `${blobEnvPrefix}/context/${organizationId}/${image.file.replace(/[^a-z0-9._/-]/gi, "_")}`,
+        `${blobEnvPrefix}/context/${organizationId}/${image.sourceFilename.replace(/[^a-z0-9._/-]/gi, "_")}`,
         bytes,
         { access: "public", contentType: `image/${extension === "jpg" ? "jpeg" : extension}`, allowOverwrite: true },
       );
@@ -2706,19 +2706,19 @@ async function main() {
       const [existing] = await db
         .select({ id: studioContextImages.id })
         .from(studioContextImages)
-        .where(and(eq(studioContextImages.organizationId, organizationId!), eq(studioContextImages.sourceFilename, image.file)))
+        .where(and(eq(studioContextImages.organizationId, organizationId!), eq(studioContextImages.sourceFilename, image.sourceFilename)))
         .limit(1);
       if (existing) {
         await db.update(studioContextImages).set(values).where(eq(studioContextImages.id, existing.id));
       } else {
-        await db.insert(studioContextImages).values({ organizationId: organizationId!, sourceFilename: image.file, ...values });
+        await db.insert(studioContextImages).values({ organizationId: organizationId!, sourceFilename: image.sourceFilename, ...values });
       }
       summary.images += 1;
-      console.log(`image    ${image.kind.padEnd(9)} ${image.file} (${dimensions.width}x${dimensions.height})`);
+      console.log(`image    ${image.kind.padEnd(9)} ${image.sourceFilename} (${dimensions.width}x${dimensions.height})`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      summary.imageFailures.push(`${image.file}: ${message}`);
-      console.warn(`image    FAILED    ${image.file}: ${message}`);
+      summary.imageFailures.push(`${image.sourceFilename}: ${message}`);
+      console.warn(`image    FAILED    ${image.sourceFilename}: ${message}`);
     }
   }
 
