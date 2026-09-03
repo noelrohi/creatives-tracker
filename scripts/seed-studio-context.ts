@@ -22,11 +22,11 @@
  */
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { put } from "@vercel/blob";
 import { eq } from "drizzle-orm";
 import { readImageDimensions } from "@/lib/image-dimensions";
 import { planContextSeed, type SeedFile } from "@/lib/studio-context-manifest";
 import { sectionDocument } from "@/lib/studio-context-sections";
+import { contentTypeForKey, putStudioObject } from "@/lib/studio-storage";
 import {
   studioContextDocuments,
   studioContextImages,
@@ -132,12 +132,8 @@ async function main(organizationId: string, dir: string) {
       const dimensions = readImageDimensions(new Uint8Array(bytes));
       if (!dimensions) throw new Error("could not read image dimensions");
       if (db) {
-        const extension = image.sourceFilename.toLowerCase().split(".").pop() ?? "png";
-        const blob = await put(
-          `${blobEnvPrefix}/context/${organizationId}/${image.sourceFilename.replace(/[^a-z0-9._/-]/gi, "_")}`,
-          bytes,
-          { access: "public", contentType: `image/${extension === "jpg" ? "jpeg" : extension}`, allowOverwrite: true },
-        );
+        const key = `${blobEnvPrefix}/context/${organizationId}/${image.sourceFilename.replace(/[^a-z0-9._/-]/gi, "_")}`;
+        const blob = await putStudioObject(key, new Uint8Array(bytes), contentTypeForKey(key));
         const values = {
           title: image.title,
           description: image.description,

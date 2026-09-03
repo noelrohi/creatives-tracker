@@ -13,7 +13,7 @@
 - **DB push:** disabled by design. Generate a migration with `bun run db:generate`, then apply it with `bun run db:migrate`
 - **DB studio:** `bun run db:studio`
 - **Trigger.dev:** `bun run trigger:dev` (local), `bun run trigger:deploy`
-- **Studio context seed:** `bun run studio:seed-context -- --org <id> --dir <folder> [--dry-run]` (folder needs a `context-manifest.json`; documents tiered core/reference, images uploaded to Blob)
+- **Studio context seed:** `bun run studio:seed-context -- --org <id> --dir <folder> [--dry-run]` (folder needs a `context-manifest.json`; documents tiered core/reference, images uploaded to Blob). Set `STUDIO_LOCAL_STORAGE_DIR` in `.env` (dev only) to write Studio images to a local folder served at `/studio-local` instead of Blob
 
 ## Architecture
 

@@ -37,6 +37,12 @@ export type VariationSource = {
 
 export type VariationRunInput = {
   source: VariationSource;
+  /**
+   * The source image's bytes, when the caller already holds them. Sent inline
+   * to the agent instead of a URL, so a source stored where the model
+   * provider cannot fetch (local dev storage) still reaches it.
+   */
+  sourceImage?: Uint8Array;
   note: string | null;
   brand: StudioBrandProfile | null;
   library: StudioContextLibrary;
@@ -241,7 +247,7 @@ export function buildVariationSystemPrompt(input: VariationRunInput) {
 }
 
 export type VariationUserContent = Array<
-  { type: "text"; text: string } | { type: "image"; image: URL }
+  { type: "text"; text: string } | { type: "image"; image: URL | Uint8Array }
 >;
 
 export function buildVariationUserContent(
@@ -263,7 +269,7 @@ export function buildVariationUserContent(
 
   return [
     { type: "text", text: lines.join("\n\n") },
-    { type: "image", image: new URL(source.imageUrl) },
+    { type: "image", image: input.sourceImage ?? new URL(source.imageUrl) },
   ];
 }
 

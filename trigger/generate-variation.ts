@@ -6,15 +6,15 @@ import {
   tool,
 } from "ai";
 import { logger, metadata, task, tags } from "@trigger.dev/sdk";
-import { put } from "@vercel/blob";
 import { and, eq, gte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { openai } from "@/lib/ai";
 import { readImageDimensions, studioFormatForDimensions } from "@/lib/image-dimensions";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
-import { fetchRemoteImage, isHttpUrl } from "@/lib/remote-image";
+import { isHttpUrl } from "@/lib/remote-image";
 import { getStudioBrandProfile } from "@/lib/studio-brand";
+import { putStudioObject, readStudioImage } from "@/lib/studio-storage";
 import {
   loadStudioContextLibrary,
   readStudioContextSection,
@@ -246,13 +246,16 @@ export const generateVariationTask = task({
         loadStudioContextLibrary(payload.organizationId),
       ]);
 
-      // Fetch the source once: its bytes feed the image model and its header
-      // decides the output format, which the generation row then records.
+      // Fetch the source once: its bytes feed the agent, the image model, and
+      // the header decides the output format, which the generation row then
+      // records. Generated images are cached under their URL too, so the
+      // review always gets bytes (a local-storage URL is not reachable by the
+      // model provider).
       const imageBytes = new Map<string, Uint8Array>();
       const fetchBytes = async (url: string) => {
         const cached = imageBytes.get(url);
         if (cached) return cached;
-        const bytes = await fetchRemoteImage(url);
+        const bytes = await readStudioImage(url);
         imageBytes.set(url, bytes);
         return bytes;
       };
@@ -272,6 +275,7 @@ export const generateVariationTask = task({
 
       const input: VariationRunInput = {
         source,
+        sourceImage: sourceBytes,
         note: payload.note ?? null,
         brand,
         library,
@@ -292,26 +296,27 @@ export const generateVariationTask = task({
               size: studioSizeFor(format),
             }),
           );
-          const blob = await put(
+          const stored = await putStudioObject(
             `${env}/create/${ctx.run.id}-${ctx.attempt.number}-${attempt}.png`,
-            Buffer.from(result.image.uint8Array),
-            { access: "public", contentType: "image/png" },
+            result.image.uint8Array,
+            "image/png",
           );
-          return { imageUrl: blob.url };
+          imageBytes.set(stored.url, result.image.uint8Array);
+          return { imageUrl: stored.url };
         },
         reviewImage: async ({ imageUrl, prompt }) => {
           try {
             const content: Array<
-              { type: "text"; text: string } | { type: "image"; image: URL }
+              { type: "text"; text: string } | { type: "image"; image: Uint8Array }
             > = [
               {
                 type: "text",
                 text: `Review this generated ad against the prompt below and the checklist.\n\nPROMPT:\n${prompt}`,
               },
-              { type: "image", image: new URL(imageUrl) },
+              { type: "image", image: await fetchBytes(imageUrl) },
             ];
             if (brand?.productImageUrl) {
-              content.push({ type: "image", image: new URL(brand.productImageUrl) });
+              content.push({ type: "image", image: await fetchBytes(brand.productImageUrl) });
             }
             const result = await generateObject({
               model: openai(REVIEW_MODEL),

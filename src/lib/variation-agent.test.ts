@@ -134,6 +134,12 @@ describe("buildVariationUserContent", () => {
     expect(content[1]).toEqual({ type: "image", image: new URL("https://cdn.test/source.png") });
   });
 
+  it("sends the source image inline when its bytes are supplied", () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const content = buildVariationUserContent({ ...input, sourceImage: bytes });
+    expect(content[1]).toEqual({ type: "image", image: bytes });
+  });
+
   it("omits performance and note when absent", () => {
     const text = (buildVariationUserContent({ ...input, note: null, source: { ...input.source, performance: null } })[0] as { text: string }).text;
     expect(text).not.toContain("PERFORMANCE");
