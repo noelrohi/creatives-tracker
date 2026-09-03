@@ -16,11 +16,14 @@
  *
  * Safe to re-run: documents and images upsert by (org, sourceFilename) and
  * sections are regenerated for every reference document.
+ *
+ * Run with NODE_ENV=production when DATABASE_URL points at production so
+ * Blob keys land under prod/.
  */
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { put } from "@vercel/blob";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { readImageDimensions } from "@/lib/image-dimensions";
 import { planContextSeed, type SeedFile } from "@/lib/studio-context-manifest";
 import { sectionDocument } from "@/lib/studio-context-sections";
@@ -66,11 +69,11 @@ async function listFiles(root: string): Promise<SeedFile[]> {
   return out.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-async function main() {
-  const manifestRaw = await readFile(join(dir!, "context-manifest.json"), "utf8");
+async function main(organizationId: string, dir: string) {
+  const manifestRaw = await readFile(join(dir, "context-manifest.json"), "utf8");
   const entries = JSON.parse(manifestRaw);
   if (!Array.isArray(entries)) throw new Error("context-manifest.json must be an array");
-  const files = await listFiles(dir!);
+  const files = await listFiles(dir);
   const plan = planContextSeed(entries, files);
   if (!plan.ok) {
     console.error("Manifest errors:");
@@ -80,22 +83,12 @@ async function main() {
 
   // The db module opens a pool on import; only load it when we will write.
   const db = dryRun ? null : (await import("@/db")).db;
-  const summary = { core: 0, reference: 0, sections: 0, images: 0, imageFailures: [] as string[] };
+  const summary = { core: 0, reference: 0, sections: 0, images: 0, imageFailures: 0 };
 
   for (const doc of plan.documents) {
-    const content = await readFile(join(dir!, doc.sourceFilename), "utf8");
+    const content = await readFile(join(dir, doc.sourceFilename), "utf8");
     const sections = doc.tier === "reference" ? sectionDocument(doc.mimeType, content) : [];
     if (db) {
-      const [existing] = await db
-        .select({ id: studioContextDocuments.id })
-        .from(studioContextDocuments)
-        .where(
-          and(
-            eq(studioContextDocuments.organizationId, organizationId!),
-            eq(studioContextDocuments.sourceFilename, doc.sourceFilename),
-          ),
-        )
-        .limit(1);
       const values = {
         title: doc.title,
         description: doc.description,
@@ -105,23 +98,24 @@ async function main() {
         content,
         updatedAt: new Date(),
       } satisfies Partial<typeof studioContextDocuments.$inferInsert>;
-      let documentId: string;
-      if (existing) {
-        await db.update(studioContextDocuments).set(values).where(eq(studioContextDocuments.id, existing.id));
-        documentId = existing.id;
-        await db.delete(studioContextSections).where(eq(studioContextSections.documentId, documentId));
-      } else {
-        const [inserted] = await db
+      // One transaction per document: a crash must not leave a reference
+      // document with its old sections deleted and no new ones written.
+      await db.transaction(async (tx) => {
+        const [row] = await tx
           .insert(studioContextDocuments)
-          .values({ organizationId: organizationId!, sourceFilename: doc.sourceFilename, ...values })
+          .values({ organizationId, sourceFilename: doc.sourceFilename, ...values })
+          .onConflictDoUpdate({
+            target: [studioContextDocuments.organizationId, studioContextDocuments.sourceFilename],
+            set: values,
+          })
           .returning({ id: studioContextDocuments.id });
-        documentId = inserted.id;
-      }
-      for (let start = 0; start < sections.length; start += 200) {
-        await db.insert(studioContextSections).values(
-          sections.slice(start, start + 200).map((section) => ({ documentId, ...section })),
-        );
-      }
+        await tx.delete(studioContextSections).where(eq(studioContextSections.documentId, row.id));
+        for (let start = 0; start < sections.length; start += 200) {
+          await tx.insert(studioContextSections).values(
+            sections.slice(start, start + 200).map((section) => ({ documentId: row.id, ...section })),
+          );
+        }
+      });
     }
     if (doc.tier === "reference") {
       summary.sections += sections.length;
@@ -134,7 +128,7 @@ async function main() {
 
   for (const image of plan.images) {
     try {
-      const bytes = await readFile(join(dir!, image.sourceFilename));
+      const bytes = await readFile(join(dir, image.sourceFilename));
       const dimensions = readImageDimensions(new Uint8Array(bytes));
       if (!dimensions) throw new Error("could not read image dimensions");
       if (db) {
@@ -153,39 +147,32 @@ async function main() {
           height: dimensions.height,
           updatedAt: new Date(),
         } satisfies Partial<typeof studioContextImages.$inferInsert>;
-        const [existing] = await db
-          .select({ id: studioContextImages.id })
-          .from(studioContextImages)
-          .where(
-            and(
-              eq(studioContextImages.organizationId, organizationId!),
-              eq(studioContextImages.sourceFilename, image.sourceFilename),
-            ),
-          )
-          .limit(1);
-        if (existing) {
-          await db.update(studioContextImages).set(values).where(eq(studioContextImages.id, existing.id));
-        } else {
-          await db.insert(studioContextImages).values({ organizationId: organizationId!, sourceFilename: image.sourceFilename, ...values });
-        }
+        await db
+          .insert(studioContextImages)
+          .values({ organizationId, sourceFilename: image.sourceFilename, ...values })
+          .onConflictDoUpdate({
+            target: [studioContextImages.organizationId, studioContextImages.sourceFilename],
+            set: values,
+          });
       }
       summary.images += 1;
       console.log(`image    ${image.kind.padEnd(12)} ${image.sourceFilename} (${dimensions.width}x${dimensions.height})`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      summary.imageFailures.push(`${image.sourceFilename}: ${message}`);
+      summary.imageFailures += 1;
       console.warn(`image    FAILED       ${image.sourceFilename}: ${message}`);
     }
   }
 
   for (const path of plan.skipped) console.warn(`skipped  ${path} (not in manifest)`);
   console.log(
-    `\n${dryRun ? "Dry run. " : "Done. "}core=${summary.core} reference=${summary.reference} sections=${summary.sections} images=${summary.images} skipped=${plan.skipped.length} imageFailures=${summary.imageFailures.length}`,
+    `\n${dryRun ? "Dry run. " : "Done. "}core=${summary.core} reference=${summary.reference} sections=${summary.sections} images=${summary.images} skipped=${plan.skipped.length} imageFailures=${summary.imageFailures}`,
   );
-  if (summary.imageFailures.length) process.exitCode = 2;
+  // drizzle holds an idle pg client whose socket keeps the loop alive.
+  process.exit(summary.imageFailures ? 2 : 0);
 }
 
-main().catch((error) => {
+main(organizationId, dir).catch((error) => {
   console.error(error);
   process.exit(1);
 });
