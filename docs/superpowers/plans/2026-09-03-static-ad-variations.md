@@ -2579,7 +2579,7 @@ git commit -m "feat(studio): retry a failed variation through the variation agen
  * Safe to re-run: documents and images upsert by (org, sourceFilename) and
  * sections are regenerated for every reference document.
  */
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { put } from "@vercel/blob";
 import { and, eq } from "drizzle-orm";
@@ -2619,7 +2619,7 @@ async function listFiles(root: string): Promise<SeedFile[]> {
       }
       const path = relative(root, full);
       if (path === "context-manifest.json") continue;
-      out.push({ path, size: (await stat(full)).size });
+      out.push({ path });
     }
   }
   await walk(root);
