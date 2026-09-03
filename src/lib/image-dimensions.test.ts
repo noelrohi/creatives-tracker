@@ -126,12 +126,12 @@ describe("studioFormatForDimensions", () => {
   it("maps taller than square to portrait", () => {
     expect(studioFormatForDimensions({ width: 1080, height: 1920 })).toBe("portrait");
   });
-  it("maps near-square to square", () => {
+  it("maps square to square and anything slightly taller to portrait", () => {
     expect(studioFormatForDimensions({ width: 1080, height: 1080 })).toBe("square");
-    expect(studioFormatForDimensions({ width: 1080, height: 1120 })).toBe("square");
+    expect(studioFormatForDimensions({ width: 1080, height: 1120 })).toBe("portrait");
   });
-  it("maps wider than square to landscape", () => {
-    expect(studioFormatForDimensions({ width: 1200, height: 628 })).toBe("landscape");
+  it("maps wider than square to square, per the variations design", () => {
+    expect(studioFormatForDimensions({ width: 1200, height: 628 })).toBe("square");
   });
   it("defaults to portrait when dimensions are unknown", () => {
     expect(studioFormatForDimensions(null)).toBe("portrait");

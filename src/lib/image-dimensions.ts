@@ -72,16 +72,14 @@ export function readImageDimensions(bytes: Uint8Array): ImageDimensions | null {
 }
 
 /**
- * Picks the closest of the three primary Studio presets (the variations spec
- * pins output to portrait, square, or landscape). Ratios within 10% of
- * square count as square; the fallback is portrait, the client's default for
+ * Maps a source's shape to a Studio preset the way the variations design
+ * specifies: portrait for anything taller than 1:1, square otherwise. The
+ * fallback for unknown dimensions is portrait, the client's default for
  * statics.
  */
 export function studioFormatForDimensions(
   dimensions: ImageDimensions | null,
-): Extract<StudioPreset, "portrait" | "square" | "landscape"> {
+): Extract<StudioPreset, "portrait" | "square"> {
   if (!dimensions || dimensions.width <= 0 || dimensions.height <= 0) return "portrait";
-  const ratio = dimensions.width / dimensions.height;
-  if (ratio > 0.9 && ratio < 1.1) return "square";
-  return ratio < 1 ? "portrait" : "landscape";
+  return dimensions.height > dimensions.width ? "portrait" : "square";
 }

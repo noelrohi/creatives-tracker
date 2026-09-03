@@ -7,11 +7,12 @@ import {
 } from "ai";
 import { logger, metadata, task, tags } from "@trigger.dev/sdk";
 import { put } from "@vercel/blob";
-import { and, eq, gte } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { openai } from "@/lib/ai";
 import { readImageDimensions, studioFormatForDimensions } from "@/lib/image-dimensions";
+import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 import { fetchRemoteImage, isHttpUrl } from "@/lib/remote-image";
 import { getStudioBrandProfile } from "@/lib/studio-brand";
 import {
@@ -42,6 +43,7 @@ import {
   type VariationSource,
 } from "@/lib/variation-agent";
 import type { VariationAttempt, VariationPlan } from "@/lib/variation-agent-types";
+import { ads } from "@/schema/ad";
 import { adCreatives } from "@/schema/ad-creative";
 import { competitorAds } from "@/schema/competitor-signals";
 import { performanceLogs } from "@/schema/performance-log";
@@ -99,10 +101,31 @@ async function loadSource(
     const windowStart = new Date(Date.now() - PERFORMANCE_WINDOW_DAYS * DAY_MS)
       .toISOString()
       .slice(0, 10);
-    const [perf] = await fetchCreativePerformanceRows(payload.organizationId, [
-      eq(adCreatives.id, row.id),
-      gte(performanceLogs.dateStart, windowStart),
+    const [[perf], [engagement]] = await Promise.all([
+      fetchCreativePerformanceRows(payload.organizationId, [
+        eq(adCreatives.id, row.id),
+        gte(performanceLogs.dateStart, windowStart),
+      ]),
+      // The shared helper carries no click or impression sums, so CTR comes
+      // from its own windowed aggregate over the same base filter.
+      db
+        .select({
+          impressions: sql<string | null>`sum(${performanceLogs.impressions})::text`,
+          linkClicks: sql<string | null>`sum(${performanceLogs.linkClicks})::text`,
+        })
+        .from(performanceLogs)
+        .innerJoin(ads, eq(ads.id, performanceLogs.adId))
+        .where(
+          and(
+            eq(ads.adCreativeId, row.id),
+            eq(ads.organizationId, payload.organizationId),
+            basePerformanceLogFilter("performance_log"),
+            gte(performanceLogs.dateStart, windowStart),
+          ),
+        ),
     ]);
+    const impressions = toNumber(engagement?.impressions);
+    const linkClicks = toNumber(engagement?.linkClicks);
     return {
       kind: "creative",
       name: row.name,
@@ -112,7 +135,7 @@ async function loadSource(
         ? {
             spend: toNumber(perf.spend),
             roas: toNullableNumber(perf.roas),
-            ctr: null,
+            ctr: impressions > 0 ? (linkClicks / impressions) * 100 : null,
             purchases: perf.purchases ?? 0,
           }
         : null,
@@ -160,13 +183,12 @@ export const generateVariationTask = task({
   id: "generate-variation",
   queue: { concurrencyLimit: 3 },
   maxDuration: 600,
-  // One attempt only. A retry re-runs the whole agent loop and re-spends up to
-  // MAX_IMAGE_ATTEMPTS image-model calls, including when the only thing that
-  // failed was a persistence write after the images were already made. The UI
-  // offers a deliberate per-variant retry instead.
-  retry: { maxAttempts: 1 },
-  // Covers what the run's own catch cannot: a maxDuration timeout or a crash
-  // that ends the run before the catch executes.
+  // Retries are inherited from trigger.config.ts. A retry after a post-loop
+  // persistence failure must not re-spend image-model calls, so the run exits
+  // early when the variant is already ready (see below); blob keys carry the
+  // attempt number so a re-run never collides with a previous upload.
+  // Marks the row failed only once every attempt is exhausted, or after a
+  // maxDuration timeout or crash that never reaches the run's own catch.
   onFailure: async ({ payload }: { payload: GenerateVariationPayload }) => {
     await failStudioGeneration(payload.generationId, payload.organizationId);
   },
@@ -179,6 +201,29 @@ export const generateVariationTask = task({
       metadata.set("steps", steps);
     };
     metadata.set("status", "generating");
+
+    // A retried run whose previous attempt already produced and persisted the
+    // image only needs to settle the generation status.
+    const [existing] = await db
+      .select({ status: studioVariants.status })
+      .from(studioVariants)
+      .where(
+        and(
+          eq(studioVariants.id, payload.variantId),
+          eq(studioVariants.organizationId, payload.organizationId),
+        ),
+      )
+      .limit(1);
+    if (existing?.status === "ready") {
+      const status = await finalizeStudioGenerationIfSettled(
+        payload.generationId,
+        payload.organizationId,
+      );
+      metadata.set("status", status ?? "generating");
+      onStep("done");
+      return { outcome: "ready" as const, reason: null };
+    }
+
     onStep("loading source and context");
 
     const markVariant = (values: VariantUpdate) =>
@@ -289,13 +334,15 @@ export const generateVariationTask = task({
             });
             return result.object;
           } catch (error) {
-            // Fail open: an unreviewed image can still ship as ready, with the
-            // "review unavailable" note persisted in attempts as the record.
-            logger.warn("Variation review failed; treating as pass", {
+            // Fail closed: the review is the gate that lets an attempt ship
+            // without an explicit finish, so an unreviewed image never becomes
+            // ready on its own. The agent still sees the attempt and may
+            // finish with it deliberately; the note stays in attempts.
+            logger.warn("Variation review failed; treating as not passed", {
               error:
                 error instanceof Error ? `${error.name}: ${error.message}` : String(error),
             });
-            return { pass: true, notes: ["review unavailable"] };
+            return { pass: false, notes: ["review unavailable"] };
           }
         },
         onStep,
@@ -401,8 +448,8 @@ export const generateVariationTask = task({
         error:
           error instanceof Error ? `${error.name}: ${error.message}` : String(error),
       });
-      metadata.set("status", "failed");
-      await failStudioGeneration(payload.generationId, payload.organizationId);
+      // Rethrow without marking the row failed: Trigger may retry this
+      // attempt, and onFailure marks the generation once retries are spent.
       throw error;
     }
   },

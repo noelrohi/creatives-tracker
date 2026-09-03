@@ -66,10 +66,11 @@ function PlanDisclosure({ plan }: { plan: VariationPlan }) {
   );
 }
 
-function VariationCard({ item, steps, pending, onMark, onRetry, onUpdate, onSteps }: {
+function VariationCard({ item, steps, pending, readOnly, onMark, onRetry, onUpdate, onSteps }: {
   item: VariationItem;
   steps: string[];
   pending: boolean;
+  readOnly: boolean;
   onMark: (mark: "good" | "bad" | null) => void;
   onRetry: (withoutImage: boolean) => void;
   onUpdate: () => unknown;
@@ -86,7 +87,7 @@ function VariationCard({ item, steps, pending, onMark, onRetry, onUpdate, onStep
         <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-muted/30 p-4 text-center" style={{ aspectRatio }}>
           <ImageOff />
           <p className={cn("line-clamp-4 text-xs", variant.moderationReason && "text-destructive")}>{failureCopy(variant.moderationReason, attempts)}</p>
-          <Button size="sm" variant="outline" disabled={pending} onClick={() => onRetry(IMAGE_BLOCKED_REASONS.has(variant.moderationReason ?? ""))}>
+          <Button size="sm" variant="outline" disabled={pending || readOnly} onClick={() => onRetry(IMAGE_BLOCKED_REASONS.has(variant.moderationReason ?? ""))}>
             <RefreshCw /> {IMAGE_BLOCKED_REASONS.has(variant.moderationReason ?? "") ? "Retry without image" : "Retry"}
           </Button>
         </div>
@@ -102,8 +103,8 @@ function VariationCard({ item, steps, pending, onMark, onRetry, onUpdate, onStep
             {variant.publishedAt ? <Badge className="absolute right-2 top-2 bg-emerald-600">Published</Badge> : null}
           </div>
           <div className="flex gap-1">
-            <Button size="sm" variant={variant.mark === "good" ? "default" : "outline"} className="flex-1" disabled={pending} onClick={() => onMark(variant.mark === "good" ? null : "good")}><Check /> Good</Button>
-            <Button size="sm" variant={variant.mark === "bad" ? "destructive" : "outline"} className="flex-1" disabled={pending} onClick={() => onMark(variant.mark === "bad" ? null : "bad")}><X /> Bad</Button>
+            <Button size="sm" variant={variant.mark === "good" ? "default" : "outline"} className="flex-1" disabled={pending || readOnly} onClick={() => onMark(variant.mark === "good" ? null : "good")}><Check /> Good</Button>
+            <Button size="sm" variant={variant.mark === "bad" ? "destructive" : "outline"} className="flex-1" disabled={pending || readOnly} onClick={() => onMark(variant.mark === "bad" ? null : "bad")}><X /> Bad</Button>
           </div>
           {plan ? <PlanDisclosure plan={plan} /> : null}
           <Button asChild size="sm" variant="ghost" className="w-full"><Link href={`/studio/${item.id}`}>Open in Studio</Link></Button>
@@ -178,6 +179,7 @@ export function CreativeVariationsTab({ creativeId, readOnly }: { creativeId: st
               item={item}
               steps={stepsByRun[item.realtime?.runId ?? ""] ?? []}
               pending={(mark.isPending && mark.variables?.variantId === item.variant.id) || (retry.isPending && retry.variables?.variantId === item.variant.id)}
+              readOnly={readOnly}
               onMark={(next) => mark.mutate({ variantId: item.variant.id, mark: next })}
               onRetry={(withoutReferenceImage) => retry.mutate({ variantId: item.variant.id, withoutReferenceImage })}
               onUpdate={list.refetch}

@@ -80,6 +80,9 @@ export default function CreativeDetailPage() {
   const id = params.id as string;
   const { role } = useActiveOrganizationRole();
   const isReadOnly = role === "member";
+  // Variations write through Studio: stay read-only until the role is known,
+  // so a member never sees an enabled button while the role loads.
+  const canWriteVariations = role != null && role !== "member";
 
   const [creativeTab, setCreativeTab] = useQueryState("tab", parseAsString.withDefault("performance"));
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 29))));
@@ -736,7 +739,7 @@ export default function CreativeDetailPage() {
         {/* Variations tab */}
         {canMakeVariations ? (
           <TabsContent value="variations" className="pt-4">
-            <CreativeVariationsTab creativeId={id} readOnly={isReadOnly} />
+            <CreativeVariationsTab creativeId={id} readOnly={!canWriteVariations} />
           </TabsContent>
         ) : null}
       </Tabs>

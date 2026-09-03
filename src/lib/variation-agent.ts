@@ -21,7 +21,6 @@ export const MAX_IMAGE_ATTEMPTS = 2;
 export const MAX_READ_CHARS = 8_000;
 
 const MAX_INDEXED_SECTIONS = 40;
-const MAX_LISTED_SECTIONS = 200;
 
 export type VariationSource = {
   kind: "creative" | "competitor_ad";
@@ -298,14 +297,20 @@ export function createVariationRun(
     if (!raw.sectionId) {
       state.contextReads += 1;
       deps.onStep(`listing ${doc.title.toLowerCase()}`);
-      const listed = doc.sections.slice(0, MAX_LISTED_SECTIONS);
+      // A listing obeys the same per-call character cap as a section read:
+      // entries are added until their serialized size would exceed it.
+      const sections: { sectionId: string; path: string }[] = [];
+      let chars = 2;
+      for (const section of doc.sections) {
+        const entry = { sectionId: section.id, path: section.path };
+        chars += JSON.stringify(entry).length + 1;
+        if (chars > MAX_READ_CHARS) break;
+        sections.push(entry);
+      }
       return {
         documentId: doc.id,
-        sections: listed.map((section) => ({
-          sectionId: section.id,
-          path: section.path,
-        })),
-        ...(doc.sections.length > MAX_LISTED_SECTIONS
+        sections,
+        ...(sections.length < doc.sections.length
           ? { truncated: true, totalSections: doc.sections.length }
           : {}),
       };

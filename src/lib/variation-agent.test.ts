@@ -6,6 +6,7 @@ import {
   escapeContextText,
   MAX_CONTEXT_READS,
   MAX_IMAGE_ATTEMPTS,
+  MAX_READ_CHARS,
   resolveVariationOutcome,
   variationPlanSchema,
   type VariationRunDeps,
@@ -165,7 +166,7 @@ describe("createVariationRun.readContext", () => {
     await expect(run.readContext({ documentId: "doc_testi", sectionId: "zzz" })).resolves.toEqual({ error: "Unknown section id: zzz" });
   });
 
-  it("caps the listed sections and reports the total", async () => {
+  it("caps a listing at the per-call character budget and reports the total", async () => {
     const sections = Array.from({ length: 250 }, (_, i) => ({ id: `s${i}`, path: `Section ${i}` }));
     const run = createVariationRun(
       { ...input, library: { ...library, reference: [{ ...library.reference[0], sections }] } },
@@ -173,7 +174,10 @@ describe("createVariationRun.readContext", () => {
     );
     const result = await run.readContext({ documentId: "doc_testi" });
     expect(result).toMatchObject({ truncated: true, totalSections: 250 });
-    expect((result as { sections: unknown[] }).sections).toHaveLength(200);
+    const listed = (result as { sections: unknown[] }).sections;
+    expect(listed.length).toBeGreaterThan(0);
+    expect(listed.length).toBeLessThan(250);
+    expect(JSON.stringify(listed).length).toBeLessThanOrEqual(MAX_READ_CHARS);
   });
 
   // Coverage-only: pins which failures spend the read budget.
