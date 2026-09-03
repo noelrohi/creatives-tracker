@@ -2567,7 +2567,11 @@ git commit -m "feat(studio): retry a failed variation through the variation agen
 /**
  * Seed an organization's Studio context library from a local folder.
  *
- * Usage: bun scripts/seed-studio-context.ts --org <organizationId> --dir <path>
+ * Usage: bun scripts/seed-studio-context.ts --org <organizationId> --dir <path> [--dry-run]
+ *
+ * `--dry-run` validates the manifest, sections the reference documents, and
+ * reads image headers, printing the same summary, without touching the
+ * database or Blob (the db module is imported only when writing).
  *
  * The folder must hold a `context-manifest.json`: an array of
  * { file, title, description, kind, tier? } entries (paths relative to the
