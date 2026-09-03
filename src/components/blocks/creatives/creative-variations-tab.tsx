@@ -19,19 +19,28 @@ import { cn } from "@/lib/utils";
 
 type VariationItem = RouterOutputs["studio"]["variations"]["listForCreative"][number];
 
-function RunSteps({ generationId, runId, accessToken, onUpdate, onSteps }: { generationId: string; runId: string; accessToken: string; onUpdate: () => unknown; onSteps: (generationId: string, steps: string[]) => void }) {
+function RunSteps({ runId, accessToken, onUpdate, onSteps }: { runId: string; accessToken: string; onUpdate: () => unknown; onSteps: (runId: string, steps: string[]) => void }) {
   const { run } = useRealtimeRun(runId, { accessToken });
   useEffect(() => {
     const steps = (run?.metadata as Record<string, unknown> | undefined)?.steps;
-    if (Array.isArray(steps)) onSteps(generationId, steps.filter((step): step is string => typeof step === "string"));
-    if (run?.metadata !== undefined || run?.status !== undefined) void onUpdate();
-  }, [run?.metadata, run?.status, generationId, onUpdate, onSteps]);
+    if (Array.isArray(steps)) onSteps(runId, steps.filter((step): step is string => typeof step === "string"));
+  }, [run?.metadata, runId, onSteps]);
+  // Step labels arrive over realtime; only a status transition changes what the
+  // list query returns, and each refetch mints a public token per generating row.
+  useEffect(() => {
+    if (run?.status) void onUpdate();
+  }, [run?.status, onUpdate]);
   return null;
 }
+
+// "claims" is a moderation reason on the variant row but is a prompt-safety
+// stop, not an image block: retrying without the source would not help.
+const IMAGE_BLOCKED_REASONS = new Set(["likeness", "logo", "moderation"]);
 
 function failureCopy(reason: string | null, attempts: VariationAttempt[] | null) {
   if (reason === "likeness") return "Blocked: the source shows a real person's likeness";
   if (reason === "logo") return "Blocked: protected branding in the source";
+  if (reason === "moderation") return "Blocked: the image model refused this request";
   if (reason === "claims") return "Stopped: the agent could not write a claims-safe prompt";
   const lastReview = attempts?.at(-1)?.review;
   if (lastReview && !lastReview.pass) return `Review rejected the image: ${lastReview.notes.join("; ") || "no notes"}`;
@@ -64,7 +73,7 @@ function VariationCard({ item, steps, pending, onMark, onRetry, onUpdate, onStep
   onMark: (mark: "good" | "bad" | null) => void;
   onRetry: (withoutImage: boolean) => void;
   onUpdate: () => unknown;
-  onSteps: (generationId: string, steps: string[]) => void;
+  onSteps: (runId: string, steps: string[]) => void;
 }) {
   const aspectRatio = studioAspectRatio(item.format as StudioFormat);
   const { variant } = item;
@@ -72,13 +81,13 @@ function VariationCard({ item, steps, pending, onMark, onRetry, onUpdate, onStep
   const attempts = variant.attempts;
   return (
     <article className="space-y-2">
-      {item.realtime ? <RunSteps generationId={item.id} runId={item.realtime.runId} accessToken={item.realtime.publicAccessToken} onUpdate={onUpdate} onSteps={onSteps} /> : null}
+      {item.realtime ? <RunSteps runId={item.realtime.runId} accessToken={item.realtime.publicAccessToken} onUpdate={onUpdate} onSteps={onSteps} /> : null}
       {variant.status === "failed" ? (
         <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-muted/30 p-4 text-center" style={{ aspectRatio }}>
           <ImageOff />
-          <p className={cn("text-xs", variant.moderationReason && "text-destructive")}>{failureCopy(variant.moderationReason, attempts)}</p>
-          <Button size="sm" variant="outline" disabled={pending} onClick={() => onRetry(Boolean(variant.moderationReason))}>
-            <RefreshCw /> {variant.moderationReason ? "Retry without image" : "Retry"}
+          <p className={cn("line-clamp-4 text-xs", variant.moderationReason && "text-destructive")}>{failureCopy(variant.moderationReason, attempts)}</p>
+          <Button size="sm" variant="outline" disabled={pending} onClick={() => onRetry(IMAGE_BLOCKED_REASONS.has(variant.moderationReason ?? ""))}>
+            <RefreshCw /> {IMAGE_BLOCKED_REASONS.has(variant.moderationReason ?? "") ? "Retry without image" : "Retry"}
           </Button>
         </div>
       ) : variant.status !== "ready" || !variant.imageUrl ? (
@@ -109,7 +118,7 @@ export function CreativeVariationsTab({ creativeId, readOnly }: { creativeId: st
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const [note, setNote] = useState("");
-  const [stepsByGeneration, setStepsByGeneration] = useState<Record<string, string[]>>({});
+  const [stepsByRun, setStepsByRun] = useState<Record<string, string[]>>({});
   const list = useQuery({
     ...trpc.studio.variations.listForCreative.queryOptions({ creativeId }),
     refetchInterval: (state) => (state.state.data?.some((item) => item.status === "generating") ? 4000 : false),
@@ -121,9 +130,11 @@ export function CreativeVariationsTab({ creativeId, readOnly }: { creativeId: st
   }));
   const mark = useMutation(trpc.studio.setVariantMark.mutationOptions({ onSuccess: () => void invalidate(), onError: (error) => toast.error(error.message) }));
   const retry = useMutation(trpc.studio.retryVariant.mutationOptions({ onSuccess: () => { toast.success("Regenerating"); void invalidate(); }, onError: (error) => toast.error(error.message) }));
-  // Stable identity so the realtime effect below only reruns on actual run changes.
-  const handleSteps = useCallback((generationId: string, steps: string[]) => {
-    setStepsByGeneration((prev) => (prev[generationId]?.length === steps.length ? prev : { ...prev, [generationId]: steps }));
+  // Stable identity so the realtime effect in RunSteps only reruns on actual run
+  // changes. Step labels are append-only within a run and each run has its own
+  // key, so an unchanged length means unchanged content.
+  const handleSteps = useCallback((runId: string, steps: string[]) => {
+    setStepsByRun((prev) => (prev[runId]?.length === steps.length ? prev : { ...prev, [runId]: steps }));
   }, []);
 
   if (list.isError) {
@@ -140,10 +151,10 @@ export function CreativeVariationsTab({ creativeId, readOnly }: { creativeId: st
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <Input value={note} maxLength={500} placeholder="Optional note, e.g. try a testimonial angle" className="max-w-md" disabled={readOnly} onChange={(event) => setNote(event.target.value)} />
+        <Input value={note} maxLength={500} aria-label="Variation note" placeholder="Optional note, e.g. try a testimonial angle" className="max-w-md" disabled={readOnly} onChange={(event) => setNote(event.target.value)} />
         {readOnly ? (
           <Tooltip>
-            <TooltipTrigger asChild><span>{button}</span></TooltipTrigger>
+            <TooltipTrigger asChild><span tabIndex={0} className="inline-flex">{button}</span></TooltipTrigger>
             <TooltipContent>Members have read-only access.</TooltipContent>
           </Tooltip>
         ) : button}
@@ -165,7 +176,7 @@ export function CreativeVariationsTab({ creativeId, readOnly }: { creativeId: st
             <VariationCard
               key={item.id}
               item={item}
-              steps={stepsByGeneration[item.id] ?? []}
+              steps={stepsByRun[item.realtime?.runId ?? ""] ?? []}
               pending={(mark.isPending && mark.variables?.variantId === item.variant.id) || (retry.isPending && retry.variables?.variantId === item.variant.id)}
               onMark={(next) => mark.mutate({ variantId: item.variant.id, mark: next })}
               onRetry={(withoutReferenceImage) => retry.mutate({ variantId: item.variant.id, withoutReferenceImage })}
