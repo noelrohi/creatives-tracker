@@ -3,6 +3,7 @@
 // documents come back as an index of section ids and paths only — the agent
 // reads a section's content on demand via readStudioContextSection, which is
 // org-scoped through the join so a section id from another org returns null.
+// Reference document content is never loaded here, only through that lookup.
 
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
@@ -29,7 +30,7 @@ export type ReferenceContextDocument = {
   sections: { id: string; path: string }[];
 };
 
-export type ContextImage = {
+export type StudioContextImage = {
   id: string;
   title: string;
   description: string;
@@ -40,24 +41,42 @@ export type ContextImage = {
 export type StudioContextLibrary = {
   core: CoreContextDocument[];
   reference: ReferenceContextDocument[];
-  images: ContextImage[];
+  images: StudioContextImage[];
 };
 
 export async function loadStudioContextLibrary(
   organizationId: string,
 ): Promise<StudioContextLibrary> {
-  const [documents, images] = await Promise.all([
+  const [coreDocuments, referenceDocuments, images] = await Promise.all([
+    db
+      .select({
+        id: studioContextDocuments.id,
+        title: studioContextDocuments.title,
+        kind: studioContextDocuments.kind,
+        content: studioContextDocuments.content,
+      })
+      .from(studioContextDocuments)
+      .where(
+        and(
+          eq(studioContextDocuments.organizationId, organizationId),
+          eq(studioContextDocuments.tier, "core"),
+        ),
+      )
+      .orderBy(asc(studioContextDocuments.title)),
     db
       .select({
         id: studioContextDocuments.id,
         title: studioContextDocuments.title,
         description: studioContextDocuments.description,
         kind: studioContextDocuments.kind,
-        tier: studioContextDocuments.tier,
-        content: studioContextDocuments.content,
       })
       .from(studioContextDocuments)
-      .where(eq(studioContextDocuments.organizationId, organizationId))
+      .where(
+        and(
+          eq(studioContextDocuments.organizationId, organizationId),
+          eq(studioContextDocuments.tier, "reference"),
+        ),
+      )
       .orderBy(asc(studioContextDocuments.title)),
     db
       .select({
@@ -71,9 +90,7 @@ export async function loadStudioContextLibrary(
       .where(eq(studioContextImages.organizationId, organizationId))
       .orderBy(asc(studioContextImages.title)),
   ]);
-  const referenceIds = documents
-    .filter((d) => d.tier === "reference")
-    .map((d) => d.id);
+  const referenceIds = referenceDocuments.map((d) => d.id);
   const sections = referenceIds.length
     ? await db
         .select({
@@ -95,18 +112,11 @@ export async function loadStudioContextLibrary(
     sectionsByDocument.set(section.documentId, list);
   }
   return {
-    core: documents
-      .filter((d) => d.tier === "core")
-      .map(({ id, title, kind, content }) => ({ id, title, kind, content })),
-    reference: documents
-      .filter((d) => d.tier === "reference")
-      .map(({ id, title, description, kind }) => ({
-        id,
-        title,
-        description,
-        kind,
-        sections: sectionsByDocument.get(id) ?? [],
-      })),
+    core: coreDocuments,
+    reference: referenceDocuments.map((doc) => ({
+      ...doc,
+      sections: sectionsByDocument.get(doc.id) ?? [],
+    })),
     images,
   };
 }
