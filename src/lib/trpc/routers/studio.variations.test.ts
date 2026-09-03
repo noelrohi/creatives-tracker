@@ -235,8 +235,6 @@ describe("studio.variations", () => {
         sourceCompetitorAdId: null,
       },
     ]);
-    // brand profile lookup
-    dbState.selectRows.push([]);
 
     await caller.studio.retryVariant({ variantId: "var_1", withoutReferenceImage: true });
 
@@ -248,6 +246,12 @@ describe("studio.variations", () => {
       note: "blue",
       withoutSourceImage: true,
     });
-    expect(dbState.updated[0]).toMatchObject({ status: "pending", retryWithoutImageAt: expect.any(Date) });
+    expect(dbState.updated[0]).toMatchObject({
+      status: "pending",
+      retryWithoutImageAt: expect.any(Date),
+      plan: null,
+      attempts: null,
+    });
+    expect(dbState.updated.at(-1)).toMatchObject({ runId: "run_var_1" });
   });
 });
