@@ -17,10 +17,10 @@ export const manifestEntrySchema = z.object({
 });
 export type ManifestEntry = z.infer<typeof manifestEntrySchema>;
 
-export type SeedFile = { path: string; size: number };
+export type SeedFile = { path: string };
 
 export type PlannedDocument = {
-  file: string;
+  sourceFilename: string;
   title: string;
   description: string;
   kind: StudioContextDocumentKind;
@@ -29,7 +29,7 @@ export type PlannedDocument = {
 };
 
 export type PlannedImage = {
-  file: string;
+  sourceFilename: string;
   title: string;
   description: string;
   kind: StudioContextImageKind;
@@ -47,8 +47,14 @@ const DOCUMENT_MIME: Record<string, PlannedDocument["mimeType"]> = {
 };
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
 
+function normalizePath(file: string) {
+  return file.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
 function extensionOf(file: string) {
-  return file.toLowerCase().split(".").pop() ?? "";
+  const base = file.slice(file.lastIndexOf("/") + 1).toLowerCase();
+  const dot = base.lastIndexOf(".");
+  return dot > 0 ? base.slice(dot + 1) : "";
 }
 
 export function planContextSeed(entries: unknown[], files: SeedFile[]): SeedPlan {
@@ -56,33 +62,49 @@ export function planContextSeed(entries: unknown[], files: SeedFile[]): SeedPlan
   const parsed: ManifestEntry[] = [];
   entries.forEach((entry, index) => {
     const result = manifestEntrySchema.safeParse(entry);
-    if (result.success) parsed.push(result.data);
-    else errors.push(`entry ${index + 1}: ${result.error.issues.map((i) => i.message).join("; ")}`);
+    if (result.success) {
+      parsed.push(result.data);
+      return;
+    }
+    const file =
+      typeof entry === "object" && entry && typeof (entry as { file?: unknown }).file === "string"
+        ? ` (${(entry as { file: string }).file})`
+        : "";
+    const detail = result.error.issues
+      .map((i) => (i.path.length ? `${i.path.join(".")}: ${i.message}` : i.message))
+      .join("; ");
+    errors.push(`entry ${index + 1}${file}: ${detail}`);
   });
   if (errors.length) return { ok: false, errors };
 
-  const byPath = new Map(files.map((f) => [f.path, f]));
+  const byPath = new Map(files.map((f) => [normalizePath(f.path), f]));
   const seen = new Set<string>();
   const documents: PlannedDocument[] = [];
   const images: PlannedImage[] = [];
   for (const entry of parsed) {
-    if (!byPath.has(entry.file)) {
-      errors.push(`${entry.file}: file not found`);
-      continue;
-    }
-    if (seen.has(entry.file)) {
+    const normalized = normalizePath(entry.file);
+    if (seen.has(normalized)) {
       errors.push(`${entry.file}: listed more than once`);
       continue;
     }
-    seen.add(entry.file);
-    const ext = extensionOf(entry.file);
+    seen.add(normalized);
+    if (!byPath.has(normalized)) {
+      const nearby = [...byPath.keys()].find((p) => p.toLowerCase() === normalized.toLowerCase());
+      errors.push(`${entry.file}: file not found${nearby ? ` (did you mean "${nearby}"?)` : ""}`);
+      continue;
+    }
+    const ext = extensionOf(normalized);
     if (IMAGE_EXTENSIONS.has(ext)) {
       if (!(STUDIO_CONTEXT_IMAGE_KINDS as readonly string[]).includes(entry.kind)) {
         errors.push(`${entry.file}: kind "${entry.kind}" is not an image kind`);
         continue;
       }
+      if (entry.tier) {
+        errors.push(`${entry.file}: images do not take a tier`);
+        continue;
+      }
       images.push({
-        file: entry.file,
+        sourceFilename: normalized,
         title: entry.title,
         description: entry.description,
         kind: entry.kind as StudioContextImageKind,
@@ -91,7 +113,7 @@ export function planContextSeed(entries: unknown[], files: SeedFile[]): SeedPlan
     }
     const mimeType = DOCUMENT_MIME[ext];
     if (!mimeType) {
-      errors.push(`${entry.file}: unsupported file type .${ext}`);
+      errors.push(`${entry.file}: unsupported file type${ext ? ` .${ext}` : ""}`);
       continue;
     }
     if (!(STUDIO_CONTEXT_DOCUMENT_KINDS as readonly string[]).includes(entry.kind)) {
@@ -103,7 +125,7 @@ export function planContextSeed(entries: unknown[], files: SeedFile[]): SeedPlan
       continue;
     }
     documents.push({
-      file: entry.file,
+      sourceFilename: normalized,
       title: entry.title,
       description: entry.description,
       kind: entry.kind as StudioContextDocumentKind,
@@ -112,6 +134,6 @@ export function planContextSeed(entries: unknown[], files: SeedFile[]): SeedPlan
     });
   }
   if (errors.length) return { ok: false, errors };
-  const skipped = files.map((f) => f.path).filter((path) => !seen.has(path));
+  const skipped = [...byPath.keys()].filter((path) => !seen.has(path));
   return { ok: true, documents, images, skipped };
 }
