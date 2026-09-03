@@ -9,7 +9,16 @@ export type ContextSection = {
 
 type RawSection = { heading: string; path: string; content: string };
 
-function splitOversized(sections: RawSection[]): ContextSection[] {
+// Keys with no content get no section.
+function isEmptyValue(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "string") return value.trim().length === 0;
+  if (typeof value === "object") return Object.keys(value).length === 0;
+  return false;
+}
+
+function finalizeSections(sections: RawSection[]): ContextSection[] {
   const out: ContextSection[] = [];
   for (const section of sections) {
     const content = section.content.trim();
@@ -48,16 +57,18 @@ export function sectionMarkdown(markdown: string): ContextSection[] {
     if (current) sections.push(current);
     const level = match[1].length;
     const heading = match[2].trim();
+    // Skipped heading levels leave holes in the chain; filter(Boolean) drops them.
     chain.length = level - 1;
     chain.push(heading);
     const path = chain.filter(Boolean).join(" > ");
     current = { heading, path, content: "" };
   }
   if (current) sections.push(current);
-  return splitOversized(sections);
+  return finalizeSections(sections);
 }
 
 function stringify(value: unknown) {
+  // Indent 1 keeps nested JSON readable while spending few tokens.
   return typeof value === "string" ? value : JSON.stringify(value, null, 1);
 }
 
@@ -66,10 +77,10 @@ export function sectionJson(json: string): ContextSection[] {
   try {
     parsed = JSON.parse(json);
   } catch {
-    return splitOversized([{ heading: "Document", path: "Document", content: json }]);
+    return finalizeSections([{ heading: "Document", path: "Document", content: json }]);
   }
   if (Array.isArray(parsed)) {
-    return splitOversized(
+    return finalizeSections(
       parsed.map((item, index) => ({
         heading: `Item ${index + 1}`,
         path: `Item ${index + 1}`,
@@ -80,17 +91,17 @@ export function sectionJson(json: string): ContextSection[] {
   if (parsed && typeof parsed === "object") {
     const record = parsed as Record<string, unknown>;
     const pages = record.pages;
-    if (Array.isArray(pages) && pages.length > 0 && pages.every((p) => p && typeof p === "object" && "text" in p)) {
-      return splitOversized(
-        (pages as Array<{ page?: number; text: unknown }>).map((page, index) => {
+    if (Array.isArray(pages) && pages.length > 0 && pages.some((p) => p && typeof p === "object" && "text" in p)) {
+      return finalizeSections(
+        (pages as Array<{ page?: number; text?: unknown }>).map((page, index) => {
           const label = `Page ${page.page ?? index + 1}`;
-          return { heading: label, path: label, content: stringify(page.text) };
+          return { heading: label, path: label, content: stringify(page.text ?? page) };
         }),
       );
     }
-    return splitOversized(
+    return finalizeSections(
       Object.entries(record)
-        .filter(([, value]) => !(Array.isArray(value) && value.length === 0))
+        .filter(([, value]) => !isEmptyValue(value))
         .map(([key, value]) => ({
           heading: key,
           path: key,
@@ -98,11 +109,11 @@ export function sectionJson(json: string): ContextSection[] {
         })),
     );
   }
-  return splitOversized([{ heading: "Document", path: "Document", content: json }]);
+  return finalizeSections([{ heading: "Document", path: "Document", content: json }]);
 }
 
 export function sectionDocument(mimeType: string, content: string): ContextSection[] {
   if (mimeType === "application/json") return sectionJson(content);
   if (mimeType === "text/markdown") return sectionMarkdown(content);
-  return splitOversized([{ heading: "Document", path: "Document", content }]);
+  return finalizeSections([{ heading: "Document", path: "Document", content }]);
 }

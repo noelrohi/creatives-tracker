@@ -46,6 +46,11 @@ describe("sectionMarkdown", () => {
     expect(sections[0].content).toHaveLength(SECTION_MAX_CHARS);
     expect(sections[2].content).toHaveLength(10);
   });
+
+  it("keeps the last-seen ancestor when a heading level is skipped", () => {
+    const sections = sectionMarkdown("# A\n### B\nb\n## C\nc");
+    expect(sections.map((s) => s.path)).toEqual(["A > B", "A > C"]);
+  });
 });
 
 describe("sectionJson", () => {
@@ -73,9 +78,24 @@ describe("sectionJson", () => {
     expect(sections).toEqual([{ ordinal: 0, heading: "Document", path: "Document", content: "not json" }]);
   });
 
-  it("falls back to top-level keys when pages is empty", () => {
+  it("falls back to top-level keys when the pages array is empty", () => {
     const sections = sectionJson(JSON.stringify({ pages: [], other: "x" }));
     expect(sections.map((s) => s.path)).toEqual(["other"]);
+  });
+
+  it("drops top-level keys whose value carries no content", () => {
+    const sections = sectionJson(
+      JSON.stringify({ arr: [], obj: {}, nil: null, str: "  ", keep: "y" }),
+    );
+    expect(sections.map((s) => s.path)).toEqual(["keep"]);
+  });
+
+  it("still sections by page when one page is malformed", () => {
+    const sections = sectionJson(
+      JSON.stringify({ pages: [{ page: 1, text: "a" }, { page: 2 }] }),
+    );
+    expect(sections.map((s) => s.path)).toEqual(["Page 1", "Page 2"]);
+    expect(sections[1].content).toContain('"page": 2');
   });
 });
 
