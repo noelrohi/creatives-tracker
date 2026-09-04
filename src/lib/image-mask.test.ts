@@ -111,5 +111,15 @@ describe("buildKeepMask", () => {
     );
     expect(cornered.alphaAt(19, 19)).toBe(255);
     expect(cornered.alphaAt(0, 0)).toBe(0);
+
+    // A negative origin is the case only the clamp fixes: without it the
+    // expanded box inverts and protects nothing.
+    const offCanvas = readRgba(
+      buildKeepMask({ width: 20, height: 20, keep: { x: -0.5, y: 0.5, w: 0.2, h: 0.2 } }),
+    );
+    expect(offCanvas.alphaAt(0, 10)).toBe(255); // clamped back onto the left edge
+    expect(offCanvas.alphaAt(3, 10)).toBe(255);
+    expect(offCanvas.alphaAt(6, 10)).toBe(0);
+    expect(offCanvas.alphaAt(0, 0)).toBe(0);
   });
 });
