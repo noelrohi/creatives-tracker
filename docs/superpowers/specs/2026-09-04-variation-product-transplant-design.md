@@ -15,15 +15,18 @@ three local test sources:
   instead of a max spread, floods neighbour-to-neighbour with a drift bound so
   vignettes flood, drops stray blobs under 1% of the box, and crops the patch
   to the product. The source cut tries margins 1%, 2%, 3% and keeps the first
-  that mattes; the rectangle fallback is the narrowest cut.
+  that mattes; when no margin mattes, the transplant is skipped and the
+  model's own product ships (the pre-transplant behaviour); the rectangle
+  paste is edit mode's only.
+- The edge feather is one pixel at alpha 150, not the two pixels proposed.
 - Live result: R3 (mouthguard on a pedestal in a flat card) mattes
   (`matted: true`, coverage 0.64) and passed review on the first attempt with
   the source's exact product on the model's pedestal. R1 (product in a glowing
   pod) and R2 (product overlapping black packaging) never have a flat border,
-  fall back to the rectangle, and fail review on the seam; that is the
-  previous behaviour and the known limit of a heuristic matte. When the model
-  draws no product at all the output locator returns null and the transplant
-  is skipped with `transplant: null`.
+  do not matte, so the transplant is skipped and the model's product ships,
+  which is the pre-transplant behaviour and the known limit of a heuristic
+  matte. When the model draws no product at all the output locator returns
+  null and the transplant is skipped with `transplant: null`.
 
 ## What the batch taught us
 
@@ -96,9 +99,9 @@ for every generate-mode run where both locators succeed.
 
 ## Risks
 
-- Matting is heuristic: reflective or translucent products on gradients will
-  fall back to rectangles more often. The fallback is the current behaviour,
-  so nothing gets worse.
+- Matting is heuristic: reflective or translucent products on gradients skip
+  the transplant more often and ship the model's own product. The fallback is
+  the current behaviour, so nothing gets worse.
 - Lighting mismatch between the source product and the generated scene is
   real and not fixable here; the review reports it and the agent can steer the
   prompt toward the source's lighting on its retry.
