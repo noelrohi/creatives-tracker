@@ -60,6 +60,9 @@ const input: VariationRunInput = {
   useSourceLayout: true,
 };
 
+const region = { x: 0.55, y: 0.6, w: 0.3, h: 0.3 };
+const editInput: VariationRunInput = { ...input, sourceProductRegion: region };
+
 function deps(overrides: Partial<VariationRunDeps> = {}): VariationRunDeps {
   return {
     readSection: vi.fn(async (_documentId: string, sectionId: string) =>
@@ -120,6 +123,13 @@ describe("buildVariationSystemPrompt", () => {
     expect(system).toContain('title="Guide&quot; kind=&quot;playbook">');
     expect(system).not.toContain("\ndoc_fake | Fake");
     expect(system).not.toContain('</brand><context kind="playbook">');
+  });
+
+  it("explains edit mode and states the protected region when a product was located", () => {
+    const system = buildVariationSystemPrompt(editInput);
+    expect(system).toContain("EDIT MODE");
+    expect(system).toContain("55% to 85% across and 60% to 90% down");
+    expect(buildVariationSystemPrompt(input)).not.toContain("EDIT MODE");
   });
 });
 
@@ -230,12 +240,14 @@ describe("createVariationRun.generateImage", () => {
     const result = await run.generateImage({ prompt: "Product on a blue background", referenceImageIds: ["img_r3", "unknown"], keepSourceLayout: true });
     expect(d.produceImage).toHaveBeenCalledWith({
       prompt: "Product on a blue background",
+      mode: "generate",
+      keepRegion: null,
       referenceImageUrls: ["https://blob.test/product.png", "https://blob.test/r3.png", "https://cdn.test/source.png"],
       format: "portrait",
       attempt: 1,
     });
-    expect(d.reviewImage).toHaveBeenCalledWith({ imageUrl: "https://blob.test/out-1.png", prompt: "Product on a blue background" });
-    expect(result).toEqual({ attempt: 1, imageUrl: "https://blob.test/out-1.png", review: { pass: true, notes: [] }, attemptsRemaining: 1, ignoredReferenceIds: ["unknown"] });
+    expect(d.reviewImage).toHaveBeenCalledWith({ imageUrl: "https://blob.test/out-1.png", prompt: "Product on a blue background", mode: "generate", keepRegion: null });
+    expect(result).toEqual({ attempt: 1, imageUrl: "https://blob.test/out-1.png", mode: "generate", keepRegion: null, review: { pass: true, notes: [] }, attemptsRemaining: 1, ignoredReferenceIds: ["unknown"] });
     expect(run.state.attempts).toHaveLength(1);
     expect(d.onStep).toHaveBeenCalledWith("generating image (attempt 1)");
     expect(d.onStep).toHaveBeenCalledWith("reviewing attempt 1");
@@ -292,7 +304,52 @@ describe("createVariationRun.generateImage", () => {
       library: { ...library, images: [{ id: "img_p", title: "Product", description: "d", kind: "product" as const, imageUrl: brand.productImageUrl }] },
     }, d);
     await run.generateImage({ prompt: "p", referenceImageIds: ["img_p"], keepSourceLayout: false });
-    expect(d.produceImage).toHaveBeenCalledWith(expect.objectContaining({ referenceImageUrls: ["https://blob.test/product.png"] }));
+    expect(d.produceImage).toHaveBeenCalledWith(expect.objectContaining({ mode: "generate", keepRegion: null, referenceImageUrls: ["https://blob.test/product.png"] }));
+  });
+
+  it("defaults to edit mode when a product region exists and sends only the source with the region", async () => {
+    const d = deps();
+    const run = createVariationRun(editInput, d);
+    const result = await run.generateImage({ prompt: "p", referenceImageIds: ["img_r3"], keepSourceLayout: true });
+    expect(d.produceImage).toHaveBeenCalledWith({
+      prompt: "p",
+      mode: "edit",
+      keepRegion: region,
+      referenceImageUrls: ["https://cdn.test/source.png"],
+      format: "portrait",
+      attempt: 1,
+    });
+    expect(d.reviewImage).toHaveBeenCalledWith({ imageUrl: "https://blob.test/out-1.png", prompt: "p", mode: "edit", keepRegion: region });
+    expect(result).toMatchObject({ mode: "edit", keepRegion: region });
+    expect(run.state.attempts[0]).toMatchObject({ mode: "edit", keepRegion: region });
+  });
+
+  it("uses generate mode when no region was found, and records it on the attempt", async () => {
+    const d = deps();
+    const run = createVariationRun(input, d);
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    expect(d.produceImage).toHaveBeenCalledWith(expect.objectContaining({ mode: "generate", keepRegion: null }));
+    expect(run.state.attempts[0]).toMatchObject({ mode: "generate" });
+  });
+
+  it("honours an explicit generate mode and a keepRegion override in edit mode", async () => {
+    const d = deps();
+    const run = createVariationRun(editInput, d);
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true, mode: "generate" });
+    expect(d.produceImage).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "generate" }));
+    const override = { x: 0.5, y: 0.5, w: 0.4, h: 0.4 };
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true, keepRegion: override });
+    expect(d.produceImage).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "edit", keepRegion: override }));
+  });
+
+  it("rejects edit mode when it is unavailable without spending an attempt", async () => {
+    const d = deps();
+    const run = createVariationRun({ ...editInput, useSourceLayout: false }, d);
+    await expect(run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true, mode: "edit" })).resolves.toEqual({
+      error: "Edit mode is not available on this run (no product region, the source is not in use, or the source is a competitor ad). Use mode \"generate\".",
+    });
+    expect(d.produceImage).not.toHaveBeenCalled();
+    expect(run.state.imageCalls).toBe(0);
   });
 });
 
@@ -322,13 +379,20 @@ describe("createVariationRun.finish", () => {
     const run = createVariationRun(input, deps());
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
     await expect(run.finish({ plan })).resolves.toEqual({ ok: true });
-    expect(run.state.plan).toEqual(plan);
+    expect(run.state.plan).toMatchObject(plan);
     expect(run.state.finished).toBe(true);
+  });
+
+  it("stamps the kept region of the final attempt onto the plan", async () => {
+    const run = createVariationRun(editInput, deps());
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    await run.finish({ plan });
+    expect(run.state.plan?.keptProductRegion).toEqual(region);
   });
 });
 
 describe("resolveVariationOutcome", () => {
-  const attempt = (n: number, pass: boolean) => ({ attempt: n, imageUrl: `https://blob.test/${n}.png`, prompt: "p", review: { pass, notes: pass ? [] : ["text illegible"] } });
+  const attempt = (n: number, pass: boolean) => ({ attempt: n, imageUrl: `https://blob.test/${n}.png`, prompt: "p", mode: "generate" as const, review: { pass, notes: pass ? [] : ["text illegible"] } });
 
   it("is ready with the finished plan", () => {
     const plan = { summary: "s", kept: [], changed: [], rationale: "r", evidence: [], inImageCopy: [], finalAttempt: 2 };

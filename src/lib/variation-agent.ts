@@ -5,6 +5,7 @@
 
 import { z } from "zod";
 import type { StudioBrandProfile } from "@/lib/studio-brand";
+import { productRegionSchema, type ProductRegion } from "@/lib/image-mask";
 import { buildClaimsConstraint, scanTextForClaims } from "@/lib/studio-claims";
 import type { StudioContextLibrary } from "@/lib/studio-context";
 import { moderationReasonFromError } from "@/lib/studio-moderation";
@@ -43,6 +44,11 @@ export type VariationRunInput = {
    * provider cannot fetch (local dev storage) still reaches it.
    */
   sourceImage?: Uint8Array;
+  /**
+   * Where the product sits in the source (normalized box), from the locator.
+   * `null` when the locator found none; `undefined` when it did not run.
+   */
+  sourceProductRegion?: ProductRegion | null;
   note: string | null;
   brand: StudioBrandProfile | null;
   library: StudioContextLibrary;
@@ -58,6 +64,9 @@ export type VariationRunDeps = {
   ) => Promise<{ path: string; content: string } | null>;
   produceImage: (input: {
     prompt: string;
+    mode: "edit" | "generate";
+    /** The protected source region in edit mode; null in generate mode. */
+    keepRegion: ProductRegion | null;
     referenceImageUrls: string[];
     format: StudioFormat;
     attempt: number;
@@ -65,6 +74,8 @@ export type VariationRunDeps = {
   reviewImage: (input: {
     imageUrl: string;
     prompt: string;
+    mode: "edit" | "generate";
+    keepRegion: ProductRegion | null;
   }) => Promise<VariationReview>;
   onStep: (label: string) => void;
 };
@@ -124,6 +135,10 @@ export const generateImageInputSchema = z.object({
   prompt: z.string().min(1),
   referenceImageIds: z.array(z.string()).default([]),
   keepSourceLayout: z.boolean().default(true),
+  /** edit: masked edit of the source keeping the product; generate: draw from references. Defaults to edit when available. */
+  mode: z.enum(["edit", "generate"]).optional(),
+  /** Override the protected region in edit mode (normalized 0-1 box). */
+  keepRegion: productRegionSchema.optional(),
 });
 
 export const finishInputSchema = z.object({ plan: variationPlanSchema });
@@ -138,6 +153,15 @@ function escapeContextField(text: string) {
   return escapeContextText(text)
     .replace(/"/g, "&quot;")
     .replace(/\s*[\r\n]+\s*/g, " ");
+}
+
+function describeRegion(region: ProductRegion) {
+  const pct = (n: number) => `${Math.round(n * 100)}%`;
+  return `${pct(region.x)} to ${pct(region.x + region.w)} across and ${pct(region.y)} to ${pct(region.y + region.h)} down`;
+}
+
+function editModeAvailable(input: VariationRunInput) {
+  return Boolean(input.sourceProductRegion) && input.useSourceLayout && input.source.kind === "creative";
 }
 
 const PROCEDURE = [
@@ -238,6 +262,9 @@ export function buildVariationSystemPrompt(input: VariationRunInput) {
     input.useSourceLayout
       ? null
       : "<mode>\nThe source image is NOT sent to the image model on this run (the user retried without it), and keepSourceLayout has no effect. Describe the layout, composition, and every element the image needs in the prompt itself.\n</mode>",
+    editModeAvailable(input) && input.sourceProductRegion
+      ? `<mode>\nEDIT MODE is available and is the default for generateImage. The source's product occupies the box ${describeRegion(input.sourceProductRegion)} of the canvas; that region is kept pixel-for-pixel and everything outside it is regenerated from your prompt. In edit mode: describe only what changes outside the product, never describe or restyle the product itself, keep the composition, and refer to the product in plain words (for example "the mouthguard at the lower right stays as it is"). If the review says the kept region cut the product, call generateImage again with a wider keepRegion. Pass mode "generate" only when the variation must move or replace the product.\n</mode>`
+      : null,
     brandBlock(input.brand),
     ...core,
     reference,
@@ -362,31 +389,49 @@ export function createVariationRun(
       };
     }
 
+    const editAvailable = editModeAvailable(input);
+    const mode = raw.mode ?? (editAvailable ? "edit" : "generate");
+    if (mode === "edit" && !editAvailable) {
+      return {
+        error:
+          'Edit mode is not available on this run (no product region, the source is not in use, or the source is a competitor ad). Use mode "generate".',
+      };
+    }
+    const keepRegion = mode === "edit" ? (raw.keepRegion ?? input.sourceProductRegion ?? null) : null;
+
     // Counted before the call: a blocked attempt still spent an image-model call.
     state.imageCalls += 1;
     const attempt = state.imageCalls;
-    // Reference order: product photo first, chosen context images, source
-    // last. The image model leans on the first reference for the product and
-    // the last for layout, and the source already shows the product the way
-    // the ad needs it.
-    const referenceImageUrls: string[] = [];
-    const productImageUrl = input.brand?.productImageUrl;
-    if (productImageUrl) referenceImageUrls.push(productImageUrl);
     const ignoredReferenceIds: string[] = [];
-    for (const id of raw.referenceImageIds) {
-      const image = imageById.get(id);
-      if (!image) ignoredReferenceIds.push(id);
-      else if (!referenceImageUrls.includes(image.imageUrl)) referenceImageUrls.push(image.imageUrl);
-    }
-    if (raw.keepSourceLayout && input.useSourceLayout) {
+    const referenceImageUrls: string[] = [];
+    if (mode === "edit") {
+      // The source is the canvas being edited; the product is preserved from
+      // it, so no product photo or context images are sent.
       referenceImageUrls.push(input.source.imageUrl);
+      ignoredReferenceIds.push(...raw.referenceImageIds);
+    } else {
+      // Reference order: product photo first, chosen context images, source
+      // last. The image model leans on the first reference for the product and
+      // the last for layout.
+      const productImageUrl = input.brand?.productImageUrl;
+      if (productImageUrl) referenceImageUrls.push(productImageUrl);
+      for (const id of raw.referenceImageIds) {
+        const image = imageById.get(id);
+        if (!image) ignoredReferenceIds.push(id);
+        else if (!referenceImageUrls.includes(image.imageUrl)) referenceImageUrls.push(image.imageUrl);
+      }
+      if (raw.keepSourceLayout && input.useSourceLayout) {
+        referenceImageUrls.push(input.source.imageUrl);
+      }
     }
 
-    deps.onStep(`generating image (attempt ${attempt})`);
+    deps.onStep(`${mode === "edit" ? "editing source" : "generating image"} (attempt ${attempt})`);
     let imageUrl: string;
     try {
       ({ imageUrl } = await deps.produceImage({
         prompt: raw.prompt,
+        mode,
+        keepRegion,
         referenceImageUrls,
         format: input.format,
         attempt,
@@ -403,11 +448,13 @@ export function createVariationRun(
     }
 
     deps.onStep(`reviewing attempt ${attempt}`);
-    const review = await deps.reviewImage({ imageUrl, prompt: raw.prompt });
-    state.attempts.push({ attempt, imageUrl, prompt: raw.prompt, review });
+    const review = await deps.reviewImage({ imageUrl, prompt: raw.prompt, mode, keepRegion });
+    state.attempts.push({ attempt, imageUrl, prompt: raw.prompt, mode, keepRegion, review });
     return {
       attempt,
       imageUrl,
+      mode,
+      keepRegion,
       review,
       attemptsRemaining: MAX_IMAGE_ATTEMPTS - state.imageCalls,
       ...(ignoredReferenceIds.length > 0 ? { ignoredReferenceIds } : {}),
@@ -424,7 +471,8 @@ export function createVariationRun(
       };
     }
 
-    state.plan = raw.plan;
+    const final = state.attempts.find((a) => a.attempt === raw.plan.finalAttempt);
+    state.plan = { ...raw.plan, keptProductRegion: final?.mode === "edit" ? (final.keepRegion ?? null) : null };
     state.finished = true;
     deps.onStep("finishing");
     return { ok: true as const };
