@@ -62,6 +62,12 @@ const LOCATOR_MODEL = "gpt-5.6-terra";
 const IMAGE_MODEL = "gpt-image-2";
 const PERFORMANCE_WINDOW_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/**
+ * Margins tried around the located product box when matting it out of the
+ * source, narrowest first: enough to clear the product's own edge, little
+ * enough to stay off whatever sits next to it in the ad.
+ */
+const MATTE_MARGINS = [0.01, 0.02, 0.03];
 const MODERATION_REASONS = [
   "claims",
   "likeness",
@@ -397,14 +403,29 @@ export const generateVariationTask = task({
         ? (located.tile ?? located.product)
         : null;
       const sourceProductBox = located?.product ?? null;
-      // The product box is tight, so the matte cuts the expanded box: the 3%
-      // margin keeps the product's anti-aliased edge out of the border ring the
-      // flood starts from, and off the crop the matte reports back.
-      const matteRegion = sourceProductBox ? expandRegion(sourceProductBox) : null;
       // The source product's matte is the same for every attempt; cut it once.
       let sourceMatte: Promise<MatteResult> | null = null;
-      const matteSource = () =>
-        (sourceMatte ??= matteProduct({ source: sourceBytes, region: matteRegion! }));
+      const matteSource = (box: ProductRegion) =>
+        (sourceMatte ??= (async () => {
+          // The product box is tight, so the matte cuts an expanded one: the
+          // margin keeps the product's anti-aliased edge out of the border ring
+          // the flood starts from. Too wide a margin reaches the tile's own
+          // label or a neighbouring prop and the border stops reading as
+          // background (measured on the R3 source: the mask's 3% swallows the
+          // tile's gold caption and the matte falls back), so widen only when
+          // the narrow cut failed.
+          let result = await matteProduct({ source: sourceBytes, region: expandRegion(box, MATTE_MARGINS[0]) });
+          for (const margin of MATTE_MARGINS.slice(1)) {
+            if (result.matted) break;
+            result = await matteProduct({ source: sourceBytes, region: expandRegion(box, margin) });
+          }
+          logger.info("Matted the source product", {
+            matted: result.matted,
+            coverage: result.coverage,
+            region: result.region,
+          });
+          return result;
+        })());
 
       const input: VariationRunInput = {
         source,
@@ -479,7 +500,7 @@ export const generateVariationTask = task({
           // the source's real product. Every failure here is recoverable —
           // the model's product stays and the review judges it as before.
           let transplant: VariationTransplant | null = null;
-          if (mode === "generate" && matteRegion && source.kind === "creative" && !payload.withoutSourceImage) {
+          if (mode === "generate" && sourceProductBox && source.kind === "creative" && !payload.withoutSourceImage) {
             try {
               onStep(`locating the product in attempt ${attempt}`);
               const locatedOutput = await locateProduct(produced, brand?.brandName ?? null, "output");
@@ -487,7 +508,7 @@ export const generateVariationTask = task({
                 // The tight product box: the paste covers the model's product
                 // and leaves the card or pedestal it drew around it.
                 const to = locatedOutput.product;
-                const matte = await matteSource();
+                const matte = await matteSource(sourceProductBox);
                 const pastedPatch = await pastePatch({ output: produced, patch: matte.patch, region: to });
                 produced = pastedPatch.bytes;
                 // The matte crops to what it kept, so record that region rather
