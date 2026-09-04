@@ -123,6 +123,22 @@ part of this addendum. (Pasting the source's own region back, §7, is in
 scope.) Alpha-feathering the paste edge is deferred until a seam is observed. Competitor sources (Phase 2) never use
 edit mode, since their product must be replaced, not kept.
 
+### 8. Measured result and the default (2026-09-04)
+
+Five runs across three sources with the paste in place: every attempt failed
+review with the same signature. The image model reflows the layout under an
+edit mask (tiles resize, cards shift), so a rectangular paste lands a few
+percent off the model's redrawn card, a duplicate model-drawn product remains
+outside the box, and a widened box covers copy. The exact product is
+preserved every time; the composition around it is not.
+
+Decision: **generate mode is the default again** (product photo first, no
+paste). Edit mode with the paste stays available when the agent passes
+`mode: "edit"`, for sources where the layout must not move at all. The
+`keptProductRegion` plan field and the card line remain meaningful only for
+those runs. The next design, in a separate addendum, is a copy-only mode with
+the source as the base and only the text regions regenerated.
+
 ## Testing
 
 - `image-mask.ts`: pure tests that the PNG has the source dimensions, the

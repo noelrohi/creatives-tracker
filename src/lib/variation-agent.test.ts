@@ -308,10 +308,17 @@ describe("createVariationRun.generateImage", () => {
     expect(d.produceImage).toHaveBeenCalledWith(expect.objectContaining({ mode: "generate", keepRegion: null, referenceImageUrls: ["https://blob.test/product.png"] }));
   });
 
-  it("defaults to edit mode when a product region exists and sends only the source with the region", async () => {
+  it("defaults to generate mode even when a product region exists", async () => {
     const d = deps();
     const run = createVariationRun(editInput, d);
-    const result = await run.generateImage({ prompt: "p", referenceImageIds: ["img_r3"], keepSourceLayout: true });
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    expect(d.produceImage).toHaveBeenCalledWith(expect.objectContaining({ mode: "generate", keepRegion: null }));
+  });
+
+  it("uses edit mode when requested and sends only the source with the region", async () => {
+    const d = deps();
+    const run = createVariationRun(editInput, d);
+    const result = await run.generateImage({ prompt: "p", referenceImageIds: ["img_r3"], keepSourceLayout: true, mode: "edit" });
     expect(d.produceImage).toHaveBeenCalledWith({
       prompt: "p",
       mode: "edit",
@@ -341,7 +348,7 @@ describe("createVariationRun.generateImage", () => {
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true, mode: "generate" });
     expect(d.produceImage).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "generate" }));
     const override = { x: 0.5, y: 0.5, w: 0.4, h: 0.4 };
-    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true, keepRegion: override });
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true, mode: "edit", keepRegion: override });
     expect(d.produceImage).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "edit", keepRegion: override }));
   });
 
@@ -406,7 +413,7 @@ describe("createVariationRun.finish", () => {
 
   it("stamps the kept region of the final attempt onto the plan", async () => {
     const run = createVariationRun(editInput, deps());
-    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true, mode: "edit" });
     await run.finish({ plan });
     expect(run.state.plan?.keptProductRegion).toEqual(region);
   });
