@@ -11,6 +11,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { openai } from "@/lib/ai";
 import { readImageDimensions, studioFormatForDimensions } from "@/lib/image-dimensions";
+import { buildKeepMask, productRegionSchema, type ProductRegion } from "@/lib/image-mask";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 import { isHttpUrl } from "@/lib/remote-image";
 import { getStudioBrandProfile } from "@/lib/studio-brand";
@@ -75,6 +76,49 @@ const reviewSchema = z.object({
   pass: z.boolean(),
   notes: z.array(z.string()),
 });
+
+const LOCATOR_MODEL = "gpt-5.6-terra";
+
+const productLocationSchema = z.object({
+  product: productRegionSchema.nullable(),
+  confidence: z.number().min(0).max(1),
+  note: z.string(),
+});
+
+/**
+ * Finds the product in the source so an edit can protect it. Includes any
+ * packaging the product sits in or on. Returns null on failure or when the
+ * source shows no product, which sends the run down the generate path.
+ */
+async function locateSourceProduct(
+  sourceBytes: Uint8Array,
+  brandName: string | null,
+): Promise<ProductRegion | null> {
+  try {
+    const result = await generateObject({
+      model: openai(LOCATOR_MODEL),
+      schema: productLocationSchema,
+      system: [
+        `Locate the advertised physical product${brandName ? ` (${brandName})` : ""} in this static ad.`,
+        "Return one normalized bounding box (x, y, w, h in 0-1 from the top-left) that covers the whole product. When the product sits in, on, or beside its own packaging or case, cover both together. Do not include headline text, badges, or unrelated props.",
+        "Return product: null when no physical product is visible (a text-only or lifestyle ad).",
+      ].join("\n"),
+      messages: [{ role: "user", content: [{ type: "image", image: sourceBytes }] }],
+    });
+    logger.info("Product locator", {
+      found: Boolean(result.object.product),
+      confidence: result.object.confidence,
+      note: result.object.note,
+    });
+    if (!result.object.product || result.object.confidence < 0.4) return null;
+    return result.object.product;
+  } catch (error) {
+    logger.warn("Product locator failed; using generate mode", {
+      error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    });
+    return null;
+  }
+}
 
 async function loadSource(
   payload: GenerateVariationPayload,
@@ -260,9 +304,8 @@ export const generateVariationTask = task({
         return bytes;
       };
       const sourceBytes = await fetchBytes(source.imageUrl);
-      const format: StudioFormat = studioFormatForDimensions(
-        readImageDimensions(sourceBytes),
-      );
+      const sourceDimensions = readImageDimensions(sourceBytes);
+      const format: StudioFormat = studioFormatForDimensions(sourceDimensions);
       await db
         .update(studioGenerations)
         .set({ format, updatedAt: new Date() })
@@ -273,9 +316,16 @@ export const generateVariationTask = task({
           ),
         );
 
+      let sourceProductRegion: ProductRegion | null = null;
+      if (source.kind === "creative" && !payload.withoutSourceImage && sourceDimensions) {
+        onStep("locating the product in the source");
+        sourceProductRegion = await locateSourceProduct(sourceBytes, brand?.brandName ?? null);
+      }
+
       const input: VariationRunInput = {
         source,
         sourceImage: sourceBytes,
+        sourceProductRegion,
         note: payload.note ?? null,
         brand,
         library,
@@ -286,15 +336,31 @@ export const generateVariationTask = task({
       const run = createVariationRun(input, {
         readSection: (documentId, sectionId) =>
           readStudioContextSection(payload.organizationId, documentId, sectionId),
-        produceImage: async ({ prompt, referenceImageUrls, format, attempt }) => {
+        produceImage: async ({ prompt, mode, keepRegion, referenceImageUrls, format, attempt }) => {
           const references: Uint8Array[] = [];
           for (const url of referenceImageUrls) references.push(await fetchBytes(url));
-          const result = await logger.trace(`Generate attempt ${attempt}`, () =>
-            generateImage({
-              model: openai.image(IMAGE_MODEL),
-              prompt: references.length ? { text: prompt, images: references } : prompt,
-              size: studioSizeFor(format),
-            }),
+          const result = await logger.trace(`${mode === "edit" ? "Edit" : "Generate"} attempt ${attempt}`, () =>
+            mode === "edit" && sourceDimensions
+              ? generateImage({
+                  model: openai.image(IMAGE_MODEL),
+                  // references holds only the source in edit mode; the mask
+                  // keeps the product region opaque so it is copied through.
+                  prompt: {
+                    images: references,
+                    mask: buildKeepMask({
+                      width: sourceDimensions.width,
+                      height: sourceDimensions.height,
+                      keep: keepRegion,
+                    }),
+                    text: prompt,
+                  },
+                  size: studioSizeFor(format),
+                })
+              : generateImage({
+                  model: openai.image(IMAGE_MODEL),
+                  prompt: references.length ? { text: prompt, images: references } : prompt,
+                  size: studioSizeFor(format),
+                }),
           );
           const stored = await putStudioObject(
             `${env}/create/${ctx.run.id}-${ctx.attempt.number}-${attempt}.png`,
@@ -304,7 +370,7 @@ export const generateVariationTask = task({
           imageBytes.set(stored.url, result.image.uint8Array);
           return { imageUrl: stored.url };
         },
-        reviewImage: async ({ imageUrl, prompt }) => {
+        reviewImage: async ({ imageUrl, prompt, mode, keepRegion }) => {
           try {
             const content: Array<
               { type: "text"; text: string } | { type: "image"; image: Uint8Array }
@@ -315,16 +381,22 @@ export const generateVariationTask = task({
               },
               { type: "image", image: await fetchBytes(imageUrl) },
             ];
-            if (brand?.productImageUrl) {
+            if (mode === "edit") {
+              content.push({ type: "image", image: sourceBytes });
+            } else if (brand?.productImageUrl) {
               content.push({ type: "image", image: await fetchBytes(brand.productImageUrl) });
             }
             const result = await generateObject({
               model: openai(REVIEW_MODEL),
               schema: reviewSchema,
               system: [
-                "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second, when present, is the advertiser's real product photo.",
+                mode === "edit"
+                  ? "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad, produced by editing the second image (the source) while protecting the product region."
+                  : "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second, when present, is the advertiser's real product photo.",
                 "Checklist (all must hold for pass = true):",
-                "- The product matches the product photo in shape, openings, material, and markings; no invented logos or text on it.",
+                mode === "edit" && keepRegion
+                  ? `- The product inside the protected region (${Math.round(keepRegion.x * 100)}% to ${Math.round((keepRegion.x + keepRegion.w) * 100)}% across, ${Math.round(keepRegion.y * 100)}% to ${Math.round((keepRegion.y + keepRegion.h) * 100)}% down) matches the source pixel-for-pixel; if any part of the product was cut off or altered, say so and name which edge.`
+                  : "- The product matches the product photo in shape, openings, material, and markings; no invented logos or text on it.",
                 "- Every line of ad copy (headline, subhead, badges, CTA, tile labels) is legible and matches the quoted copy in the prompt, with no garbled or invented copy. Incidental labels on props and packaging inside the scene (a shampoo bottle, a book spine) are fine and are not ad copy.",
                 `- No logos or brand marks other than ${brand?.brandName ?? "the advertiser's"}; no platform UI, no watermarks.`,
                 "- The palette is consistent with a clean brand look: no clashing neon, no split panels unless the prompt asked for them.",
