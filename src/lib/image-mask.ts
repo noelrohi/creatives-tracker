@@ -29,6 +29,8 @@ export function clampRegion(region: ProductRegion): ProductRegion {
   return { x, y, w, h };
 }
 
+// Each edge moves outward independently and stops at the canvas, so a box on
+// the top or left border does not gain the lost margin on the far side.
 export function expandRegion(region: ProductRegion, margin = MASK_MARGIN): ProductRegion {
   const left = Math.max(region.x - margin, 0);
   const top = Math.max(region.y - margin, 0);
@@ -65,6 +67,9 @@ function chunk(type: string, data: Uint8Array) {
 
 /** Encodes 8-bit RGBA pixels (row-major, 4 bytes per pixel) as a PNG. */
 export function encodePng(width: number, height: number, rgba: Uint8Array): Uint8Array {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+    throw new Error(`encodePng: expected positive integer dimensions, got ${width}x${height}`);
+  }
   if (rgba.length !== width * height * 4) {
     throw new Error(`encodePng: expected ${width * height * 4} bytes, got ${rgba.length}`);
   }
@@ -83,7 +88,7 @@ export function encodePng(width: number, height: number, rgba: Uint8Array): Uint
   const parts = [
     signature,
     chunk("IHDR", ihdr),
-    chunk("IDAT", new Uint8Array(deflateSync(scanlines))),
+    chunk("IDAT", deflateSync(scanlines)),
     chunk("IEND", new Uint8Array(0)),
   ];
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
@@ -100,14 +105,22 @@ export type KeepMaskInput = {
   height: number;
   /** Region to protect (normalized). `null` protects nothing: the whole image is editable. */
   keep: ProductRegion | null;
-  /** When true the box is the only editable area (the Phase 2 polarity). */
+  /**
+   * When true the box is the only editable area (the Phase 2 polarity).
+   * Meaningless without `keep`: with no box, everything would be protected.
+   */
   invert?: boolean;
 };
 
 /** A PNG the size of the source where kept pixels are opaque white and editable pixels are transparent. */
 export function buildKeepMask({ width, height, keep, invert = false }: KeepMaskInput): Uint8Array {
   const rgba = new Uint8Array(width * height * 4);
-  const box = keep ? expandRegion(keep) : null;
+  // Clamp before expanding so an out-of-range region cannot silently produce
+  // a bad mask. A region that clamps down to zero area has nothing left to
+  // keep, so it is treated the same as no region at all rather than letting
+  // the margin expand a single point into a phantom sliver.
+  const clamped = keep ? clampRegion(keep) : null;
+  const box = clamped && clamped.w > 0 && clamped.h > 0 ? expandRegion(clamped) : null;
   const left = box ? Math.floor(box.x * width) : 0;
   const top = box ? Math.floor(box.y * height) : 0;
   const right = box ? Math.ceil((box.x + box.w) * width) : 0;

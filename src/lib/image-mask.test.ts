@@ -1,4 +1,4 @@
-import { inflateSync } from "node:zlib";
+import { crc32, inflateSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
   buildKeepMask,
@@ -28,6 +28,9 @@ function readRgba(png: Uint8Array) {
       expect(png[offset + 17]).toBe(6); // RGBA
     }
     if (type === "IDAT") idat.push(data);
+    expect(crc32(png.subarray(offset + 4, offset + 8 + length)) >>> 0).toBe(
+      view.getUint32(offset + 8 + length),
+    );
     offset += 12 + length;
   }
   const raw = inflateSync(Buffer.concat(idat.map((c) => Buffer.from(c))));
@@ -64,6 +67,11 @@ describe("encodePng", () => {
     expect([width, height]).toEqual([2, 1]);
     expect([alphaAt(0, 0), alphaAt(1, 0)]).toEqual([255, 0]);
   });
+
+  it("rejects zero or non-integer dimensions", () => {
+    expect(() => encodePng(0, 0, new Uint8Array(0))).toThrow(/positive integer/);
+    expect(() => encodePng(10.5, 10, new Uint8Array(420))).toThrow(/positive integer/);
+  });
 });
 
 describe("buildKeepMask", () => {
@@ -89,5 +97,19 @@ describe("buildKeepMask", () => {
     );
     expect(alphaAt(60, 60)).toBe(0);
     expect(alphaAt(10, 10)).toBe(255);
+  });
+
+  it("clamps an out-of-range region before expanding it", () => {
+    const empty = readRgba(
+      buildKeepMask({ width: 20, height: 20, keep: { x: 2, y: 2, w: 0.1, h: 0.1 } }),
+    );
+    expect(empty.alphaAt(0, 0)).toBe(0);
+    expect(empty.alphaAt(19, 19)).toBe(0);
+
+    const cornered = readRgba(
+      buildKeepMask({ width: 20, height: 20, keep: { x: 0.9, y: 0.9, w: 5, h: 5 } }),
+    );
+    expect(cornered.alphaAt(19, 19)).toBe(255);
+    expect(cornered.alphaAt(0, 0)).toBe(0);
   });
 });
