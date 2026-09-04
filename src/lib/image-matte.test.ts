@@ -78,8 +78,30 @@ describe("matteProduct", () => {
     });
     const result = await matteProduct({ source, region: full });
     expect(result.matted).toBe(true);
+    // The label is well over 1% of the box, so it survives as part of the product
+    // and the crop runs from the top of the disc to the clamped bottom edge.
+    expect(await sizeOf(result.patch)).toEqual({ width: 33, height: 46 });
+    expect(result.box).toEqual({ left: 14, top: 14, width: 33, height: 46 });
     // Label interior at (30,55); the crop starts at (14,14) so the patch keeps it opaque.
     expect(await alphaAt(result.patch, 16, 41)).toBe(255);
+  });
+
+  it("drops stray specks so the crop stays tight", async () => {
+    // Two 2x2 specks the flood cannot reach, each ~0.1% of the box: one near a
+    // corner, which would otherwise drag the crop back out to the whole tile,
+    // and one beside the disc, which stays inside the crop so its alpha is
+    // readable. Both are dropped, so the crop is the disc-only one above.
+    const speck = (x: number, y: number) =>
+      (x >= 4 && x <= 5 && y >= 4 && y <= 5) || (x >= 16 && x <= 17 && y >= 44 && y <= 45);
+    const source = tile(60, 60, (x, y) => (speck(x, y) ? [30, 40, 60] : [245, 240, 232]), {
+      cx: 30,
+      cy: 30,
+      r: 15,
+    });
+    const result = await matteProduct({ source, region: full });
+    expect(result.matted).toBe(true);
+    expect(result.box).toEqual({ left: 14, top: 14, width: 33, height: 33 });
+    expect(await alphaAt(result.patch, 2, 30)).toBe(0); // the speck at (16,44) in the crop
   });
 
   it("falls back when almost nothing or almost everything is background", async () => {
