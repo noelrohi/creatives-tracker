@@ -461,6 +461,27 @@ with a small `pct(region)` helper producing the "x% to y% across, …" text (reu
 
 ---
 
+### Task 7: Matte flatness by border majority, patch cropped to the product
+
+Measured after Task 4's live check on `r3_test.jpg`: the whole-tile box the locator returns has a border max spread of 80 (364 expanded) against the 40 threshold, so the matte never ran. A box around the mouthguard plus its pedestal has 95% of its border pixels within 32 of the border median, and a prototype that floods from the median and accepts an 85% majority cuts the mouthguard cleanly (pedestal and card flood away). Two changes follow: this task fixes the flatness rule; Task 8 makes the locator return a product-tight box.
+
+**Files:**
+- Modify: `src/lib/image-matte.ts`, `src/lib/image-matte.test.ts`
+
+- [ ] Replace `FLAT_BORDER_SPREAD` (max spread from the mean) with `const FLAT_BORDER_SHARE = 0.85;` ("Share of border pixels that must sit within BACKGROUND_DISTANCE of the border median for the border to count as background"). The reference colour becomes the per-channel median of the border ring (`reference`, replacing `mean` everywhere: seeding, drift). A border is flat when `flat / border.length >= FLAT_BORDER_SHARE`. Neighbour flood and `BACKGROUND_DRIFT` unchanged.
+- [ ] When matted, crop the patch to the bounding box of foreground pixels (alpha > 0) padded by 1 px and clamped to the extracted box, and report that crop as `box` (pixel box in the oriented source). Add `region: ProductRegion` to `MatteResult`: the normalized region of `box` in the oriented source (for the fallback, the clamped input region). Callers paste `patch` into the output's product box, so a patch without transparent margins keeps the product at the box's scale.
+- [ ] Tests: rewrite "falls back to an opaque rectangle when the box border is not flat" so the border is non-flat by majority (e.g. left half of the tile one colour, right half another); add "tolerates a few off-colour border pixels" (a contrasting run covering ~10% of the border, e.g. a label crossing the bottom edge, still yields `matted: true` and those pixels stay opaque); add "crops the patch to the product bounds and reports its region" (disc in a 100×100 box at a known offset: patch dimensions = disc bbox + 2 px, `box.left/top` offset accordingly, `region` = that box normalized). Keep the vignette and other tests passing.
+- [ ] `bun run test -- src/lib/image-matte.test.ts` (8 expected), typecheck, lint; commit `fix(studio): judge matte flatness by the border majority and crop to the product`.
+
+### Task 8: Product-tight locator box for the transplant
+
+**Files:**
+- Modify: `trigger/generate-variation.ts`
+
+- [ ] `productLocationSchema` gains `tile: box | null` next to `product`. Prompt: `product` is a tight box around the physical product itself only (no packaging, case, pedestal, card, or text); `tile` is the card, tile, panel, or pedestal area with its own background that the product sits in, when there is one (the existing whole-card rule), else null. Clamp both; keep the confidence/area guards on `product`; drop `tile` when it does not contain the centre of `product`.
+- [ ] `locateProduct` returns `{ product, tile } | null`. Source: `sourceProductRegion = tile ?? product` (edit mode keeps protecting the whole tile); new `sourceProductBox = product` drives the matte: `matteProduct({ source, region: expandRegion(sourceProductBox) })`, `transplant.from = matte.region`. Output: `to = product` (tight), so the paste covers only the model's product and its card and pedestal stay.
+- [ ] Live check as in Task 4 on R3 (expect `matted: true`, mouthguard only, no card-in-card), R1 (expect fallback), and R2; record outcome, review notes, `to`, matted, coverage per attempt. Commit `feat(studio): locate the product tightly for the transplant`.
+
 ## Self-review against the spec
 
 - Proposal steps 1-5 map to Tasks 3 (prompt guidance), 4 (output locator, matte, paste, review), 2 (matte), 1 (patch paste).
