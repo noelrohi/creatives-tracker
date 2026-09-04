@@ -72,4 +72,25 @@ describe("matteProduct", () => {
     expect(await alphaAt(result.patch, 20, 20)).toBe(255); // disc centre at (70,70) -> (20,20) in the crop
     expect(await alphaAt(result.patch, 2, 2)).toBe(0);
   });
+
+  it("mattes a product on a vignetted background", async () => {
+    // The background drifts far from the border mean toward the centre, so a
+    // single global threshold would leave an opaque halo of it around the disc.
+    const maxDist = Math.hypot(40, 40);
+    const source = tile(
+      80,
+      80,
+      (x, y) => {
+        const shade = Math.round(60 * (1 - Math.hypot(x - 40, y - 40) / maxDist));
+        return [245 - shade, 240 - shade, 232 - shade];
+      },
+      { cx: 40, cy: 40, r: 10 },
+    );
+    const result = await matteProduct({ source, region: full });
+    expect(result.matted).toBe(true);
+    expect(result.coverage).toBeGreaterThan(0.04);
+    expect(result.coverage).toBeLessThan(0.08);
+    expect(await alphaAt(result.patch, 40, 22)).toBe(0); // 18px above the disc, deep in the vignette
+    expect(await alphaAt(result.patch, 40, 40)).toBe(255);
+  });
 });

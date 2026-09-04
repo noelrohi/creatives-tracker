@@ -2,8 +2,11 @@
 // scene without dragging the source's background along. Works on the common
 // case (a product on a flat card or pedestal): flood-fills the background from
 // the box border, keeps everything it cannot reach, and softens the edge one
-// pixel. Anything else falls back to an opaque rectangle so callers always get
-// a usable patch.
+// pixel. The flood spreads by neighbour-to-neighbour similarity rather than a
+// single global threshold, so a vignette or spotlight that darkens toward the
+// centre still floods; an overall drift bound keeps it from walking into the
+// product through a soft edge. Anything else falls back to an opaque rectangle
+// so callers always get a usable patch.
 
 import sharp from "sharp";
 import { pixelBox, type PasteBox } from "@/lib/image-composite";
@@ -13,6 +16,11 @@ import { clampRegion, type ProductRegion } from "@/lib/image-mask";
 const FLAT_BORDER_SPREAD = 40;
 /** A pixel this close to the border's mean colour is background. */
 const BACKGROUND_DISTANCE = 32;
+/**
+ * How far the background may drift from the border mean overall, so a smooth
+ * vignette floods but the flood cannot walk into a product through a soft edge.
+ */
+const BACKGROUND_DRIFT = 96;
 /** Foreground share outside this band means the matte is not trustworthy. */
 const MIN_COVERAGE = 0.02;
 const MAX_COVERAGE = 0.9;
@@ -72,7 +80,9 @@ export async function matteProduct(input: {
   for (const i of border) spread = Math.max(spread, distance(rgbAt(i), mean));
   if (spread > FLAT_BORDER_SPREAD) return rectangle();
 
-  // Flood fill background from the border.
+  // Flood fill background from the border. A neighbour joins when it matches
+  // the pixel it was reached from, which follows a gradient, and when it is
+  // still within the overall drift bound, which stops the walk at the product.
   const background = new Uint8Array(width * height);
   const queue: number[] = [];
   for (const i of border) {
@@ -95,7 +105,10 @@ export async function matteProduct(input: {
       const ny = y + dy;
       if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
       const n = ny * width + nx;
-      if (background[n] || distance(rgbAt(n), mean) > BACKGROUND_DISTANCE) continue;
+      if (background[n]) continue;
+      const colour = rgbAt(n);
+      if (distance(colour, rgbAt(i)) > BACKGROUND_DISTANCE) continue;
+      if (distance(colour, mean) > BACKGROUND_DRIFT) continue;
       background[n] = 1;
       queue.push(n);
     }
