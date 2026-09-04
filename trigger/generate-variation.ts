@@ -10,8 +10,9 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { openai } from "@/lib/ai";
+import { pasteSourceRegion } from "@/lib/image-composite";
 import { readImageDimensions, studioFormatForDimensions } from "@/lib/image-dimensions";
-import { buildKeepMask, productRegionSchema, type ProductRegion } from "@/lib/image-mask";
+import { buildKeepMask, clampRegion, type ProductRegion } from "@/lib/image-mask";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 import { isHttpUrl } from "@/lib/remote-image";
 import { getStudioBrandProfile } from "@/lib/studio-brand";
@@ -52,6 +53,7 @@ import { studioGenerations, studioVariants } from "@/schema/studio";
 
 const AGENT_MODEL = "gpt-5.6-terra";
 const REVIEW_MODEL = "gpt-5.6-terra";
+const LOCATOR_MODEL = "gpt-5.6-terra";
 const IMAGE_MODEL = "gpt-image-2";
 const PERFORMANCE_WINDOW_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -77,10 +79,10 @@ const reviewSchema = z.object({
   notes: z.array(z.string()),
 });
 
-const LOCATOR_MODEL = "gpt-5.6-terra";
-
+// The locator's own schema is permissive: a box that overshoots by a rounding
+// hair should be clamped, not thrown away with the whole edit path.
 const productLocationSchema = z.object({
-  product: productRegionSchema.nullable(),
+  product: z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }).nullable(),
   confidence: z.number().min(0).max(1),
   note: z.string(),
 });
@@ -105,13 +107,13 @@ async function locateSourceProduct(
       ].join("\n"),
       messages: [{ role: "user", content: [{ type: "image", image: sourceBytes }] }],
     });
-    logger.info("Product locator", {
-      found: Boolean(result.object.product),
-      confidence: result.object.confidence,
-      note: result.object.note,
-    });
-    if (!result.object.product || result.object.confidence < 0.4) return null;
-    return result.object.product;
+    const { product, confidence, note } = result.object;
+    const region = product ? clampRegion(product) : null;
+    const area = region ? region.w * region.h : 0;
+    // Too small is noise; too large leaves the variation nothing to change.
+    const usable = region !== null && confidence >= 0.4 && area >= 0.005 && area <= 0.7;
+    logger.info("Product locator", { found: Boolean(product), confidence, area, usable, note });
+    return usable ? region : null;
   } catch (error) {
     logger.warn("Product locator failed; using generate mode", {
       error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
@@ -339,12 +341,16 @@ export const generateVariationTask = task({
         produceImage: async ({ prompt, mode, keepRegion, referenceImageUrls, format, attempt }) => {
           const references: Uint8Array[] = [];
           for (const url of referenceImageUrls) references.push(await fetchBytes(url));
+          if (mode === "edit" && !sourceDimensions) {
+            logger.warn("Edit mode without source dimensions; falling back to an unmasked call", { attempt });
+          }
           const result = await logger.trace(`${mode === "edit" ? "Edit" : "Generate"} attempt ${attempt}`, () =>
             mode === "edit" && sourceDimensions
               ? generateImage({
                   model: openai.image(IMAGE_MODEL),
-                  // references holds only the source in edit mode; the mask
-                  // keeps the product region opaque so it is copied through.
+                  // references holds only the source in edit mode. The mask
+                  // holds composition and placement; preservation happens in
+                  // the paste below.
                   prompt: {
                     images: references,
                     mask: buildKeepMask({
@@ -362,12 +368,20 @@ export const generateVariationTask = task({
                   size: studioSizeFor(format),
                 }),
           );
+          // The mask is guidance only: the provider regenerates the whole
+          // canvas at `size` and re-renders the product. Paste the source's
+          // region back so the product is preserved by construction, and store
+          // and review those bytes.
+          const produced =
+            mode === "edit" && keepRegion && sourceDimensions
+              ? (await pasteSourceRegion({ source: sourceBytes, output: result.image.uint8Array, region: keepRegion })).bytes
+              : result.image.uint8Array;
           const stored = await putStudioObject(
             `${env}/create/${ctx.run.id}-${ctx.attempt.number}-${attempt}.png`,
-            result.image.uint8Array,
+            produced,
             "image/png",
           );
-          imageBytes.set(stored.url, result.image.uint8Array);
+          imageBytes.set(stored.url, produced);
           return { imageUrl: stored.url };
         },
         reviewImage: async ({ imageUrl, prompt, mode, keepRegion }) => {
@@ -391,11 +405,11 @@ export const generateVariationTask = task({
               schema: reviewSchema,
               system: [
                 mode === "edit"
-                  ? "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad, produced by editing the second image (the source) while protecting the product region."
+                  ? "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad, produced by editing the second image (the source); the source's product was pasted back into its box after the edit."
                   : "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second, when present, is the advertiser's real product photo.",
                 "Checklist (all must hold for pass = true):",
                 mode === "edit" && keepRegion
-                  ? `- The product inside the protected region (${Math.round(keepRegion.x * 100)}% to ${Math.round((keepRegion.x + keepRegion.w) * 100)}% across, ${Math.round(keepRegion.y * 100)}% to ${Math.round((keepRegion.y + keepRegion.h) * 100)}% down) matches the source pixel-for-pixel; if any part of the product was cut off or altered, say so and name which edge.`
+                  ? `- The product from the source has been pasted back into its box (${Math.round(keepRegion.x * 100)}% to ${Math.round((keepRegion.x + keepRegion.w) * 100)}% across, ${Math.round(keepRegion.y * 100)}% to ${Math.round((keepRegion.y + keepRegion.h) * 100)}% down). Check four things: its lighting, colour temperature, and perspective sit naturally against the new background; there is no visible rectangular seam or halo at the box edge; no second, re-rendered copy of the product appears anywhere outside the box; and the box does not cover copy or a focal element the prompt asked for. Name which of these failed.`
                   : "- The product matches the product photo in shape, openings, material, and markings; no invented logos or text on it.",
                 "- Every line of ad copy (headline, subhead, badges, CTA, tile labels) is legible and matches the quoted copy in the prompt, with no garbled or invented copy. Incidental labels on props and packaging inside the scene (a shampoo bottle, a book spine) are fine and are not ad copy.",
                 `- No logos or brand marks other than ${brand?.brandName ?? "the advertiser's"}; no platform UI, no watermarks.`,
