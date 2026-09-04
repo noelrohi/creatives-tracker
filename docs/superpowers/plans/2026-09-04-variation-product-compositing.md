@@ -170,12 +170,13 @@ export function clampRegion(region: ProductRegion): ProductRegion {
 }
 
 export function expandRegion(region: ProductRegion, margin = MASK_MARGIN): ProductRegion {
-  return clampRegion({
-    x: region.x - margin,
-    y: region.y - margin,
-    w: region.w + 2 * margin,
-    h: region.h + 2 * margin,
-  });
+  // Each edge moves outward independently and stops at the canvas, so a box
+  // on the top or left border does not gain the lost margin on the far side.
+  const left = Math.max(region.x - margin, 0);
+  const top = Math.max(region.y - margin, 0);
+  const right = Math.min(region.x + region.w + margin, 1);
+  const bottom = Math.min(region.y + region.h + margin, 1);
+  return { x: left, y: top, w: right - left, h: bottom - top };
 }
 
 const CRC_TABLE = (() => {
@@ -268,7 +269,7 @@ export function buildKeepMask({ width, height, keep, invert = false }: KeepMaskI
 }
 ```
 
-Note on the second expand test: with `x: 0.9, w: 0.1` the expanded box would run to 1.03, so `clampRegion` trims `w` to `1 - x`, giving `0.1 + MASK_MARGIN`; the test encodes that.
+Note on the second expand test: with `x: 0.9, w: 0.1` the right edge stops at 1, giving `w = 0.1 + MASK_MARGIN`; with `y: 0` the top edge stays at 0 and only the bottom gains the margin, giving `h = 0.1 + MASK_MARGIN`. Clamping origin and extent separately would wrongly give `h = 0.1 + 2 * MASK_MARGIN`.
 
 - [ ] **Step 4: Run to verify pass**
 
