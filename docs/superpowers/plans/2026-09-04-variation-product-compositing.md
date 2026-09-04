@@ -472,10 +472,14 @@ function editModeAvailable(input: VariationRunInput) {
 System prompt: in the `return [...]` array of `buildVariationSystemPrompt`, after the retry-without-image `<mode>` entry, add:
 
 ```ts
-    editModeAvailable(input) && input.sourceProductRegion
-      ? `<mode>\nEDIT MODE is available and is the default for generateImage. The source's product occupies the box ${describeRegion(input.sourceProductRegion)} of the canvas; that region is kept pixel-for-pixel and everything outside it is regenerated from your prompt. In edit mode: describe only what changes outside the product, never describe or restyle the product itself, keep the composition, and refer to the product in plain words (for example "the mouthguard at the lower right stays as it is"). If the review says the kept region cut the product, call generateImage again with a wider keepRegion. Pass mode "generate" only when the variation must move or replace the product.\n</mode>`
+    editAvailable && input.sourceProductRegion
+      ? `<mode>\nEDIT MODE is available and is the default for generateImage. The source is the canvas: the box ${describeRegion(input.sourceProductRegion)} of it holds the product and is kept pixel-for-pixel, and everything outside that box is redrawn from your prompt alone. The prompt is still the self-contained description step 4 asks for, minus the product: describe the whole scene outside the kept box (background, lighting, palette, mood) and re-quote every line of copy the finished ad shows, including lines you are not changing. Anything you leave out is lost. Never describe or restyle the product itself; refer to it in plain words if you must (for example "the product in the lower-right tile is kept as is"). Keep the source's composition. If the review says the kept region cut the product, call generateImage again with a wider keepRegion. keepSourceLayout is ignored in edit mode; pass mode "generate" only when the variation must move or replace the product.\n</mode>`
       : null,
 ```
+
+where `const editAvailable = editModeAvailable(input);` is declared at the top of `buildVariationSystemPrompt` and also passed to `brandBlock(input.brand, editAvailable)`, whose product-photo line becomes mode-aware: in edit mode it states that no product photo is attached and the product is preserved from the source, so the model must not describe, restyle, or match it; otherwise the existing "attached as the first reference" wording stays.
+
+Two further rules shipped with this task (found in review): an explicit `keepSourceLayout: false` selects generate mode (`const mode = raw.mode ?? (editAvailable && raw.keepSourceLayout ? "edit" : "generate")`) and the moderation hint says `pass mode "generate"` in edit mode; and the tool result carries `ignoredReferenceReason` next to `ignoredReferenceIds` (edit mode: references are never attached; generate mode: unknown id). `resolveVariationOutcome`'s synthesized plan also records `keptProductRegion` from the passing attempt.
 
 `generateImage` handler: replace the body from the `// Reference order` comment through the `deps.produceImage` call and the `state.attempts.push` line with:
 
