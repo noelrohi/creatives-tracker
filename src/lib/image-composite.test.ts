@@ -63,4 +63,20 @@ describe("pasteSourceRegion", () => {
       pasteSourceRegion({ source, output, region: { x: 2, y: 2, w: 0.1, h: 0.1 } }),
     ).rejects.toThrow(/empty/);
   });
+
+  it("maps a non-square region onto a non-square output without transposing or stretching", async () => {
+    const source = solid(40, 20, [0, 0, 255], { box: [4, 6, 12, 8], rgb: [255, 0, 0] });
+    const output = solid(15, 25, [0, 255, 0]);
+    const { bytes, box } = await pasteSourceRegion({
+      source,
+      output,
+      region: { x: 0.1, y: 0.3, w: 0.3, h: 0.4 },
+    });
+    expect(box).toEqual({ left: 2, top: 12, width: 4, height: 3 });
+    expect(await pixel(bytes, box.left, box.top)).toEqual([255, 0, 0]);
+    expect(await pixel(bytes, box.left + box.width - 1, box.top + box.height - 1)).toEqual([255, 0, 0]);
+    expect(await pixel(bytes, box.left - 1, box.top)).toEqual([0, 255, 0]);
+    expect(await pixel(bytes, box.left, box.top - 1)).toEqual([0, 255, 0]);
+    expect(await pixel(bytes, box.left, box.top + box.height)).toEqual([0, 255, 0]);
+  });
 });
