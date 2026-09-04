@@ -102,7 +102,7 @@ async function locateSourceProduct(
       schema: productLocationSchema,
       system: [
         `Locate the advertised physical product${brandName ? ` (${brandName})` : ""} in this static ad.`,
-        "Return one normalized bounding box (x, y, w, h in 0-1 from the top-left) that covers the whole product. When the product sits in, on, or beside its own packaging or case, cover both together. Do not include headline text, badges, or unrelated props.",
+        "Return one normalized bounding box (x, y, w, h in 0-1 from the top-left) that covers the whole product. When the product sits in, on, or beside its own packaging or case, cover both together. When the product sits inside a card, tile, panel, or pedestal area with its own background, return that whole card or tile: the region is pasted over the final image as one rectangle, so its edges must fall on a natural boundary. Do not include headline text, badges, or unrelated props outside that card.",
         "Return product: null when no physical product is visible (a text-only or lifestyle ad).",
       ].join("\n"),
       messages: [{ role: "user", content: [{ type: "image", image: sourceBytes }] }],
