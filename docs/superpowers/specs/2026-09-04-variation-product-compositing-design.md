@@ -136,8 +136,11 @@ Decision: **generate mode is the default again** (product photo first, no
 paste). Edit mode with the paste stays available when the agent passes
 `mode: "edit"`, for sources where the layout must not move at all. The
 `keptProductRegion` plan field and the card line remain meaningful only for
-those runs. The next design, in a separate addendum, is a copy-only mode with
-the source as the base and only the text regions regenerated.
+those runs. The copy-only idea was examined and rejected; the design that
+followed, and that shipped as the default, is the product transplant in
+`2026-09-04-variation-product-transplant-design.md`: generate as the base,
+locate the product in the output, alpha-matte the source product, paste it
+over the model's.
 
 ## Testing
 

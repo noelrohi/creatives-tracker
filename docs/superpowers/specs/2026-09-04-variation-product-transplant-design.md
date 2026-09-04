@@ -1,7 +1,29 @@
 # Variation product transplant — design proposal
 
-Date: 2026-09-04. Status: proposed, awaiting approval. Follows
-`2026-09-04-variation-product-compositing-design.md` §8.
+Date: 2026-09-04. Status: implemented (plan
+`docs/superpowers/plans/2026-09-04-variation-product-transplant.md`, Tasks 1-8).
+Follows `2026-09-04-variation-product-compositing-design.md` §8.
+
+Implementation notes that differ from the proposal below, all measured on the
+three local test sources:
+
+- The locator returns two boxes: `product` (tight, the product itself) and
+  `tile` (the containing card, pedestal, or packaging, when any). Edit mode
+  keeps protecting `tile ?? product`; the transplant cuts `product` and pastes
+  into the output's `product`, so the model's own card and pedestal stay.
+- The matte judges the border by an 85% majority around its median colour
+  instead of a max spread, floods neighbour-to-neighbour with a drift bound so
+  vignettes flood, drops stray blobs under 1% of the box, and crops the patch
+  to the product. The source cut tries margins 1%, 2%, 3% and keeps the first
+  that mattes; the rectangle fallback is the narrowest cut.
+- Live result: R3 (mouthguard on a pedestal in a flat card) mattes
+  (`matted: true`, coverage 0.64) and passed review on the first attempt with
+  the source's exact product on the model's pedestal. R1 (product in a glowing
+  pod) and R2 (product overlapping black packaging) never have a flat border,
+  fall back to the rectangle, and fail review on the seam; that is the
+  previous behaviour and the known limit of a heuristic matte. When the model
+  draws no product at all the output locator returns null and the transplant
+  is skipped with `transplant: null`.
 
 ## What the batch taught us
 
