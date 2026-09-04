@@ -58,6 +58,11 @@ function PlanDisclosure({ plan }: { plan: VariationPlan }) {
         {plan.keptProductRegion ? (
           <p className="text-muted-foreground">Product kept from the source (masked edit).</p>
         ) : null}
+        {plan.transplantedProduct ? (
+          <p className="text-muted-foreground">
+            {plan.transplantedProduct.matted ? "Product transplanted from the source." : "Product transplanted from the source (rectangle fallback)."}
+          </p>
+        ) : null}
         {plan.synthesized ? <p className="text-muted-foreground">The agent did not write a full plan for this image.</p> : null}
         {plan.changed.length ? <p><span className="font-medium">Changed:</span> {plan.changed.join("; ")}</p> : null}
         {plan.kept.length ? <p><span className="font-medium">Kept:</span> {plan.kept.join("; ")}</p> : null}
