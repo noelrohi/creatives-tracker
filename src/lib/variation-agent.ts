@@ -203,7 +203,7 @@ function brandBlock(brand: StudioBrandProfile | null, editAvailable: boolean) {
     brand.productImageUrl
       ? editAvailable
         ? "In generate mode a product photo is attached as the first reference so the image model knows what it is drawing, but the product it draws is replaced afterwards (see TRANSPLANT): name the product and do not spell out its markings or ask for an exact match to the photo. In edit mode no product photo is attached: the product is preserved from the source itself, so do not describe it, restyle it, or ask for a match to the photo."
-        : "A product photo is attached as the first reference on every image call; when the source image is attached it comes last. The product in the ad must match the product photo exactly, and when the source already shows the product, tell the image model to reuse the product exactly as it appears in the source rather than re-rendering it. Render only the markings the product notes describe."
+        : "A product photo is attached as the first reference on every image call; when the source image is attached it comes last. The product in the ad must match the product photo exactly; render only the markings the product notes describe."
       : null,
   ].filter(Boolean);
   const claims = buildClaimsConstraint({
@@ -271,10 +271,10 @@ export function buildVariationSystemPrompt(input: VariationRunInput) {
       ? null
       : "<mode>\nThe source image is NOT sent to the image model on this run (the user retried without it), and keepSourceLayout has no effect. Describe the layout, composition, and every element the image needs in the prompt itself.\n</mode>",
     editAvailable
-      ? "<mode>\nTRANSPLANT: in generate mode the product you draw is replaced afterwards by the source's own product photo, cut out and pasted over it. So draw the product alone on a plain, evenly lit surface at roughly the size it has in the source, with nothing overlapping it and no second copy elsewhere; do not describe its shape, colour, or markings beyond naming it. Everything else in the prompt is yours to design.\n</mode>"
+      ? "<mode>\nTRANSPLANT: in generate mode the product you draw is replaced afterwards by the product cut out of the source ad and pasted over it. So draw the product alone on a plain, evenly lit surface at about the size it has in the source ad image, with nothing overlapping it and no second copy elsewhere; do not describe its shape, colour, or markings beyond naming it. Everything else in the prompt is yours to design. This staging is a constraint on how you draw the product, not your one change.\n</mode>"
       : null,
     editAvailable && input.sourceProductRegion
-      ? `<mode>\nEDIT MODE is available on request (pass mode "edit" to generateImage; the default is generate, which draws from the references). Use it only when the variation keeps the whole layout and the product's position untouched. In edit mode the source is the canvas: the box ${describeRegion(input.sourceProductRegion)} of it holds the product; after the edit the source's pixels for that box are pasted back, so the product is preserved exactly, and everything outside that box is redrawn from your prompt alone. Because that rectangle is pasted over the result, the image model must keep the box at exactly the same position and size (no reflowed grid, no resized tiles) and must not draw the product anywhere else in the image; say both of those in the prompt. The prompt is still the self-contained description step 4 asks for, minus the product: describe the whole scene outside the kept box (background, lighting, palette, mood) and re-quote every line of copy the finished ad shows, including lines you are not changing. Anything you leave out is lost. Never describe or restyle the product itself; refer to it in plain words if you must (for example "the product in the lower-right tile is kept as is"). Keep the source's composition. If the review reports a misaligned box or a collision with a neighbouring element, move or resize keepRegion so its edges fall on a flat, unbroken area of the source (a plain background band, not a card edge). If it reports a second copy of the product, keep the box and rewrite the prompt to state that the product appears only inside that box. If it reports the box covering copy, shrink the box. Once in edit mode keepSourceLayout has no effect; to leave edit mode pass mode "generate" or keepSourceLayout false, and do that only when the variation must move or replace the product.\n</mode>`
+      ? `<mode>\nEDIT MODE is available on request (pass mode "edit" to generateImage; the default is generate, which draws from the references). Use it only when the variation keeps the whole layout and the product's position untouched. In edit mode the source is the canvas: the box ${describeRegion(input.sourceProductRegion)} of it holds the product; after the edit the source's pixels for that box are pasted back, so the product is preserved exactly, and everything outside that box is redrawn from your prompt alone. Because that rectangle is pasted over the result, the image model must keep the box at exactly the same position and size (no reflowed grid, no resized tiles) and must not draw the product anywhere else in the image; say both of those in the prompt. The prompt is still the self-contained description step 4 asks for, minus the product: describe the whole scene outside the kept box (background, lighting, palette, mood) and re-quote every line of copy the finished ad shows, including lines you are not changing. Anything you leave out is lost. Never describe or restyle the product itself; refer to it in plain words if you must (for example "the product in the lower-right tile is kept as is"). Keep the source's composition. If the review reports a misaligned box or a collision with a neighbouring element, move or resize keepRegion so its edges fall on a flat, unbroken area of the source (a plain background band, not a card edge). If it reports a second copy of the product, keep the box and rewrite the prompt to state that the product appears only inside that box. If it reports the box covering copy, shrink the box. Once in edit mode keepSourceLayout has no effect; to leave edit mode pass mode "generate", and do that only when the variation must move or replace the product.\n</mode>`
       : null,
     brandBlock(input.brand, editAvailable),
     ...core,
@@ -402,11 +402,11 @@ export function createVariationRun(
     }
 
     const editAvailable = editModeAvailable(input);
-    // An explicit keepSourceLayout:false is the model asking not to be pinned to
-    // the source; edit mode pins it hardest, so it selects generate.
-    // Generate is the default. A measured batch (2026-09-04) showed the image
-    // model reflows the layout under an edit mask, so a pasted product box
-    // rarely lands cleanly; edit mode stays available on explicit request.
+    // Generate is the default and only an explicit mode "edit" leaves it:
+    // keepSourceLayout says whether the source is attached as a layout
+    // reference, not which mode runs. A measured batch (2026-09-04) showed the
+    // image model reflows the layout under an edit mask, so a pasted product
+    // box rarely lands cleanly; edit mode stays available on explicit request.
     const mode = raw.mode ?? "generate";
     if (mode === "edit" && !editAvailable) {
       return {

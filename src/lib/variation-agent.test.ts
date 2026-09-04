@@ -134,7 +134,10 @@ describe("buildVariationSystemPrompt", () => {
   });
 
   it("tells the model in generate mode that its product will be replaced when a source product was located", () => {
-    expect(buildVariationSystemPrompt(editInput)).toContain("TRANSPLANT");
+    const system = buildVariationSystemPrompt(editInput);
+    expect(system).toContain("TRANSPLANT");
+    // The staging rules must not read as the one change step 3 asks for.
+    expect(system).toContain("not your one change");
     expect(buildVariationSystemPrompt(input)).not.toContain("TRANSPLANT");
   });
 });
@@ -367,11 +370,16 @@ describe("createVariationRun.generateImage", () => {
     expect(run.state.imageCalls).toBe(0);
   });
 
-  it("falls back to generate mode when the model asks not to keep the source layout", async () => {
+  it("drops the source reference on keepSourceLayout false without it choosing the mode", async () => {
     const d = deps();
     const run = createVariationRun(editInput, d);
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: false });
-    expect(d.produceImage).toHaveBeenCalledWith(expect.objectContaining({ mode: "generate", keepRegion: null }));
+    expect(d.produceImage).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "generate", keepRegion: null, referenceImageUrls: ["https://blob.test/product.png"] }),
+    );
+    // Only mode "edit" leaves the generate default, so the flag cannot rescue it.
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: false, mode: "edit" });
+    expect(d.produceImage).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "edit", keepRegion: region }));
   });
 
   it("never edits a competitor source even when a region was located", async () => {

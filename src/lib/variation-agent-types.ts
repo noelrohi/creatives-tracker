@@ -11,7 +11,7 @@ export type VariationTransplant = {
   from: ProductRegion;
   /** Where the model drew its product in the output, now covered by the source's. */
   to: ProductRegion;
-  /** False when the rectangle fallback was pasted instead of a matte. */
+  /** False when the cut fell back to a rectangle instead of a matte; a generate-mode transplant is only recorded when the matte held, so it is true there. */
   matted: boolean;
 };
 

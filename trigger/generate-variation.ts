@@ -151,9 +151,13 @@ async function locateProduct(
     const { product, tile, confidence, note } = result.object;
     const region = product ? clampRegion(product) : null;
     const area = region ? region.w * region.h : 0;
-    // Too small is noise; a box that fills the canvas leaves the variation
-    // nothing to change, so that run drops to the generate path instead.
-    const usable = region !== null && confidence >= 0.4 && area >= 0.005 && area <= 0.85;
+    // Too small is noise; a source box that fills the canvas leaves the
+    // variation nothing to change, so that run drops to the generate path
+    // instead. An output box has no such job — it is only a paste target, and
+    // a product-led generate legitimately fills most of the frame — so the
+    // ceiling there only has to reject a box that is the whole ad.
+    const maxArea = label === "output" ? 0.95 : 0.85;
+    const usable = region !== null && confidence >= 0.4 && area >= 0.005 && area <= maxArea;
     // A tile that misses the product's centre is some other element, one
     // smaller than the product is not the surface it sits on, and one that
     // fills the canvas is the whole ad rather than a card. Either way the
@@ -186,7 +190,10 @@ async function locateProduct(
             ? "low_confidence"
             : area < 0.005
               ? "too_small"
-              : "fills_canvas",
+              : area > maxArea
+                ? "fills_canvas"
+                // No check left to fail: `usable` and the chain agree.
+                : null,
     });
     return usable && region ? { product: region, tile: usableTile } : null;
   } catch (error) {
@@ -430,8 +437,8 @@ export const generateVariationTask = task({
               source: sourceBytes,
               region: expandRegion(sourceProductBox, margin),
             });
-            // The narrowest cut is the fallback rectangle: least foreign
-            // background, and the product fills more of the pasted box.
+            // The narrowest cut is what an unmatted result reports: least
+            // foreign background, and nothing pastes it anyway.
             fallback ??= cut;
             if (cut.matted) {
               matted = cut;
@@ -520,8 +527,9 @@ export const generateVariationTask = task({
           }
           // Generate mode composes freely, so the model's own product is
           // wherever it decided to put it: locate it there and cover it with
-          // the source's real product. Every failure here is recoverable —
-          // the model's product stays and the review judges it as before.
+          // the source's real product. Every failure here is recoverable — the
+          // model's product stays, `transplant` stays null, and the review is
+          // told the paste did not run.
           let transplant: VariationTransplant | null = null;
           if (mode === "generate" && sourceProductBox && source.kind === "creative" && !payload.withoutSourceImage) {
             try {
@@ -532,20 +540,31 @@ export const generateVariationTask = task({
                 // and leaves the card or pedestal it drew around it.
                 const to = locatedOutput.product;
                 const matte = await matteSource();
-                const pastedPatch = await pastePatch({ output: produced, patch: matte.patch, region: to });
-                produced = pastedPatch.bytes;
-                // The matte crops to what it kept, so record that region rather
-                // than the box it was asked to cut from.
-                transplant = { from: matte.region, to, matted: matte.matted };
-                logger.info("Transplanted source product", {
-                  attempt,
-                  from: matte.region,
-                  to,
-                  tile: locatedOutput.tile,
-                  matted: matte.matted,
-                  coverage: matte.coverage,
-                  box: pastedPatch.box,
-                });
+                if (matte.matted) {
+                  const pastedPatch = await pastePatch({ output: produced, patch: matte.patch, region: to });
+                  produced = pastedPatch.bytes;
+                  // The matte crops to what it kept, so record that region
+                  // rather than the box it was asked to cut from.
+                  transplant = { from: matte.region, to, matted: matte.matted };
+                  logger.info("Transplanted source product", {
+                    attempt,
+                    from: matte.region,
+                    to,
+                    tile: locatedOutput.tile,
+                    matted: matte.matted,
+                    coverage: matte.coverage,
+                    box: pastedPatch.box,
+                  });
+                } else {
+                  // The unmatted cut is a rectangle carrying the source's own
+                  // background, and the live batch showed it fails review on
+                  // the seam every time. Keeping the model's product is the
+                  // pre-transplant behaviour, which reviews on its own merits.
+                  logger.warn(
+                    "Transplant skipped: the source product did not matte; keeping the model's product",
+                    { attempt, coverage: matte.coverage, region: matte.region },
+                  );
+                }
               } else {
                 logger.warn("Transplant skipped: product not located in the output", { attempt });
               }
@@ -566,6 +585,16 @@ export const generateVariationTask = task({
           return { imageUrl: stored.url, transplant };
         },
         reviewImage: async ({ imageUrl, prompt, mode, keepRegion, transplant }) => {
+          // The same gate the transplant block runs under. When it holds and
+          // `transplant` is still null (the output locator missed, the source
+          // did not matte, or the paste threw), the product on screen is the
+          // model's own but the prompt forbade describing its markings, so
+          // judging it against the product photo would fail it for obeying us.
+          const transplantExpected =
+            mode === "generate" &&
+            Boolean(sourceProductBox) &&
+            source.kind === "creative" &&
+            !payload.withoutSourceImage;
           try {
             const content: Array<
               { type: "text"; text: string } | { type: "image"; image: Uint8Array }
@@ -596,8 +625,10 @@ export const generateVariationTask = task({
                   : mode === "edit"
                     ? "- The product matches the source image in shape, openings, material, and markings; no invented logos or text on it."
                     : transplant
-                      ? `- The source's product now sits in the box ${pct(transplant.to)}. Check: it is a plausible size for the scene; its lighting and colour do not clash with the surroundings; no remnant of the model's own product shows around its edges; and nothing important is covered. Name which failed.`
-                      : "- The product matches the product photo in shape, openings, material, and markings; no invented logos or text on it.",
+                      ? `- The source's product now sits in the box ${pct(transplant.to)}. Check: it is a plausible size for the scene; its lighting and colour do not clash with the surroundings; no remnant of the model's own product shows around its edges; nothing important is covered; and no second copy of the product appears anywhere else in the image. Name which failed.`
+                      : transplantExpected
+                        ? "- The product is a plausible rendering of the product photo; the step that pastes the real product did not run, so do not fail the attempt on its markings or exact shape."
+                        : "- The product matches the product photo in shape, openings, material, and markings; no invented logos or text on it.",
                 "- Every line of ad copy (headline, subhead, badges, CTA, tile labels) is legible and matches the quoted copy in the prompt, with no garbled or invented copy. Incidental labels on props and packaging inside the scene (a shampoo bottle, a book spine) are fine and are not ad copy.",
                 `- No logos or brand marks other than ${brand?.brandName ?? "the advertiser's"}; no platform UI, no watermarks.`,
                 "- The palette is consistent with a clean brand look: no clashing neon, no split panels unless the prompt asked for them.",
