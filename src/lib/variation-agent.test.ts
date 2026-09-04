@@ -4,6 +4,7 @@ import {
   buildVariationUserContent,
   createVariationRun,
   escapeContextText,
+  generateImageInputSchema,
   MAX_CONTEXT_READS,
   MAX_IMAGE_ATTEMPTS,
   MAX_READ_CHARS,
@@ -247,7 +248,7 @@ describe("createVariationRun.generateImage", () => {
       attempt: 1,
     });
     expect(d.reviewImage).toHaveBeenCalledWith({ imageUrl: "https://blob.test/out-1.png", prompt: "Product on a blue background", mode: "generate", keepRegion: null });
-    expect(result).toEqual({ attempt: 1, imageUrl: "https://blob.test/out-1.png", mode: "generate", keepRegion: null, review: { pass: true, notes: [] }, attemptsRemaining: 1, ignoredReferenceIds: ["unknown"] });
+    expect(result).toEqual({ attempt: 1, imageUrl: "https://blob.test/out-1.png", mode: "generate", keepRegion: null, review: { pass: true, notes: [] }, attemptsRemaining: 1, ignoredReferenceIds: ["unknown"], ignoredReferenceReason: "Not in the image index; check the id." });
     expect(run.state.attempts).toHaveLength(1);
     expect(d.onStep).toHaveBeenCalledWith("generating image (attempt 1)");
     expect(d.onStep).toHaveBeenCalledWith("reviewing attempt 1");
@@ -321,6 +322,8 @@ describe("createVariationRun.generateImage", () => {
     });
     expect(d.reviewImage).toHaveBeenCalledWith({ imageUrl: "https://blob.test/out-1.png", prompt: "p", mode: "edit", keepRegion: region });
     expect(result).toMatchObject({ mode: "edit", keepRegion: region });
+    expect(result).toMatchObject({ ignoredReferenceIds: ["img_r3"] });
+    expect((result as { ignoredReferenceReason: string }).ignoredReferenceReason).toContain("Edit mode");
     expect(run.state.attempts[0]).toMatchObject({ mode: "edit", keepRegion: region });
   });
 
@@ -350,6 +353,24 @@ describe("createVariationRun.generateImage", () => {
     });
     expect(d.produceImage).not.toHaveBeenCalled();
     expect(run.state.imageCalls).toBe(0);
+  });
+
+  it("falls back to generate mode when the model asks not to keep the source layout", async () => {
+    const d = deps();
+    const run = createVariationRun(editInput, d);
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: false });
+    expect(d.produceImage).toHaveBeenCalledWith(expect.objectContaining({ mode: "generate", keepRegion: null }));
+  });
+
+  it("never edits a competitor source even when a region was located", async () => {
+    const d = deps();
+    const competitor = {
+      ...editInput,
+      source: { kind: "competitor_ad" as const, name: "Rival ad", imageUrl: "https://cdn.test/rival.png", text: "Buy now", performance: null },
+    };
+    await createVariationRun(competitor, d).generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    expect(d.produceImage).toHaveBeenCalledWith(expect.objectContaining({ mode: "generate", keepRegion: null }));
+    expect(buildVariationSystemPrompt(competitor)).not.toContain("EDIT MODE");
   });
 });
 
@@ -389,6 +410,13 @@ describe("createVariationRun.finish", () => {
     await run.finish({ plan });
     expect(run.state.plan?.keptProductRegion).toEqual(region);
   });
+
+  it("records no kept region when the shipped attempt was generated", async () => {
+    const run = createVariationRun(input, deps());
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    await run.finish({ plan });
+    expect(run.state.plan?.keptProductRegion).toBeNull();
+  });
 });
 
 describe("resolveVariationOutcome", () => {
@@ -406,6 +434,12 @@ describe("resolveVariationOutcome", () => {
     expect(outcome).toMatchObject({ kind: "ready", imageUrl: "https://blob.test/1.png", plan: { finalAttempt: 1, synthesized: true } });
   });
 
+  it("carries the kept region into a synthesized plan", () => {
+    const edited = { attempt: 1, imageUrl: "https://blob.test/1.png", prompt: "p", mode: "edit" as const, keepRegion: region, review: { pass: true, notes: [] } };
+    const outcome = resolveVariationOutcome({ attempts: [edited], plan: null, finished: false, contextReads: 0, imageCalls: 1, claimsFlags: 0, moderationReason: null });
+    expect(outcome).toMatchObject({ kind: "ready", plan: { keptProductRegion: region, synthesized: true } });
+  });
+
   it("fails with review or no_image when nothing passed review", () => {
     expect(resolveVariationOutcome({ attempts: [attempt(1, false)], plan: null, finished: false, contextReads: 0, imageCalls: 1, claimsFlags: 0, moderationReason: null })).toEqual({ kind: "failed", reason: "review", attempts: [attempt(1, false)] });
     expect(resolveVariationOutcome({ attempts: [], plan: null, finished: false, contextReads: 0, imageCalls: 0, claimsFlags: 0, moderationReason: null })).toEqual({ kind: "failed", reason: "no_image", attempts: [] });
@@ -417,6 +451,13 @@ describe("resolveVariationOutcome", () => {
 
   it("prefers the moderation reason when a later attempt was blocked after a failed review", () => {
     expect(resolveVariationOutcome({ attempts: [attempt(1, false)], plan: null, finished: false, contextReads: 0, claimsFlags: 0, imageCalls: 2, moderationReason: "likeness" })).toEqual({ kind: "failed", reason: "likeness", attempts: [attempt(1, false)] });
+  });
+});
+
+describe("generateImageInputSchema", () => {
+  it("rejects a keepRegion that runs off the canvas", () => {
+    expect(generateImageInputSchema.safeParse({ prompt: "p", keepRegion: { x: 0.55, y: 0.6, w: 0.3, h: 0.3 } }).success).toBe(true);
+    expect(generateImageInputSchema.safeParse({ prompt: "p", keepRegion: { x: 0.9, y: 0.6, w: 0.3, h: 0.3 } }).success).toBe(false);
   });
 });
 

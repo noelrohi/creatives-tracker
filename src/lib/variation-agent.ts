@@ -188,7 +188,7 @@ const TOOLS_NOTE = [
   `Budgets: at most ${MAX_CONTEXT_READS} readContext calls, ${MAX_IMAGE_ATTEMPTS} generateImage calls, ${MAX_STEPS} steps in total. Tool errors tell you what to change; adapt instead of repeating the call.`,
 ].join("\n");
 
-function brandBlock(brand: StudioBrandProfile | null) {
+function brandBlock(brand: StudioBrandProfile | null, editAvailable: boolean) {
   if (!brand) return "<brand>No brand profile is configured.</brand>";
 
   const lines = [
@@ -196,7 +196,9 @@ function brandBlock(brand: StudioBrandProfile | null) {
     brand.offer ? `Offer: ${brand.offer}` : null,
     brand.productNotes ? `Product notes: ${brand.productNotes}` : null,
     brand.productImageUrl
-      ? "A product photo is attached as the first reference on every image call; when the source image is attached it comes last. The product in the ad must match the product photo exactly, and when the source already shows the product, tell the image model to reuse the product exactly as it appears in the source rather than re-rendering it. Render only the markings the product notes describe."
+      ? editAvailable
+        ? "In generate mode a product photo is attached as the first reference and the product in the ad must match it exactly; render only the markings the product notes describe. In edit mode no product photo is attached: the product is preserved from the source itself, so do not describe it, restyle it, or ask for a match to the photo."
+        : "A product photo is attached as the first reference on every image call; when the source image is attached it comes last. The product in the ad must match the product photo exactly, and when the source already shows the product, tell the image model to reuse the product exactly as it appears in the source rather than re-rendering it. Render only the markings the product notes describe."
       : null,
   ].filter(Boolean);
   const claims = buildClaimsConstraint({
@@ -216,6 +218,7 @@ function brandBlock(brand: StudioBrandProfile | null) {
 
 export function buildVariationSystemPrompt(input: VariationRunInput) {
   const { library } = input;
+  const editAvailable = editModeAvailable(input);
 
   const core = library.core.map((doc) =>
     [
@@ -262,10 +265,10 @@ export function buildVariationSystemPrompt(input: VariationRunInput) {
     input.useSourceLayout
       ? null
       : "<mode>\nThe source image is NOT sent to the image model on this run (the user retried without it), and keepSourceLayout has no effect. Describe the layout, composition, and every element the image needs in the prompt itself.\n</mode>",
-    editModeAvailable(input) && input.sourceProductRegion
-      ? `<mode>\nEDIT MODE is available and is the default for generateImage. The source's product occupies the box ${describeRegion(input.sourceProductRegion)} of the canvas; that region is kept pixel-for-pixel and everything outside it is regenerated from your prompt. In edit mode: describe only what changes outside the product, never describe or restyle the product itself, keep the composition, and refer to the product in plain words (for example "the mouthguard at the lower right stays as it is"). If the review says the kept region cut the product, call generateImage again with a wider keepRegion. Pass mode "generate" only when the variation must move or replace the product.\n</mode>`
+    editAvailable && input.sourceProductRegion
+      ? `<mode>\nEDIT MODE is available and is the default for generateImage. The source is the canvas: the box ${describeRegion(input.sourceProductRegion)} of it holds the product and is kept pixel-for-pixel, and everything outside that box is redrawn from your prompt alone. The prompt is still the self-contained description step 4 asks for, minus the product: describe the whole scene outside the kept box (background, lighting, palette, mood) and re-quote every line of copy the finished ad shows, including lines you are not changing. Anything you leave out is lost. Never describe or restyle the product itself; refer to it in plain words if you must (for example "the product in the lower-right tile is kept as is"). Keep the source's composition. If the review says the kept region cut the product, call generateImage again with a wider keepRegion. keepSourceLayout is ignored in edit mode; pass mode "generate" only when the variation must move or replace the product.\n</mode>`
       : null,
-    brandBlock(input.brand),
+    brandBlock(input.brand, editAvailable),
     ...core,
     reference,
     images,
@@ -390,7 +393,9 @@ export function createVariationRun(
     }
 
     const editAvailable = editModeAvailable(input);
-    const mode = raw.mode ?? (editAvailable ? "edit" : "generate");
+    // An explicit keepSourceLayout:false is the model asking not to be pinned to
+    // the source; edit mode pins it hardest, so it selects generate.
+    const mode = raw.mode ?? (editAvailable && raw.keepSourceLayout ? "edit" : "generate");
     if (mode === "edit" && !editAvailable) {
       return {
         error:
@@ -441,7 +446,7 @@ export function createVariationRun(
       if (reason) {
         state.moderationReason = reason;
         return {
-          error: `The image model blocked this attempt (${reason}). Try again without relying on people from the source, or set keepSourceLayout to false.`,
+          error: `The image model blocked this attempt (${reason}). Try again without relying on people from the source${mode === "edit" ? ', or pass mode "generate"' : ", or set keepSourceLayout to false"}.`,
         };
       }
       throw error;
@@ -457,7 +462,15 @@ export function createVariationRun(
       keepRegion,
       review,
       attemptsRemaining: MAX_IMAGE_ATTEMPTS - state.imageCalls,
-      ...(ignoredReferenceIds.length > 0 ? { ignoredReferenceIds } : {}),
+      ...(ignoredReferenceIds.length > 0
+        ? {
+            ignoredReferenceIds,
+            ignoredReferenceReason:
+              mode === "edit"
+                ? 'Edit mode sends only the source image; reference images are not attached. Do not resend them; pass mode "generate" if you need them.'
+                : "Not in the image index; check the id.",
+          }
+        : {}),
     };
   }
 
@@ -465,14 +478,14 @@ export function createVariationRun(
     if (state.attempts.length === 0) {
       return { error: "Generate an image before finishing." };
     }
-    if (!state.attempts.some((entry) => entry.attempt === raw.plan.finalAttempt)) {
+    const final = state.attempts.find((entry) => entry.attempt === raw.plan.finalAttempt);
+    if (!final) {
       return {
         error: `finalAttempt ${raw.plan.finalAttempt} does not exist. Attempts so far: ${state.attempts.length}.`,
       };
     }
 
-    const final = state.attempts.find((a) => a.attempt === raw.plan.finalAttempt);
-    state.plan = { ...raw.plan, keptProductRegion: final?.mode === "edit" ? (final.keepRegion ?? null) : null };
+    state.plan = { ...raw.plan, keptProductRegion: final.mode === "edit" ? (final.keepRegion ?? null) : null };
     state.finished = true;
     deps.onStep("finishing");
     return { ok: true as const };
@@ -509,6 +522,7 @@ export function resolveVariationOutcome(state: VariationRunState): VariationOutc
         inImageCopy: [],
         finalAttempt: passing.attempt,
         synthesized: true,
+        keptProductRegion: passing.mode === "edit" ? (passing.keepRegion ?? null) : null,
       },
       attempts: state.attempts,
     };
