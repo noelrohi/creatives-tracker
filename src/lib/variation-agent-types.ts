@@ -6,6 +6,15 @@ export type VariationEvidence = {
   title: string;
 };
 
+export type VariationTransplant = {
+  /** Where the product was cut from in the source. */
+  from: ProductRegion;
+  /** Where the model drew its product in the output, now covered by the source's. */
+  to: ProductRegion;
+  /** False when the rectangle fallback was pasted instead of a matte. */
+  matted: boolean;
+};
+
 export type VariationPlan = {
   summary: string;
   kept: string[];
@@ -18,6 +27,8 @@ export type VariationPlan = {
   synthesized?: boolean;
   /** Set by the core on finish: the source region protected in the shipped edit, if any. */
   keptProductRegion?: ProductRegion | null;
+  /** Set by the core on finish: the product transplanted into the shipped generate, if any. */
+  transplantedProduct?: VariationTransplant | null;
 };
 
 export type VariationReview = {
@@ -32,5 +43,7 @@ export type VariationAttempt = {
   mode: "edit" | "generate";
   /** The protected source region for an edit attempt. */
   keepRegion?: ProductRegion | null;
+  /** The product transplant applied to a generate attempt, if any. */
+  transplant?: VariationTransplant | null;
   review: VariationReview;
 };

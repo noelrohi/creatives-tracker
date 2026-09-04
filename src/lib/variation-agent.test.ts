@@ -132,6 +132,11 @@ describe("buildVariationSystemPrompt", () => {
     expect(system).toContain("55% to 85% across and 60% to 90% down");
     expect(buildVariationSystemPrompt(input)).not.toContain("EDIT MODE");
   });
+
+  it("tells the model in generate mode that its product will be replaced when a source product was located", () => {
+    expect(buildVariationSystemPrompt(editInput)).toContain("TRANSPLANT");
+    expect(buildVariationSystemPrompt(input)).not.toContain("TRANSPLANT");
+  });
 });
 
 describe("buildVariationUserContent", () => {
@@ -247,8 +252,8 @@ describe("createVariationRun.generateImage", () => {
       format: "portrait",
       attempt: 1,
     });
-    expect(d.reviewImage).toHaveBeenCalledWith({ imageUrl: "https://blob.test/out-1.png", prompt: "Product on a blue background", mode: "generate", keepRegion: null });
-    expect(result).toEqual({ attempt: 1, imageUrl: "https://blob.test/out-1.png", mode: "generate", keepRegion: null, review: { pass: true, notes: [] }, attemptsRemaining: 1, ignoredReferenceIds: ["unknown"], ignoredReferenceReason: "Not in the image index; check the id." });
+    expect(d.reviewImage).toHaveBeenCalledWith({ imageUrl: "https://blob.test/out-1.png", prompt: "Product on a blue background", mode: "generate", keepRegion: null, transplant: null });
+    expect(result).toEqual({ attempt: 1, imageUrl: "https://blob.test/out-1.png", mode: "generate", keepRegion: null, transplant: null, review: { pass: true, notes: [] }, attemptsRemaining: 1, ignoredReferenceIds: ["unknown"], ignoredReferenceReason: "Not in the image index; check the id." });
     expect(run.state.attempts).toHaveLength(1);
     expect(d.onStep).toHaveBeenCalledWith("generating image (attempt 1)");
     expect(d.onStep).toHaveBeenCalledWith("reviewing attempt 1");
@@ -327,7 +332,7 @@ describe("createVariationRun.generateImage", () => {
       format: "portrait",
       attempt: 1,
     });
-    expect(d.reviewImage).toHaveBeenCalledWith({ imageUrl: "https://blob.test/out-1.png", prompt: "p", mode: "edit", keepRegion: region });
+    expect(d.reviewImage).toHaveBeenCalledWith({ imageUrl: "https://blob.test/out-1.png", prompt: "p", mode: "edit", keepRegion: region, transplant: null });
     expect(result).toMatchObject({ mode: "edit", keepRegion: region });
     expect(result).toMatchObject({ ignoredReferenceIds: ["img_r3"] });
     expect((result as { ignoredReferenceReason: string }).ignoredReferenceReason).toContain("Edit mode");
@@ -433,6 +438,19 @@ describe("createVariationRun.finish", () => {
     await expect(run.finish({ plan })).resolves.toEqual({ ok: true });
     expect(run.state.plan).toMatchObject(plan);
     expect(run.state.finished).toBe(true);
+  });
+
+  it("records a transplant reported by produceImage and stamps it on the plan", async () => {
+    const transplant = { from: region, to: { x: 0.5, y: 0.55, w: 0.3, h: 0.3 }, matted: true };
+    const d = deps({ produceImage: vi.fn(async () => ({ imageUrl: "https://blob.test/out-1.png", transplant })) });
+    const run = createVariationRun(editInput, d);
+    const result = await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    expect(result).toMatchObject({ mode: "generate", transplant });
+    expect(run.state.attempts[0]).toMatchObject({ transplant });
+    expect(d.reviewImage).toHaveBeenCalledWith(expect.objectContaining({ transplant }));
+    await run.finish({ plan });
+    expect(run.state.plan?.transplantedProduct).toEqual(transplant);
+    expect(run.state.plan?.keptProductRegion).toBeNull();
   });
 
   it("records no kept region when the shipped attempt was generated", async () => {

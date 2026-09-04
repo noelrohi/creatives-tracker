@@ -14,6 +14,7 @@ import type {
   VariationAttempt,
   VariationPlan,
   VariationReview,
+  VariationTransplant,
 } from "@/lib/variation-agent-types";
 
 export const MAX_STEPS = 12;
@@ -70,12 +71,14 @@ export type VariationRunDeps = {
     referenceImageUrls: string[];
     format: StudioFormat;
     attempt: number;
-  }) => Promise<{ imageUrl: string }>;
+  }) => Promise<{ imageUrl: string; transplant?: VariationTransplant | null }>;
   reviewImage: (input: {
     imageUrl: string;
     prompt: string;
     mode: "edit" | "generate";
     keepRegion: ProductRegion | null;
+    /** The product transplanted into a generate result, if any. */
+    transplant: VariationTransplant | null;
   }) => Promise<VariationReview>;
   onStep: (label: string) => void;
 };
@@ -267,6 +270,9 @@ export function buildVariationSystemPrompt(input: VariationRunInput) {
     input.useSourceLayout
       ? null
       : "<mode>\nThe source image is NOT sent to the image model on this run (the user retried without it), and keepSourceLayout has no effect. Describe the layout, composition, and every element the image needs in the prompt itself.\n</mode>",
+    editAvailable
+      ? "<mode>\nTRANSPLANT: in generate mode the product you draw is replaced afterwards by the source's own product photo, cut out and pasted over it. So draw the product alone on a plain, evenly lit surface at roughly the size it has in the source, with nothing overlapping it and no second copy elsewhere; do not describe its shape, colour, or markings beyond naming it. Everything else in the prompt is yours to design.\n</mode>"
+      : null,
     editAvailable && input.sourceProductRegion
       ? `<mode>\nEDIT MODE is available on request (pass mode "edit" to generateImage; the default is generate, which draws from the references). Use it only when the variation keeps the whole layout and the product's position untouched. In edit mode the source is the canvas: the box ${describeRegion(input.sourceProductRegion)} of it holds the product; after the edit the source's pixels for that box are pasted back, so the product is preserved exactly, and everything outside that box is redrawn from your prompt alone. Because that rectangle is pasted over the result, the image model must keep the box at exactly the same position and size (no reflowed grid, no resized tiles) and must not draw the product anywhere else in the image; say both of those in the prompt. The prompt is still the self-contained description step 4 asks for, minus the product: describe the whole scene outside the kept box (background, lighting, palette, mood) and re-quote every line of copy the finished ad shows, including lines you are not changing. Anything you leave out is lost. Never describe or restyle the product itself; refer to it in plain words if you must (for example "the product in the lower-right tile is kept as is"). Keep the source's composition. If the review reports a misaligned box or a collision with a neighbouring element, move or resize keepRegion so its edges fall on a flat, unbroken area of the source (a plain background band, not a card edge). If it reports a second copy of the product, keep the box and rewrite the prompt to state that the product appears only inside that box. If it reports the box covering copy, shrink the box. Once in edit mode keepSourceLayout has no effect; to leave edit mode pass mode "generate" or keepSourceLayout false, and do that only when the variation must move or replace the product.\n</mode>`
       : null,
@@ -437,16 +443,16 @@ export function createVariationRun(
     }
 
     deps.onStep(`${mode === "edit" ? "editing source" : "generating image"} (attempt ${attempt})`);
-    let imageUrl: string;
+    let produced: { imageUrl: string; transplant?: VariationTransplant | null };
     try {
-      ({ imageUrl } = await deps.produceImage({
+      produced = await deps.produceImage({
         prompt: raw.prompt,
         mode,
         keepRegion,
         referenceImageUrls,
         format: input.format,
         attempt,
-      }));
+      });
     } catch (error) {
       const reason = moderationReasonFromError(error);
       if (reason) {
@@ -457,15 +463,18 @@ export function createVariationRun(
       }
       throw error;
     }
+    const imageUrl = produced.imageUrl;
+    const transplant = produced.transplant ?? null;
 
     deps.onStep(`reviewing attempt ${attempt}`);
-    const review = await deps.reviewImage({ imageUrl, prompt: raw.prompt, mode, keepRegion });
-    state.attempts.push({ attempt, imageUrl, prompt: raw.prompt, mode, keepRegion, review });
+    const review = await deps.reviewImage({ imageUrl, prompt: raw.prompt, mode, keepRegion, transplant });
+    state.attempts.push({ attempt, imageUrl, prompt: raw.prompt, mode, keepRegion, transplant, review });
     return {
       attempt,
       imageUrl,
       mode,
       keepRegion,
+      transplant,
       review,
       attemptsRemaining: MAX_IMAGE_ATTEMPTS - state.imageCalls,
       ...(ignoredReferenceIds.length > 0
@@ -501,7 +510,11 @@ export function createVariationRun(
       };
     }
 
-    state.plan = { ...raw.plan, keptProductRegion: final.mode === "edit" ? (final.keepRegion ?? null) : null };
+    state.plan = {
+      ...raw.plan,
+      keptProductRegion: final.mode === "edit" ? (final.keepRegion ?? null) : null,
+      transplantedProduct: final.transplant ?? null,
+    };
     state.finished = true;
     deps.onStep("finishing");
     return { ok: true as const };
@@ -539,6 +552,7 @@ export function resolveVariationOutcome(state: VariationRunState): VariationOutc
         finalAttempt: passing.attempt,
         synthesized: true,
         keptProductRegion: passing.mode === "edit" ? (passing.keepRegion ?? null) : null,
+        transplantedProduct: passing.transplant ?? null,
       },
       attempts: state.attempts,
     };
