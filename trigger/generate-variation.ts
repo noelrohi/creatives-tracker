@@ -102,6 +102,8 @@ const productLocationSchema = z.object({
   product: locatorBoxSchema
     .nullable()
     .describe("Tight box around the physical product itself, or null when none is visible."),
+  // .nullable(), not .nullish(): OpenAI's strict structured outputs require
+  // every key to be present, same as `product`.
   tile: locatorBoxSchema
     .nullable()
     .describe("Box around the card, tile, panel, or pedestal the product sits inside, or null."),
@@ -140,8 +142,8 @@ async function locateProduct(
       schema: productLocationSchema,
       system: [
         `Locate the advertised physical product${brandName ? ` (${brandName})` : ""} in this static ad.`,
-        "product: one normalized bounding box (x, y, w, h in 0-1 from the top-left) that covers the physical product itself as tightly as you can. Exclude its packaging, case, pedestal, card, panel, shadow, and any text, badge, or prop around it. When several units of the product appear, box the main one.",
-        "tile: the card, tile, panel, or pedestal area with its own background that the product sits inside, when there is one, else null. Its edges must fall on a natural boundary, and it must not reach over headline text or unrelated props outside it.",
+        "product: one normalized bounding box (x, y, w, h in 0-1 from the top-left) that covers the physical product itself as tightly as you can. Exclude its packaging, case, pedestal, card, panel, shadow, and any text, badge, or prop around it. When several units of the product appear, box the main one. When the packaging is itself the advertised product, box the packaging.",
+        "tile: the card, tile, panel, or pedestal area with its own background that the product sits inside, or the packaging or case it sits in, on, or beside, when there is one, else null. Its edges must fall on a natural boundary, and it must not reach over headline text or unrelated props outside it.",
         "Return product: null when no physical product is visible (a text-only or lifestyle ad); tile is null then too.",
       ].join("\n"),
       messages: [{ role: "user", content: [{ type: "image", image: bytes }] }],
@@ -152,14 +154,17 @@ async function locateProduct(
     // Too small is noise; a box that fills the canvas leaves the variation
     // nothing to change, so that run drops to the generate path instead.
     const usable = region !== null && confidence >= 0.4 && area >= 0.005 && area <= 0.85;
-    // A tile that misses the product's centre is some other element, and one
-    // that fills the canvas is the whole ad rather than a card. Either way the
+    // A tile that misses the product's centre is some other element, one
+    // smaller than the product is not the surface it sits on, and one that
+    // fills the canvas is the whole ad rather than a card. Either way the
     // product's own box is the safer answer, so drop the tile.
     const tileRegion = tile ? clampRegion(tile) : null;
+    const tileArea = tileRegion ? tileRegion.w * tileRegion.h : 0;
     const usableTile =
       region !== null &&
       tileRegion !== null &&
-      tileRegion.w * tileRegion.h <= 0.85 &&
+      tileArea >= region.w * region.h &&
+      tileArea <= 0.85 &&
       containsCentre(tileRegion, region)
         ? tileRegion
         : null;
@@ -167,6 +172,7 @@ async function locateProduct(
       label,
       found: Boolean(product),
       tile: usableTile,
+      tileDropped: Boolean(tileRegion) && !usableTile,
       confidence,
       area,
       usable,
@@ -405,8 +411,10 @@ export const generateVariationTask = task({
       const sourceProductBox = located?.product ?? null;
       // The source product's matte is the same for every attempt; cut it once.
       let sourceMatte: Promise<MatteResult> | null = null;
-      const matteSource = (box: ProductRegion) =>
+      const matteSource = () =>
         (sourceMatte ??= (async () => {
+          // Guarded by the caller: the transplant only runs with a located box.
+          if (!sourceProductBox) throw new Error("matteSource: no product box was located");
           // The product box is tight, so the matte cuts an expanded one: the
           // margin keeps the product's anti-aliased edge out of the border ring
           // the flood starts from. Too wide a margin reaches the tile's own
@@ -414,17 +422,32 @@ export const generateVariationTask = task({
           // background (measured on the R3 source: the mask's 3% swallows the
           // tile's gold caption and the matte falls back), so widen only when
           // the narrow cut failed.
-          let result = await matteProduct({ source: sourceBytes, region: expandRegion(box, MATTE_MARGINS[0]) });
-          for (const margin of MATTE_MARGINS.slice(1)) {
-            if (result.matted) break;
-            result = await matteProduct({ source: sourceBytes, region: expandRegion(box, margin) });
+          let fallback: MatteResult | null = null;
+          let matted: MatteResult | null = null;
+          let chosen = MATTE_MARGINS[0];
+          for (const margin of MATTE_MARGINS) {
+            const cut = await matteProduct({
+              source: sourceBytes,
+              region: expandRegion(sourceProductBox, margin),
+            });
+            // The narrowest cut is the fallback rectangle: least foreign
+            // background, and the product fills more of the pasted box.
+            fallback ??= cut;
+            if (cut.matted) {
+              matted = cut;
+              chosen = margin;
+              break;
+            }
           }
+          const matte = matted ?? fallback;
+          if (!matte) throw new Error("matteSource: no margin was tried");
           logger.info("Matted the source product", {
-            matted: result.matted,
-            coverage: result.coverage,
-            region: result.region,
+            matted: matte.matted,
+            margin: chosen,
+            coverage: matte.coverage,
+            region: matte.region,
           });
-          return result;
+          return matte;
         })());
 
       const input: VariationRunInput = {
@@ -508,7 +531,7 @@ export const generateVariationTask = task({
                 // The tight product box: the paste covers the model's product
                 // and leaves the card or pedestal it drew around it.
                 const to = locatedOutput.product;
-                const matte = await matteSource(sourceProductBox);
+                const matte = await matteSource();
                 const pastedPatch = await pastePatch({ output: produced, patch: matte.patch, region: to });
                 produced = pastedPatch.bytes;
                 // The matte crops to what it kept, so record that region rather
@@ -516,6 +539,7 @@ export const generateVariationTask = task({
                 transplant = { from: matte.region, to, matted: matte.matted };
                 logger.info("Transplanted source product", {
                   attempt,
+                  from: matte.region,
                   to,
                   tile: locatedOutput.tile,
                   matted: matte.matted,
