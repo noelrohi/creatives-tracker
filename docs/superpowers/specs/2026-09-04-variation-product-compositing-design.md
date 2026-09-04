@@ -75,12 +75,40 @@ plain words ("the product in the lower-right tile is kept as is").
 
 ### 4. Review
 
-The review checklist keeps its product-fidelity item, but in edit mode it
-compares the output against the **source** rather than the product photo and
-expects a near-exact match inside the protected region. A failed fidelity
-check in edit mode is a signal that the mask was wrong (too small, wrong box),
-so the agent's second attempt may call `generateImage` with an explicit
-`keepRegion` override (`{ x, y, w, h }`) to widen or move the box.
+In edit mode the review compares the output against the **source** rather
+than the product photo. Because the product is pasted back (see §7), a
+pixel match inside the box is true by construction and is not checked.
+Instead the edit-mode fidelity line asks for the four things a paste can get
+wrong: the pasted product's lighting, colour temperature, and perspective
+against the new background; a visible rectangular seam or halo at the paste
+boundary; a second, model-rendered copy of the product outside the pasted box;
+and the paste covering copy or a focal element the prompt asked for. A failed
+check is a signal that the box was wrong (too small, wrong place), so the
+agent's second attempt may call `generateImage` with an explicit `keepRegion`
+override (`{ x, y, w, h }`) to widen or move the box.
+
+### 7. Paste step (added after the first live run)
+
+The first live run showed that the image model treats the mask as guidance,
+not preservation: composition and placement held, but the product inside the
+opaque region was re-rendered, and the output is always resampled to a preset
+size. So preservation is done on our side, after the edit returns and before
+anything is stored or reviewed:
+
+1. Read the output's dimensions.
+2. Extract the **raw** (not margin-expanded) region from the source, resize it
+   to the same normalized box in the output's pixel size, and composite it at
+   that position. The margin exists only for the mask; pasting it would stamp
+   stale background over the new scene.
+3. Store and review the composited bytes, so the blob, the byte cache, the
+   review, and the variant row all see one image.
+
+`src/lib/image-composite.ts` (pure, tested) does the extract, resize, and
+composite with `sharp`, which is already present as a transitive dependency of
+Next.js and becomes a direct dependency; the Trigger.dev build marks it
+external so the native module is not bundled. The locator's own schema is
+permissive and the task clamps the box, discarding boxes under 0.5% or over
+70% of the canvas as noise or "nothing left to change".
 
 ### 5. Retry without image
 
@@ -89,9 +117,10 @@ edit mode and falls back to `generate`. No change.
 
 ### 6. Out of scope
 
-Compositing a catalog render onto a generated scene (paste-in) is the
-alternative when the source has no product; it needs matting and lighting
-work and is not part of this addendum. Competitor sources (Phase 2) never use
+Compositing a **catalog render** onto a generated scene is the alternative
+when the source has no product; it needs matting and lighting work and is not
+part of this addendum. (Pasting the source's own region back, §7, is in
+scope.) Alpha-feathering the paste edge is deferred until a seam is observed. Competitor sources (Phase 2) never use
 edit mode, since their product must be replaced, not kept.
 
 ## Testing

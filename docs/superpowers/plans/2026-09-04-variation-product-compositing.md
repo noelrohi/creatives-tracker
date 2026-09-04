@@ -767,7 +767,235 @@ git commit -m "feat(creatives): say when a variation kept the source product"
 
 ---
 
-### Task 5: Full verification and docs
+### Task 6: Paste the source region back (pure, sharp)
+
+Added after the first live run: the provider re-renders the masked region, so
+preservation is done here (addendum §7).
+
+**Files:**
+- Modify: `package.json` (`sharp` becomes a direct dependency), `trigger.config.ts`
+- Create: `src/lib/image-composite.ts`
+- Test: `src/lib/image-composite.test.ts`
+
+- [ ] **Step 1: Dependency and Trigger build config**
+
+Run: `bun add sharp@0.34.5` (the version already installed transitively). In `trigger.config.ts` add `build: { external: ["sharp"] }` to the `defineConfig` object so the native module is not bundled.
+
+- [ ] **Step 2: Write the failing tests**
+
+```ts
+import sharp from "sharp";
+import { describe, expect, it } from "vitest";
+import { encodePng } from "./image-mask";
+import { pasteSourceRegion } from "./image-composite";
+
+function solid(width: number, height: number, rgb: [number, number, number], patch?: { box: [number, number, number, number]; rgb: [number, number, number] }) {
+  const rgba = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const inPatch = patch && x >= patch.box[0] && x < patch.box[0] + patch.box[2] && y >= patch.box[1] && y < patch.box[1] + patch.box[3];
+      const c = inPatch ? patch.rgb : rgb;
+      rgba.set([c[0], c[1], c[2], 255], (y * width + x) * 4);
+    }
+  }
+  return encodePng(width, height, rgba);
+}
+
+async function pixel(png: Uint8Array, x: number, y: number) {
+  const { data, info } = await sharp(png).raw().toBuffer({ resolveWithObject: true });
+  const i = (y * info.width + x) * info.channels;
+  return [data[i], data[i + 1], data[i + 2]];
+}
+
+describe("pasteSourceRegion", () => {
+  it("pastes the source's region over the output at the same normalized box, scaled to the output", async () => {
+    // 40x40 blue source with a red 20x20 block at (10,10); 20x20 green output.
+    const source = solid(40, 40, [0, 0, 255], { box: [10, 10, 20, 20], rgb: [255, 0, 0] });
+    const output = solid(20, 20, [0, 255, 0]);
+    const { bytes, box } = await pasteSourceRegion({ source, output, region: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 } });
+    expect(box).toEqual({ left: 5, top: 5, width: 10, height: 10 });
+    expect(await pixel(bytes, 10, 10)).toEqual([255, 0, 0]); // inside: red from the source
+    expect(await pixel(bytes, 2, 2)).toEqual([0, 255, 0]); // outside: untouched output
+    expect(await pixel(bytes, 14, 14)).toEqual([255, 0, 0]);
+    expect(await pixel(bytes, 15, 15)).toEqual([0, 255, 0]);
+    const meta = await sharp(bytes).metadata();
+    expect([meta.width, meta.height, meta.format]).toEqual([20, 20, "png"]);
+  });
+
+  it("clamps an out-of-range region and rejects an empty one", async () => {
+    const source = solid(10, 10, [0, 0, 255]);
+    const output = solid(10, 10, [0, 255, 0]);
+    const { box } = await pasteSourceRegion({ source, output, region: { x: 0.8, y: 0.8, w: 1, h: 1 } });
+    expect(box).toEqual({ left: 8, top: 8, width: 2, height: 2 });
+    await expect(pasteSourceRegion({ source, output, region: { x: 2, y: 2, w: 0.1, h: 0.1 } })).rejects.toThrow(/empty/);
+  });
+});
+```
+
+- [ ] **Step 3: Run to verify failure**
+
+Run: `bun run test -- src/lib/image-composite.test.ts`
+Expected: FAIL, cannot resolve `./image-composite`.
+
+- [ ] **Step 4: Implement** `src/lib/image-composite.ts`:
+
+```ts
+// Puts the source's product back into an edited output. The image model treats
+// an edit mask as guidance and re-renders the whole canvas at a preset size,
+// so the only way to guarantee the product is to copy the source's region over
+// the output ourselves, scaled to the output's pixel size.
+
+import sharp from "sharp";
+import { clampRegion, type ProductRegion } from "@/lib/image-mask";
+
+export type PasteBox = { left: number; top: number; width: number; height: number };
+
+function pixelBox(region: ProductRegion, width: number, height: number): PasteBox {
+  const left = Math.round(region.x * width);
+  const top = Math.round(region.y * height);
+  const right = Math.round((region.x + region.w) * width);
+  const bottom = Math.round((region.y + region.h) * height);
+  return { left, top, width: right - left, height: bottom - top };
+}
+
+/**
+ * Extracts `region` from `source`, resizes it to the same normalized box in
+ * `output`'s pixel size, composites it there, and returns PNG bytes plus the
+ * box it landed in. The region is clamped to the canvas first; an empty box
+ * throws so the caller never ships an output that silently kept nothing.
+ */
+export async function pasteSourceRegion(input: {
+  source: Uint8Array;
+  output: Uint8Array;
+  region: ProductRegion;
+}): Promise<{ bytes: Uint8Array; box: PasteBox }> {
+  const region = clampRegion(input.region);
+  const [sourceMeta, outputMeta] = await Promise.all([
+    sharp(input.source).metadata(),
+    sharp(input.output).metadata(),
+  ]);
+  if (!sourceMeta.width || !sourceMeta.height || !outputMeta.width || !outputMeta.height) {
+    throw new Error("pasteSourceRegion: could not read image dimensions");
+  }
+  const from = pixelBox(region, sourceMeta.width, sourceMeta.height);
+  const to = pixelBox(region, outputMeta.width, outputMeta.height);
+  if (from.width <= 0 || from.height <= 0 || to.width <= 0 || to.height <= 0) {
+    throw new Error("pasteSourceRegion: the region is empty after clamping");
+  }
+  const patch = await sharp(input.source)
+    .extract(from)
+    .resize(to.width, to.height, { fit: "fill" })
+    .png()
+    .toBuffer();
+  const bytes = await sharp(input.output)
+    .composite([{ input: patch, left: to.left, top: to.top }])
+    .png()
+    .toBuffer();
+  return { bytes: new Uint8Array(bytes), box: to };
+}
+```
+
+- [ ] **Step 5: Run to verify pass**
+
+Run: `bun run test -- src/lib/image-composite.test.ts`
+Expected: PASS (2 tests). Then `bun run typecheck`, `bun run lint`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add package.json bun.lock trigger.config.ts src/lib/image-composite.ts src/lib/image-composite.test.ts
+git commit -m "feat(studio): paste the source product back over an edited variation"
+```
+
+---
+
+### Task 7: Wire the paste, fix the premise, harden the locator
+
+**Files:**
+- Modify: `trigger/generate-variation.ts`
+- Modify: `src/lib/variation-agent.ts` (one prompt sentence) and its test if the sentence is asserted
+
+- [ ] **Step 1: Paste in `produceImage`**
+
+Import `pasteSourceRegion` from `@/lib/image-composite` and `clampRegion` from `@/lib/image-mask` (keep `buildKeepMask`, drop `productRegionSchema` once Step 3 lands). After `generateImage` returns and before `putStudioObject`:
+
+```ts
+          // The mask is guidance only: the provider regenerates the whole
+          // canvas at `size` and re-renders the product. Paste the source's
+          // region back so the product is preserved by construction, and store
+          // and review those bytes.
+          const produced =
+            mode === "edit" && keepRegion && sourceDimensions
+              ? (await pasteSourceRegion({ source: sourceBytes, output: result.image.uint8Array, region: keepRegion })).bytes
+              : result.image.uint8Array;
+```
+
+and use `produced` for `putStudioObject` and `imageBytes.set`. Replace the edit-branch comment above `prompt: { images, mask, text }` with: `// references holds only the source in edit mode. The mask holds composition and placement; preservation happens in the paste below.`
+
+- [ ] **Step 2: Paste-aware review line**
+
+Replace the edit-mode fidelity line with:
+
+```ts
+                mode === "edit" && keepRegion
+                  ? `- The product from the source has been pasted back into its box (${Math.round(keepRegion.x * 100)}% to ${Math.round((keepRegion.x + keepRegion.w) * 100)}% across, ${Math.round(keepRegion.y * 100)}% to ${Math.round((keepRegion.y + keepRegion.h) * 100)}% down). Check four things: its lighting, colour temperature, and perspective sit naturally against the new background; there is no visible rectangular seam or halo at the box edge; no second, re-rendered copy of the product appears anywhere outside the box; and the box does not cover copy or a focal element the prompt asked for. Name which of these failed.`
+                  : "- The product matches the product photo in shape, openings, material, and markings; no invented logos or text on it.",
+```
+
+- [ ] **Step 3: Locator hardening**
+
+Make the locator schema permissive and clamp in the task, with an area guard:
+
+```ts
+// The locator's own schema is permissive: a box that overshoots by a rounding
+// hair should be clamped, not thrown away with the whole edit path.
+const productLocationSchema = z.object({
+  product: z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }).nullable(),
+  confidence: z.number().min(0).max(1),
+  note: z.string(),
+});
+```
+
+and in `locateSourceProduct` after the call:
+
+```ts
+    const { product, confidence, note } = result.object;
+    const region = product ? clampRegion(product) : null;
+    const area = region ? region.w * region.h : 0;
+    // Too small is noise; too large leaves the variation nothing to change.
+    const usable = region !== null && confidence >= 0.4 && area >= 0.005 && area <= 0.7;
+    logger.info("Product locator", { found: Boolean(product), confidence, area, usable, note });
+    return usable ? region : null;
+```
+
+Also, before the `generateImage` call in `produceImage`, make the silent fallback audible:
+
+```ts
+          if (mode === "edit" && !sourceDimensions) {
+            logger.warn("Edit mode without source dimensions; falling back to an unmasked call", { attempt });
+          }
+```
+
+Move `LOCATOR_MODEL` up beside `AGENT_MODEL`/`REVIEW_MODEL`.
+
+- [ ] **Step 4: Prompt premise**
+
+In `src/lib/variation-agent.ts`'s EDIT MODE block replace `holds the product and is kept pixel-for-pixel, and everything outside that box is redrawn from your prompt alone` with `holds the product; after the edit the source's pixels for that box are pasted back, so the product is preserved exactly, and everything outside that box is redrawn from your prompt alone`. Update any test asserting the old phrase.
+
+- [ ] **Step 5: Verify**
+
+`bun run typecheck`, `bun run lint`, `bun run test -- src/lib/variation-agent.test.ts src/lib/image-mask.test.ts src/lib/image-composite.test.ts`. Then the live check from Task 3 Step 5 again: the product in the output must be the source's product (compare visually), the review should pass or name a seam, and `attempts[n].mode === "edit"`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add trigger/generate-variation.ts src/lib/variation-agent.ts src/lib/variation-agent.test.ts
+git commit -m "feat(studio): preserve the source product by pasting it over the edited variation"
+```
+
+---
+
+### Task 5: Full verification and docs (runs last)
 
 - [ ] **Step 1:** `bun run typecheck && bun run lint && bun run test`. Expected: all green (Postgres-backed suites need the local database, which is up).
 
