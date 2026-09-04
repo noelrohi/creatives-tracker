@@ -1,7 +1,7 @@
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { encodePng } from "./image-mask";
-import { pasteSourceRegion } from "./image-composite";
+import { pastePatch, pasteSourceRegion } from "./image-composite";
 
 function solid(
   width: number,
@@ -78,5 +78,21 @@ describe("pasteSourceRegion", () => {
     expect(await pixel(bytes, box.left - 1, box.top)).toEqual([0, 255, 0]);
     expect(await pixel(bytes, box.left, box.top - 1)).toEqual([0, 255, 0]);
     expect(await pixel(bytes, box.left, box.top + box.height)).toEqual([0, 255, 0]);
+  });
+});
+
+describe("pastePatch", () => {
+  it("uniform-fits an alpha patch into the output box and keeps the output visible where the patch is transparent", async () => {
+    // 4x4 patch: opaque red left half, fully transparent right half.
+    const rgba = new Uint8Array(4 * 4 * 4);
+    for (let y = 0; y < 4; y += 1) for (let x = 0; x < 4; x += 1) rgba.set(x < 2 ? [255, 0, 0, 255] : [0, 0, 0, 0], (y * 4 + x) * 4);
+    const patch = encodePng(4, 4, rgba);
+    const output = solid(20, 20, [0, 255, 0]);
+    const { bytes, box } = await pastePatch({ output, patch, region: { x: 0.5, y: 0.5, w: 0.4, h: 0.2 } });
+    // Output box is 8x4; a 4x4 patch fits uniformly as 4x4 centred: left 10+2, top 10.
+    expect(box).toEqual({ left: 12, top: 10, width: 4, height: 4 });
+    expect(await pixel(bytes, 12, 11)).toEqual([255, 0, 0]); // opaque half
+    expect(await pixel(bytes, 15, 11)).toEqual([0, 255, 0]); // transparent half shows the output
+    expect(await pixel(bytes, 10, 11)).toEqual([0, 255, 0]); // band left of the centred patch
   });
 });

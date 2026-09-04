@@ -8,7 +8,7 @@ import { clampRegion, type ProductRegion } from "@/lib/image-mask";
 
 export type PasteBox = { left: number; top: number; width: number; height: number };
 
-function pixelBox(region: ProductRegion, width: number, height: number): PasteBox {
+export function pixelBox(region: ProductRegion, width: number, height: number): PasteBox {
   const left = Math.round(region.x * width);
   const top = Math.round(region.y * height);
   const right = Math.round((region.x + region.w) * width);
@@ -75,6 +75,38 @@ export async function pasteSourceRegion(input: {
   const bytes = await sharp(input.output)
     .autoOrient()
     .composite([{ input: patch, left: paste.left, top: paste.top }])
+    .png()
+    .toBuffer();
+  return { bytes: new Uint8Array(bytes), box: paste };
+}
+
+/**
+ * Composites an already-prepared patch (PNG, alpha allowed) into the output at
+ * `region`, uniform-scaled to fit the region's pixel box and centred. Used by
+ * the product transplant: the patch is the matted source product and `region`
+ * is where the model drew its own product.
+ */
+export async function pastePatch(input: {
+  output: Uint8Array;
+  patch: Uint8Array;
+  region: ProductRegion;
+}): Promise<{ bytes: Uint8Array; box: PasteBox }> {
+  const region = clampRegion(input.region);
+  const [outputMeta, patchMeta] = await Promise.all([
+    sharp(input.output).metadata(),
+    sharp(input.patch).metadata(),
+  ]);
+  const outputSize = outputMeta.autoOrient;
+  if (!outputSize?.width || !outputSize?.height || !patchMeta.width || !patchMeta.height) {
+    throw new Error("pastePatch: could not read image dimensions");
+  }
+  const to = pixelBox(region, outputSize.width, outputSize.height);
+  if (to.width <= 0 || to.height <= 0) throw new Error("pastePatch: the region is empty after clamping");
+  const paste = fitBox({ left: 0, top: 0, width: patchMeta.width, height: patchMeta.height }, to);
+  const resized = await sharp(input.patch).resize(paste.width, paste.height, { fit: "fill" }).png().toBuffer();
+  const bytes = await sharp(input.output)
+    .autoOrient()
+    .composite([{ input: resized, left: paste.left, top: paste.top }])
     .png()
     .toBuffer();
   return { bytes: new Uint8Array(bytes), box: paste };
