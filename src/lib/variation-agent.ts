@@ -140,7 +140,7 @@ export const generateImageInputSchema = z.object({
   prompt: z.string().min(1),
   referenceImageIds: z.array(z.string()).default([]),
   keepSourceLayout: z.boolean().default(true),
-  /** edit: masked edit of the source keeping the product; generate: draw from references. Defaults to edit when available. */
+  /** edit: masked edit of the source keeping the product; generate: draw from the references. Defaults to generate. */
   mode: z.enum(["edit", "generate"]).optional(),
   /** Override the protected region in edit mode (normalized 0-1 box). */
   keepRegion: productRegionSchema.optional(),
@@ -202,7 +202,7 @@ function brandBlock(brand: StudioBrandProfile | null, editAvailable: boolean) {
     brand.productNotes ? `Product notes: ${brand.productNotes}` : null,
     brand.productImageUrl
       ? editAvailable
-        ? "In generate mode a product photo is attached as the first reference and the product in the ad must match it exactly; render only the markings the product notes describe. In edit mode no product photo is attached: the product is preserved from the source itself, so do not describe it, restyle it, or ask for a match to the photo."
+        ? "In generate mode a product photo is attached as the first reference so the image model knows what it is drawing, but the product it draws is replaced afterwards (see TRANSPLANT): name the product and do not spell out its markings or ask for an exact match to the photo. In edit mode no product photo is attached: the product is preserved from the source itself, so do not describe it, restyle it, or ask for a match to the photo."
         : "A product photo is attached as the first reference on every image call; when the source image is attached it comes last. The product in the ad must match the product photo exactly, and when the source already shows the product, tell the image model to reuse the product exactly as it appears in the source rather than re-rendering it. Render only the markings the product notes describe."
       : null,
   ].filter(Boolean);
@@ -513,7 +513,7 @@ export function createVariationRun(
     state.plan = {
       ...raw.plan,
       keptProductRegion: final.mode === "edit" ? (final.keepRegion ?? null) : null,
-      transplantedProduct: final.transplant ?? null,
+      transplantedProduct: final.mode === "generate" ? (final.transplant ?? null) : null,
     };
     state.finished = true;
     deps.onStep("finishing");
@@ -552,7 +552,7 @@ export function resolveVariationOutcome(state: VariationRunState): VariationOutc
         finalAttempt: passing.attempt,
         synthesized: true,
         keptProductRegion: passing.mode === "edit" ? (passing.keepRegion ?? null) : null,
-        transplantedProduct: passing.transplant ?? null,
+        transplantedProduct: passing.mode === "generate" ? (passing.transplant ?? null) : null,
       },
       attempts: state.attempts,
     };

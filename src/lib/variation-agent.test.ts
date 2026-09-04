@@ -453,6 +453,18 @@ describe("createVariationRun.finish", () => {
     expect(run.state.plan?.keptProductRegion).toBeNull();
   });
 
+  it("ignores a transplant reported on an edit attempt", async () => {
+    const transplant = { from: region, to: { x: 0.5, y: 0.55, w: 0.3, h: 0.3 }, matted: true };
+    const run = createVariationRun(
+      editInput,
+      deps({ produceImage: vi.fn(async () => ({ imageUrl: "https://blob.test/out-1.png", transplant })) }),
+    );
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true, mode: "edit" });
+    await run.finish({ plan });
+    expect(run.state.plan?.transplantedProduct).toBeNull();
+    expect(run.state.plan?.keptProductRegion).toEqual(region);
+  });
+
   it("records no kept region when the shipped attempt was generated", async () => {
     const run = createVariationRun(input, deps());
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
