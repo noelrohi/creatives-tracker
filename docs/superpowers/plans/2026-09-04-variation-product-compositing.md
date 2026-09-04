@@ -895,10 +895,12 @@ export async function pasteSourceRegion(input: {
 }
 ```
 
+Two refinements shipped in review: the patch is uniform-scaled and centred inside the output box (`fitBox`) rather than stretched with `fit: "fill"`, because a 4:5 source landing in the 2:3 portrait preset would otherwise stretch the product by about 17%; and both pipelines start with `.autoOrient()` with boxes derived from the oriented sizes, so EXIF-rotated JPEG sources paste the right region. A third test covers a non-square region on a non-square output.
+
 - [ ] **Step 5: Run to verify pass**
 
 Run: `bun run test -- src/lib/image-composite.test.ts`
-Expected: PASS (2 tests). Then `bun run typecheck`, `bun run lint`.
+Expected: PASS (3 tests). Then `bun run typecheck`, `bun run lint`.
 
 - [ ] **Step 6: Commit**
 
