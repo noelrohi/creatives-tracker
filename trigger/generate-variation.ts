@@ -10,9 +10,10 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { openai } from "@/lib/ai";
-import { pasteSourceRegion } from "@/lib/image-composite";
+import { pastePatch, pasteSourceRegion } from "@/lib/image-composite";
 import { readImageDimensions, studioFormatForDimensions } from "@/lib/image-dimensions";
 import { buildKeepMask, clampRegion, expandRegion, type ProductRegion } from "@/lib/image-mask";
+import { matteProduct, type MatteResult } from "@/lib/image-matte";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 import { isHttpUrl } from "@/lib/remote-image";
 import { getStudioBrandProfile } from "@/lib/studio-brand";
@@ -44,7 +45,11 @@ import {
   type VariationRunInput,
   type VariationSource,
 } from "@/lib/variation-agent";
-import type { VariationAttempt, VariationPlan } from "@/lib/variation-agent-types";
+import type {
+  VariationAttempt,
+  VariationPlan,
+  VariationTransplant,
+} from "@/lib/variation-agent-types";
 import { ads } from "@/schema/ad";
 import { adCreatives } from "@/schema/ad-creative";
 import { competitorAds } from "@/schema/competitor-signals";
@@ -87,14 +92,23 @@ const productLocationSchema = z.object({
   note: z.string(),
 });
 
+/** A region as review-readable percentages of the canvas. */
+function pct(region: ProductRegion) {
+  return `${Math.round(region.x * 100)}% to ${Math.round((region.x + region.w) * 100)}% across and ${Math.round(region.y * 100)}% to ${Math.round((region.y + region.h) * 100)}% down`;
+}
+
 /**
- * Finds the product in the source so an edit can protect it. Includes any
- * packaging the product sits in or on. Returns null on failure or when the
- * source shows no product, which sends the run down the generate path.
+ * Finds the product in an image. On the source it decides what an edit
+ * protects and what the transplant cuts out; on a generated output it says
+ * where the model drew its own product, which is where the source's product
+ * gets pasted. Includes any packaging the product sits in or on. Returns null
+ * on failure or when the image shows no product: on the source that sends the
+ * run down the generate path, on an output it skips the transplant.
  */
-async function locateSourceProduct(
-  sourceBytes: Uint8Array,
+async function locateProduct(
+  bytes: Uint8Array,
   brandName: string | null,
+  label: "source" | "output",
 ): Promise<ProductRegion | null> {
   try {
     const result = await generateObject({
@@ -105,7 +119,7 @@ async function locateSourceProduct(
         "Return one normalized bounding box (x, y, w, h in 0-1 from the top-left) that covers the whole product. When the product sits in, on, or beside its own packaging or case, cover both together. When the product sits inside a card, tile, panel, or pedestal area with its own background, return that whole card or tile: the region is pasted over the final image as one rectangle, so its edges must fall on a natural boundary. Do not include headline text, badges, or unrelated props outside that card.",
         "Return product: null when no physical product is visible (a text-only or lifestyle ad).",
       ].join("\n"),
-      messages: [{ role: "user", content: [{ type: "image", image: sourceBytes }] }],
+      messages: [{ role: "user", content: [{ type: "image", image: bytes }] }],
     });
     const { product, confidence, note } = result.object;
     const region = product ? clampRegion(product) : null;
@@ -114,6 +128,7 @@ async function locateSourceProduct(
     // nothing to change, so that run drops to the generate path instead.
     const usable = region !== null && confidence >= 0.4 && area >= 0.005 && area <= 0.85;
     logger.info("Product locator", {
+      label,
       found: Boolean(product),
       confidence,
       area,
@@ -132,7 +147,8 @@ async function locateSourceProduct(
     });
     return usable ? region : null;
   } catch (error) {
-    logger.warn("Product locator failed; using generate mode", {
+    logger.warn("Product locator failed", {
+      label,
       error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
     });
     return null;
@@ -341,8 +357,17 @@ export const generateVariationTask = task({
       let sourceProductRegion: ProductRegion | null = null;
       if (source.kind === "creative" && !payload.withoutSourceImage && sourceDimensions) {
         onStep("locating the product in the source");
-        sourceProductRegion = await locateSourceProduct(sourceBytes, brand?.brandName ?? null);
+        sourceProductRegion = await locateProduct(sourceBytes, brand?.brandName ?? null, "source");
       }
+      // The locator's box is tight, and a product touching the box edge would
+      // fail the matte's border flatness check, so the transplant cuts the
+      // expanded box. One value feeds both the cut and the region recorded on
+      // the attempt, so the two cannot drift.
+      const matteRegion = sourceProductRegion ? expandRegion(sourceProductRegion) : null;
+      // The source product's matte is the same for every attempt; cut it once.
+      let sourceMatte: Promise<MatteResult> | null = null;
+      const matteSource = () =>
+        (sourceMatte ??= matteProduct({ source: sourceBytes, region: matteRegion! }));
 
       const input: VariationRunInput = {
         source,
@@ -412,6 +437,37 @@ export const generateVariationTask = task({
               });
             }
           }
+          // Generate mode composes freely, so the model's own product is
+          // wherever it decided to put it: locate it there and cover it with
+          // the source's real product. Every failure here is recoverable —
+          // the model's product stays and the review judges it as before.
+          let transplant: VariationTransplant | null = null;
+          if (mode === "generate" && matteRegion && source.kind === "creative" && !payload.withoutSourceImage) {
+            try {
+              onStep(`locating the product in attempt ${attempt}`);
+              const to = await locateProduct(produced, brand?.brandName ?? null, "output");
+              if (to) {
+                const matte = await matteSource();
+                const pastedPatch = await pastePatch({ output: produced, patch: matte.patch, region: to });
+                produced = pastedPatch.bytes;
+                transplant = { from: matteRegion, to, matted: matte.matted };
+                logger.info("Transplanted source product", {
+                  attempt,
+                  to,
+                  matted: matte.matted,
+                  coverage: matte.coverage,
+                  box: pastedPatch.box,
+                });
+              } else {
+                logger.warn("Transplant skipped: product not located in the output", { attempt });
+              }
+            } catch (error) {
+              logger.warn("Transplant failed; keeping the model's product", {
+                attempt,
+                error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+              });
+            }
+          }
           const stored = await putStudioObject(
             `${env}/create/${ctx.run.id}-${ctx.attempt.number}-${attempt}.png`,
             produced,
@@ -419,9 +475,9 @@ export const generateVariationTask = task({
           );
           imageBytes.set(stored.url, produced);
           if (pasted) pastedUrls.add(stored.url);
-          return { imageUrl: stored.url };
+          return { imageUrl: stored.url, transplant };
         },
-        reviewImage: async ({ imageUrl, prompt, mode, keepRegion }) => {
+        reviewImage: async ({ imageUrl, prompt, mode, keepRegion, transplant }) => {
           try {
             const content: Array<
               { type: "text"; text: string } | { type: "image"; image: Uint8Array }
@@ -432,7 +488,7 @@ export const generateVariationTask = task({
               },
               { type: "image", image: await fetchBytes(imageUrl) },
             ];
-            if (mode === "edit") {
+            if (mode === "edit" || transplant) {
               content.push({ type: "image", image: sourceBytes });
             } else if (brand?.productImageUrl) {
               content.push({ type: "image", image: await fetchBytes(brand.productImageUrl) });
@@ -443,13 +499,17 @@ export const generateVariationTask = task({
               system: [
                 mode === "edit"
                   ? `You are a strict creative reviewer for paid-social static ads. The first image is the generated ad, produced by editing the second image (the source); ${pastedUrls.has(imageUrl) ? "the source's product was pasted back into its box after the edit" : "the step that pastes the source's product back did not run, so the product you see is the image model's own re-render"}.`
-                  : "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second, when present, is the advertiser's real product photo.",
+                  : transplant
+                    ? "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the source's own product was cut out of the second image (the source) and pasted over the product the model drew."
+                    : "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second, when present, is the advertiser's real product photo.",
                 "Checklist (all must hold for pass = true):",
                 mode === "edit" && keepRegion && pastedUrls.has(imageUrl)
-                  ? `- The product from the source has been pasted back into its box (${Math.round(keepRegion.x * 100)}% to ${Math.round((keepRegion.x + keepRegion.w) * 100)}% across, ${Math.round(keepRegion.y * 100)}% to ${Math.round((keepRegion.y + keepRegion.h) * 100)}% down). Check four things: its lighting, colour temperature, and perspective sit naturally against the new background; the pasted box lines up with the redrawn layout (no overlap or collision with a neighbouring card or element; a clean straight edge on flat background is acceptable and should only be mentioned as a note, not a failure); no second, re-rendered copy of the product appears anywhere outside the box; and the box does not cover copy or a focal element the prompt asked for. Name which of these failed.`
+                  ? `- The product from the source has been pasted back into its box (${pct(keepRegion)}). Check four things: its lighting, colour temperature, and perspective sit naturally against the new background; the pasted box lines up with the redrawn layout (no overlap or collision with a neighbouring card or element; a clean straight edge on flat background is acceptable and should only be mentioned as a note, not a failure); no second, re-rendered copy of the product appears anywhere outside the box; and the box does not cover copy or a focal element the prompt asked for. Name which of these failed.`
                   : mode === "edit"
                     ? "- The product matches the source image in shape, openings, material, and markings; no invented logos or text on it."
-                    : "- The product matches the product photo in shape, openings, material, and markings; no invented logos or text on it.",
+                    : transplant
+                      ? `- The source's product now sits in the box ${pct(transplant.to)}. Check: it is a plausible size for the scene; its lighting and colour do not clash with the surroundings; no remnant of the model's own product shows around its edges; and nothing important is covered. Name which failed.`
+                      : "- The product matches the product photo in shape, openings, material, and markings; no invented logos or text on it.",
                 "- Every line of ad copy (headline, subhead, badges, CTA, tile labels) is legible and matches the quoted copy in the prompt, with no garbled or invented copy. Incidental labels on props and packaging inside the scene (a shampoo bottle, a book spine) are fine and are not ad copy.",
                 `- No logos or brand marks other than ${brand?.brandName ?? "the advertiser's"}; no platform UI, no watermarks.`,
                 "- The palette is consistent with a clean brand look: no clashing neon, no split panels unless the prompt asked for them.",
