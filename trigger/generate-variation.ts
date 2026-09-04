@@ -12,7 +12,7 @@ import { db } from "@/db";
 import { openai } from "@/lib/ai";
 import { pasteSourceRegion } from "@/lib/image-composite";
 import { readImageDimensions, studioFormatForDimensions } from "@/lib/image-dimensions";
-import { buildKeepMask, clampRegion, type ProductRegion } from "@/lib/image-mask";
+import { buildKeepMask, clampRegion, expandRegion, type ProductRegion } from "@/lib/image-mask";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 import { isHttpUrl } from "@/lib/remote-image";
 import { getStudioBrandProfile } from "@/lib/studio-brand";
@@ -110,9 +110,26 @@ async function locateSourceProduct(
     const { product, confidence, note } = result.object;
     const region = product ? clampRegion(product) : null;
     const area = region ? region.w * region.h : 0;
-    // Too small is noise; too large leaves the variation nothing to change.
-    const usable = region !== null && confidence >= 0.4 && area >= 0.005 && area <= 0.7;
-    logger.info("Product locator", { found: Boolean(product), confidence, area, usable, note });
+    // Too small is noise; a box that fills the canvas leaves the variation
+    // nothing to change, so that run drops to the generate path instead.
+    const usable = region !== null && confidence >= 0.4 && area >= 0.005 && area <= 0.85;
+    logger.info("Product locator", {
+      found: Boolean(product),
+      confidence,
+      area,
+      usable,
+      note,
+      // Only meaningful on a rejection; a usable box has no failed check.
+      reason: usable
+        ? null
+        : !region
+          ? "none"
+          : confidence < 0.4
+            ? "low_confidence"
+            : area < 0.005
+              ? "too_small"
+              : "fills_canvas",
+    });
     return usable ? region : null;
   } catch (error) {
     logger.warn("Product locator failed; using generate mode", {
@@ -298,6 +315,9 @@ export const generateVariationTask = task({
       // review always gets bytes (a local-storage URL is not reachable by the
       // model provider).
       const imageBytes = new Map<string, Uint8Array>();
+      // Which stored outputs actually got the source's product pasted in: the
+      // review's premise depends on it, and the paste can degrade.
+      const pastedUrls = new Set<string>();
       const fetchBytes = async (url: string) => {
         const cached = imageBytes.get(url);
         if (cached) return cached;
@@ -371,17 +391,34 @@ export const generateVariationTask = task({
           // The mask is guidance only: the provider regenerates the whole
           // canvas at `size` and re-renders the product. Paste the source's
           // region back so the product is preserved by construction, and store
-          // and review those bytes.
-          const produced =
-            mode === "edit" && keepRegion && sourceDimensions
-              ? (await pasteSourceRegion({ source: sourceBytes, output: result.image.uint8Array, region: keepRegion })).bytes
-              : result.image.uint8Array;
+          // and review those bytes. A paste failure is ours, not the model's:
+          // keep the unpasted output so the review still judges an image we
+          // already paid for instead of aborting the agent loop.
+          let produced = result.image.uint8Array;
+          let pasted = false;
+          if (mode === "edit" && keepRegion && sourceDimensions) {
+            try {
+              // Paste the same box the mask protected (region plus margin) so
+              // the seam falls where the model was told to keep the source.
+              const pasteResult = await pasteSourceRegion({ source: sourceBytes, output: produced, region: expandRegion(keepRegion) });
+              produced = pasteResult.bytes;
+              pasted = true;
+              logger.info("Pasted source product", { attempt, box: pasteResult.box });
+            } catch (error) {
+              logger.warn("Product paste failed; keeping the unpasted output", {
+                attempt,
+                keepRegion,
+                error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+              });
+            }
+          }
           const stored = await putStudioObject(
             `${env}/create/${ctx.run.id}-${ctx.attempt.number}-${attempt}.png`,
             produced,
             "image/png",
           );
           imageBytes.set(stored.url, produced);
+          if (pasted) pastedUrls.add(stored.url);
           return { imageUrl: stored.url };
         },
         reviewImage: async ({ imageUrl, prompt, mode, keepRegion }) => {
@@ -405,12 +442,14 @@ export const generateVariationTask = task({
               schema: reviewSchema,
               system: [
                 mode === "edit"
-                  ? "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad, produced by editing the second image (the source); the source's product was pasted back into its box after the edit."
+                  ? `You are a strict creative reviewer for paid-social static ads. The first image is the generated ad, produced by editing the second image (the source); ${pastedUrls.has(imageUrl) ? "the source's product was pasted back into its box after the edit" : "the step that pastes the source's product back did not run, so the product you see is the image model's own re-render"}.`
                   : "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second, when present, is the advertiser's real product photo.",
                 "Checklist (all must hold for pass = true):",
-                mode === "edit" && keepRegion
-                  ? `- The product from the source has been pasted back into its box (${Math.round(keepRegion.x * 100)}% to ${Math.round((keepRegion.x + keepRegion.w) * 100)}% across, ${Math.round(keepRegion.y * 100)}% to ${Math.round((keepRegion.y + keepRegion.h) * 100)}% down). Check four things: its lighting, colour temperature, and perspective sit naturally against the new background; there is no visible rectangular seam or halo at the box edge; no second, re-rendered copy of the product appears anywhere outside the box; and the box does not cover copy or a focal element the prompt asked for. Name which of these failed.`
-                  : "- The product matches the product photo in shape, openings, material, and markings; no invented logos or text on it.",
+                mode === "edit" && keepRegion && pastedUrls.has(imageUrl)
+                  ? `- The product from the source has been pasted back into its box (${Math.round(keepRegion.x * 100)}% to ${Math.round((keepRegion.x + keepRegion.w) * 100)}% across, ${Math.round(keepRegion.y * 100)}% to ${Math.round((keepRegion.y + keepRegion.h) * 100)}% down). Check four things: its lighting, colour temperature, and perspective sit naturally against the new background; the pasted box lines up with the redrawn layout (no overlap or collision with a neighbouring card or element; a clean straight edge on flat background is acceptable and should only be mentioned as a note, not a failure); no second, re-rendered copy of the product appears anywhere outside the box; and the box does not cover copy or a focal element the prompt asked for. Name which of these failed.`
+                  : mode === "edit"
+                    ? "- The product matches the source image in shape, openings, material, and markings; no invented logos or text on it."
+                    : "- The product matches the product photo in shape, openings, material, and markings; no invented logos or text on it.",
                 "- Every line of ad copy (headline, subhead, badges, CTA, tile labels) is legible and matches the quoted copy in the prompt, with no garbled or invented copy. Incidental labels on props and packaging inside the scene (a shampoo bottle, a book spine) are fine and are not ad copy.",
                 `- No logos or brand marks other than ${brand?.brandName ?? "the advertiser's"}; no platform UI, no watermarks.`,
                 "- The palette is consistent with a clean brand look: no clashing neon, no split panels unless the prompt asked for them.",

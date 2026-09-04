@@ -411,6 +411,23 @@ describe("createVariationRun.finish", () => {
     expect(run.state.plan?.keptProductRegion).toEqual(region);
   });
 
+  it("bounces the first finish on an attempt the review rejected, then ships it", async () => {
+    const run = createVariationRun(
+      input,
+      deps({ reviewImage: vi.fn(async () => ({ pass: false, notes: ["text illegible"] })) }),
+    );
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    await expect(run.finish({ plan })).resolves.toEqual({
+      error:
+        "Attempt 1 did not pass review (text illegible). Fix it and generate again if you have an attempt left, or call finish again with this attempt to ship it as is.",
+    });
+    expect(run.state.finished).toBe(false);
+    expect(run.state.plan).toBeNull();
+    await expect(run.finish({ plan })).resolves.toEqual({ ok: true });
+    expect(run.state.plan).toMatchObject(plan);
+    expect(run.state.finished).toBe(true);
+  });
+
   it("records no kept region when the shipped attempt was generated", async () => {
     const run = createVariationRun(input, deps());
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
@@ -424,33 +441,33 @@ describe("resolveVariationOutcome", () => {
 
   it("is ready with the finished plan", () => {
     const plan = { summary: "s", kept: [], changed: [], rationale: "r", evidence: [], inImageCopy: [], finalAttempt: 2 };
-    expect(resolveVariationOutcome({ attempts: [attempt(1, false), attempt(2, true)], plan, finished: true, contextReads: 0, imageCalls: 2, claimsFlags: 0, moderationReason: null })).toEqual({
+    expect(resolveVariationOutcome({ attempts: [attempt(1, false), attempt(2, true)], plan, finished: true, contextReads: 0, imageCalls: 2, claimsFlags: 0, overrodeReview: false, moderationReason: null })).toEqual({
       kind: "ready", imageUrl: "https://blob.test/2.png", plan, attempts: [attempt(1, false), attempt(2, true)],
     });
   });
 
   it("synthesizes a plan from the last passing attempt when finish was never called", () => {
-    const outcome = resolveVariationOutcome({ attempts: [attempt(1, true), attempt(2, false)], plan: null, finished: false, contextReads: 0, imageCalls: 2, claimsFlags: 0, moderationReason: null });
+    const outcome = resolveVariationOutcome({ attempts: [attempt(1, true), attempt(2, false)], plan: null, finished: false, contextReads: 0, imageCalls: 2, claimsFlags: 0, overrodeReview: false, moderationReason: null });
     expect(outcome).toMatchObject({ kind: "ready", imageUrl: "https://blob.test/1.png", plan: { finalAttempt: 1, synthesized: true } });
   });
 
   it("carries the kept region into a synthesized plan", () => {
     const edited = { attempt: 1, imageUrl: "https://blob.test/1.png", prompt: "p", mode: "edit" as const, keepRegion: region, review: { pass: true, notes: [] } };
-    const outcome = resolveVariationOutcome({ attempts: [edited], plan: null, finished: false, contextReads: 0, imageCalls: 1, claimsFlags: 0, moderationReason: null });
+    const outcome = resolveVariationOutcome({ attempts: [edited], plan: null, finished: false, contextReads: 0, imageCalls: 1, claimsFlags: 0, overrodeReview: false, moderationReason: null });
     expect(outcome).toMatchObject({ kind: "ready", plan: { keptProductRegion: region, synthesized: true } });
   });
 
   it("fails with review or no_image when nothing passed review", () => {
-    expect(resolveVariationOutcome({ attempts: [attempt(1, false)], plan: null, finished: false, contextReads: 0, imageCalls: 1, claimsFlags: 0, moderationReason: null })).toEqual({ kind: "failed", reason: "review", attempts: [attempt(1, false)] });
-    expect(resolveVariationOutcome({ attempts: [], plan: null, finished: false, contextReads: 0, imageCalls: 0, claimsFlags: 0, moderationReason: null })).toEqual({ kind: "failed", reason: "no_image", attempts: [] });
+    expect(resolveVariationOutcome({ attempts: [attempt(1, false)], plan: null, finished: false, contextReads: 0, imageCalls: 1, claimsFlags: 0, overrodeReview: false, moderationReason: null })).toEqual({ kind: "failed", reason: "review", attempts: [attempt(1, false)] });
+    expect(resolveVariationOutcome({ attempts: [], plan: null, finished: false, contextReads: 0, imageCalls: 0, claimsFlags: 0, overrodeReview: false, moderationReason: null })).toEqual({ kind: "failed", reason: "no_image", attempts: [] });
   });
 
   it("reports the moderation reason when that is why nothing was produced", () => {
-    expect(resolveVariationOutcome({ attempts: [], plan: null, finished: false, contextReads: 0, imageCalls: 1, claimsFlags: 0, moderationReason: "logo" })).toEqual({ kind: "failed", reason: "logo", attempts: [] });
+    expect(resolveVariationOutcome({ attempts: [], plan: null, finished: false, contextReads: 0, imageCalls: 1, claimsFlags: 0, overrodeReview: false, moderationReason: "logo" })).toEqual({ kind: "failed", reason: "logo", attempts: [] });
   });
 
   it("prefers the moderation reason when a later attempt was blocked after a failed review", () => {
-    expect(resolveVariationOutcome({ attempts: [attempt(1, false)], plan: null, finished: false, contextReads: 0, claimsFlags: 0, imageCalls: 2, moderationReason: "likeness" })).toEqual({ kind: "failed", reason: "likeness", attempts: [attempt(1, false)] });
+    expect(resolveVariationOutcome({ attempts: [attempt(1, false)], plan: null, finished: false, contextReads: 0, claimsFlags: 0, overrodeReview: false, imageCalls: 2, moderationReason: "likeness" })).toEqual({ kind: "failed", reason: "likeness", attempts: [attempt(1, false)] });
   });
 });
 

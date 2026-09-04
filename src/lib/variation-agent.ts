@@ -88,6 +88,8 @@ export type VariationRunState = {
   attempts: VariationAttempt[];
   plan: VariationPlan | null;
   finished: boolean;
+  /** Set by the first finish on a rejected attempt, which bounces; a second finish ships it. */
+  overrodeReview: boolean;
   moderationReason: "likeness" | "logo" | "moderation" | null;
 };
 
@@ -172,7 +174,7 @@ const PROCEDURE = [
   "2. Check the core context, especially the resolution log and playbook, for what worked and did not work in that lane. Read reference sections only when they add something specific (a testimonial to quote, a customer phrase to reuse).",
   "3. Choose ONE primary change and keep everything else. Prefer moves the playbook supports: plain-language benefits, product-led minimal composition, soft claims (may / designed to support), ad-to-landing-page continuity.",
   "4. Write a finished image prompt and call generateImage. The prompt must be self-contained and under 120 words: one plain-language description of subject, composition, lighting, palette, and mood. Quote exactly, in double quotes, every word that appears in the image (headline, offer, CTA) and keep it short. End with: No other text. No watermarks, platform UI, or third-party logos.",
-  "5. Read the review. If it failed, fix the specific problems and try once more. Then call finish with the attempt you are shipping.",
+  "5. Read the review. If it failed, fix the specific problems and try once more. Then call finish with the attempt you are shipping. Finishing on an attempt the review rejected is allowed but bounces once; call finish again to confirm.",
   "",
   "Rules:",
   "- Any CONSTRAINT FROM THE USER is a hard constraint, not a suggestion.",
@@ -266,7 +268,7 @@ export function buildVariationSystemPrompt(input: VariationRunInput) {
       ? null
       : "<mode>\nThe source image is NOT sent to the image model on this run (the user retried without it), and keepSourceLayout has no effect. Describe the layout, composition, and every element the image needs in the prompt itself.\n</mode>",
     editAvailable && input.sourceProductRegion
-      ? `<mode>\nEDIT MODE is available and is the default for generateImage. The source is the canvas: the box ${describeRegion(input.sourceProductRegion)} of it holds the product; after the edit the source's pixels for that box are pasted back, so the product is preserved exactly, and everything outside that box is redrawn from your prompt alone. Because that rectangle is pasted over the result, the image model must keep the box at exactly the same position and size (no reflowed grid, no resized tiles) and must not draw the product anywhere else in the image; say both of those in the prompt. The prompt is still the self-contained description step 4 asks for, minus the product: describe the whole scene outside the kept box (background, lighting, palette, mood) and re-quote every line of copy the finished ad shows, including lines you are not changing. Anything you leave out is lost. Never describe or restyle the product itself; refer to it in plain words if you must (for example "the product in the lower-right tile is kept as is"). Keep the source's composition. If the review says the kept region cut the product, call generateImage again with a wider keepRegion. Once in edit mode keepSourceLayout has no effect; to leave edit mode pass mode "generate" or keepSourceLayout false, and do that only when the variation must move or replace the product.\n</mode>`
+      ? `<mode>\nEDIT MODE is available and is the default for generateImage. The source is the canvas: the box ${describeRegion(input.sourceProductRegion)} of it holds the product; after the edit the source's pixels for that box are pasted back, so the product is preserved exactly, and everything outside that box is redrawn from your prompt alone. Because that rectangle is pasted over the result, the image model must keep the box at exactly the same position and size (no reflowed grid, no resized tiles) and must not draw the product anywhere else in the image; say both of those in the prompt. The prompt is still the self-contained description step 4 asks for, minus the product: describe the whole scene outside the kept box (background, lighting, palette, mood) and re-quote every line of copy the finished ad shows, including lines you are not changing. Anything you leave out is lost. Never describe or restyle the product itself; refer to it in plain words if you must (for example "the product in the lower-right tile is kept as is"). Keep the source's composition. If the review reports a misaligned box or a collision with a neighbouring element, move or resize keepRegion so its edges fall on a flat, unbroken area of the source (a plain background band, not a card edge). If it reports a second copy of the product, keep the box and rewrite the prompt to state that the product appears only inside that box. If it reports the box covering copy, shrink the box. Once in edit mode keepSourceLayout has no effect; to leave edit mode pass mode "generate" or keepSourceLayout false, and do that only when the variation must move or replace the product.\n</mode>`
       : null,
     brandBlock(input.brand, editAvailable),
     ...core,
@@ -316,6 +318,7 @@ export function createVariationRun(
     attempts: [],
     plan: null,
     finished: false,
+    overrodeReview: false,
     moderationReason: null,
   };
   const referenceById = new Map(input.library.reference.map((doc) => [doc.id, doc]));
@@ -482,6 +485,16 @@ export function createVariationRun(
     if (!final) {
       return {
         error: `finalAttempt ${raw.plan.finalAttempt} does not exist. Attempts so far: ${state.attempts.length}.`,
+      };
+    }
+
+    // Shipping a rejected attempt is allowed, but only as a second, deliberate
+    // choice: the first finish bounces so the agent spends its remaining
+    // attempt or restates the call.
+    if (!final.review.pass && !state.overrodeReview) {
+      state.overrodeReview = true;
+      return {
+        error: `Attempt ${final.attempt} did not pass review (${final.review.notes.join("; ") || "no notes"}). Fix it and generate again if you have an attempt left, or call finish again with this attempt to ship it as is.`,
       };
     }
 

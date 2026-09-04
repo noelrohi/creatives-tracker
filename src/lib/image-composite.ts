@@ -37,9 +37,9 @@ function fitBox(from: PasteBox, to: PasteBox): PasteBox {
 }
 
 /**
- * Extracts `region` from `source`, resizes it to the same normalized box in
- * `output`'s pixel size, composites it there, and returns PNG bytes plus the
- * box it landed in. The region is clamped to the canvas first; an empty box
+ * Extracts `region` from `source`, uniform-scales it to fit the same
+ * normalized box in `output`'s pixel size, centred, composites it there, and
+ * returns PNG bytes plus the box it landed in. The region is clamped to the canvas first; an empty box
  * throws so the caller never ships an output that silently kept nothing.
  */
 export async function pasteSourceRegion(input: {
