@@ -2,23 +2,31 @@
 // scene without dragging the source's background along. Works on the common
 // case (a product on a flat card or pedestal): flood-fills the background from
 // the box border, keeps everything it cannot reach, and softens the edge one
-// pixel. The flood spreads by neighbour-to-neighbour similarity rather than a
-// single global threshold, so a vignette or spotlight that darkens toward the
-// centre still floods; an overall drift bound keeps it from walking into the
-// product through a soft edge. Anything else falls back to an opaque rectangle
-// so callers always get a usable patch.
+// pixel. The border counts as background when a majority of its pixels sit
+// close to its median colour, so a gold outline or a label clipping a few
+// border pixels does not veto the matte. The flood spreads by
+// neighbour-to-neighbour similarity rather than a single global threshold, so a
+// vignette or spotlight that darkens toward the centre still floods; an overall
+// drift bound keeps it from walking into the product through a soft edge. The
+// matted patch is cropped to the product it found, so a caller fitting it into
+// a target box does not spend that box on transparent margins. Anything else
+// falls back to an opaque rectangle so callers always get a usable patch.
 
 import sharp from "sharp";
 import { pixelBox, type PasteBox } from "@/lib/image-composite";
 import { clampRegion, type ProductRegion } from "@/lib/image-mask";
 
-/** Max spread of border colours (RGB Euclidean, 0-441) for the border to count as flat. */
-const FLAT_BORDER_SPREAD = 40;
-/** A pixel this close to the border's mean colour is background. */
+/**
+ * Share of border pixels that must sit within BACKGROUND_DISTANCE of the border
+ * median for the border to count as background.
+ */
+const FLAT_BORDER_SHARE = 0.85;
+/** A pixel this close to the border's reference colour is background. */
 const BACKGROUND_DISTANCE = 32;
 /**
- * How far the background may drift from the border mean overall, so a smooth
- * vignette floods but the flood cannot walk into a product through a soft edge.
+ * How far the background may drift from the border reference overall, so a
+ * smooth vignette floods but the flood cannot walk into a product through a
+ * soft edge.
  */
 const BACKGROUND_DRIFT = 96;
 /** Foreground share outside this band means the matte is not trustworthy. */
@@ -31,6 +39,8 @@ export type MatteResult = {
   patch: Uint8Array;
   /** Pixel box of the region in the (oriented) source. */
   box: PasteBox;
+  /** Normalized region of `box` in the oriented source. */
+  region: ProductRegion;
   /** False when the rectangle fallback was used. */
   matted: boolean;
   /** Foreground share of the box (0 when not matted). */
@@ -66,19 +76,25 @@ export async function matteProduct(input: {
   const rectangle = async (): Promise<MatteResult> => ({
     patch: new Uint8Array(await sharp(data, { raw: { width, height, channels: 4 } }).png().toBuffer()),
     box,
+    region,
     matted: false,
     coverage: 0,
   });
 
-  // Border ring: is it flat enough to treat as background?
+  // Border ring: does a majority of it sit close to its own median colour? The
+  // median ignores the handful of pixels an outline or a label crosses, which a
+  // mean (and a max-spread test around it) would let veto the whole matte.
   const border: number[] = [];
   for (let x = 0; x < width; x += 1) border.push(x, (height - 1) * width + x);
   for (let y = 1; y < height - 1; y += 1) border.push(y * width, y * width + width - 1);
-  const mean: [number, number, number] = [0, 0, 0];
-  for (const i of border) for (let c = 0; c < 3; c += 1) mean[c] += data[i * 4 + c] / border.length;
-  let spread = 0;
-  for (const i of border) spread = Math.max(spread, distance(rgbAt(i), mean));
-  if (spread > FLAT_BORDER_SPREAD) return rectangle();
+  const reference: [number, number, number] = [0, 0, 0];
+  for (let c = 0; c < 3; c += 1) {
+    const channel = border.map((i) => data[i * 4 + c]).sort((a, b) => a - b);
+    reference[c] = channel[Math.floor(channel.length / 2)];
+  }
+  let flat = 0;
+  for (const i of border) if (distance(rgbAt(i), reference) <= BACKGROUND_DISTANCE) flat += 1;
+  if (flat / border.length < FLAT_BORDER_SHARE) return rectangle();
 
   // Flood fill background from the border. A neighbour joins when it matches
   // the pixel it was reached from, which follows a gradient, and when it is
@@ -86,7 +102,7 @@ export async function matteProduct(input: {
   const background = new Uint8Array(width * height);
   const queue: number[] = [];
   for (const i of border) {
-    if (distance(rgbAt(i), mean) <= BACKGROUND_DISTANCE && !background[i]) {
+    if (distance(rgbAt(i), reference) <= BACKGROUND_DISTANCE && !background[i]) {
       background[i] = 1;
       queue.push(i);
     }
@@ -108,7 +124,7 @@ export async function matteProduct(input: {
       if (background[n]) continue;
       const colour = rgbAt(n);
       if (distance(colour, rgbAt(i)) > BACKGROUND_DISTANCE) continue;
-      if (distance(colour, mean) > BACKGROUND_DRIFT) continue;
+      if (distance(colour, reference) > BACKGROUND_DRIFT) continue;
       background[n] = 1;
       queue.push(n);
     }
@@ -121,20 +137,58 @@ export async function matteProduct(input: {
 
   // Alpha: background 0, product edge soft, product 255.
   const out = Buffer.from(data);
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
   for (let i = 0; i < width * height; i += 1) {
+    const x = i % width;
+    const y = (i - x) / width;
     if (background[i]) {
       out[i * 4 + 3] = 0;
       continue;
     }
-    const x = i % width;
-    const y = (i - x) / width;
     const touchesBackground =
       (x > 0 && background[i - 1] === 1) ||
       (x < width - 1 && background[i + 1] === 1) ||
       (y > 0 && background[i - width] === 1) ||
       (y < height - 1 && background[i + width] === 1);
     out[i * 4 + 3] = touchesBackground ? EDGE_ALPHA : 255;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
   }
-  const patch = new Uint8Array(await sharp(out, { raw: { width, height, channels: 4 } }).png().toBuffer());
-  return { patch, box, matted: true, coverage };
+
+  // Crop to the product plus a pixel of slack: callers fit the patch into the
+  // output's product box, so transparent margins would shrink the product.
+  const crop = {
+    left: Math.max(minX - 1, 0),
+    top: Math.max(minY - 1, 0),
+    width: 0,
+    height: 0,
+  };
+  crop.width = Math.min(maxX + 1, width - 1) - crop.left + 1;
+  crop.height = Math.min(maxY + 1, height - 1) - crop.top + 1;
+  const patch = new Uint8Array(
+    await sharp(out, { raw: { width, height, channels: 4 } }).extract(crop).png().toBuffer(),
+  );
+  const cropped: PasteBox = {
+    left: box.left + crop.left,
+    top: box.top + crop.top,
+    width: crop.width,
+    height: crop.height,
+  };
+  return {
+    patch,
+    box: cropped,
+    region: {
+      x: cropped.left / size.width,
+      y: cropped.top / size.height,
+      w: cropped.width / size.width,
+      h: cropped.height / size.height,
+    },
+    matted: true,
+    coverage,
+  };
 }
