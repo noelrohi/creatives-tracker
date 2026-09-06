@@ -4,6 +4,8 @@ import { db } from "@/db";
 import { DAY_PATTERN } from "@/lib/day";
 import { analyticsMetadataShape, explicitStoreWindow } from "@/lib/analytics-reporting";
 import { loadAnalyticsReporting } from "@/lib/analytics-reporting-queries";
+import { fulfillmentSummarySchema } from "@/lib/shopify-fulfillment";
+import { getUnfulfilledOrders } from "@/lib/shopify-fulfillment-queries";
 import { shopifySyncRuns } from "@/schema/shopify";
 import {
   ATTRIBUTION_BUCKETS,
@@ -181,6 +183,23 @@ const syncStatusOutputSchema = z.object({
 });
 
 export const attributionRouter = router({
+  unfulfilledOrders: orgProcedure
+    .meta(openApiQueryMeta("attribution", "unfulfilledOrders", "Observed unfulfilled order counts", "Inclusive store-calendar creation-day selection, excluding cancelled and test orders independently of financial status. Counts latest observed UNFULFILLED, OPEN and RESTOCKED statuses only; partial/fulfilled/other statuses are separate and missing statuses remain unknown. This is not status-as-of the window end or a guarantee of complete source coverage. Old orders refresh through updated-at sync subject to Shopify historical access; legacy rows need an explicit status backfill. Aggregate only; no customer/order identifiers or fulfillment mutations."))
+    .input(dateRangeSchema)
+    .output(fulfillmentSummarySchema.extend(analyticsMetadataShape))
+    .query(async ({ input, ctx }) => {
+      const store = await requireStore(ctx.organizationId);
+      const [summary, reporting] = await Promise.all([
+        getUnfulfilledOrders({ ...input, organizationId: ctx.organizationId, storeId: store.id }),
+        loadAnalyticsReporting({ organizationId: ctx.organizationId, store, includeMeta: false }),
+      ]);
+      return {
+        ...summary,
+        effectiveWindow: { ...explicitStoreWindow(input), rowSelection: "store_order_day" as const },
+        reporting,
+      };
+    }),
+
   overview: orgProcedure
     .meta(
       openApiQueryMeta(

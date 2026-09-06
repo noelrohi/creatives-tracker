@@ -145,6 +145,8 @@ export type ShopifyOrderRow = {
   lastClickUtmSource: string | null;
   lastClickUtmMedium: string | null;
   lastClickUtmCampaign: string | null;
+  fulfillmentStatus: string | null;
+  fulfillmentStatusObservedAt: Date | null;
   cancelledAt: Date | null;
   cancelReason: string | null;
   orderSourceName: string | null;
@@ -206,6 +208,8 @@ export function mapOrderToRow(
     lastClickUtmSource: normalizeLower(utm?.source),
     lastClickUtmMedium: normalizeLower(utm?.medium),
     lastClickUtmCampaign: normalizeLower(utm?.campaign),
+    fulfillmentStatus: order.displayFulfillmentStatus || null,
+    fulfillmentStatusObservedAt: order.displayFulfillmentStatus ? now : null,
     cancelledAt: toDateOrNull(order.cancelledAt),
     cancelReason: order.cancelReason ?? null,
     orderSourceName: order.sourceName ?? null,
@@ -623,6 +627,13 @@ export async function loadSyncedMetaAds(
 }
 
 async function upsertOrderRows(rows: ShopifyOrderRow[]) {
+  // Keep the source watermark monotonic so a delayed bulk/ID response cannot
+  // make a later stale response look current. Missing status never erases evidence.
+  const currentSource = sql`(${shopifyOrders.orderUpdatedAt} IS NULL OR excluded.order_updated_at >= ${shopifyOrders.orderUpdatedAt})`;
+  const observeFulfillment = sql`excluded.fulfillment_status IS NOT NULL AND ${currentSource}
+    AND (${shopifyOrders.fulfillmentStatusObservedAt} IS NULL
+      OR excluded.order_updated_at > ${shopifyOrders.orderUpdatedAt}
+      OR excluded.fulfillment_status_observed_at >= ${shopifyOrders.fulfillmentStatusObservedAt})`;
   const idByShopifyOrderId = new Map<string, string>();
 
   for (let index = 0; index < rows.length; index += UPSERT_BATCH_SIZE) {
@@ -636,7 +647,9 @@ async function upsertOrderRows(rows: ShopifyOrderRow[]) {
           organizationId: sql`excluded.organization_id`,
           orderName: sql`excluded.order_name`,
           orderCreatedAt: sql`excluded.order_created_at`,
-          orderUpdatedAt: sql`excluded.order_updated_at`,
+          orderUpdatedAt: sql`greatest(${shopifyOrders.orderUpdatedAt}, excluded.order_updated_at)`,
+          fulfillmentStatus: sql`case when ${observeFulfillment} then excluded.fulfillment_status else ${shopifyOrders.fulfillmentStatus} end`,
+          fulfillmentStatusObservedAt: sql`case when ${observeFulfillment} then excluded.fulfillment_status_observed_at else ${shopifyOrders.fulfillmentStatusObservedAt} end`,
           orderDay: sql`excluded.order_day`,
           netSales: sql`excluded.net_sales`,
           taxesIncluded: sql`excluded.taxes_included`,
@@ -647,8 +660,8 @@ async function upsertOrderRows(rows: ShopifyOrderRow[]) {
           lastClickUtmSource: sql`excluded.last_click_utm_source`,
           lastClickUtmMedium: sql`excluded.last_click_utm_medium`,
           lastClickUtmCampaign: sql`excluded.last_click_utm_campaign`,
-          cancelledAt: sql`excluded.cancelled_at`,
-          cancelReason: sql`excluded.cancel_reason`,
+          cancelledAt: sql`case when ${currentSource} then excluded.cancelled_at else ${shopifyOrders.cancelledAt} end`,
+          cancelReason: sql`case when ${currentSource} then excluded.cancel_reason else ${shopifyOrders.cancelReason} end`,
           orderSourceName: sql`excluded.order_source_name`,
           updatedAt: new Date(),
         },

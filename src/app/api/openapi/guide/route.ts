@@ -40,6 +40,19 @@ Existing metrics, attribution \`range\` and connector health fields remain.
   IDs, so changing the top sort or limit changes their membership. A full capped
   list is possibly truncated, not proof of the total eligible population.
 
+### Shopify fulfillment summary
+
+\`GET attribution/unfulfilledOrders\` accepts inclusive \`dateFrom\`/\`dateTo\`
+store-calendar creation dates and requires only read access. It counts locally
+observed UNFULFILLED, OPEN and RESTOCKED orders, excluding cancellations
+independently of payment status. Partial, fulfilled and other workflow statuses
+are separate; missing/unrecognized statuses stay unknown. Status is the latest
+observed current status, not historical status at the window end. A complete
+classification of observed rows is not proof of complete ingestion or source zero.
+Older status changes refresh through updated-at sync subject to Shopify access;
+legacy rows need the explicit operator fulfillment backfill. No customer/order
+identifiers or fulfillment mutations are exposed by this summary.
+
 ## Core semantics
 
 - **Star, don't save.** Studio output never becomes an ad creative record.

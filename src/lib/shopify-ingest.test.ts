@@ -66,6 +66,25 @@ function order(overrides: Partial<ShopifyOrderNode> = {}): ShopifyOrderNode {
   };
 }
 
+describe("Shopify fulfillment observation", () => {
+  it("requests authoritative status in shared normal/bulk selections", () => {
+    expect(ORDER_FIELDS).toContain("displayFulfillmentStatus");
+  });
+
+  it.each(["UNFULFILLED", "PARTIALLY_FULFILLED", "FULFILLED", "ON_HOLD", "FUTURE_STATUS"])("retains %s and its observation time independently of financial status", (status) => {
+    const now = new Date("2026-08-01T12:00:00Z");
+    const mapped = mapOrderToRow(order({ displayFulfillmentStatus: status }), { ...CONTEXT, now });
+    expect(mapped.fulfillmentStatus).toBe(status);
+    expect(mapped.fulfillmentStatusObservedAt).toEqual(now);
+  });
+
+  it("keeps unobserved status distinct from known unfulfilled", () => {
+    const mapped = mapOrderToRow(order(), CONTEXT);
+    expect(mapped.fulfillmentStatus).toBeNull();
+    expect(mapped.fulfillmentStatusObservedAt).toBeNull();
+  });
+});
+
 describe("Shopify monetary sync boundary", () => {
   it("does not request evidence-only line or identity fields", () => {
     expect(ORDER_FIELDS).not.toMatch(/\blineItems\b/);

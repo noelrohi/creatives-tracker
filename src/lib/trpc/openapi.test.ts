@@ -116,6 +116,7 @@ const EXPECTED_PROCEDURES = {
   signals: ["ingestFill", "rankedSignals", "ingestTestPlan", "planFeedback"],
   performanceSummary: ["monthlyOverview"],
   attribution: [
+    "unfulfilledOrders",
     "overview",
     "metaCheck",
     "campaignLedger",
@@ -177,6 +178,20 @@ function getResponseSchema(operation: Operation) {
 }
 
 describe("analytics reporting contracts", () => {
+  it("documents aggregate-only unfulfilled counts and unknown coverage", () => {
+    const document = generateOpenApiDocument(BASE_URL);
+    const operation = document.paths["/api/openapi/attribution/unfulfilledOrders"].get as Operation;
+    const schema = getResponseSchema(operation);
+    expect(schema).toMatchObject({ properties: {
+      observedUnfulfilledCount: { type: "integer" },
+      unknownStatusCount: { type: "integer" },
+      statusBasis: { enum: ["latest_observed_current_status"] },
+      effectiveWindow: expect.any(Object), reporting: expect.any(Object),
+    } });
+    expect(JSON.stringify(schema)).not.toContain('"shopifyOrderId"');
+    expect(JSON.stringify(schema)).not.toContain('"customerId"');
+  });
+
   it.each(["adCreative/dashboardStats", "adCreative/portfolioSummary", "attribution/overview", "attribution/metaCheck", "attribution/campaignLedger", "attribution/dailySeries", "attribution/refundsTotal"])("exposes additive evidence on %s", (procedure) => {
     const document = generateOpenApiDocument(BASE_URL);
     const schema = getResponseSchema(document.paths[`/api/openapi/${procedure}`].get as Operation);
@@ -261,8 +276,8 @@ describe("OpenAPI app inventory", () => {
     ({ path }) => !path.startsWith("/api/openapi/studio/"),
   );
 
-  it("contains exactly the expected 91 non-studio paths", () => {
-    expect(nonStudioOperations).toHaveLength(91);
+  it("contains exactly the expected non-studio paths", () => {
+    expect(nonStudioOperations).toHaveLength(EXPECTED_PATHS.length);
     expect(
       Object.keys(document.paths)
         .filter((path) => !path.startsWith("/api/openapi/studio/"))

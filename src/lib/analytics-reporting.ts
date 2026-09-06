@@ -8,7 +8,7 @@ export const effectiveWindowSchema = z.object({
   rollingDays: z.number().nullable(),
   ignoredOneSidedBound: z.boolean(),
   resolutionTimezone: z.string().nullable(),
-  rowSelection: z.enum(["reporting_interval_overlap", "store_order_and_refund_day", "store_refund_day", "meta_date_start_and_store_order_refund_days"]),
+  rowSelection: z.enum(["reporting_interval_overlap", "store_order_day", "store_order_and_refund_day", "store_refund_day", "meta_date_start_and_store_order_refund_days"]),
 }).describe("Queried inclusive calendar labels, not a guarantee of matching instants across sources. Rolling N days includes today and N preceding dates, resolved by PostgreSQL. Both explicit bounds override days; a lone bound is ignored. Overlap selection does not prorate multi-day rows.");
 export type EffectiveWindow = z.infer<typeof effectiveWindowSchema>;
 

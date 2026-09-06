@@ -1,6 +1,6 @@
 # Unfulfilled Shopify order counts (#260)
 
-Status: proposed written spec, awaiting review. No fulfillment implementation yet.
+Status: approved by the user and implemented. Operator documentation: `docs/specs/2026-09-06-shopify-unfulfilled-orders.md`. Migration/backfill have not been run in production.
 
 ## Definition
 
