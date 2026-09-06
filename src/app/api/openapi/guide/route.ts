@@ -14,6 +14,45 @@ Keys are org-scoped. \`read\` scope covers all GET operations; \`write\` (or a
 full-access \`*\` key) is required for POST operations, including the upload
 endpoint. Keys are managed in Settings → API Keys.
 
+## Analytics evidence
+
+\`adCreative/dashboardStats\`, \`adCreative/portfolioSummary\` and attribution
+range aggregates return additive \`effectiveWindow\` and \`reporting\` metadata.
+Existing metrics, attribution \`range\` and connector health fields remain.
+
+- Boundaries are inclusive. Dashboard \`from\` + \`to\` override \`days\`; a lone
+  bound is ignored. Rolling \`days=N\` selects PostgreSQL's current date and N
+  preceding dates, not N dates total. The response and SQL use the same bounds.
+- Dashboard rows overlap the window; multi-day reporting rows are not prorated.
+  Attribution Meta rows use date_start, Shopify orders use creation day, and
+  revenue refunds use refund day. Read \`rowSelection\` for the event basis.
+- Meta dates use each account's reporting timezone; Shopify uses store-calendar
+  days. Equal labels need not cover equal instants. Mixed/missing account
+  timezones are explicit. Historical timezone changes are not reconstructed.
+- \`reporting.generatedAt\` is response generation time. Ingestion freshness is
+  separate from unknown gap-free coverage and provisional attribution. A recent
+  partial sync or maximum imported date does not establish complete or final data.
+  Account evidence includes lagging, never-synced and disconnected accounts.
+- \`sortBy=conversions|roas\` affects only top performers, before LIMIT.
+  Conversions-first remains the default; complete ties use creative ID.
+  \`leaderboards\` describes eligibility, ordering, filter asymmetries, lifetime
+  exceptions and health scope. Surviving/attention exclude only the returned top
+  IDs, so changing the top sort or limit changes their membership. A full capped
+  list is possibly truncated, not proof of the total eligible population.
+
+### Shopify fulfillment summary
+
+\`GET attribution/unfulfilledOrders\` accepts inclusive \`dateFrom\`/\`dateTo\`
+store-calendar creation dates and requires only read access. It counts locally
+observed UNFULFILLED, OPEN and RESTOCKED orders, excluding cancellations
+independently of payment status. Partial, fulfilled and other workflow statuses
+are separate; missing/unrecognized statuses stay unknown. Status is the latest
+observed current status, not historical status at the window end. A complete
+classification of observed rows is not proof of complete ingestion or source zero.
+Older status changes refresh through updated-at sync subject to Shopify access;
+legacy rows need the explicit operator fulfillment backfill. No customer/order
+identifiers or fulfillment mutations are exposed by this summary.
+
 ## Core semantics
 
 - **Star, don't save.** Studio output never becomes an ad creative record.

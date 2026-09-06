@@ -102,6 +102,9 @@ export const shopifyOrders = pgTable(
     verificationPending: boolean("verification_pending")
       .default(false)
       .notNull(),
+    // Nullable for legacy/unobserved rows; never infer this from financial status.
+    fulfillmentStatus: text("fulfillment_status"),
+    fulfillmentStatusObservedAt: timestamp("fulfillment_status_observed_at"),
     cancelledAt: timestamp("cancelled_at"),
     cancelReason: text("cancel_reason"),
     // Shopify source_name: web/pos/draft/subscription detection

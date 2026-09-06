@@ -40,7 +40,7 @@ vi.mock("@/db", () => ({
 }));
 vi.mock("server-only", () => ({}));
 
-const { createMockCaller } = await import("../test-helpers");
+const { createMockCaller, createApiKeyCaller } = await import("../test-helpers");
 
 const ORG = "org_portfolio_test";
 const FROM = "2026-06-01";
@@ -57,7 +57,15 @@ const FIXTURE_DDL = [
      id text PRIMARY KEY,
      name text NOT NULL,
      meta_account_id text NOT NULL UNIQUE,
-     organization_id text
+     organization_id text,
+     timezone text,
+     is_disabled boolean NOT NULL DEFAULT false,
+     meta_access_token text,
+     data_date_end date
+   )`,
+  `CREATE TABLE account_sync_run (
+     id text PRIMARY KEY, organization_id text NOT NULL, account_id text NOT NULL,
+     result text, requested_at timestamp NOT NULL DEFAULT now(), finished_at timestamp
    )`,
   `CREATE TABLE campaign (
      id text PRIMARY KEY,
@@ -236,7 +244,7 @@ describeIfDb("ad-creative portfolio aggregates", () => {
   beforeEach(async () => {
     await testDb!.execute(
       sql.raw(
-        "TRUNCATE performance_log, ad, ad_creative, ad_set, campaign, ad_account RESTART IDENTITY CASCADE",
+        "TRUNCATE account_sync_run, performance_log, ad, ad_creative, ad_set, campaign, ad_account RESTART IDENTITY CASCADE",
       ),
     );
     await testDb!.execute(sql`
@@ -251,6 +259,128 @@ describeIfDb("ad-creative portfolio aggregates", () => {
       INSERT INTO ad_set (id, name, campaign_id, meta_id, organization_id)
       VALUES ('set_1', 'Broad', 'cmp_1', 'meta_set_1', ${ORG})
     `);
+  });
+
+  describe("leaderboard population ordering and evidence", () => {
+    async function winner(id: string, conversions: number | undefined, revenue: number, spend = 100, status = "active") {
+      await seedCreative(id);
+      await seedAd(`ad_${id}`, { creativeId: id, status });
+      await seedPerf({ adId: `ad_${id}`, date: "2026-06-02", spend, purchaseValue: revenue, conversions });
+    }
+
+    it("ranks before LIMIT, preserves conversions-first defaults and stabilizes complete ties", async () => {
+      await winner("volume", 20, 200);
+      await winner("efficient_b", 2, 1000);
+      await winner("efficient_a", 2, 1000);
+      const defaults = await caller.adCreative.dashboardStats({ from: FROM, to: TO, limit: 1 });
+      expect(defaults.topPerformers.map((row) => row.id)).toEqual(["volume"]);
+      const roas = await caller.adCreative.dashboardStats({ from: FROM, to: TO, sortBy: "roas", limit: 1 });
+      expect(roas.topPerformers.map((row) => row.id)).toEqual(["efficient_a"]);
+      expect(roas.leaderboards.bottomPerformers.excludedTopIds).toEqual(["efficient_a"]);
+      expect(roas.leaderboards.topPerformers.truncation).toBe("possibly_truncated");
+    });
+
+    it("enforces spend, profit and active qualification and handles null/zero metrics", async () => {
+      await winner("null_conversions", undefined, 200);
+      await winner("zero_conversions", 0, 200);
+      await winner("under_floor", 100, 1000, 49);
+      await winner("zero_spend", 100, 1000, 0);
+      await winner("unprofitable", 100, 99);
+      await winner("paused", 100, 1000, 100, "paused");
+      const result = await caller.adCreative.dashboardStats({ from: FROM, to: TO });
+      expect(result.topPerformers.map((row) => row.id)).toEqual(["zero_conversions", "null_conversions"]);
+      expect(result.topPerformers[1].conversions).toBeNull();
+      expect(result.topPerformers[0].cpa).toBeNull();
+      expect(result.leaderboards.topPerformers.truncation).toBe("below_limit");
+    });
+
+    it("uses lifetime surviving scope, ignores requested status there, and excludes only returned top IDs", async () => {
+      await winner("volume", 20, 200);
+      await winner("survivor", 1, 200);
+      await seedPerf({ adId: "ad_survivor", date: "2026-05-01", spend: 100, purchaseValue: 200, conversions: 1 });
+      const result = await caller.adCreative.dashboardStats({ from: FROM, to: TO, limit: 1 });
+      expect(result.survivingCreatives.map((row) => row.id)).toEqual(["survivor"]);
+      expect(Number(result.survivingCreatives[0].totalSpend)).toBe(200);
+      expect(result.leaderboards.survivingCreatives.metricScope).toBe("lifetime");
+      const paused = await caller.adCreative.dashboardStats({ from: FROM, to: TO, statuses: ["paused"] });
+      expect(paused.topPerformers).toEqual([]);
+      expect(paused.survivingCreatives.map((row) => row.id)).toEqual(["survivor"]);
+    });
+
+    it("keeps per-ad attention thresholds and stable urgency/risk ties instead of sorting by ROAS", async () => {
+      for (const [id, spend, start] of [
+        ["pause_b", 50, "2026-05-28"], ["pause_a", 50, "2026-05-28"],
+        ["watch_age", 25, "2026-05-26"], ["cooking", 25, "2026-05-28"],
+        ["under_floor", 24, "2026-05-01"],
+      ] as const) {
+        await winner(id, 0, 0, spend);
+        await seedPerf({ adId: `ad_${id}`, date: start, spend: 0, purchaseValue: 0, conversions: 0 });
+      }
+      const result = await caller.adCreative.dashboardStats({ from: FROM, to: TO, statuses: ["paused"], sortBy: "roas", includePortfolio: false });
+      expect(result.bottomPerformers.map((row) => [row.id, row.tier])).toEqual([["pause_a", "pause_now"], ["pause_b", "pause_now"], ["watch_age", "watch"]]);
+      expect(result.leaderboards.bottomPerformers.ignoredFilters).toContain("statuses");
+      expect(result.leaderboards.bottomPerformers.lifetimeMeasures).toContain("qualification:adRunningDays");
+    });
+
+    it("qualifies with an active ad but displays paused-ad metrics unless filtered out", async () => {
+      await winner("mixed", 1, 100);
+      await seedAd("paused_ad", { creativeId: "mixed", status: "paused" });
+      await seedPerf({ adId: "paused_ad", date: "2026-06-02", spend: 100, purchaseValue: 500, conversions: 10 });
+      const all = await caller.adCreative.dashboardStats({ from: FROM, to: TO });
+      expect(Number(all.topPerformers[0].conversions)).toBe(11);
+      const active = await caller.adCreative.dashboardStats({ from: FROM, to: TO, statuses: ["active"] });
+      expect(Number(active.topPerformers[0].conversions)).toBe(1);
+      const paused = await caller.adCreative.dashboardStats({ from: FROM, to: TO, statuses: ["paused"] });
+      expect(paused.topPerformers).toEqual([]);
+    });
+
+    it.each([
+      { accountId: "missing" }, { teamId: "missing" }, { campaignIds: ["missing"] },
+      { adSetIds: ["missing"] }, { format: "video" as const }, { ownership: "ours" as const },
+    ])("applies the requested scope to top population before ranking: %j", async (filter) => {
+      await winner("winner", 1, 200);
+      const result = await caller.adCreative.dashboardStats({ from: FROM, to: TO, sortBy: "roas", ...filter });
+      expect(result.topPerformers).toEqual([]);
+    });
+
+    it("retains lagging account evidence and enforces read-key and org isolation", async () => {
+      await winner("winner", 1, 200);
+      await testDb!.execute(sql`UPDATE ad_account SET timezone = 'America/New_York', meta_access_token = 'synthetic' WHERE id = 'acc_1'`);
+      await testDb!.execute(sql`INSERT INTO ad_account (id, name, meta_account_id, organization_id, timezone) VALUES ('acc_2', 'Lagging', 'act_acc_2', ${ORG}, 'Asia/Tokyo')`);
+      await testDb!.execute(sql`INSERT INTO account_sync_run (id, account_id, organization_id, result, finished_at) VALUES ('run', 'acc_1', ${ORG}, 'partial_success', now() AT TIME ZONE 'UTC')`);
+      const read = createApiKeyCaller({ organizationId: ORG, scopes: ["read"] });
+      const result = await read.adCreative.dashboardStats({ from: FROM, to: TO });
+      expect(result.reporting.meta).toMatchObject({ freshness: "never_synced", timezoneState: "mixed", allAccountsConnected: false });
+      expect(result.reporting.meta?.accounts.map((row) => row.accountId)).toEqual(["acc_1", "acc_2"]);
+      const other = createApiKeyCaller({ organizationId: "other-org", scopes: ["read"] });
+      const isolated = await other.adCreative.dashboardStats({ from: FROM, to: TO, accountId: "acc_1" });
+      expect(isolated.topPerformers).toEqual([]);
+      expect(isolated.reporting.meta?.accounts).toEqual([]);
+      await expect(createApiKeyCaller({ organizationId: ORG, scopes: ["write"] }).adCreative.dashboardStats({})).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("uses the database timezone and date even when the application clock is across midnight", async () => {
+      await testDb!.transaction(async (tx) => {
+        await tx.execute(sql`SET LOCAL TIME ZONE 'Pacific/Auckland'`);
+        const expected = await tx.execute(sql`SELECT (current_date - 1)::text AS date_from, current_date::text AS date_to`);
+        const execute = vi.spyOn(testDb!, "execute").mockImplementation(tx.execute.bind(tx));
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("1999-01-01T23:59:59Z"));
+        try {
+          const result = await caller.adCreative.portfolioSummary({ days: 1 });
+          expect(result.effectiveWindow).toMatchObject({ dateFrom: expected.rows[0].date_from, dateTo: expected.rows[0].date_to, resolutionTimezone: "Pacific/Auckland", rollingDays: 1 });
+        } finally {
+          vi.useRealTimers();
+          execute.mockRestore();
+        }
+      });
+    });
+
+    it("reports the actual PostgreSQL calendar for inclusive rolling selection", async () => {
+      const result = await caller.adCreative.portfolioSummary({ days: 7, from: "1999-01-01" });
+      const expected = await testDb!.execute(sql`SELECT (current_date - 7)::text AS date_from, current_date::text AS date_to, current_setting('TimeZone') AS timezone`);
+      expect(result.effectiveWindow).toMatchObject({ dateFrom: expected.rows[0].date_from, dateTo: expected.rows[0].date_to, resolutionTimezone: expected.rows[0].timezone, ignoredOneSidedBound: true, boundaries: "inclusive" });
+    });
   });
 
   describe("CTR weighting", () => {

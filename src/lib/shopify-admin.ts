@@ -57,6 +57,7 @@ export type ShopifyOrderNode = {
   test?: boolean | null;
   taxesIncluded?: boolean | null;
   displayFinancialStatus?: string | null;
+  displayFulfillmentStatus?: string | null;
   sourceName?: string | null;
   subtotalPriceSet?: ShopifyMoneySet;
   currentSubtotalPriceSet?: ShopifyMoneySet;
@@ -99,6 +100,7 @@ const ORDER_CORE_FIELDS = `
   test
   taxesIncluded
   displayFinancialStatus
+  displayFulfillmentStatus
   sourceName
   subtotalPriceSet { shopMoney { amount } }
   currentSubtotalPriceSet { shopMoney { amount } }

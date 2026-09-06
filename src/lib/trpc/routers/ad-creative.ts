@@ -22,6 +22,9 @@ import { fetchAgentExportRows } from "@/lib/ad-export";
 import { effectiveAdActiveSql, effectiveAdStatusSql } from "@/lib/effective-ad-status";
 import { adSetScopeFilter, campaignScopeFilter } from "@/lib/ad-scope-sql";
 import { ANGLE_TYPES, MODES, VISUAL_STYLES } from "@/lib/creative-taxonomy";
+import { analyticsMetadataShape, type EffectiveWindow } from "@/lib/analytics-reporting";
+import { loadAnalyticsReporting, resolveDashboardWindow } from "@/lib/analytics-reporting-queries";
+import { leaderboardMetadata, leaderboardMetadataSchema, leaderboardSortSchema } from "@/lib/leaderboard-contract";
 
 type CreativeAttributes = (typeof adCreatives.$inferSelect)["attributes"];
 type CreativeAttributesMeta = (typeof adCreatives.$inferSelect)["attributesMeta"];
@@ -55,6 +58,7 @@ const dashboardAnalyticsFilterSchema = z.object({
 const dashboardAnalyticsInputSchema = dashboardAnalyticsFilterSchema.optional();
 const dashboardStatsInputSchema = dashboardAnalyticsFilterSchema
   .extend({
+    sortBy: leaderboardSortSchema.default("conversions").describe("Top performers only: ranks the full eligible population before LIMIT. Surviving and attention retain their specialized ordering."),
     includePortfolio: z.boolean().optional(),
     /**
      * Rows per leaderboard, applied to all three the same way. The screen wants
@@ -367,6 +371,8 @@ const dashboardPerformerSchema = z.object({
 });
 
 const dashboardStatsOutputSchema = z.object({
+  ...analyticsMetadataShape,
+  leaderboards: leaderboardMetadataSchema,
   portfolio: portfolioSummarySchema,
   topPerformers: z.array(dashboardPerformerSchema.extend({
     runningDays: z.number(),
@@ -557,8 +563,7 @@ type PortfolioRow = {
   total_conversions: string | null;
 };
 
-function buildDashboardAnalyticsFilters(input: DashboardAnalyticsInput, organizationId: string) {
-  const days = input?.days ?? 7;
+function buildDashboardAnalyticsFilters(input: DashboardAnalyticsInput, organizationId: string, window: EffectiveWindow) {
   const accountFilter = input?.accountId
     ? sql`AND ad.account_id = ${input.accountId}`
     : sql``;
@@ -580,9 +585,7 @@ function buildDashboardAnalyticsFilters(input: DashboardAnalyticsInput, organiza
     ? sql`AND ${effectiveAdStatusSql(sql`ad.status`, sql`ast.status`)} IN (${sql.join(input.statuses.map((s) => sql`${s}`), sql`, `)})`
     : sql``;
 
-  const dateFilter = input?.from && input?.to
-    ? sql`pl.date_start <= ${input.to}::date AND pl.date_end >= ${input.from}::date`
-    : sql`pl.date_start <= current_date AND pl.date_end >= current_date - ${days}::int`;
+  const dateFilter = sql`pl.date_start <= ${window.dateTo}::date AND pl.date_end >= ${window.dateFrom}::date`;
 
   return {
     accountFilter,
@@ -1164,21 +1167,26 @@ export const adCreativeRouter = router({
     }),
 
   portfolioSummary: orgProcedure
-    .meta(openApiQueryMeta("adCreative", "portfolioSummary"))
-    .output(portfolioSummarySchema)
+    .meta(openApiQueryMeta("adCreative", "portfolioSummary", "Portfolio aggregate with reporting evidence", "Both explicit bounds override days; a lone bound is ignored. Rolling days=N queries inclusive PostgreSQL current_date-N through current_date (N+1 calendar labels), using reporting-row overlap. effectiveWindow echoes those same query bounds. reporting distinguishes account calendar timezones, ingestion freshness, unknown coverage and provisional Meta attribution. Source evidence is org/account-scoped and may be broader than campaign/team/format metric filters."))
+    .output(portfolioSummarySchema.extend(analyticsMetadataShape))
     .input(dashboardAnalyticsInputSchema)
     .query(async ({ input, ctx }) => {
-      const filters = buildDashboardAnalyticsFilters(input, ctx.organizationId);
-      const portfolio = await fetchPortfolioRow(filters);
-      return mapPortfolioRow(portfolio);
+      const effectiveWindow = await resolveDashboardWindow(input);
+      const filters = buildDashboardAnalyticsFilters(input, ctx.organizationId, effectiveWindow);
+      const [portfolio, reporting] = await Promise.all([
+        fetchPortfolioRow(filters),
+        loadAnalyticsReporting({ organizationId: ctx.organizationId, accountId: input?.accountId }),
+      ]);
+      return { ...mapPortfolioRow(portfolio), effectiveWindow, reporting };
     }),
 
   dashboardStats: orgProcedure
-    .meta(openApiQueryMeta("adCreative", "dashboardStats"))
+    .meta(openApiQueryMeta("adCreative", "dashboardStats", "Creative leaderboards", "Top performers default to conversions descending, then ROAS; sortBy=roas reverses metric priority before LIMIT. All lists use creative ID as the final tie-breaker. Surviving uses lifetime metrics and ignores date/status filters. Attention uses per-ad urgency and at-risk spend, ignores requested status filters, and uses lifetime age. Surviving and attention exclude the returned top IDs, so sortBy and limit affect membership. See leaderboards for eligibility, ordering, metric scopes and truncation evidence."))
     .output(dashboardStatsOutputSchema)
     .input(dashboardStatsInputSchema)
     .query(async ({ input, ctx }) => {
-      const filters = buildDashboardAnalyticsFilters(input, ctx.organizationId);
+      const effectiveWindow = await resolveDashboardWindow(input);
+      const filters = buildDashboardAnalyticsFilters(input, ctx.organizationId, effectiveWindow);
       const {
         accountFilter,
         ownershipFilter,
@@ -1193,6 +1201,10 @@ export const adCreativeRouter = router({
       const includePortfolio = input?.includePortfolio !== false;
       const limit = input?.limit ?? 10;
       const includeSurviving = input?.includeSurviving !== false;
+      const sortBy = input?.sortBy ?? "conversions";
+      const topOrdering = sortBy === "roas"
+        ? sql`coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST, sum(pl.conversions) DESC NULLS LAST, ac.id ASC`
+        : sql`sum(pl.conversions) DESC NULLS LAST, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST, ac.id ASC`;
       const portfolio = includePortfolio
         ? await fetchPortfolioRow(filters)
         : undefined;
@@ -1228,9 +1240,10 @@ export const adCreativeRouter = router({
         ad_status: string | null;
       };
 
-      // Top performers by ROAS (min $50 spend). Displayed metrics aggregate
-      // ALL ads in the window (matches Meta's report — paused-ad late
-      // attribution counts because revenue is real). But the creative only
+      // Top performers default to conversions, then ROAS (min $50 spend).
+      // Displayed metrics aggregate
+      // all ads admitted by the requested filters, not just active ads.
+      // But the creative only
       // qualifies if at least one active ad has window spend, so the panel
       // never recommends "scale this" on a creative with nothing to scale.
       // Tracks running_days for the "evergreen" tag.
@@ -1257,22 +1270,15 @@ export const adCreativeRouter = router({
         HAVING sum(pl.spend) >= 50
           AND coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) >= 1
           AND bool_or(${effectiveAdActiveSql(sql`ad.status`, sql`ast.status`)} AND pl.spend > 0)
-        ORDER BY sum(pl.conversions) DESC NULLS LAST, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST
+        ORDER BY ${topOrdering}
         LIMIT ${limit}
       `);
       const topPerformers = topResult.rows as (CreativeRow & { running_days: number })[];
 
       const topIds = topPerformers.map((r) => r.id);
-      // Note the coupling `limit` introduces: this exclusion list is as long as
-      // Top Performers, so a smaller limit excludes fewer creatives and a
-      // profitable concept can appear in both leaderboards. Top and Bottom read
-      // their own rows and are unaffected. Left as is — "the ones that didn't
-      // crack the top list you were shown" is the honest reading of a capped
-      // response, and pinning the exclusion at ten would make a limit=3 caller
-      // pay for a query whose extra rows it never sees.
-      //
-      // Surviving creatives: long-running profitable concepts that didn't crack
-      // the Top Performers top-10. Same display-vs-qualify split — metrics
+      // Both secondary lists exclude only the top IDs returned at this sort and
+      // limit. Changing either input therefore changes their eligible population.
+      // Surviving creatives: long-running profitable concepts outside that list. Same display-vs-qualify split — metrics
       // aggregate all ads (matches Meta) but the creative only qualifies if at
       // least one active ad has spend (something is currently runnable).
       const survivingExclude = topIds.length
@@ -1305,7 +1311,7 @@ export const adCreativeRouter = router({
           AND coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) >= 1
           AND (max(pl.date_end)::date - min(pl.date_start)::date) >= 14
           AND bool_or(${effectiveAdActiveSql(sql`ad.status`, sql`ast.status`)} AND pl.spend > 0)
-        ORDER BY (max(pl.date_end)::date - min(pl.date_start)::date) DESC, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST
+        ORDER BY (max(pl.date_end)::date - min(pl.date_start)::date) DESC, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST, ac.id ASC
         LIMIT ${limit}
       `) : null;
       const survivingCreatives = (survivingResult?.rows ?? []) as (CreativeRow & { running_days: number })[];
@@ -1429,7 +1435,7 @@ export const adCreativeRouter = router({
           ) AS active_ad_count,
           sum(b.spend)::text AS bleeder_spend,
           sum(coalesce(b.spend, 0) * (1 - coalesce(b.roas, 0)))::text AS bleeder_at_risk,
-          array_agg(b.meta_ad_id ORDER BY b.spend DESC NULLS LAST) AS bleeder_meta_ids,
+          array_agg(b.meta_ad_id ORDER BY b.spend DESC NULLS LAST, b.ad_id ASC) AS bleeder_meta_ids,
           (CASE WHEN bool_or(b.tier = 'pause_now') THEN 'pause_now' ELSE 'watch' END)::text AS tier,
           EXISTS (
             SELECT 1 FROM ad_window aw
@@ -1445,7 +1451,8 @@ export const adCreativeRouter = router({
         GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url, cw.spend, cw.revenue, cw.conversions
         ORDER BY
           (CASE WHEN bool_or(b.tier = 'pause_now') THEN 0 ELSE 1 END),
-          sum(coalesce(b.spend, 0) * (1 - coalesce(b.roas, 0))) DESC NULLS LAST
+          sum(coalesce(b.spend, 0) * (1 - coalesce(b.roas, 0))) DESC NULLS LAST,
+          ac.id ASC
         LIMIT ${limit}
       `);
       const bottomPerformers = bottomResult.rows as BleederRow[];
@@ -1464,6 +1471,9 @@ export const adCreativeRouter = router({
       });
 
       return {
+        effectiveWindow,
+        reporting: await loadAnalyticsReporting({ organizationId: ctx.organizationId, accountId: input?.accountId }),
+        leaderboards: leaderboardMetadata({ sortBy, limit, includeSurviving, includePortfolio, fairShotSpend: includePortfolio ? fairShotSpend : null, topIds, survivingCount: survivingCreatives.length, bottomCount: bottomPerformers.length }),
         portfolio: mapPortfolioRow(portfolio),
         topPerformers: topPerformers.map((r) => ({
           id: r.id,

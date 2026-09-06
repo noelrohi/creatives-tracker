@@ -116,6 +116,7 @@ const EXPECTED_PROCEDURES = {
   signals: ["ingestFill", "rankedSignals", "ingestTestPlan", "planFeedback"],
   performanceSummary: ["monthlyOverview"],
   attribution: [
+    "unfulfilledOrders",
     "overview",
     "metaCheck",
     "campaignLedger",
@@ -175,6 +176,41 @@ function getOperations(document: ReturnType<typeof generateOpenApiDocument>) {
 function getResponseSchema(operation: Operation) {
   return operation.responses?.["200"]?.content?.["application/json"]?.schema;
 }
+
+describe("analytics reporting contracts", () => {
+  it("documents aggregate-only unfulfilled counts and unknown coverage", () => {
+    const document = generateOpenApiDocument(BASE_URL);
+    const operation = document.paths["/api/openapi/attribution/unfulfilledOrders"].get as Operation;
+    const schema = getResponseSchema(operation);
+    expect(schema).toMatchObject({ properties: {
+      observedUnfulfilledCount: { type: "integer" },
+      unknownStatusCount: { type: "integer" },
+      statusBasis: { enum: ["latest_observed_current_status"] },
+      effectiveWindow: expect.any(Object), reporting: expect.any(Object),
+    } });
+    expect(JSON.stringify(schema)).not.toContain('"shopifyOrderId"');
+    expect(JSON.stringify(schema)).not.toContain('"customerId"');
+  });
+
+  it.each(["adCreative/dashboardStats", "adCreative/portfolioSummary", "attribution/overview", "attribution/metaCheck", "attribution/campaignLedger", "attribution/dailySeries", "attribution/refundsTotal"])("exposes additive evidence on %s", (procedure) => {
+    const document = generateOpenApiDocument(BASE_URL);
+    const schema = getResponseSchema(document.paths[`/api/openapi/${procedure}`].get as Operation);
+    expect(schema).toMatchObject({ properties: {
+      effectiveWindow: { properties: { boundaries: { enum: ["inclusive"] }, rowSelection: { type: "string" } } },
+      reporting: { properties: { generatedAt: { type: "string" }, meta: expect.any(Object), shopify: expect.any(Object) } },
+    } });
+    expect(JSON.stringify(schema)).not.toContain("finalizedThrough");
+  });
+
+  it("publishes closed leaderboard sorting and algorithm metadata", () => {
+    const document = generateOpenApiDocument(BASE_URL);
+    const operation = document.paths["/api/openapi/adCreative/dashboardStats"].get;
+    expect(JSON.stringify(operation)).toContain('"enum":["conversions","roas"]');
+    expect(getResponseSchema(operation as Operation)).toMatchObject({ properties: {
+      leaderboards: { properties: { sortAppliesTo: { enum: ["topPerformers"] }, survivingCreatives: { properties: { ignoredFilters: { type: "array" }, lifetimeMeasures: { type: "array" } } } } },
+    } });
+  });
+});
 
 describe("OpenAPI generator unit fixtures", () => {
   it("uses declared output schemas and preserves dates and arrays", () => {
@@ -240,8 +276,8 @@ describe("OpenAPI app inventory", () => {
     ({ path }) => !path.startsWith("/api/openapi/studio/"),
   );
 
-  it("contains exactly the expected 91 non-studio paths", () => {
-    expect(nonStudioOperations).toHaveLength(91);
+  it("contains exactly the expected non-studio paths", () => {
+    expect(nonStudioOperations).toHaveLength(EXPECTED_PATHS.length);
     expect(
       Object.keys(document.paths)
         .filter((path) => !path.startsWith("/api/openapi/studio/"))
