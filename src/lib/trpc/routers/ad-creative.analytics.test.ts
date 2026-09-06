@@ -27,6 +27,20 @@ const mockDb = {
 const mockComputeCreativeHealthByCreativeId = vi.fn();
 
 vi.mock("@/db", () => ({ db: mockDb }));
+vi.mock("@/lib/analytics-reporting-queries", async () => {
+  const { buildReporting } = await import("@/lib/analytics-reporting");
+  return {
+    resolveDashboardWindow: vi.fn(async (input?: { from?: string; to?: string; days?: number }) => ({
+      dateFrom: input?.from && input?.to ? input.from : "2026-06-01",
+      dateTo: input?.from && input?.to ? input.to : "2026-06-08",
+      boundaries: "inclusive", selection: input?.from && input?.to ? "explicit" : "rolling",
+      rollingDays: input?.from && input?.to ? null : input?.days ?? 7,
+      ignoredOneSidedBound: Boolean(input?.from) !== Boolean(input?.to),
+      resolutionTimezone: "UTC", rowSelection: "reporting_interval_overlap",
+    })),
+    loadAnalyticsReporting: vi.fn(async () => buildReporting({ now: new Date("2026-06-08T12:00:00Z"), metaAccounts: [] })),
+  };
+});
 vi.mock("@/lib/creative-health-rollup", () => ({
   computeCreativeHealthByCreativeId: mockComputeCreativeHealthByCreativeId,
 }));
@@ -71,6 +85,41 @@ describe("adCreative analytics procedures", () => {
   });
 
   describe("dashboardStats", () => {
+    it.each(["conversions", "roas"] as const)("ranks the eligible population by %s before LIMIT with stable ties", async (sortBy) => {
+      const caller = createMockCaller({ role: "member" });
+      const result = await caller.adCreative.dashboardStats({ sortBy, limit: 3 });
+      const topSql = compileSql(mockState.executedSql[1]);
+      const ordering = topSql.slice(topSql.lastIndexOf("ORDER BY"));
+      const conversions = ordering.indexOf("sum(pl.conversions)");
+      const roas = ordering.indexOf("coalesce(sum(pl.purchase_value)");
+      expect(sortBy === "roas" ? roas < conversions : conversions < roas).toBe(true);
+      expect(ordering).toMatch(/ac.id ASC\s+LIMIT/);
+      expect(topSql).toContain("HAVING sum(pl.spend) >= 50");
+      expect(topSql).toContain("AND bool_or(");
+      expect(topSql).toContain("AND pl.spend > 0");
+      expect(topSql.match(/LIMIT/g)).toHaveLength(1);
+      expect(result.leaderboards.sortBy).toBe(sortBy);
+      expect(result.leaderboards.topPerformers.ordering[0].metric).toBe(sortBy);
+      expect(result.leaderboards.survivingCreatives.ignoredFilters).toEqual(["date", "statuses", "sortBy"]);
+      expect(result.leaderboards.bottomPerformers.ordering[0].metric).toBe("tier:pause_now_before_watch");
+      expect(compileSql(mockState.executedSql[2])).toMatch(/ac.id ASC\s+LIMIT/);
+      expect(compileSql(mockState.executedSql[3])).toMatch(/ac.id ASC\s+LIMIT/);
+    });
+
+    it("rejects unsupported sort modes before querying", async () => {
+      const caller = createMockCaller({ role: "member" });
+      await expect(caller.adCreative.dashboardStats({ sortBy: "spend" as "roas" })).rejects.toThrow();
+      expect(mockDb.execute).not.toHaveBeenCalled();
+    });
+
+    it("describes omitted lists and defaults without pretending a capped list is complete", async () => {
+      const caller = createMockCaller({ role: "member" });
+      const result = await caller.adCreative.dashboardStats({ includeSurviving: false, includePortfolio: false });
+      expect(result.leaderboards.sortBy).toBe("conversions");
+      expect(result.leaderboards.survivingCreatives).toMatchObject({ included: false, truncation: "not_requested", excludedTopIds: [] });
+      expect(result.leaderboards.bottomPerformers).toMatchObject({ fairShotSpend: null, ignoredFilters: ["statuses", "sortBy"] });
+    });
+
     it("maps portfolio, leaderboard rows, and health rollups without changing public shape", async () => {
       mockComputeCreativeHealthByCreativeId.mockResolvedValue(
         new Map([
@@ -327,7 +376,7 @@ describe("adCreative analytics procedures", () => {
           accountId: "acct_1",
           teamId: "team_1",
         }),
-      ).resolves.toEqual({
+      ).resolves.toMatchObject({
         totalSpend: "1000",
         totalRevenue: "2400",
         roas: "2.4",

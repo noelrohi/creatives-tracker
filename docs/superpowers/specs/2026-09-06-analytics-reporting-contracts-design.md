@@ -1,6 +1,6 @@
 # Analytics reporting contracts (#257–259)
 
-Status: proposed written spec; approach approved, awaiting spec review.
+Status: approved by the user; implemented for #257–259.
 
 ## Delivery boundaries
 

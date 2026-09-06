@@ -176,6 +176,27 @@ function getResponseSchema(operation: Operation) {
   return operation.responses?.["200"]?.content?.["application/json"]?.schema;
 }
 
+describe("analytics reporting contracts", () => {
+  it.each(["adCreative/dashboardStats", "adCreative/portfolioSummary", "attribution/overview", "attribution/metaCheck", "attribution/campaignLedger", "attribution/dailySeries", "attribution/refundsTotal"])("exposes additive evidence on %s", (procedure) => {
+    const document = generateOpenApiDocument(BASE_URL);
+    const schema = getResponseSchema(document.paths[`/api/openapi/${procedure}`].get as Operation);
+    expect(schema).toMatchObject({ properties: {
+      effectiveWindow: { properties: { boundaries: { enum: ["inclusive"] }, rowSelection: { type: "string" } } },
+      reporting: { properties: { generatedAt: { type: "string" }, meta: expect.any(Object), shopify: expect.any(Object) } },
+    } });
+    expect(JSON.stringify(schema)).not.toContain("finalizedThrough");
+  });
+
+  it("publishes closed leaderboard sorting and algorithm metadata", () => {
+    const document = generateOpenApiDocument(BASE_URL);
+    const operation = document.paths["/api/openapi/adCreative/dashboardStats"].get;
+    expect(JSON.stringify(operation)).toContain('"enum":["conversions","roas"]');
+    expect(getResponseSchema(operation as Operation)).toMatchObject({ properties: {
+      leaderboards: { properties: { sortAppliesTo: { enum: ["topPerformers"] }, survivingCreatives: { properties: { ignoredFilters: { type: "array" }, lifetimeMeasures: { type: "array" } } } } },
+    } });
+  });
+});
+
 describe("OpenAPI generator unit fixtures", () => {
   it("uses declared output schemas and preserves dates and arrays", () => {
     const document = generateFixtureDocument();

@@ -2,6 +2,8 @@ import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { DAY_PATTERN } from "@/lib/day";
+import { analyticsMetadataShape, explicitStoreWindow } from "@/lib/analytics-reporting";
+import { loadAnalyticsReporting } from "@/lib/analytics-reporting-queries";
 import { shopifySyncRuns } from "@/schema/shopify";
 import {
   ATTRIBUTION_BUCKETS,
@@ -45,6 +47,13 @@ export function computeAov(
 // also serve the web UI, and output parsing strips anything undeclared.
 const rangeSchema = z.object({ dateFrom: z.string(), dateTo: z.string() });
 
+async function rangeEvidence(organizationId: string, store: { id: string; ianaTimezone: string }, range: { dateFrom: string; dateTo: string }, basis: "store" | "mixed" | "refund" = "store", includeMeta = false) {
+  return {
+    effectiveWindow: explicitStoreWindow(range, basis),
+    reporting: await loadAnalyticsReporting({ organizationId, store, includeMeta }),
+  };
+}
+
 const connectorHealthSchema = z.object({
   lastSuccessAt: z.date().nullable(),
   stale: z.boolean(),
@@ -56,6 +65,7 @@ const syncHealthSchema = z.object({
 });
 
 const overviewOutputSchema = z.object({
+  ...analyticsMetadataShape,
   store: z.object({
     id: z.string(),
     shopDomain: z.string(),
@@ -85,6 +95,7 @@ const overviewOutputSchema = z.object({
 });
 
 const metaCheckOutputSchema = z.object({
+  ...analyticsMetadataShape,
   range: rangeSchema,
   claims: z.object({
     claimed: z.string().nullable(),
@@ -101,6 +112,7 @@ const metaCheckOutputSchema = z.object({
 });
 
 const campaignLedgerOutputSchema = z.object({
+  ...analyticsMetadataShape,
   range: rangeSchema,
   campaigns: z.array(
     z.object({
@@ -125,6 +137,7 @@ const campaignLedgerOutputSchema = z.object({
 });
 
 const dailySeriesOutputSchema = z.object({
+  ...analyticsMetadataShape,
   range: rangeSchema,
   days: z.array(
     z.object({
@@ -137,6 +150,7 @@ const dailySeriesOutputSchema = z.object({
 });
 
 const refundsTotalOutputSchema = z.object({
+  ...analyticsMetadataShape,
   range: rangeSchema,
   total: z.string(),
   count: z.number().int(),
@@ -203,6 +217,7 @@ export const attributionRouter = router({
       );
 
       return {
+        ...await rangeEvidence(ctx.organizationId, store, input, "store", true),
         store: {
           id: store.id,
           shopDomain: store.shopDomain,
@@ -271,6 +286,7 @@ export const attributionRouter = router({
       );
 
       return {
+        ...await rangeEvidence(ctx.organizationId, store, input, "mixed", true),
         range: { dateFrom: input.dateFrom, dateTo: input.dateTo },
         claims: {
           // Null, not "0.00": no labeled claim for the range is "no data yet".
@@ -326,6 +342,7 @@ export const attributionRouter = router({
       ]);
 
       return {
+        ...await rangeEvidence(ctx.organizationId, store, input, "mixed", true),
         range: { dateFrom: input.dateFrom, dateTo: input.dateTo },
         campaigns: ledger.campaigns.map((row) => ({
           campaignId: row.campaignId,
@@ -383,6 +400,7 @@ export const attributionRouter = router({
       });
 
       return {
+        ...await rangeEvidence(ctx.organizationId, store, input),
         range: { dateFrom: input.dateFrom, dateTo: input.dateTo },
         days: series.map((point) => ({
           day: point.day,
@@ -418,6 +436,7 @@ export const attributionRouter = router({
         dateTo: input.dateTo,
       });
       return {
+        ...await rangeEvidence(ctx.organizationId, store, input, "refund"),
         range: { dateFrom: input.dateFrom, dateTo: input.dateTo },
         total: centsToAmount(refunds.refundedCents),
         count: refunds.count,
