@@ -1,3 +1,4 @@
+import { applySnapshotPrivacyFixture } from "@/lib/klaviyo/snapshot-privacy-fixture";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { sql } from "drizzle-orm";
@@ -142,6 +143,7 @@ async function createFixtureSchema(pool: Pool): Promise<void> {
       .filter(Boolean);
     for (const statement of migration) await pool.query(statement);
   }
+  await applySnapshotPrivacyFixture(pool);
 }
 
 async function cleanupFixture(): Promise<void> {

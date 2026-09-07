@@ -115,6 +115,7 @@ const EXPECTED_PROCEDURES = {
   team: ["list", "getById", "create", "update", "delete"],
   signals: ["ingestFill", "rankedSignals", "ingestTestPlan", "planFeedback"],
   performanceSummary: ["monthlyOverview"],
+  klaviyoReads: ["campaigns", "metrics", "events", "campaignValues"],
   attribution: [
     "conversionAvailability",
     "unfulfilledOrders",

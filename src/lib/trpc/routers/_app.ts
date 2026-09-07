@@ -19,6 +19,8 @@ import { studioRouter } from "./studio";
 import { attributionRouter } from "./attribution";
 import { findingsRouter } from "./findings";
 import { klaviyoRouter } from "./klaviyo";
+import { klaviyoReadsRouter } from "./klaviyo-reads";
+import { klaviyoSnapshotControlsRouter } from "./klaviyo-snapshot-controls";
 import { googleAdsRouter } from "./google-ads";
 import { landingPageRouter } from "./landing-page";
 import { creativeInsightsRouter } from "./creative-insights";
@@ -46,6 +48,8 @@ export const appRouter = router({
   attribution: attributionRouter,
   findings: findingsRouter,
   klaviyo: klaviyoRouter,
+  klaviyoReads: klaviyoReadsRouter,
+  klaviyoSnapshots: klaviyoSnapshotControlsRouter,
   googleAds: googleAdsRouter,
   landingPage: landingPageRouter,
   creativeInsights: creativeInsightsRouter,
