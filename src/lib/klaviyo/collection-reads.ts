@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { KlaviyoReadError, type KlaviyoReadRequester } from "./read-transport";
+import {
+  klaviyoCampaignMessageRecordSchema as messageSchema,
+  klaviyoCampaignRecordSchema as campaignSchema,
+  klaviyoEventRecordSchema as eventSchema,
+  klaviyoMetricRecordSchema as metricSchema,
+} from "./record-contracts";
 
 const MAX_RECORDS = 1000;
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
@@ -22,20 +28,6 @@ export const eventsInputSchema = z.object({
   return span > 0 && span <= YEAR_MS;
 });
 
-const campaignSchema = z.object({
-  campaignId: id, name: text.min(1), status: text.min(1), archived: z.boolean(),
-  createdAt: instant, updatedAt: instant, scheduledAt: instant.nullable(), sendTime: instant.nullable(),
-}).strict();
-const messageSchema = z.object({
-  messageId: id, campaignId: id, channel: text.min(1),
-  subject: text.nullable(), previewText: text.nullable(), createdAt: instant, updatedAt: instant,
-}).strict();
-const metricSchema = z.object({ metricId: id, name: text.nullable() }).strict();
-const eventSchema = z.object({
-  eventId: id, metricId: id, metricName: text.nullable(), datetime: instant,
-  profileId: id.nullable(), profileExternalId: text.nullable(), value: z.number().finite().nullable(),
-  uuid: text.nullable(), orderId: text.nullable(), currency: text.nullable(),
-}).strict();
 export const campaignsOutputSchema = z.object({
   campaigns: z.array(campaignSchema).max(MAX_RECORDS), messages: z.array(messageSchema).max(MAX_RECORDS),
   nextContinuation: continuation.nullable(),
@@ -238,7 +230,24 @@ export async function readMetrics(client: KlaviyoReadRequester, scope: Scope, in
   return parse(metricsOutputSchema, { metrics, nextContinuation: next(state, response.cursor, 1) });
 }
 
-export async function readEvents(client: KlaviyoReadRequester, scope: Scope, input: z.infer<typeof eventsInputSchema>, now: Date = new Date()): Promise<z.infer<typeof eventsOutputSchema>> {
+/**
+ * Shared single-page event reader. `collectIdentity` additionally requests
+ * the sparse profile email so snapshot workers can derive identity HMACs
+ * in memory, mirroring the canonical ingestion pattern; the email itself
+ * never enters the reviewed record projection and is returned separately
+ * for transient worker use only.
+ */
+async function readEventPage(
+  client: KlaviyoReadRequester,
+  scope: Scope,
+  input: z.infer<typeof eventsInputSchema>,
+  now: Date,
+  collectIdentity: boolean,
+): Promise<{
+  events: z.infer<typeof eventSchema>[];
+  nextContinuation: string | null;
+  profileEmailById: Map<string, string>;
+}> {
   input = parse(eventsInputSchema, input, "invalid_input");
   const { metricIds, since, until } = input;
   const state = begin("events", scope, input, [metricIds, since, until], metricIds.length, now);
@@ -251,8 +260,19 @@ export async function readEvents(client: KlaviyoReadRequester, scope: Scope, inp
   const response = page(await client.request({ resource: "events", params: paramsWithCursor({
     filter: `and(equals(metric_id,'${metricId}'),greater-or-equal(datetime,${since}),less-than(datetime,${until}))`,
     include: "metric,profile", "fields[event]": "datetime,event_properties,uuid", "fields[metric]": "name",
-    "fields[profile]": "external_id", "page[size]": "200", sort: "datetime",
+    "fields[profile]": collectIdentity ? "external_id,email" : "external_id", "page[size]": "200", sort: "datetime",
   }, state) }), "events");
+  const profileEmailById = new Map<string, string>();
+  if (collectIdentity) {
+    for (const item of response.resources.values()) {
+      if (item.type !== "profile") continue;
+      const { id: includedProfileId, attributes } = resource(item, "profile");
+      const email = attributes.email;
+      if (typeof email === "string" && email.includes("@") && email.length <= 1024) {
+        profileEmailById.set(includedProfileId, email);
+      }
+    }
+  }
   const events = response.data.map((raw) => {
     const { value, id: eventId, attributes: a } = resource(raw, "event");
     if (reference(relationship(value, "metric"), "metric") !== metricId) return invalid();
@@ -274,5 +294,29 @@ export async function readEvents(client: KlaviyoReadRequester, scope: Scope, inp
       value: properties.$value ?? null, uuid: nullableString(a.uuid),
       orderId: nullableString(properties.$event_id), currency: nullableString(properties.$currency) };
   });
-  return parse(eventsOutputSchema, { events, nextContinuation: next(state, response.cursor, metricIds.length) });
+  const output = parse(eventsOutputSchema, { events, nextContinuation: next(state, response.cursor, metricIds.length) });
+  return {
+    events: output.events,
+    nextContinuation: output.nextContinuation,
+    profileEmailById,
+  };
+}
+
+export async function readEvents(client: KlaviyoReadRequester, scope: Scope, input: z.infer<typeof eventsInputSchema>, now: Date = new Date()): Promise<z.infer<typeof eventsOutputSchema>> {
+  const page = await readEventPage(client, scope, input, now, false);
+  return { events: page.events, nextContinuation: page.nextContinuation };
+}
+
+/**
+ * Worker-only event page read with transient identity material. Identical
+ * reviewed record projection to `readEvents`; additionally returns the
+ * page's sparse profile emails for in-memory HMAC derivation. The emails
+ * must never be persisted, logged or returned through any API.
+ */
+export async function readEventsForCollection(client: KlaviyoReadRequester, scope: Scope, input: z.infer<typeof eventsInputSchema>, now: Date = new Date()): Promise<{
+  events: z.infer<typeof eventSchema>[];
+  nextContinuation: string | null;
+  profileEmailById: Map<string, string>;
+}> {
+  return readEventPage(client, scope, input, now, true);
 }

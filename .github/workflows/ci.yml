@@ -78,7 +78,7 @@ jobs:
         env:
           POSTGRES_USER: ci
           POSTGRES_PASSWORD: ci
-          POSTGRES_DB: ci
+          POSTGRES_DB: snapshot_ci
         ports:
           - 5432:5432
         options: >-
@@ -89,7 +89,9 @@ jobs:
     env:
       # Each suite creates and drops its own throwaway database off this one,
       # so the connection user has to be able to CREATE DATABASE.
-      DATABASE_URL: postgres://ci:ci@localhost:5432/ci
+      DATABASE_URL: postgres://ci:ci@localhost:5432/snapshot_ci
+      SNAPSHOT_TEST_DATABASE: "1"
+      TZ: UTC
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
@@ -129,10 +131,30 @@ jobs:
       - name: Build
         run: bun run build
 
+  migrate:
+    name: Migrate production database
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [static, test, components]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Pull Vercel production configuration
+        run: bunx vercel pull --yes --environment=production
+      # Use the same DATABASE_URL as the production app, not a local .env or
+      # the CI test database. Never print the downloaded environment file.
+      - name: Apply generated migrations
+        run: bun --env-file=.vercel/.env.production.local run db:migrate
+
   trigger-deploy:
     name: Deploy Trigger.dev production
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [static, test, components]
+    needs: [static, test, components, migrate]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -146,7 +168,7 @@ jobs:
   deploy:
     name: Deploy production
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [static, test, components]
+    needs: [static, test, components, migrate, trigger-deploy]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:

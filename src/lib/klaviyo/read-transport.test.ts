@@ -24,6 +24,7 @@ afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("KlaviyoReadTransport", () => {
   it.each([
+    ["accounts", "/api/accounts", "GET"],
     ["campaigns", "/api/campaigns", "GET"],
     ["metrics", "/api/metrics", "GET"],
     ["events", "/api/events", "GET"],

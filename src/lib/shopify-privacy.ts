@@ -19,6 +19,8 @@ import {
   sourceIdentityHmacs,
 } from "@/schema/shopify-evidence";
 import { eraseSuppressedKlaviyoEventEvidence } from "@/lib/klaviyo/privacy-match-closure";
+import { eraseSnapshotProfileEvidence } from "@/lib/klaviyo/snapshot-store";
+import { klaviyoSnapshotProfileSuppressions } from "@/schema/klaviyo-snapshot";
 import { klaviyoConnections, klaviyoEvents } from "@/schema/klaviyo";
 import { shopifyOrders, shopifyStores } from "@/schema/shopify";
 
@@ -328,20 +330,48 @@ export async function eraseShopifySubjectByEmail(params: {
             ),
           )
       : [];
-    if (klaviyoMatches.length > 0) {
+    // Store lock prevents collectors from adding associations during discovery.
+    // Match the suppression version as well as its digest, retaining old email
+    // associations so an email change does not hide historical profiles.
+    const snapshotSuppressionVersions = await tx
+      .selectDistinct({ keyVersion: klaviyoSnapshotProfileSuppressions.keyVersion })
+      .from(klaviyoSnapshotProfileSuppressions)
+      .where(and(
+        eq(klaviyoSnapshotProfileSuppressions.organizationId, scope.organizationId),
+        eq(klaviyoSnapshotProfileSuppressions.storeId, scope.storeId),
+      ));
+    if (snapshotSuppressionVersions.some(({ keyVersion }) => keyVersion !== emailSuppression.keyVersion)) {
+      cryptoPolicyConflict();
+    }
+    const snapshotMatches = await tx.selectDistinct({
+      connectionId: klaviyoSnapshotProfileSuppressions.connectionId,
+      profileId: klaviyoSnapshotProfileSuppressions.profileId,
+    }).from(klaviyoSnapshotProfileSuppressions).where(and(
+      eq(klaviyoSnapshotProfileSuppressions.organizationId, scope.organizationId),
+      eq(klaviyoSnapshotProfileSuppressions.storeId, scope.storeId),
+      eq(klaviyoSnapshotProfileSuppressions.keyVersion, emailSuppression.keyVersion),
+      eq(klaviyoSnapshotProfileSuppressions.digest, emailSuppression.digest),
+    ));
+    const profileMatches = [...klaviyoMatches, ...snapshotMatches];
+    if (profileMatches.length > 0) {
       // Store lock is held; take the connection lock second.
       const connectionIds = [
-        ...new Set(klaviyoMatches.map((match) => match.connectionId)),
+        ...new Set(profileMatches.map((match) => match.connectionId)),
       ];
       await tx
         .select({ id: klaviyoConnections.id })
         .from(klaviyoConnections)
-        .where(inArray(klaviyoConnections.id, connectionIds))
+        .where(and(
+          eq(klaviyoConnections.organizationId, scope.organizationId),
+          eq(klaviyoConnections.storeId, scope.storeId),
+          inArray(klaviyoConnections.id, connectionIds),
+        ))
+        .orderBy(klaviyoConnections.id)
         .for("update");
     }
     const profileAliasSuppressions = [
       ...new Set(
-        klaviyoMatches.flatMap((match) =>
+        profileMatches.flatMap((match) =>
           match.profileId === null ? [] : [match.profileId],
         ),
       ),
@@ -396,8 +426,35 @@ export async function eraseShopifySubjectByEmail(params: {
         ),
       )
       .limit(1);
+    const profilesByConnection = new Map<string, Set<string>>();
+    for (const match of profileMatches) {
+      if (match.profileId === null) continue;
+      const profiles = profilesByConnection.get(match.connectionId) ?? new Set<string>();
+      profiles.add(match.profileId);
+      profilesByConnection.set(match.connectionId, profiles);
+    }
+    // An observed profile is the same subject even when its canonical events
+    // were ingested under a newer email. Close those events through the normal
+    // erasure helper too, preserving rotation proofs and claim cascades.
+    const eventsToErase = new Map(klaviyoMatches.map((match) => [match.eventId, match]));
+    for (const [connectionId, profiles] of profilesByConnection) {
+      const profileIds = [...profiles];
+      for (let offset = 0; offset < profileIds.length; offset += 1000) {
+        const events = await tx.select({
+          eventId: klaviyoEvents.id,
+          connectionId: klaviyoEvents.connectionId,
+          profileId: klaviyoEvents.profileId,
+        }).from(klaviyoEvents).where(and(
+          eq(klaviyoEvents.organizationId, scope.organizationId),
+          eq(klaviyoEvents.storeId, scope.storeId),
+          eq(klaviyoEvents.connectionId, connectionId),
+          inArray(klaviyoEvents.profileId, profileIds.slice(offset, offset + 1000)),
+        ));
+        for (const event of events) eventsToErase.set(event.eventId, event);
+      }
+    }
     let klaviyoEventsErased = 0;
-    for (const match of klaviyoMatches) {
+    for (const match of eventsToErase.values()) {
       const outcome = await eraseSuppressedKlaviyoEventEvidence({
         scope: {
           organizationId: scope.organizationId,
@@ -409,6 +466,15 @@ export async function eraseShopifySubjectByEmail(params: {
         tx,
       });
       if (outcome.erased) klaviyoEventsErased += 1;
+    }
+
+    for (const [connectionId, profiles] of profilesByConnection) {
+      await eraseSnapshotProfileEvidence({
+        scope: { ...scope, connectionId },
+        profileIds: [...profiles],
+        tx,
+        now: new Date(),
+      });
     }
 
     const orderIds = [...matchedOrders.keys()];

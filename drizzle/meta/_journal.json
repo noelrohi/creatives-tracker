@@ -512,6 +512,13 @@
       "when": 1788749983355,
       "tag": "0072_fluffy_warbound",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1788764382096,
+      "tag": "0073_curious_lucky_pierre",
+      "breakpoints": true
     }
   ]
 }

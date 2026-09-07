@@ -1,5 +1,8 @@
 import { z } from "zod";
 import { KlaviyoReadError, type KlaviyoReadRequester } from "./read-transport";
+import {
+  klaviyoCampaignValueRecordSchema as rowSchema,
+} from "./record-contracts";
 
 // Revision 2026-07-15: request statistics/groupings, ignored timeframe offsets,
 // one-year maximum, and page_cursor input (but no documented next cursor):
@@ -14,10 +17,6 @@ const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 const instant = z.string().max(64).datetime({ offset: true });
 const identifier = z.string().min(1).max(256);
 const wallTime = z.string().max(64);
-// Match ecomconn core/src/delivery/connector.ts requiredNumber and Klaviyo
-// jobs.ts optionalNumber: finite numbers unchanged, null/undefined -> null.
-// Numeric strings are not coerced; counts and rates gain no semantic bounds.
-const measure = z.number().finite().nullable();
 
 const statistics = {
   recipients: "recipients",
@@ -49,32 +48,6 @@ export const campaignValuesInputSchema = z.object({
   const span = Date.parse(until) - Date.parse(since);
   return span > 0 && span <= YEAR_MS;
 }, { message: "Window must be positive and at most 365 days" });
-
-const rowSchema = z.object({
-  campaignId: identifier,
-  campaignMessageId: identifier,
-  sendChannel: identifier,
-  conversionMetricId: identifier,
-  timeframeStart: wallTime,
-  timeframeEnd: wallTime,
-  recipients: measure,
-  delivered: measure,
-  deliveryRate: measure,
-  opensUnique: measure,
-  openRate: measure,
-  clicksUnique: measure,
-  clickRate: measure,
-  conversions: measure,
-  conversionRate: measure,
-  conversionValue: measure,
-  revenuePerRecipient: measure,
-  bounced: measure,
-  bounceRate: measure,
-  unsubscribes: measure,
-  unsubscribeRate: measure,
-  spamComplaints: measure,
-  spamComplaintRate: measure,
-}).strict();
 
 export const campaignValuesOutputSchema = z.object({
   rows: z.array(rowSchema).max(MAX_ROWS),

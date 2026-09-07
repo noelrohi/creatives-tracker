@@ -2,28 +2,50 @@
 
 ## Revised target — Postgres snapshots
 
-The user corrected the architecture after reviewing PR #264: all four OpenAPI reads must be served from **Adsolute Postgres snapshots**, not live Klaviyo calls. They chose snapshot history with latest-by-default reads, daily background refresh plus explicit manual refresh, and `not_available` for missing scopes without automatic fetching or job enqueueing. The revised data flow is approved; the written spec awaits review.
+The user corrected the architecture after reviewing PR #264: all four OpenAPI reads must be served from **Adsolute Postgres snapshots**, not live Klaviyo calls. They chose snapshot history with latest-by-default reads, daily background refresh plus explicit manual refresh, and `not_available` for missing scopes without automatic fetching or job enqueueing. The written Postgres snapshot specification is approved.
 
 Design: `docs/superpowers/specs/2026-09-07-klaviyo-postgres-snapshots-design.md`.
 
 | Requirement | Current branch / PR #264 | Revised target |
 |---|---|---|
 | Campaign/message, metric, event and 17-statistic report field contracts | Implemented and fixture-tested | Reuse in background collectors; persist reviewed fields |
-| Provider transport and pagination | Implemented on GET path | Move exclusively behind durable background jobs |
-| Durable source-data snapshots | Missing for the expanded OpenAPI contracts | Versioned, org/connection-scoped Postgres storage |
-| Atomic publication and snapshot history | Not implemented for new endpoints | Latest successful snapshot plus retained older observations |
-| Daily refresh and explicit manual sync | Not implemented for new endpoints | Durable configured collection, no GET-triggered jobs |
-| OpenAPI data source | Live Klaviyo | Postgres only, including when provider credentials are unavailable |
-| Pagination | Provider cursor/traversal state | Stable DB pages pinned to a published snapshot |
-| Missing scope/window | Fetches live | `not_available`; explicit sync required |
-| Failure/freshness | Request-time provider errors | Keep prior good snapshot; expose age and refresh status |
+| Provider transport and pagination | Worker-only adapters; obsolete live service removed | Durable background collection |
+| Durable source-data snapshots | Generated migration and scoped store implemented | Versioned, org/connection-scoped Postgres storage |
+| Atomic publication and snapshot history | Implemented; real PostgreSQL lifecycle tests pass | Latest successful snapshot plus retained older observations |
+| Daily refresh and explicit manual sync | Independent schedule and session-admin controls implemented | Durable configured collection, no GET-triggered jobs |
+| OpenAPI data source | Postgres-only snapshot service | Readable without provider credentials |
+| Pagination | DB keyset pages pinned to snapshot ID | Stable across newer publications and erasure |
+| Missing scope/window | Explicit `not_available` | Explicit matching sync required |
+| Failure/freshness | Last good publication plus separate refresh metadata | Expose stale data without fetching a replacement |
 | Report semantics | Warnings and unverified completeness already exposed | Persist the same limitations separately from collection success |
-| Event privacy/history lifecycle | Ephemeral output only | Private profile-to-email-suppression-HMAC associations; erasure/suppression across staging and all historical versions |
+| Event privacy/history lifecycle | Private associations, tombstones and staging/history/canonical erasure verified | Suppression survives email changes and worker replay |
 | Existing Lab/evidence/claims/flows/admin access | Unchanged | Preserve while adding snapshot storage |
 
-**No snapshot implementation has started.** PR #264 is now draft while its architecture is revised. The live-read test results below are useful baseline/parser evidence only; they do not verify this revised architecture. Production migrations, deployment, daily activation and live backfills require separate authorization.
+**Snapshot implementation and independent review are complete; local verification passes.** The user separately authorized production migration/deployment or squash merge, gated on CI. Current release results are recorded in [PR #264](https://github.com/noelrohi/creatives-tracker/pull/264). Daily enrollment and live backfills remain explicit operator actions. Earlier live-read results below are baseline evidence only.
 
 Design self-review identified a privacy gap: current email erasure can discover profiles only through canonical event HMACs, so it would miss snapshot-only profiles. The new spec requires worker-only transient email resolution, private versioned suppression-HMAC associations, and fail-closed collection when identifiable rows cannot be made safely erasable. No plaintext email is added to stored/public records. New published history is retained without automatic age pruning in this slice; existing 90-day attribution-evidence retention remains unchanged.
+
+## Snapshot round 1 — initial partial implementation
+
+Added the approved implementation plan, snapshot schema draft, shared pure record contracts, scope/checkpoint/response contracts, initial store and worker collector. Extracted provider record schemas without changing their reviewed fields; added a worker-only transient profile-email event reader. Corrected tuple decoding, checkpoint transition checks and privacy count double-counting found during implementation.
+
+Executed with an explicit unreachable synthetic `DATABASE_URL`:
+- `bun run typecheck`: passed.
+- `bun run test src/lib/klaviyo/snapshot-contracts.test.ts src/lib/klaviyo/collection-reads.test.ts src/lib/klaviyo/campaign-value-reads.test.ts`: **3 files, 150 tests passed**.
+
+These are pure-contract/provider-parser checks, **not snapshot persistence or privacy certification**. No migration generated/applied yet. Store/collector still require substantive isolated-Postgres tests and correctness review (including crypto key-material checks, durable worker ownership and publication races). GET cutover, erasure integration, administrator controls and daily Trigger integration remain unfinished. No live calls, deployment, activation, commit or push performed.
+
+## Snapshot round 2 — integration and release verification
+
+Implemented snapshot storage, collector/tasks, administrator controls, privacy erasure and the DB-only API cutover. Generated migration `0073_curious_lucky_pierre` extends the journal. Before release, a read-only production preflight confirmed `0072_fluffy_warbound` matches its repository hash and only 0073 was pending. Production rollout results are recorded on the PR, not inferred from local tests.
+
+Final full isolated PostgreSQL 16 verification: **144 files, 2,276 tests passed, zero failures/skips**. This includes 48 snapshot lifecycle tests, 13 real HTTP/Postgres snapshot API tests, eight snapshot privacy tests and all 49 unchanged claim/dimension/report tests. Both process and PostgreSQL used UTC; the three previously recorded lease failures pass without legacy edits. Initial new-fixture failures and a force-drop teardown race were corrected and rerun, not waived.
+
+Typecheck, build, migration guard, diff check and **19 component files / 156 tests** pass. Lint has zero errors and nine existing warnings. External networking was blocked and synthetic local DB URLs were explicit during full verification; temporary clusters were stopped.
+
+Two independent reviewers found and rechecked fixes for actual provider-key account ownership, pre-ingestion suppression after email changes, daily occurrence replay and ambiguous-connection selection. Follow-up review found no remaining actionable standards/requirements findings. Regressions cover same-page email changes, historical/canonical erasure closure and terminal daily replay. Customer-ID-only snapshot requests fail closed; arbitrary external IDs are never treated as authoritative Shopify customer links.
+
+Release ordering is tested in `src/lib/deployment-workflow.test.ts`: checked main push → production migration → Trigger deployment → web deployment. CI explicitly opts into the real-PG snapshot suites. [Operations](klaviyo-snapshot-operations.md) documents initial configuration, manual handoff recovery, retained history and provider limitations.
 
 ## Round 0 — source comparison and regression baseline
 
@@ -77,7 +99,7 @@ Paths prefixed E are under `~/sandbox/ecomconn`; A under `~/sandbox/adsolute`.
 - A8: `src/app/api/mcp/route.ts`, `src/lib/trpc/openapi.ts`, `src/lib/api-keys.ts` — external access infrastructure.
 - A9: `trigger/klaviyo-*.ts`, `src/lib/klaviyo/incremental-sync.ts` — durable workflows.
 
-## Provider feature matrix
+## Provider feature matrix — original Round 0 findings
 
 | Capability | ecomconn | Adsolute now | Status / required delta | Evidence |
 |---|---|---|---|---|
@@ -142,7 +164,7 @@ No ecomconn background sync, outbound webhook delivery, marketing writes, or pro
 | Canonical Shopify money and production attribution isolation | `src/lib/klaviyo/{advisory-isolation,claims-reporting-isolation}.integration.test.ts` |
 | Existing Lab access gates and all admin-only mutations | A6,A7 |
 
-## Approved direction and proposed implementation rounds
+## Superseded live-read implementation rounds
 
 Focused design: `docs/superpowers/specs/2026-09-07-klaviyo-openapi-parity-design.md`.
 
@@ -215,9 +237,9 @@ For each later round record: changed rows; source/test paths; commands and resul
 
 ## Approval and blockers
 
-- **Architecture revised:** the user approved the Postgres snapshot data flow. Review the new written snapshot design before implementation; the prior live-read approval no longer describes the target.
+- **Architecture revised:** the user approved the Postgres snapshot data flow. The written snapshot design is approved; the prior live-read approval no longer describes the target.
 - **Credential custody is no longer a design blocker:** reuse the existing server-side pilot credential provider and org-scoped connection lookup. Organizations without that configured connection receive an explicit unavailable/not-configured error. General multi-account setup is out of scope.
 - **Permissions:** new read procedures use existing org/read authorization; current session-admin evidence reads, sync/review mutations and uninstall remain unchanged. No new scope-editing capabilities.
 - **Live report completeness:** ecomconn unconditionally stops after one response; its docs explicitly leave report pagination unresolved. Port the implemented contract but do not copy silent completeness assumptions. Live-account evidence may be needed; unresolved completeness must remain visible.
 - **Report interval semantics:** source serializes account-local wall time with a `Z` suffix, subtracts a second from the exclusive end, and acknowledges provider hour rounding. Validate pinned provider behavior rather than interpreting these strings as UTC or blindly replacing existing reporting semantics. DST and non-hour-aligned intervals require tests.
-- **Deployment/live verification:** the snapshot revision requires generated DB migrations and background-job deployment, unlike the earlier live-only PR. Applying production migrations, activating daily refresh, and running live backfills/smoke tests require separate operator authorization. No such production actions have been performed.
+- **Deployment/live verification:** the user subsequently authorized production migration/deployment or squash merge after completion. Release results belong in the snapshot verification section above. This does not certify live account behavior or enroll daily scopes/backfills automatically.

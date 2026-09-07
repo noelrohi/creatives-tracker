@@ -1,6 +1,7 @@
 import "server-only";
 
 const PATHS = {
+  accounts: "/api/accounts",
   campaigns: "/api/campaigns",
   metrics: "/api/metrics",
   events: "/api/events",

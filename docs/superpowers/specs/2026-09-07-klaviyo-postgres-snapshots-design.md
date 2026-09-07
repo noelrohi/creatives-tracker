@@ -10,7 +10,7 @@ The user selected:
 - Refresh daily in background jobs and allow explicit manual refresh.
 - Missing data returns `not_available`; GET requests neither fetch Klaviyo nor enqueue work.
 
-The user approved the revised data-flow design. This document records its implementation contract for written review.
+The user approved this written specification and the revised data-flow design. This document is the approved implementation contract.
 
 ## Data flow
 
@@ -155,4 +155,6 @@ Revise PR #264 rather than retain a live fallback. The existing single-PR size e
 
 Generate migrations with `bun run db:generate` and run the migration guard. Apply only to disposable local verification databases unless deployment is separately authorized. No automatic production migration, scheduled sync activation, backfill, live provider call or deployment is authorized by this design review.
 
-Previously confirmed pre-existing lease-expiry failures in three Klaviyo DB tests remain recorded in the matrix. New snapshot lifecycle tests must pass independently; do not rely on those failing assertions as proof of correct lease behavior.
+Previously observed lease-expiry failures in three Klaviyo DB tests remain recorded in the matrix. They subsequently passed with both the test process and PostgreSQL configured for UTC, without legacy code/test changes. New snapshot lifecycle tests must still pass independently.
+
+**Subsequent release authorization:** the user requested production migration/deployment or squash merge to deploy. After implementation, independent review and checks pass, the release pipeline may apply the generated migration, deploy workers, then deploy the web app. This does not automatically enroll daily definitions or authorize an unbounded live backfill. See `docs/klaviyo-snapshot-operations.md`.

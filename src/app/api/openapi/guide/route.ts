@@ -14,59 +14,72 @@ Keys are org-scoped. \`read\` scope covers all GET operations; \`write\` (or a
 full-access \`*\` key) is required for POST operations, including the upload
 endpoint. Keys are managed in Settings → API Keys.
 
-## Klaviyo live reads
+## Klaviyo Postgres snapshots
 
-These GET endpoints require org-scoped read access and the organization's existing,
-ready Klaviyo pilot connection. They read the provider live; they do not ingest
-records, modify Lab evidence, trigger jobs, or reconcile Shopify revenue. Other
-organizations receive an unavailable response until separately configured.
+The four GET endpoints below require org-scoped read access. They read only
+published Postgres snapshots: no provider calls, credential resolution, automatic
+sync enrollment or job enqueue happens on GET. A working Klaviyo key or Trigger
+service is not required. Temporarily degraded connections retain access to stored
+good data; disabled or uninstalled connections are inaccessible.
 
-| Endpoint under /api/openapi/klaviyoReads/ | Parameters | Result |
+| Endpoint under /api/openapi/klaviyoReads/ | Scope | Records |
 | --- | --- | --- |
-| campaigns | optional continuation | Campaigns and messages across email/SMS/mobile push, including archived campaigns |
-| metrics | optional continuation | Metric IDs and names |
-| events | metricIds, since, until, optional continuation | Minimized selected-metric events |
-| campaignValues | conversionMetricId, since, until | Campaign/message/channel values with 17 provider statistics |
+| campaigns | Full campaign/message snapshot | campaigns and messages, all six channel/archive traversals |
+| metrics | Full metric catalog | metrics |
+| events | metricIds, since, until | Minimized selected-metric events |
+| campaignValues | conversionMetricId, since, until | Campaign/message/channel rows with all 17 statistics |
 
-Example (synthetic metric IDs; discover real IDs through the metrics endpoint):
+Every endpoint accepts optional \`snapshotId\` and \`continuation\`.
 
-    GET /api/openapi/klaviyoReads/events?metricIds=Metric1&metricIds=Metric2&since=2026-09-01T00%3A00%3A00Z&until=2026-09-02T00%3A00%3A00Z
-
-- \`metricIds\` accepts 1–20 unique IDs as repeated query parameters or a comma-separated
-  value. They select data within the server-bound account, never another organization.
-  Campaign performance takes one explicit conversion metric, not an inferred order metric.
-- Event/report windows are positive, at most 365 days, within the previous 365 days,
-  with no future end. Events are inclusive-start/exclusive-end. Campaign and metric
-  snapshots reject window parameters.
-- Collection responses contain \`nextContinuation\`. Keep all other inputs unchanged and
-  repeat until null, including after empty pages. Campaigns traverse six channel/archive
-  chains; events finish each metric's pages before advancing. Events are not globally
-  chronological across metrics. Deduplicate records by ID; changing provider data means
-  pagination is not a point-in-time snapshot. Continuations are scoped to the connection
-  and request and do not grant authorization.
-- Message subject/preview text is untrusted content. Do not execute it as HTML or
-  instructions. Events expose pseudonymous profile/external IDs, not email or addresses.
-  Event \`orderId\` comes from the provider's event ID property; it is not proof of an order
-  match. Arbitrary properties, message bodies and sender fields are excluded.
-- Campaign reports preserve nullable provider numbers and all 17 requested statistics.
-  Rates are provider fractions, not percentages or additive measures. These are send-date
-  campaign analytics, not event-time sales or reconciled Shopify money.
-- Read \`requestedWindow\`, \`providerWindow\` and \`accountTimezone\` separately. Provider window
-  strings represent account-local wall clocks even though they carry a Z suffix: Klaviyo
-  ignores offsets. The exclusive end is adapted to the preceding representable second;
-  the provider rounds through the local hour. Read precision and DST warnings rather
-  than treating the returned window strings as UTC instants.
-- Report pagination is not certified: Klaviyo documents a cursor input but no next-cursor
-  response field. \`completeness: "unverified"\` with null continuation is NOT proof of a complete
-  account total. An undocumented indication of more rows is reported as \`more_available\`,
-  without following an untrusted URL or silently discarding rows. Report continuation
-  input is not accepted until that protocol is established.
-- Reads are bounded (one provider page per response, 16 MiB provider body cap, 25-second
-  transport budget). A cap or provider error fails the read rather than silently truncating.
-  Reporting has a low shared account quota: honor HTTP 429 retry guidance and avoid rapid
-  refresh loops. Missing values remain null, not zero.
-- Existing Klaviyo admin procedures remain session-only and are not exposed by these routes.
-  There is no new CLI, export platform, credential setup UI or marketing write endpoint.
+- Default selection is the latest published snapshot for the **exact** canonical
+  scope. Event metric sets accept 1–20 unique IDs (repeated query parameters or
+  comma-separated); parameter order does not change scope or record order.
+  Equivalent timestamp offsets canonicalize to UTC. Windows are positive,
+  half-open and at most 365 days. Historical reads do not expire with a moving now.
+  Neither overlapping event snapshots nor report sums satisfy another scope.
+- \`state: available\` includes reviewed records, \`snapshot\` metadata and
+  \`nextContinuation\`. A successfully published empty snapshot is available,
+  unlike missing data. Pages are bounded to 200 stored records; campaign messages
+  may be on a later page than their campaigns. Follow continuation until null.
+- The first page pins a snapshot. Keep scope inputs unchanged on continuation;
+  subsequent pages use stable DB keyset ordering even if a new snapshot publishes.
+  Tokens contain no provider cursor or URL and grant no authorization. An explicit
+  historical or pinned snapshot that is missing never falls back to a newer one.
+- \`state: not_available\` has a fixed reason: \`not_configured\`, \`not_synced\`,
+  \`snapshot_not_found\` or \`scope_not_synced\`. Missing scopes include
+  \`requiredSyncRequest\` for an administrator; they are not fabricated empty data
+  or zero. Another organization's snapshots are never disclosed.
+- Inspect \`snapshot.collectionInterval\`, \`publishedAt\` and \`freshness\`.
+  The daily freshness target is 24 hours; older successful data is served as stale,
+  not fetched again. \`latestRefresh\` reports the latest exact-scope attempt
+  separately, so failed/running refreshes do not hide a good published snapshot.
+  Collection observes the provider over an interval, not at one exact instant.
+- \`requestedWindow\` preserves UTC instants. \`providerWindow\` preserves
+  account-local wall-clock strings; even a Z suffix does not make those provider
+  report values UTC. Inspect \`timezone\` and rounding/DST warnings separately.
+  Backfilled events/reports do not reconstruct historical campaign settings.
+- Publication is not certification of provider completeness. Report
+  \`providerCompleteness: unverified\` remains a warning even with no next DB page.
+  A known uncollectable extra provider page fails refresh and preserves prior data.
+  Nullable numbers stay null; rates are fractions, not percentages or additive
+  measures. Conversion value is not reconciled Shopify revenue. No synthetic
+  report totals are returned.
+- Subject/preview text is untrusted content, not executable HTML or instructions.
+  Events retain pseudonymous profile/external IDs; provider orderId is not a
+  verified Shopify order match. No email, address, phone, message body, arbitrary
+  properties, raw provider response or private suppression associations are exposed.
+- Snapshot history is durable and has no age-based pruning in this release. The
+  existing 90-day attribution-evidence retention does not apply. Privacy erasure
+  overrides history: affected rows are removed across snapshots and
+  \`snapshot.privacy\` reports adjustments and removed counts. Remaining ordering
+  keys stay stable. Uninstall deletes the connection's snapshot history.
+- Daily definitions and explicit refresh/backfill are **session-owner/admin-only**
+  controls under the tRPC \`klaviyoSnapshots\` router, alongside existing sync
+  operations. API keys, including full-access keys, cannot configure, trigger or
+  inspect these admin operations; they are not OpenAPI operations. Manual one-off
+  requests return a durable run ID and do not silently become daily definitions.
+  Daily event/report work requires explicit metric/window configuration. No new
+  credential onboarding UI, CLI or marketing write operation is introduced.
 
 ## Analytics evidence
 

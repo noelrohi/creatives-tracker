@@ -1,66 +1,30 @@
 import { router, orgProcedure } from "../init";
 import { openApiQueryMeta } from "../openapi-meta";
 import {
-  campaignsInputSchema,
-  campaignsOutputSchema,
-  metricsInputSchema,
-  metricsOutputSchema,
-  eventsInputSchema,
-  eventsOutputSchema,
-  readCampaigns,
-  readMetrics,
-  readEvents,
-} from "@/lib/klaviyo/collection-reads";
-import {
-  campaignValuesInputSchema,
-  campaignValuesOutputSchema,
-  readCampaignValues,
-} from "@/lib/klaviyo/campaign-value-reads";
-import { withKlaviyoReadContext } from "@/lib/klaviyo/read-service";
-import { KlaviyoReadError } from "@/lib/klaviyo/read-transport";
+  snapshotCampaignsReadInputSchema, snapshotCampaignsReadOutputSchema,
+  snapshotMetricsReadInputSchema, snapshotMetricsReadOutputSchema,
+  snapshotEventsReadInputSchema, snapshotEventsReadOutputSchema,
+  snapshotCampaignValuesReadInputSchema, snapshotCampaignValuesReadOutputSchema,
+} from "@/lib/klaviyo/snapshot-contracts";
+import { readSnapshot } from "@/lib/klaviyo/snapshot-reads";
 
-/** Live, minimized provider reads. The evidence/admin router remains session-only. */
+const description = "Bounded Postgres page from the latest published exact-scope snapshot, or snapshotId history. Continuations remain pinned to that snapshot. Missing data returns not_available; GET never fetches Klaviyo or queues work. Inspect snapshot freshness, privacy adjustments and latestRefresh separately.";
+
 export const klaviyoReadsRouter = router({
   campaigns: orgProcedure
-    .meta(openApiQueryMeta(
-      "klaviyoReads", "campaigns", "Read Klaviyo campaigns and messages",
-      "Live bounded page of campaigns and reviewed message fields. Follow nextContinuation with unchanged inputs through email, SMS and mobile-push, archived and unarchived campaigns. Not a historical snapshot or Shopify attribution report.",
-    ))
-    .input(campaignsInputSchema)
-    .output(campaignsOutputSchema)
-    .query(({ ctx, input }) => withKlaviyoReadContext(ctx.organizationId,
-      ({ client, scope }) => readCampaigns(client, scope, input))),
-
+    .meta(openApiQueryMeta("klaviyoReads", "campaigns", "Read stored Klaviyo campaigns and messages", description))
+    .input(snapshotCampaignsReadInputSchema).output(snapshotCampaignsReadOutputSchema)
+    .query(async ({ ctx, input }) => snapshotCampaignsReadOutputSchema.parse(await readSnapshot(ctx.organizationId, { ...input, dataset: "campaigns" }))),
   metrics: orgProcedure
-    .meta(openApiQueryMeta(
-      "klaviyoReads", "metrics", "Read the Klaviyo metric catalog",
-      "Live account-wide metric IDs and names for the organization's configured Klaviyo connection. Follow nextContinuation until null. Metric names do not establish verified Shopify integration or attribution semantics.",
-    ))
-    .input(metricsInputSchema)
-    .output(metricsOutputSchema)
-    .query(({ ctx, input }) => withKlaviyoReadContext(ctx.organizationId,
-      ({ client, scope }) => readMetrics(client, scope, input))),
-
+    .meta(openApiQueryMeta("klaviyoReads", "metrics", "Read stored Klaviyo metric catalog", description))
+    .input(snapshotMetricsReadInputSchema).output(snapshotMetricsReadOutputSchema)
+    .query(async ({ ctx, input }) => snapshotMetricsReadOutputSchema.parse(await readSnapshot(ctx.organizationId, { ...input, dataset: "metrics" }))),
   events: orgProcedure
-    .meta(openApiQueryMeta(
-      "klaviyoReads", "events", "Read selected Klaviyo metric events",
-      "Live minimized events for 1–20 ordered metricIds and a half-open since/until window within the past 365 days. Each metric cursor chain completes before the next; ordering is not global across metrics. Keep metricIds and window unchanged on continuation. Profile IDs/external IDs are pseudonymous; orderId is the provider's event identifier, not a verified order match. Does not ingest or modify attribution evidence.",
-    ))
-    .input(eventsInputSchema)
-    .output(eventsOutputSchema)
-    .query(({ ctx, input }) => withKlaviyoReadContext(ctx.organizationId,
-      ({ client, scope }) => readEvents(client, scope, input))),
-
+    .meta(openApiQueryMeta("klaviyoReads", "events", "Read stored selected-metric events", `${description} Requires an exact canonical metric set and half-open window; overlapping snapshots are not composed. Profile/external IDs are pseudonymous, not verified Shopify identities.`))
+    .input(snapshotEventsReadInputSchema).output(snapshotEventsReadOutputSchema)
+    .query(async ({ ctx, input }) => snapshotEventsReadOutputSchema.parse(await readSnapshot(ctx.organizationId, { ...input, dataset: "events" }))),
   campaignValues: orgProcedure
-    .meta(openApiQueryMeta(
-      "klaviyoReads", "campaignValues", "Read Klaviyo campaign performance",
-      "Live campaign/message/channel values with 17 provider statistics and an explicit conversionMetricId. Returns requested and account-local provider windows separately. Provider rounding and completeness limitations are explicit; unverified completeness is not a complete account total. Rates are provider fractions, not additive measures; conversion value is not reconciled Shopify revenue. Reporting has a low provider quota; honor retry guidance.",
-    ))
-    .input(campaignValuesInputSchema)
-    .output(campaignValuesOutputSchema)
-    .query(({ ctx, input }) => withKlaviyoReadContext(ctx.organizationId,
-      ({ client, scope }) => {
-        if (!scope.accountTimezone) throw new KlaviyoReadError("unavailable");
-        return readCampaignValues(client, { ...scope, accountTimezone: scope.accountTimezone }, input);
-      })),
+    .meta(openApiQueryMeta("klaviyoReads", "campaignValues", "Read stored Klaviyo campaign performance", `${description} Requires an exact conversion metric and window. Preserves all 17 nullable provider statistics; rates are fractions, never additive. Unverified provider completeness is not an account total or reconciled Shopify revenue.`))
+    .input(snapshotCampaignValuesReadInputSchema).output(snapshotCampaignValuesReadOutputSchema)
+    .query(async ({ ctx, input }) => snapshotCampaignValuesReadOutputSchema.parse(await readSnapshot(ctx.organizationId, { ...input, dataset: "campaign_values" }))),
 });
