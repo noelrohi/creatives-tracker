@@ -368,6 +368,7 @@ async function matteFromProductPhoto(args: {
     const chosen = pickProductMatch(result.object, candidates);
     logger.info("Product photo match", {
       candidates: candidates.length,
+      labels: candidates.map((candidate) => candidate.label),
       match: result.object.match,
       confidence: result.object.confidence,
       note: result.object.note,
@@ -783,6 +784,12 @@ export const generateVariationTask = task({
             } else if (brand?.productImageUrl) {
               content.push({ type: "image", image: await fetchBytes(brand.productImageUrl) });
             }
+            // A wrong-SKU match is the asset fallback's known failure mode, and
+            // the review cannot see it without the photo the patch was cut
+            // from: attach it third so the two products can be compared.
+            if (transplant?.patchSource === "asset" && transplant.assetImageUrl) {
+              content.push({ type: "image", image: await fetchBytes(transplant.assetImageUrl) });
+            }
             const result = await generateObject({
               model: openai(REVIEW_MODEL),
               schema: reviewSchema,
@@ -790,9 +797,14 @@ export const generateVariationTask = task({
                 mode === "edit"
                   ? `You are a strict creative reviewer for paid-social static ads. The first image is the generated ad, produced by editing the second image (the source); ${pastedUrls.has(imageUrl) ? "the source's product was pasted back into its box after the edit" : "the step that pastes the source's product back did not run, so the product you see is the image model's own re-render"}.`
                   : transplant
-                    ? `You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the real product was cut out of ${transplant.patchSource === "asset" ? "the brand's product photo" : "the second image (the source)"} and ${transplant.target === "landing" ? "pasted into the empty area the model left for it" : "pasted over the product the model drew"}.`
+                    ? transplant.patchSource === "asset"
+                      ? `You are a strict creative reviewer for paid-social static ads. The first image is the generated ad, the second is the source ad it varies, and the third is the brand's product photo; the real product was cut out of that third image and ${transplant.target === "landing" ? "pasted into the empty area the model left for it" : "pasted over the product the model drew"}.`
+                      : `You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the real product was cut out of the second image (the source) and ${transplant.target === "landing" ? "pasted into the empty area the model left for it" : "pasted over the product the model drew"}.`
                     : "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second, when present, is the advertiser's real product photo.",
                 "Checklist (all must hold for pass = true):",
+                transplant?.patchSource === "asset"
+                  ? "- The third image is the product photo the pasted product was cut from. The pasted product must be the same model as the product in the source (second image): same silhouette, openings, thickness, and colour. If it is a different model, fail and say so."
+                  : null,
                 mode === "edit" && keepRegion && pastedUrls.has(imageUrl)
                   ? `- The product from the source has been pasted back into its box (${pct(keepRegion)}). Check four things: its lighting, colour temperature, and perspective sit naturally against the new background; the pasted box lines up with the redrawn layout (no overlap or collision with a neighbouring card or element; a clean straight edge on flat background is acceptable and should only be mentioned as a note, not a failure); no second, re-rendered copy of the product appears anywhere outside the box; and the box does not cover copy or a focal element the prompt asked for. Name which of these failed.`
                   : mode === "edit"
@@ -800,7 +812,7 @@ export const generateVariationTask = task({
                     : transplant
                       ? `- The source's product now sits in the box ${pct(transplant.to)}. Check: it is a plausible size for the scene; its lighting and colour do not clash with the surroundings; no remnant of the model's own product shows around its edges; nothing important is covered; and no second copy of the product appears anywhere else in the image; and the product rests on the surface rather than floating above it or sinking into it. Name which failed.`
                       : transplantExpected
-                        ? "- The product is a plausible rendering of the product photo; the step that pastes the real product did not run, so do not fail the attempt on its markings or exact shape, and the scene may show an empty landing area; do not fail it for that alone."
+                        ? "- The product is not pasted in on this attempt (the paste step did not run), so the product you see, if any, is the model's own rendering: do not fail it on markings or exact shape, and an empty landing area beside it is acceptable. But the ad must still show the product somewhere; if no product is visible at all, fail and say 'no product visible'."
                         : "- The product matches the product photo in shape, openings, material, and markings; no invented logos or text on it.",
                 "- Every line of ad copy (headline, subhead, badges, CTA, tile labels) is legible and matches the quoted copy in the prompt, with no garbled or invented copy. Incidental labels on props and packaging inside the scene (a shampoo bottle, a book spine) are fine and are not ad copy.",
                 `- No logos or brand marks other than ${brand?.brandName ?? "the advertiser's"}; no platform UI, no watermarks.`,
