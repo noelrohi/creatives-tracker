@@ -1,10 +1,39 @@
 # Variation transplant: empty scene and product-photo fallback
 
-Date: 2026-09-07. Status: proposed, awaiting approval. Follows
+Date: 2026-09-07. Status: implemented (plan
+`docs/superpowers/plans/2026-09-07-variation-empty-scene-transplant.md`). Follows
 `2026-09-04-variation-product-transplant-design.md` and applies two
 recommendations from the Buzz agent's questionnaire answers
 (`rands/BUZZ_AGENT_STATIC_AD_WORKFLOW_QUESTIONNAIRE_2026_09_07.md`, §5.3 and
 §5.4).
+
+## Implementation notes and live results (2026-09-07)
+
+Live check on the three local test sources after the wiring landed:
+
+- **R3** (mouthguard on a pedestal in a flat card): source patch; the model
+  drew the tile with a bare pedestal and no product; the exact source product
+  was pasted bottom-aligned into the `landing` box; review passed on attempt
+  1 with no notes.
+- **R1** (product in a glowing pod, never mattes): the fallback matched the
+  library's R1 product photo, matted it, and pasted it into the landing box
+  on the model's dark scene; review passed on attempt 1. It reads slightly
+  "placed" for lack of a contact shadow, the known limit of this pass.
+- **R2** (product over black packaging): the fallback matched the R2 photo on
+  one run and the look-alike R1 photo on another (confidence above 0.7 both
+  times), so the matcher is not reliable between look-alike models. The
+  review now receives the chosen product photo as a third image and fails a
+  pasted product that is not the same model as the source's. One attempt
+  found neither a product nor a landing area in the output and the ad shipped
+  with no product at all; the review now fails an attempt with no product
+  visible.
+
+Other observations: the empty-scene instruction ("draw nothing that looks
+like the product, no packaging") made the model drop unrelated bottles from
+neighbouring tiles on R3; acceptable, but a softer wording is a candidate if
+reviews start flagging missing props. The smoke-test note "empty-scene check"
+was read as a user constraint and stripped copy on one R2 run: notes are hard
+constraints by design, so test notes must read like real ones.
 
 ## What we have and what still hurts
 
