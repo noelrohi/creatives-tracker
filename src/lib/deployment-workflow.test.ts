@@ -18,14 +18,16 @@ describe("production release ordering", () => {
     expect(job("test")).toContain("TZ: UTC");
   });
 
-  it("migrates only on main after checks, using the production app configuration", () => {
+  it("migrates only on main after checks, using the explicit production secret", () => {
     const migration = job("migrate");
     expect(migration).toContain("github.event_name == 'push' && github.ref == 'refs/heads/main'");
     expect(migration).toContain("needs: [static, test, components]");
-    const pull = migration.indexOf("vercel pull --yes --environment=production");
-    const apply = migration.indexOf("bun --env-file=.vercel/.env.production.local run db:migrate");
-    expect(pull).toBeGreaterThan(-1);
-    expect(apply).toBeGreaterThan(pull);
+    expect(migration).toContain("PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}");
+    const validate = migration.indexOf('test -n "$PRODUCTION_DATABASE_URL"');
+    const apply = migration.indexOf("bun run db:migrate:prod");
+    expect(validate).toBeGreaterThan(-1);
+    expect(apply).toBeGreaterThan(validate);
+    expect(migration).not.toContain("vercel pull");
     expect(migration).not.toContain("db:push");
     expect(migration).not.toContain("cat .vercel");
   });

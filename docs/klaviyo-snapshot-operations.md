@@ -4,7 +4,9 @@ The four `/api/openapi/klaviyoReads/` GETs read published Postgres snapshots onl
 
 ## Release
 
-On a checked `main` push, GitHub Actions applies generated Drizzle migrations using the Vercel production app's database configuration, deploys Trigger.dev, then deploys the web app. A migration or worker-deployment failure blocks web deployment. Never use `db:push` or rewrite applied migrations. Rerunning a successful migration is a no-op.
+On a checked `main` push, GitHub Actions applies generated Drizzle migrations using the explicitly authorized `PRODUCTION_DATABASE_URL` GitHub Actions secret, deploys Trigger.dev, then deploys the web app. A migration or worker-deployment failure blocks web deployment. Never use `db:push` or rewrite applied migrations. Rerunning a successful migration is a no-op.
+
+Vercel exports sensitive environment values as empty strings, so its downloaded environment file is not a migration credential source. Keep the Actions migration secret aligned with the production database when credentials rotate; missing configuration fails before migration.
 
 This migration creates empty storage; it does not backfill data or enable daily definitions. Deployment is not live-provider certification. Keep new daily definitions disabled until their scope is explicitly approved.
 
