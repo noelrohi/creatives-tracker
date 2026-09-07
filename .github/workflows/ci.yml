@@ -138,18 +138,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      # Vercel exports sensitive values as empty strings. Use the separately
+      # authorized migration secret; never print it or fall back to a local DB.
+      PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
-      - name: Pull Vercel production configuration
-        run: bunx vercel pull --yes --environment=production
-      # Use the same DATABASE_URL as the production app, not a local .env or
-      # the CI test database. Never print the downloaded environment file.
+      - name: Validate migration configuration
+        run: test -n "$PRODUCTION_DATABASE_URL"
       - name: Apply generated migrations
-        run: bun --env-file=.vercel/.env.production.local run db:migrate
+        run: bun run db:migrate:prod
 
   trigger-deploy:
     name: Deploy Trigger.dev production
