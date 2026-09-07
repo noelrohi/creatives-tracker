@@ -25,7 +25,7 @@ const MEMBER_PATH_PREFIXES = [
   "/meta",
   "/mer",
   "/campaigns",
-  ...featureFlagDefs.map((def) => def.href),
+  ...featureFlagDefs.flatMap((def) => (def.href ? [def.href] : [])),
 ];
 
 export function canAccessMemberPath(

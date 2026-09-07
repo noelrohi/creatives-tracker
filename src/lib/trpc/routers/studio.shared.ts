@@ -15,7 +15,7 @@ import {
   studioVariants,
 } from "@/schema/studio";
 import { AWARENESS_LEVELS, type AwarenessLevel } from "@/lib/awareness";
-import { isImageStudioEnabled } from "@/lib/feature-flags.server";
+import { isCreativeVariationsEnabled, isImageStudioEnabled } from "@/lib/feature-flags.server";
 import { isHttpUrl } from "@/lib/remote-image";
 import { isStaticImageCreative } from "@/lib/studio-assets";
 import { getStudioBrandProfile } from "@/lib/studio-brand";
@@ -89,6 +89,22 @@ export const studioProcedure = orgProcedure.use(async ({ ctx, next }) => {
 });
 export const studioWriteProcedure = orgWriteProcedure.use(async ({ ctx, next }) => {
   await requireImageStudioEnabled(ctx.organizationId);
+  return next();
+});
+
+async function requireCreativeVariationsEnabled(organizationId: string) {
+  if (!(await isCreativeVariationsEnabled(organizationId))) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Creative variations are not enabled" });
+  }
+}
+
+/** Variations need Image Studio and the creativeVariations flag. */
+export const variationsProcedure = orgProcedure.use(async ({ ctx, next }) => {
+  await requireCreativeVariationsEnabled(ctx.organizationId);
+  return next();
+});
+export const variationsWriteProcedure = orgWriteProcedure.use(async ({ ctx, next }) => {
+  await requireCreativeVariationsEnabled(ctx.organizationId);
   return next();
 });
 

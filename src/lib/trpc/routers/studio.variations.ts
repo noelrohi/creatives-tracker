@@ -9,8 +9,8 @@ import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import {
   createVariationGeneration,
   reconcileStaleGenerations,
-  studioProcedure,
-  studioWriteProcedure,
+  variationsProcedure,
+  variationsWriteProcedure,
 } from "./studio.shared";
 
 const realtimeSchema = z
@@ -49,7 +49,7 @@ async function realtimeFor(status: string, runId: string | null) {
 
 export const studioVariationProcedures = {
   variations: {
-    create: studioWriteProcedure
+    create: variationsWriteProcedure
       .meta(openApiMutationMeta(
         "studio", "variations.create", "Queue one variation of a static creative",
         "Runs the variation agent against the org's context library and returns the generation, its single variant, and a run-scoped realtime token. Poll variations.listForCreative; polling is canonical.",
@@ -76,7 +76,7 @@ export const studioVariationProcedures = {
         };
       }),
 
-    listForCreative: studioProcedure
+    listForCreative: variationsProcedure
       .meta(openApiQueryMeta(
         "studio", "variations.listForCreative", "List variations of a creative",
         "Variation generations for one source creative, newest first, each with its single variant and a realtime token while generating.",

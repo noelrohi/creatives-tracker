@@ -225,7 +225,10 @@ export default function CreativeDetailPage() {
   const adPreviewUrl = adPreviewQuery.data?.previewUrl ?? null;
   const isLoadingVideo = wantsVideo && adPreviewQuery.isLoading;
   const canFetchMetaPreview = (!displayAssetUrl || (previewFormat === "video" && !playableVideoUrl));
-  const canMakeVariations = isStaticImageCreative(creative.data) && (featureFlags?.imageStudio ?? false);
+  const canMakeVariations =
+    isStaticImageCreative(creative.data) &&
+    (featureFlags?.imageStudio ?? false) &&
+    (featureFlags?.creativeVariations ?? false);
   // A shared ?tab=variations link can point at a creative that is no longer a
   // static image, or arrive after Image Studio was turned off; fall back rather
   // than rendering an empty tab body.
@@ -440,7 +443,17 @@ export default function CreativeDetailPage() {
             )}
           </TabsTrigger>
           <TabsTrigger value="demographics">Demographics</TabsTrigger>
-          {canMakeVariations ? <TabsTrigger value="variations">Variations</TabsTrigger> : null}
+          {canMakeVariations ? (
+            <TabsTrigger value="variations">
+              Variations
+              <Badge
+                variant="outline"
+                className="ml-1 px-1.5 py-0 text-[9px] uppercase tracking-[0.08em] text-muted-foreground"
+              >
+                Beta
+              </Badge>
+            </TabsTrigger>
+          ) : null}
         </TabsList>
 
         {/* Performance tab */}

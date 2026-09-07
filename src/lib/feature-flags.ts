@@ -1,7 +1,8 @@
 /**
  * Single source of truth for org-scoped feature flags: the settings page
  * renders one row per definition, the sidebar renders the enabled ones.
- * A flag missing from the stored jsonb is off.
+ * A flag missing from the stored jsonb is off. A definition with `href: null`
+ * gates a surface inside an existing page (a tab, a button) and gets no nav item.
  */
 export const featureFlagDefs = [
   {
@@ -32,6 +33,16 @@ export const featureFlagDefs = [
     badge: "Beta",
     href: "/studio",
     icon: "solar:magic-stick-3-linear",
+    group: "tools",
+  },
+  {
+    key: "creativeVariations",
+    label: "Creative variations",
+    description:
+      "Adds a Variations tab to static image creatives, where the agent makes one new variation from the source ad and the workspace's context library. Needs Image Studio.",
+    badge: "Beta",
+    href: null,
+    icon: "solar:layers-minimalistic-linear",
     group: "tools",
   },
 ] as const;

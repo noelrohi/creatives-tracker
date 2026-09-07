@@ -105,7 +105,7 @@ describe("studio.variations", () => {
     dbState.selectRows = [];
     dbState.inserted = [];
     dbState.updated = [];
-    dbState.featureFlags = { imageStudio: true };
+    dbState.featureFlags = { imageStudio: true, creativeVariations: true };
     dbState.generationRow = { ...variationGenerationRow };
     vi.clearAllMocks();
     triggerMock.trigger.mockResolvedValue({ id: "run_var_1" });
@@ -172,6 +172,15 @@ describe("studio.variations", () => {
     triggerMock.trigger.mockRejectedValueOnce(new Error("queue down"));
     await expect(caller.studio.variations.create({ sourceCreativeId: "cr_1" })).rejects.toThrow("queue down");
     expect(dbState.updated.some((row) => row.status === "failed")).toBe(true);
+  });
+
+  it("hides the router behind NOT_FOUND until both imageStudio and creativeVariations are on", async () => {
+    for (const flags of [{ imageStudio: true }, { creativeVariations: true }]) {
+      dbState.featureFlags = flags;
+      const caller = createMockCaller({ role: "owner" });
+      await expect(caller.studio.variations.listForCreative({ creativeId: "cr_1" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(caller.studio.variations.create({ sourceCreativeId: "cr_1" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    }
   });
 
   it("create: members cannot queue variations", async () => {
