@@ -63,6 +63,7 @@ const input: VariationRunInput = {
 
 const region = { x: 0.55, y: 0.6, w: 0.3, h: 0.3 };
 const editInput: VariationRunInput = { ...input, sourceProductRegion: region };
+const patchInput = { ...editInput, productPatch: { source: "source" as const } };
 
 function deps(overrides: Partial<VariationRunDeps> = {}): VariationRunDeps {
   return {
@@ -133,12 +134,28 @@ describe("buildVariationSystemPrompt", () => {
     expect(buildVariationSystemPrompt(input)).not.toContain("EDIT MODE");
   });
 
-  it("tells the model in generate mode that its product will be replaced when a source product was located", () => {
-    const system = buildVariationSystemPrompt(editInput);
+  it("tells the model in generate mode that its product will be replaced when a product patch is ready", () => {
+    const system = buildVariationSystemPrompt(patchInput);
     expect(system).toContain("TRANSPLANT");
     // The staging rules must not read as the one change step 3 asks for.
     expect(system).toContain("not your one change");
     expect(buildVariationSystemPrompt(input)).not.toContain("TRANSPLANT");
+  });
+
+  it("asks for an empty landing area and drops the draw-the-product text when a product patch is ready", () => {
+    const system = buildVariationSystemPrompt(patchInput);
+    expect(system).toContain("TRANSPLANT");
+    expect(system).toContain("Do not draw the product");
+    expect(system).toContain("landing area");
+    expect(system).not.toContain("the product it draws is replaced");
+    expect(system).toContain("No product photo is attached");
+  });
+
+  it("keeps the draw-the-product prompt when no patch is ready even though a product was located", () => {
+    const system = buildVariationSystemPrompt(editInput);
+    expect(system).not.toContain("TRANSPLANT");
+    expect(system).toContain("must match the product photo exactly");
+    expect(system).toContain("EDIT MODE");
   });
 });
 
@@ -391,6 +408,24 @@ describe("createVariationRun.generateImage", () => {
     await createVariationRun(competitor, d).generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
     expect(d.produceImage).toHaveBeenCalledWith(expect.objectContaining({ mode: "generate", keepRegion: null }));
     expect(buildVariationSystemPrompt(competitor)).not.toContain("EDIT MODE");
+  });
+
+  it("leaves the product photo out of the references when a product patch is ready", async () => {
+    const d = deps();
+    const run = createVariationRun({ ...editInput, productPatch: { source: "asset" } }, d);
+    await run.generateImage({ prompt: "p", referenceImageIds: ["img_r3"], keepSourceLayout: true });
+    expect(d.produceImage).toHaveBeenCalledWith(
+      expect.objectContaining({ referenceImageUrls: ["https://blob.test/r3.png", "https://cdn.test/source.png"] }),
+    );
+  });
+
+  it("still sends the product photo first when no patch is ready", async () => {
+    const d = deps();
+    const run = createVariationRun(editInput, d);
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    expect(d.produceImage).toHaveBeenCalledWith(
+      expect.objectContaining({ referenceImageUrls: ["https://blob.test/product.png", "https://cdn.test/source.png"] }),
+    );
   });
 });
 

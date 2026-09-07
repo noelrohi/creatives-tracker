@@ -50,6 +50,13 @@ export type VariationRunInput = {
    * `null` when the locator found none; `undefined` when it did not run.
    */
   sourceProductRegion?: ProductRegion | null;
+  /**
+   * Set when the trigger already holds a matted cut of the real product
+   * (from the source ad or a matched product photo) that it will paste into
+   * every generate attempt. Null when no cut exists: the model then draws the
+   * product itself from the product photo.
+   */
+  productPatch?: { source: "source" | "asset" } | null;
   note: string | null;
   brand: StudioBrandProfile | null;
   library: StudioContextLibrary;
@@ -193,7 +200,7 @@ const TOOLS_NOTE = [
   `Budgets: at most ${MAX_CONTEXT_READS} readContext calls, ${MAX_IMAGE_ATTEMPTS} generateImage calls, ${MAX_STEPS} steps in total. Tool errors tell you what to change; adapt instead of repeating the call.`,
 ].join("\n");
 
-function brandBlock(brand: StudioBrandProfile | null, editAvailable: boolean) {
+function brandBlock(brand: StudioBrandProfile | null, { patchReady }: { patchReady: boolean }) {
   if (!brand) return "<brand>No brand profile is configured.</brand>";
 
   const lines = [
@@ -201,8 +208,8 @@ function brandBlock(brand: StudioBrandProfile | null, editAvailable: boolean) {
     brand.offer ? `Offer: ${brand.offer}` : null,
     brand.productNotes ? `Product notes: ${brand.productNotes}` : null,
     brand.productImageUrl
-      ? editAvailable
-        ? "In generate mode a product photo is attached as the first reference so the image model knows what it is drawing, but the product it draws is replaced afterwards (see TRANSPLANT): name the product and do not spell out its markings or ask for an exact match to the photo. In edit mode no product photo is attached: the product is preserved from the source itself, so do not describe it, restyle it, or ask for a match to the photo."
+      ? patchReady
+        ? "No product photo is attached in generate mode: the real product is pasted in afterwards (see TRANSPLANT), so do not describe its shape, colour, or markings. In edit mode no product photo is attached either: the product is preserved from the source itself, so do not describe it, restyle it, or ask for a match to the photo."
         : "A product photo is attached as the first reference on every image call; when the source image is attached it comes last. The product in the ad must match the product photo exactly; render only the markings the product notes describe."
       : null,
   ].filter(Boolean);
@@ -270,13 +277,15 @@ export function buildVariationSystemPrompt(input: VariationRunInput) {
     input.useSourceLayout
       ? null
       : "<mode>\nThe source image is NOT sent to the image model on this run (the user retried without it), and keepSourceLayout has no effect. Describe the layout, composition, and every element the image needs in the prompt itself.\n</mode>",
-    editAvailable
-      ? "<mode>\nTRANSPLANT: in generate mode the product you draw is replaced afterwards by the product cut out of the source ad and pasted over it. So draw the product alone on a plain, evenly lit surface at about the size it has in the source ad image, with nothing overlapping it and no second copy elsewhere; do not describe its shape, colour, or markings beyond naming it. Everything else in the prompt is yours to design. This staging is a constraint on how you draw the product, not your one change.\n</mode>"
+    input.productPatch
+      ? "<mode>\nTRANSPLANT: the real product is pasted into your image afterwards, cut out of " +
+        (input.productPatch.source === "asset" ? "the brand's product photo" : "the source ad") +
+        ". Do not draw the product, and do not draw anything that looks like it (no product-shaped object, no packaging, no logo) anywhere in the image. Instead leave an empty landing area for it: an evenly lit, plain surface (pedestal top, flat card area, tabletop) at about the position and size the product has in the source ad image, with nothing overlapping it and no text inside it. Name the product in the prompt only to say where its landing area is. Everything else in the prompt is yours to design. This staging is a constraint on how you draw the scene, not your one change.\n</mode>"
       : null,
     editAvailable && input.sourceProductRegion
       ? `<mode>\nEDIT MODE is available on request (pass mode "edit" to generateImage; the default is generate, which draws from the references and then transplants the source's real product, so a copy-only or CTA-only change still belongs in generate mode with the source kept as the layout reference). Edit mode is a last resort: measured runs show the image model reflows the layout under an edit mask, so the pasted box misaligns and the review rejects most edit attempts. Use it only when the CONSTRAINT FROM THE USER demands the source's exact pixels outside one region, never merely because the change is small. In edit mode the source is the canvas: the box ${describeRegion(input.sourceProductRegion)} of it holds the product; after the edit the source's pixels for that box are pasted back, so the product is preserved exactly, and everything outside that box is redrawn from your prompt alone. Because that rectangle is pasted over the result, the image model must keep the box at exactly the same position and size (no reflowed grid, no resized tiles) and must not draw the product anywhere else in the image; say both of those in the prompt. The prompt is still the self-contained description step 4 asks for, minus the product: describe the whole scene outside the kept box (background, lighting, palette, mood) and re-quote every line of copy the finished ad shows, including lines you are not changing. Anything you leave out is lost. Never describe or restyle the product itself; refer to it in plain words if you must (for example "the product in the lower-right tile is kept as is"). Keep the source's composition. If the review reports a misaligned box or a collision with a neighbouring element, move or resize keepRegion so its edges fall on a flat, unbroken area of the source (a plain background band, not a card edge). If it reports a second copy of the product, keep the box and rewrite the prompt to state that the product appears only inside that box. If it reports the box covering copy, shrink the box. Once in edit mode keepSourceLayout has no effect; to leave edit mode pass mode "generate", and do that only when the variation must move or replace the product.\n</mode>`
       : null,
-    brandBlock(input.brand, editAvailable),
+    brandBlock(input.brand, { patchReady: Boolean(input.productPatch) }),
     ...core,
     reference,
     images,
@@ -429,8 +438,10 @@ export function createVariationRun(
     } else {
       // Reference order: product photo first, chosen context images, source
       // last. The image model leans on the first reference for the product and
-      // the last for layout.
-      const productImageUrl = input.brand?.productImageUrl;
+      // the last for layout. With a product patch ready the product photo is
+      // left out entirely: the model is asked for an empty landing area, and
+      // attaching the photo invites it to draw the product anyway.
+      const productImageUrl = input.productPatch ? null : input.brand?.productImageUrl;
       if (productImageUrl) referenceImageUrls.push(productImageUrl);
       for (const id of raw.referenceImageIds) {
         const image = imageById.get(id);
