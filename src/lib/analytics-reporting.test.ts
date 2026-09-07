@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildReporting, explicitStoreWindow, reportingSchema, type MetaAccountEvidence } from "./analytics-reporting";
+import { buildReporting, explicitStoreWindow, reportingSchema, type RequestedWindowAttemptEvidence, type MetaAccountEvidence } from "./analytics-reporting";
 import { deriveDayInTimezone } from "./shopify-ingest";
 
 const now = new Date("2026-11-02T12:00:00Z");
@@ -48,6 +48,89 @@ describe("analytics source evidence", () => {
     const result = buildReporting({ now, metaAccounts: [fresh], shopify: { storeId: "store", timezone: "Europe/London", lastSuccessMs: now.getTime() - 3 * 3_600_000, latestAttempt: null } });
     expect(result.meta?.freshness).toBe("fresh");
     expect(result.shopify).toMatchObject({ freshness: "stale", timezone: "Europe/London", coverage: { state: "unknown" }, revisability: "unknown" });
+  });
+});
+
+describe("bounded requested-window evidence", () => {
+  const attempt: RequestedWindowAttemptEvidence = {
+    runId: "run-a", requestedMs: now.getTime() - 1000, finishedMs: now.getTime(),
+    dateFrom: "2026-10-01", dateTo: "2026-10-31", basis: "meta_insight_request_dates",
+    windowPrecision: "inclusive_account_calendar_dates", result: "success",
+    breakdownsRequested: ["age", "gender"], breakdownsCompleted: ["age"],
+  };
+
+  it.each([
+    { result: "success", finishedMs: now.getTime(), outcome: "success" },
+    { result: "partial_success", finishedMs: now.getTime(), outcome: "partial_success" },
+    { result: "failed", finishedMs: now.getTime(), outcome: "failed" },
+    { result: null, finishedMs: null, outcome: "unfinished" },
+    { result: "success", finishedMs: null, outcome: "unfinished" },
+    { result: null, finishedMs: now.getTime(), outcome: "unknown" },
+    { result: "cancelled", finishedMs: now.getTime(), outcome: "unknown" },
+  ])("exposes $result/$outcome without promoting coverage", ({ result, finishedMs, outcome }) => {
+    const reporting = reportingSchema.parse(buildReporting({ now, metaAccounts: [{
+      ...fresh, requestedWindowAttempts: [{ ...attempt, result, finishedMs }],
+    }] }));
+    const account = reporting.meta!.accounts[0];
+    expect(account.requestedWindowAttempts.attempts[0]).toMatchObject({
+      result, outcome, dateFrom: "2026-10-01", dateTo: "2026-10-31",
+      basis: "meta_insight_request_dates", breakdownsRequested: ["age", "gender"], breakdownsCompleted: ["age"],
+    });
+    expect(account.coverage.state).toBe("unknown");
+    expect(reporting.meta?.coverage.state).toBe("unknown");
+  });
+
+  it("bounds the recent history deterministically and leaves input unchanged", () => {
+    const attempts = Array.from({ length: 12 }, (_, i) => ({ ...attempt, runId: `run-${String(11 - i).padStart(2, "0")}` }));
+    const result = buildReporting({ now, metaAccounts: [{ ...fresh, requestedWindowAttempts: attempts }] });
+    const history = result.meta!.accounts[0].requestedWindowAttempts;
+    expect(history.limit).toBe(10);
+    expect(history.attempts.map((row) => row.runId)).toEqual(Array.from({ length: 10 }, (_, i) => `run-${String(i).padStart(2, "0")}`));
+    expect(attempts[0].runId).toBe("run-11");
+    expect(buildReporting({ now, metaAccounts: [fresh] }).meta!.accounts[0].requestedWindowAttempts.attempts).toEqual([]);
+  });
+
+  it.each(["shopify_incremental_updated_at", "shopify_backfill_created_at"] as const)("discloses %s day-label precision and nullable bounds", (basis) => {
+    const result = reportingSchema.parse(buildReporting({ now, shopify: {
+      storeId: "store", timezone: "Asia/Tokyo", lastSuccessMs: now.getTime(), latestAttempt: null,
+      requestedWindowAttempts: [{ ...attempt, basis, dateFrom: null, dateTo: null,
+        windowPrecision: "utc_day_labels_not_exact_query_bounds", breakdownsRequested: null, breakdownsCompleted: null }],
+    } }));
+    expect(result.shopify?.requestedWindowAttempts.attempts[0]).toMatchObject({ basis, dateFrom: null, dateTo: null, windowPrecision: "utc_day_labels_not_exact_query_bounds", outcome: "success" });
+    expect(result.shopify?.coverage.state).toBe("unknown");
+  });
+});
+
+describe("Meta currency evidence", () => {
+  it.each([
+    { currencies: ["USD"], state: "uniform", currency: "USD", usable: true },
+    { currencies: ["USD", "USD"], state: "uniform", currency: "USD", usable: true },
+    { currencies: ["USD", "EUR"], state: "mixed", currency: null, usable: false },
+    { currencies: ["USD", null], state: "unknown", currency: null, usable: false },
+    { currencies: [null], state: "unknown", currency: null, usable: false },
+    { currencies: [], state: "unknown", currency: null, usable: false },
+    { currencies: ["USD", "EUR", null], state: "mixed", currency: null, usable: false },
+    { currencies: ["usd"], state: "unknown", currency: null, usable: false },
+  ])("marks $currencies as $state without converting money", ({ currencies, state, currency, usable }) => {
+    const accounts = currencies.map((currency, i) => ({ ...fresh, accountId: `account-${i}`, currency }));
+    const result = reportingSchema.parse(buildReporting({ now, metaAccounts: accounts }));
+    expect(result.meta?.currencyEvidence).toMatchObject({ state, currency, aggregateAmountsUsable: usable, source: "meta_account_currency", conversion: "none" });
+  });
+
+  it("includes disconnected/disabled currency evidence and identifies missing accounts", () => {
+    const result = buildReporting({ now, metaAccounts: [
+      { ...fresh, currency: "USD" },
+      { ...fresh, accountId: "b", currency: "EUR", connection: "disabled" },
+      { ...fresh, accountId: "c", currency: null, connection: "disconnected" },
+    ] });
+    expect(result.meta?.currencyEvidence).toMatchObject({ currencies: ["EUR", "USD"], unknownAccountIds: ["c"], aggregateAmountsUsable: false });
+    expect(result.meta?.accounts[0].currency).toBe("USD");
+  });
+
+  it("never infers missing currency from timezone or the presence of Shopify", () => {
+    const result = buildReporting({ now, metaAccounts: [fresh], shopify: { storeId: "store", timezone: "America/New_York", lastSuccessMs: now.getTime(), latestAttempt: null } });
+    expect(result.meta?.accounts[0].currency).toBeNull();
+    expect(result.meta?.currencyEvidence).toMatchObject({ state: "unknown", currency: null, aggregateAmountsUsable: false });
   });
 });
 

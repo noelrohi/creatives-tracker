@@ -24,7 +24,7 @@ import { adSetScopeFilter, campaignScopeFilter } from "@/lib/ad-scope-sql";
 import { ANGLE_TYPES, MODES, VISUAL_STYLES } from "@/lib/creative-taxonomy";
 import { analyticsMetadataShape, type EffectiveWindow } from "@/lib/analytics-reporting";
 import { loadAnalyticsReporting, resolveDashboardWindow } from "@/lib/analytics-reporting-queries";
-import { leaderboardMetadata, leaderboardMetadataSchema, leaderboardSortSchema } from "@/lib/leaderboard-contract";
+import { leaderboardMetadata, leaderboardMetadataSchema, leaderboardRankingModeSchema, leaderboardSortSchema } from "@/lib/leaderboard-contract";
 
 type CreativeAttributes = (typeof adCreatives.$inferSelect)["attributes"];
 type CreativeAttributesMeta = (typeof adCreatives.$inferSelect)["attributesMeta"];
@@ -59,6 +59,7 @@ const dashboardAnalyticsInputSchema = dashboardAnalyticsFilterSchema.optional();
 const dashboardStatsInputSchema = dashboardAnalyticsFilterSchema
   .extend({
     sortBy: leaderboardSortSchema.default("conversions").describe("Top performers only: ranks the full eligible population before LIMIT. Surviving and attention retain their specialized ordering."),
+    rankingMode: leaderboardRankingModeSchema.default("current_active").describe("Top performers only. historical ranks observed window performance without current-active eligibility and ignores statuses; it does not reconstruct historical ad status. Surviving and attention retain current operational rules. Qualification remains spend >= 50 and ROAS >= 1; sample warnings are not confidence claims."),
     includePortfolio: z.boolean().optional(),
     /**
      * Rows per leaderboard, applied to all three the same way. The screen wants
@@ -460,14 +461,15 @@ const dailyPortfolioPerformanceOutputSchema = z.array(dailyPortfolioPerformanceR
 const merSparklinePointSchema = z.object({
   date: z.string(),
   spend: z.number(),
-  revenue: z.number(),
+  revenue: z.number().describe("Meta-attributed purchase value for this reporting day, in the parent account currency. Missing daily observations display zero, not evidence of complete ingestion."),
   roas: z.number().nullable(),
 });
 const merAccountBreakdownOutputSchema = z.array(z.object({
   accountId: z.string(),
   accountName: z.string(),
+  currency: z.string().nullable().describe("Authoritative Meta ad-account currency for this row's monetary amounts, including prior spend and sparkline. Null means unknown; no currency inference or conversion is performed."),
   spend: z.string().nullable(),
-  revenue: z.string().nullable(),
+  revenue: z.string().nullable().describe("Meta-attributed revenue: sum of performance_log.purchase_value over canonical base daily Meta observations in the inclusive requested reporting-date window, scoped by organization/account/team/campaign/ad set. Not Shopify net sales or Shopify-verified attributed revenue; no reconciliation or attribution-finality claim."),
   roas: z.string().nullable(),
   priorSpend: z.string().nullable(),
   priorRoas: z.string().nullable(),
@@ -1181,7 +1183,7 @@ export const adCreativeRouter = router({
     }),
 
   dashboardStats: orgProcedure
-    .meta(openApiQueryMeta("adCreative", "dashboardStats", "Creative leaderboards", "Top performers default to conversions descending, then ROAS; sortBy=roas reverses metric priority before LIMIT. All lists use creative ID as the final tie-breaker. Surviving uses lifetime metrics and ignores date/status filters. Attention uses per-ad urgency and at-risk spend, ignores requested status filters, and uses lifetime age. Surviving and attention exclude the returned top IDs, so sortBy and limit affect membership. See leaderboards for eligibility, ordering, metric scopes and truncation evidence."))
+    .meta(openApiQueryMeta("adCreative", "dashboardStats", "Creative leaderboards", "rankingMode=historical ranks observed window performance without requiring current-active ads and ignores statuses for the top list only; it does not reconstruct historical status. Defaults remain current_active. Top-list qualification is spend >= 50 and ROAS >= 1, with no conversion minimum. Sample counts and heuristic low-conversion warnings are exposed in leaderboards, not proof of a winner. Top performers default to conversions descending, then ROAS; sortBy=roas reverses metric priority before LIMIT. All lists use creative ID as the final tie-breaker. Surviving uses lifetime metrics and ignores date/status filters. Attention uses per-ad urgency and at-risk spend, ignores requested status filters, and uses lifetime age. Surviving and attention exclude the returned top IDs, so sortBy and limit affect membership. See leaderboards for eligibility, ordering, metric scopes and truncation evidence."))
     .output(dashboardStatsOutputSchema)
     .input(dashboardStatsInputSchema)
     .query(async ({ input, ctx }) => {
@@ -1202,6 +1204,11 @@ export const adCreativeRouter = router({
       const limit = input?.limit ?? 10;
       const includeSurviving = input?.includeSurviving !== false;
       const sortBy = input?.sortBy ?? "conversions";
+      const rankingMode = input?.rankingMode ?? "current_active";
+      const topStatusFilter = rankingMode === "historical" ? sql`` : statusFilter;
+      const topActiveQualification = rankingMode === "historical"
+        ? sql``
+        : sql`AND bool_or(${effectiveAdActiveSql(sql`ad.status`, sql`ast.status`)} AND pl.spend > 0)`;
       const topOrdering = sortBy === "roas"
         ? sql`coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST, sum(pl.conversions) DESC NULLS LAST, ac.id ASC`
         : sql`sum(pl.conversions) DESC NULLS LAST, coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) DESC NULLS LAST, ac.id ASC`;
@@ -1240,13 +1247,9 @@ export const adCreativeRouter = router({
         ad_status: string | null;
       };
 
-      // Top performers default to conversions, then ROAS (min $50 spend).
-      // Displayed metrics aggregate
-      // all ads admitted by the requested filters, not just active ads.
-      // But the creative only
-      // qualifies if at least one active ad has window spend, so the panel
-      // never recommends "scale this" on a creative with nothing to scale.
-      // Tracks running_days for the "evergreen" tag.
+      // Qualification, samples and display share the same window/filter scope.
+      // Historical ranking ignores current status; default operational ranking
+      // additionally requires an active ad with window spend.
       const topResult = await db.execute(sql`
         SELECT
           ac.id,
@@ -1260,20 +1263,23 @@ export const adCreativeRouter = router({
           ${impressionWeightedCtr("pl")}::text as ctr,
           sum(pl.conversions)::text as total_conversions,
           CASE WHEN bool_or(${effectiveAdActiveSql(sql`ad.status`, sql`ast.status`)}) THEN 'active' ELSE 'paused' END AS ad_status,
-          (max(pl.date_end)::date - min(pl.date_start)::date) as running_days
+          (max(pl.date_end)::date - min(pl.date_start)::date) as running_days,
+          sum(pl.impressions)::text AS sample_impressions,
+          count(DISTINCT pl.date_start)::int AS sample_days,
+          count(DISTINCT ad.id)::int AS sample_ads
         FROM ad_creative ac
         JOIN ad ON ad.ad_creative_id = ac.id
         LEFT JOIN ad_set ast ON ast.id = ad.ad_set_id
         JOIN performance_log pl ON pl.ad_id = ad.id
-        WHERE ${dateFilter} AND ${basePl} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${statusFilter} ${ownershipFilter} ${teamFilter} ${formatFilter}
+        WHERE ${dateFilter} AND ${basePl} AND ad.organization_id = ${ctx.organizationId} ${accountFilter} ${campaignFilter} ${adSetFilter} ${topStatusFilter} ${ownershipFilter} ${teamFilter} ${formatFilter}
         GROUP BY ac.id, ac.name, ac.format, ac.asset_url, ac.video_url
         HAVING sum(pl.spend) >= 50
           AND coalesce(sum(pl.purchase_value), 0) / nullif(sum(pl.spend), 0) >= 1
-          AND bool_or(${effectiveAdActiveSql(sql`ad.status`, sql`ast.status`)} AND pl.spend > 0)
+          ${topActiveQualification}
         ORDER BY ${topOrdering}
         LIMIT ${limit}
       `);
-      const topPerformers = topResult.rows as (CreativeRow & { running_days: number })[];
+      const topPerformers = topResult.rows as (CreativeRow & { running_days: number; sample_impressions: string | null; sample_days: number; sample_ads: number })[];
 
       const topIds = topPerformers.map((r) => r.id);
       // Both secondary lists exclude only the top IDs returned at this sort and
@@ -1473,7 +1479,7 @@ export const adCreativeRouter = router({
       return {
         effectiveWindow,
         reporting: await loadAnalyticsReporting({ organizationId: ctx.organizationId, accountId: input?.accountId }),
-        leaderboards: leaderboardMetadata({ sortBy, limit, includeSurviving, includePortfolio, fairShotSpend: includePortfolio ? fairShotSpend : null, topIds, survivingCount: survivingCreatives.length, bottomCount: bottomPerformers.length }),
+        leaderboards: leaderboardMetadata({ rankingMode, topSamples: topPerformers.map((r) => ({ creativeId: r.id, conversions: r.total_conversions == null ? null : Number(r.total_conversions), impressions: r.sample_impressions == null ? null : Number(r.sample_impressions), observedDays: r.sample_days ?? null, adCount: r.sample_ads ?? null })), sortBy, limit, includeSurviving, includePortfolio, fairShotSpend: includePortfolio ? fairShotSpend : null, topIds, survivingCount: survivingCreatives.length, bottomCount: bottomPerformers.length }),
         portfolio: mapPortfolioRow(portfolio),
         topPerformers: topPerformers.map((r) => ({
           id: r.id,
@@ -1769,7 +1775,7 @@ export const adCreativeRouter = router({
     }),
 
   getMerAccountBreakdown: orgProcedure
-    .meta(openApiQueryMeta("adCreative", "getMerAccountBreakdown"))
+    .meta(openApiQueryMeta("adCreative", "getMerAccountBreakdown", "Meta performance by account", "Per-account observed Meta spend and Meta-attributed purchase value, not Shopify net sales or Shopify-verified revenue. Revenue sums canonical base daily purchase_value in the inclusive requested reporting-date window with organization/account/team/campaign/ad-set filters. ROAS is coalesce(revenue, 0) / spend, null for zero or unknown spend. Each row carries nullable authoritative Meta account currency; amounts are not converted and must not be summed across unknown or differing currencies. Accounts without matching current-period observations are omitted. Sparkline gaps display zero, not source-completeness evidence."))
     .output(merAccountBreakdownOutputSchema)
     .input(
       z.object({
@@ -1800,6 +1806,7 @@ export const adCreativeRouter = router({
       type Row = {
         account_id: string;
         account_name: string;
+        currency: string | null;
         spend: string | null;
         revenue: string | null;
         roas: string | null;
@@ -1887,6 +1894,7 @@ export const adCreativeRouter = router({
         SELECT
           acc.id as account_id,
           acc.name as account_name,
+          acc.currency,
           cp.spend::text as spend,
           cp.revenue::text as revenue,
           cp.roas::text as roas,
@@ -1912,6 +1920,7 @@ export const adCreativeRouter = router({
         return {
           accountId: r.account_id,
           accountName: r.account_name,
+          currency: r.currency ?? null,
           spend: r.spend,
           revenue: r.revenue,
           roas: r.roas,

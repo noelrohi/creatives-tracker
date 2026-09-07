@@ -1,10 +1,11 @@
 import { z } from "zod";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router, orgProcedure, orgAdminProcedure, orgWriteProcedure } from "../init";
 import { openApiMutationMeta, openApiQueryMeta } from "../openapi-meta";
 import { db } from "@/db";
 import { adAccounts } from "@/schema/account";
+import { normalizeMetaCurrency } from "@/lib/analytics-reporting";
 
 const publicAdAccountSchema = z.object({
   id: z.string(),
@@ -17,6 +18,7 @@ const publicAdAccountSchema = z.object({
   lastImportedAt: z.date().nullable(),
   dataDateEnd: z.string().nullable(),
   timezone: z.string().nullable(),
+  currency: z.string().nullable().describe("Authoritative Meta account currency; null means unknown. Never inferred from Shopify or timezone."),
   organizationId: z.string().nullable(),
   createdAt: z.date(),
   updatedAt: z.date(),
@@ -35,6 +37,7 @@ function sanitizeAccount(account: typeof adAccounts.$inferSelect) {
     lastImportedAt: account.lastImportedAt,
     dataDateEnd: account.dataDateEnd,
     timezone: account.timezone,
+    currency: normalizeMetaCurrency(account.currency),
     organizationId: account.organizationId,
     createdAt: account.createdAt,
     updatedAt: account.updatedAt,
@@ -144,7 +147,13 @@ export const adAccountRouter = router({
       const { id, ...data } = input;
       const [account] = await db
         .update(adAccounts)
-        .set(data)
+        .set({
+          ...data,
+          // Connector identity changes invalidate its previously observed currency.
+          ...(data.metaAccountId !== undefined ? {
+            currency: sql`CASE WHEN ${adAccounts.metaAccountId} = ${data.metaAccountId} THEN ${adAccounts.currency} ELSE NULL END`,
+          } : {}),
+        })
         .where(
           and(
             eq(adAccounts.id, id),

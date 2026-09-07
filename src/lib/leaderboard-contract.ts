@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+export const leaderboardRankingModeSchema = z.enum(["current_active", "historical"]);
+export type LeaderboardRankingMode = z.infer<typeof leaderboardRankingModeSchema>;
+
 export const leaderboardSortSchema = z.enum(["conversions", "roas"]);
 export type LeaderboardSort = z.infer<typeof leaderboardSortSchema>;
 
@@ -27,6 +30,25 @@ const listSchema = z.object({
   fairShotBasis: z.string().nullable(),
 });
 export const leaderboardMetadataSchema = z.object({
+  rankingMode: leaderboardRankingModeSchema,
+  rankingModeAppliesTo: z.literal("topPerformers"),
+  historicalStatusReconstructed: z.literal(false),
+  qualification: z.object({
+    minSpend: z.number(),
+    minRoas: z.number(),
+    minConversions: z.number().nullable(),
+    requiresCurrentlyActiveAd: z.boolean(),
+    lowSampleConversionThreshold: z.number(),
+    warningPolicy: z.string(),
+  }),
+  samples: z.array(z.object({
+    creativeId: z.string(),
+    conversions: z.number().nullable(),
+    impressions: z.number().nullable(),
+    observedDays: z.number().nullable().describe("Count of distinct observed performance_log.date_start values in the filtered sample, not calendar-day coverage. A multi-day reporting row contributes one start; this does not establish gap-free ingestion or complete coverage of the requested window."),
+    adCount: z.number().nullable(),
+    warnings: z.array(z.enum(["low_conversion_sample", "unknown_conversion_sample"])),
+  })),
   sortBy: leaderboardSortSchema,
   sortAppliesTo: z.literal("topPerformers"),
   topPerformers: listSchema,
@@ -40,6 +62,8 @@ const uniqueTie = { metric: "creativeId", direction: "asc" as const, nulls: "not
 
 export function leaderboardMetadata(input: {
   sortBy: LeaderboardSort;
+  rankingMode?: LeaderboardRankingMode;
+  topSamples?: Array<{ creativeId: string; conversions: number | null; impressions: number | null; observedDays: number | null; adCount: number | null }>;
   limit: number;
   includeSurviving: boolean;
   includePortfolio: boolean;
@@ -58,17 +82,33 @@ export function leaderboardMetadata(input: {
     fairShotBasis: null,
     healthScope: "Creative-wide ads scoped by organization, not the requested account/team/campaign/ad-set/status/format filters. Base health totals use the requested window; recent comparisons use the latest lifetime reporting day and can extend outside that window.",
   });
+  const historical = input.rankingMode === "historical";
   return {
+    rankingMode: input.rankingMode ?? "current_active",
+    rankingModeAppliesTo: "topPerformers",
+    historicalStatusReconstructed: false,
+    qualification: {
+      minSpend: 50,
+      minRoas: 1,
+      minConversions: null,
+      requiresCurrentlyActiveAd: !historical,
+      lowSampleConversionThreshold: 10,
+      warningPolicy: "Top-list samples use the same filtered window as qualification and displayed metrics. Fewer than 10 observed conversions is a heuristic warning, not an eligibility cutoff or statistical confidence test. Observed ROAS is not proof of a winner; source completeness and attribution finality are not established.",
+    },
+    samples: (input.topSamples ?? []).map((sample) => ({
+      ...sample,
+      warnings: sample.conversions === null ? ["unknown_conversion_sample" as const] : sample.conversions < 10 ? ["low_conversion_sample" as const] : [],
+    })),
     sortBy: input.sortBy,
     sortAppliesTo: "topPerformers",
     topPerformers: {
       ...base(input.topIds.length),
       ordering: [...(input.sortBy === "roas" ? [desc("roas"), desc("conversions")] : [desc("conversions"), desc("roas")]), uniqueTie],
-      eligibility: ["aggregate spend >= 50", "aggregate ROAS >= 1", "at least one effectively active scoped ad with positive window spend"],
+      eligibility: ["aggregate spend >= 50", "aggregate ROAS >= 1", historical ? "observed window performance; no current-active requirement or historical status reconstruction" : "at least one effectively active scoped ad with positive window spend"],
       metricScope: "window",
       lifetimeMeasures: [],
-      appliedFilters: [...scopedFilters, "date", "statuses"],
-      ignoredFilters: [],
+      appliedFilters: [...scopedFilters, "date", ...(historical ? [] : ["statuses"])],
+      ignoredFilters: historical ? ["statuses"] : [],
       excludedTopIds: [],
       displayScope: "All ads admitted by the requested filters, not just the active qualifying ads. runningDays is the window row span; isEvergreen uses that span. See healthScope for separate health rules.",
     },

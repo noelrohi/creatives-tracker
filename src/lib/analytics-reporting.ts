@@ -16,6 +16,26 @@ const coverageSchema = z.object({
   state: z.literal("unknown"),
   reason: z.literal("no_gap_free_window_coverage_evidence"),
 });
+export const REQUESTED_WINDOW_ATTEMPT_LIMIT = 10;
+const requestedWindowAttemptSchema = z.object({
+  runId: z.string(),
+  requestedAt: z.iso.datetime(),
+  finishedAt: z.iso.datetime().nullable(),
+  dateFrom: z.string().nullable(),
+  dateTo: z.string().nullable(),
+  basis: z.enum(["meta_insight_request_dates", "shopify_incremental_updated_at", "shopify_backfill_created_at"]),
+  windowPrecision: z.enum(["inclusive_account_calendar_dates", "utc_day_labels_not_exact_query_bounds"]),
+  result: z.string().nullable(),
+  outcome: z.enum(["success", "partial_success", "failed", "unfinished", "unknown"]),
+  breakdownsRequested: z.array(z.string()).nullable(),
+  breakdownsCompleted: z.array(z.string()).nullable(),
+});
+const requestedWindowAttemptsSchema = z.object({
+  limit: z.literal(10),
+  selection: z.literal("latest_requested_at_desc_run_id_asc"),
+  attempts: z.array(requestedWindowAttemptSchema).max(10),
+}).describe("Bounded recent recorded ingestion attempts, independent of the report window; not exhaustive history or gap-free coverage. Success is the recorded run result, not proof of source completeness or attribution finality. Empty history means no available evidence. Shopify dates are UTC day labels only: incremental queries use updated_at >= a timestamp, backfills use created_at >= a timestamp; stored dateTo is not an enforced upper bound. Local rebucketing is excluded. No error text or arbitrary run metadata is exposed.");
+
 const freshnessSchema = z.enum(["fresh", "stale", "never_synced", "no_accounts"]);
 const evidenceSchema = z.object({
   lastSuccessAt: z.iso.datetime().nullable(),
@@ -26,11 +46,47 @@ const evidenceSchema = z.object({
   }).nullable(),
   freshness: freshnessSchema,
   coverage: coverageSchema,
+  requestedWindowAttempts: requestedWindowAttemptsSchema,
   revisability: z.enum(["provisional", "unknown"]),
 });
+export const metaCurrencyEvidenceSchema = z.object({
+  state: z.enum(["uniform", "mixed", "unknown"]),
+  currency: z.string().nullable(),
+  currencies: z.array(z.string()),
+  unknownAccountIds: z.array(z.string()),
+  aggregateAmountsUsable: z.boolean(),
+  source: z.literal("meta_account_currency"),
+  conversion: z.literal("none"),
+}).describe("Current authoritative Meta account currency, not historical currency reconstruction. Only uniform known currencies permit aggregate monetary amounts and money-derived ratios to be used. Legacy amounts are retained without FX conversion. Inventory scope may conservatively include accounts without observed rows.");
+
+/** Reject malformed metadata rather than inferring a currency from another source. */
+export function normalizeMetaCurrency(value: unknown): string | null {
+  return typeof value === "string" && /^[A-Z]{3}$/.test(value) ? value : null;
+}
+
+export function buildMetaCurrencyEvidence(accounts: { accountId: string; currency?: string | null }[]): z.infer<typeof metaCurrencyEvidenceSchema> {
+  const currencies = [...new Set(accounts.flatMap((account) => {
+    const currency = normalizeMetaCurrency(account.currency);
+    return currency ? [currency] : [];
+  }))].sort();
+  const unknownAccountIds = accounts.filter((account) => !normalizeMetaCurrency(account.currency)).map((account) => account.accountId).sort();
+  // Known disagreement remains mixed even when other accounts are unknown.
+  const state = currencies.length > 1 ? "mixed" : accounts.length === 0 || unknownAccountIds.length > 0 ? "unknown" : "uniform";
+  return {
+    state,
+    currency: state === "uniform" ? currencies[0] : null,
+    currencies,
+    unknownAccountIds,
+    aggregateAmountsUsable: state === "uniform",
+    source: "meta_account_currency",
+    conversion: "none",
+  };
+}
+
 const metaAccountSchema = evidenceSchema.extend({
   accountId: z.string(),
   timezone: z.string().nullable(),
+  currency: z.string().nullable(),
   connection: z.enum(["connected", "disabled", "disconnected"]),
   observedImportedThrough: z.string().nullable().describe("Maximum imported date only; does not prove contiguous coverage or finality."),
 });
@@ -41,6 +97,7 @@ export const reportingSchema = z.object({
     calendarBasis: z.literal("meta_account_reporting_day"),
     timezoneState: z.enum(["uniform", "mixed", "unknown"]),
     timezones: z.array(z.string()),
+    currencyEvidence: metaCurrencyEvidenceSchema,
     freshness: freshnessSchema,
     allAccountsConnected: z.boolean(),
     coverage: coverageSchema,
@@ -56,17 +113,48 @@ export const reportingSchema = z.object({
 export const analyticsMetadataShape = { effectiveWindow: effectiveWindowSchema, reporting: reportingSchema };
 export type Reporting = z.infer<typeof reportingSchema>;
 
+export type RequestedWindowAttemptEvidence = Omit<z.infer<typeof requestedWindowAttemptSchema>, "requestedAt" | "finishedAt" | "outcome"> & {
+  requestedMs: number;
+  finishedMs: number | null;
+};
+
 export type SyncEvidence = {
+  requestedWindowAttempts?: RequestedWindowAttemptEvidence[];
   lastSuccessMs: number | null;
   latestAttempt: { requestedMs: number; finishedMs: number | null; result: string | null } | null;
 };
 export type MetaAccountEvidence = SyncEvidence & {
   accountId: string;
   timezone: string | null;
+  currency?: string | null;
   connection: "connected" | "disabled" | "disconnected";
   observedImportedThrough: string | null;
 };
 const unknownCoverage = { state: "unknown", reason: "no_gap_free_window_coverage_evidence" } as const;
+
+function buildRequestedWindowAttempts(attempts: RequestedWindowAttemptEvidence[] = []): z.infer<typeof requestedWindowAttemptsSchema> {
+  return {
+    limit: REQUESTED_WINDOW_ATTEMPT_LIMIT,
+    selection: "latest_requested_at_desc_run_id_asc",
+    attempts: [...attempts]
+      .sort((a, b) => b.requestedMs - a.requestedMs || (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0))
+      .slice(0, REQUESTED_WINDOW_ATTEMPT_LIMIT)
+      .map((attempt) => ({
+        runId: attempt.runId,
+        requestedAt: new Date(attempt.requestedMs).toISOString(),
+        finishedAt: attempt.finishedMs == null ? null : new Date(attempt.finishedMs).toISOString(),
+        dateFrom: attempt.dateFrom,
+        dateTo: attempt.dateTo,
+        basis: attempt.basis,
+        windowPrecision: attempt.windowPrecision,
+        result: attempt.result,
+        outcome: attempt.finishedMs == null ? "unfinished"
+          : attempt.result === "success" || attempt.result === "partial_success" || attempt.result === "failed" ? attempt.result : "unknown",
+        breakdownsRequested: attempt.breakdownsRequested,
+        breakdownsCompleted: attempt.breakdownsCompleted,
+      })),
+  };
+}
 
 function syncState(evidence: SyncEvidence, cycleHours: number, now: Date) {
   return {
@@ -79,6 +167,7 @@ function syncState(evidence: SyncEvidence, cycleHours: number, now: Date) {
     freshness: evidence.lastSuccessMs == null ? "never_synced" as const
       : now.getTime() - evidence.lastSuccessMs > 2 * cycleHours * 3_600_000 ? "stale" as const : "fresh" as const,
     coverage: unknownCoverage,
+    requestedWindowAttempts: buildRequestedWindowAttempts(evidence.requestedWindowAttempts),
   };
 }
 
@@ -90,6 +179,7 @@ export function buildReporting(input: {
   const accounts = input.metaAccounts?.map((account) => ({
     accountId: account.accountId,
     timezone: account.timezone,
+    currency: normalizeMetaCurrency(account.currency),
     connection: account.connection,
     observedImportedThrough: account.observedImportedThrough,
     ...syncState(account, 24, input.now),
@@ -103,6 +193,7 @@ export function buildReporting(input: {
       calendarBasis: "meta_account_reporting_day",
       timezoneState: accounts.length === 0 || accounts.some((account) => !account.timezone) ? "unknown" : timezones.length === 1 ? "uniform" : "mixed",
       timezones,
+      currencyEvidence: buildMetaCurrencyEvidence(accounts),
       freshness: accounts.length === 0 ? "no_accounts" : accounts.some((account) => account.freshness === "never_synced") ? "never_synced" : accounts.some((account) => account.freshness === "stale") ? "stale" : "fresh",
       allAccountsConnected: accounts.length > 0 && accounts.every((account) => account.connection === "connected"),
       coverage: unknownCoverage,

@@ -7,6 +7,11 @@ export const FULFILLMENT_STATUSES = [
 export const UNFULFILLED_STATUSES = ["UNFULFILLED", "OPEN", "RESTOCKED"] as const;
 
 export const fulfillmentSummarySchema = z.object({
+  answer: z.object({
+    unfulfilledCount: z.number().int().nullable(),
+    availability: z.enum(["available_for_observed_orders", "partial", "unknown"]),
+    sourceCoverage: z.literal("unknown"),
+  }),
   statusBasis: z.literal("latest_observed_current_status"),
   population: z.literal("locally_ingested_non_test_orders_by_creation_day"),
   cancellationsExcluded: z.literal(true),
@@ -36,16 +41,22 @@ export function summarizeFulfillment(groups: FulfillmentGroup[]): z.infer<typeof
   const counts = new Map(groups.map((row) => [row.status, row.count]));
   const statusCounts = FULFILLMENT_STATUSES.map((status) => ({ status, count: counts.get(status) ?? 0 }));
   const knownCount = statusCounts.reduce((sum, row) => sum + row.count, 0);
-  const unknownCount = counts.get("UNKNOWN") ?? 0;
+  const unknownCount = groups.filter((row) => row.status !== "CANCELLED" && !FULFILLMENT_STATUSES.some((status) => status === row.status)).reduce((sum, row) => sum + row.count, 0);
   const observedGroups = groups.filter((row) => row.status !== "CANCELLED");
   const oldest = observedGroups.flatMap((row) => row.oldestMs === null ? [] : [row.oldestMs]);
   const newest = observedGroups.flatMap((row) => row.newestMs === null ? [] : [row.newestMs]);
+  const observedUnfulfilledCount = UNFULFILLED_STATUSES.reduce((sum, status) => sum + (counts.get(status) ?? 0), 0);
   return {
+    answer: {
+      unfulfilledCount: knownCount > 0 && unknownCount === 0 ? observedUnfulfilledCount : null,
+      availability: knownCount === 0 ? "unknown" : unknownCount > 0 ? "partial" : "available_for_observed_orders",
+      sourceCoverage: "unknown",
+    },
     statusBasis: "latest_observed_current_status",
     population: "locally_ingested_non_test_orders_by_creation_day",
     cancellationsExcluded: true,
     countedStatuses: [...UNFULFILLED_STATUSES],
-    observedUnfulfilledCount: UNFULFILLED_STATUSES.reduce((sum, status) => sum + (counts.get(status) ?? 0), 0),
+    observedUnfulfilledCount,
     observedNonCancelledCount: knownCount + unknownCount,
     excludedCancelledCount: counts.get("CANCELLED") ?? 0,
     unknownStatusCount: unknownCount,

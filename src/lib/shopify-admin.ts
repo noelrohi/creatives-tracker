@@ -176,11 +176,14 @@ export class ShopifyGraphqlError extends Error {
 export async function shopifyGraphql<T>(
   query: string,
   variables?: Record<string, unknown>,
+  options?: { signal?: AbortSignal; retry?: boolean },
 ): Promise<T> {
   const endpoint = shopifyEndpoint();
   const accessToken = requireEnv("SHOPIFY_ACCESS_TOKEN");
+  const maxRetries = options?.retry === false ? 0 : MAX_THROTTLE_RETRIES;
 
-  for (let attempt = 0; attempt <= MAX_THROTTLE_RETRIES; attempt += 1) {
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    options?.signal?.throwIfAborted();
     const response = await fetch(endpoint, {
       method: "POST",
       headers: {
@@ -188,10 +191,11 @@ export async function shopifyGraphql<T>(
         "X-Shopify-Access-Token": accessToken,
       },
       body: JSON.stringify({ query, variables: variables ?? {} }),
+      ...(options?.signal ? { signal: options.signal } : {}),
     });
 
     if (response.status === 429 || response.status >= 500) {
-      if (attempt === MAX_THROTTLE_RETRIES) {
+      if (attempt === maxRetries) {
         throw new ShopifyGraphqlError(
           `Shopify Admin API returned ${response.status} ${response.statusText}`,
         );
@@ -213,7 +217,7 @@ export async function shopifyGraphql<T>(
     };
 
     if (payload.errors?.length) {
-      if (isThrottled(payload.errors) && attempt < MAX_THROTTLE_RETRIES) {
+      if (isThrottled(payload.errors) && attempt < maxRetries) {
         await sleep(1000 * 2 ** attempt);
         continue;
       }

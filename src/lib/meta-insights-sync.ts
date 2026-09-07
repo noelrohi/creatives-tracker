@@ -7,6 +7,7 @@ import { mapMetaInsightsToRows } from "@/lib/meta-api-mapper";
 import { fetchMetaCreativePreviewsForAds } from "@/lib/meta-creative-assets";
 import type { MappedRow } from "@/lib/csv-parser";
 import { adAccounts } from "@/schema/account";
+import { normalizeMetaCurrency } from "@/lib/analytics-reporting";
 
 const GRAPH_API_VERSION = "v25.0";
 export const META_GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
@@ -114,28 +115,32 @@ export async function getMetaAccountWithToken(input: {
 }
 
 /**
- * Stamp the account with Meta's own `timezone_name` (an IANA name like
- * "America/Los_Angeles") so daily figures can be read against the clock Meta
- * bucketed them in. Best-effort and once per account — timezones effectively
- * never change, a failure just retries on the next sync, and the sync itself
- * must never fail over this.
+ * Fill authoritative account metadata together. Keep the existing entry point
+ * for sync callers. Missing fields retry on subsequent syncs, including accounts
+ * whose timezone was populated before currency was introduced. Metadata failure
+ * must not fail insights ingestion or invent currency evidence.
  */
 export async function syncMetaAccountTimezone(
   account: MetaAccountWithToken,
 ): Promise<void> {
-  if (account.timezone) return;
+  if (account.timezone && normalizeMetaCurrency(account.currency)) return;
   try {
-    const url = `${META_GRAPH_API_BASE}/act_${account.metaAccountId}?fields=timezone_name&access_token=${account.metaAccessToken}`;
+    const url = `${META_GRAPH_API_BASE}/act_${account.metaAccountId}?fields=timezone_name,currency&access_token=${account.metaAccessToken}`;
     const response = await fetch(url);
     if (!response.ok) return;
-    const body = (await response.json()) as { timezone_name?: string };
-    if (!body.timezone_name) return;
+    const body = (await response.json()) as { timezone_name?: unknown; currency?: unknown };
+    const currency = normalizeMetaCurrency(body.currency);
+    const timezone = typeof body.timezone_name === "string" && body.timezone_name.trim() ? body.timezone_name : null;
+    if (!timezone && !currency) return;
     await db
       .update(adAccounts)
-      .set({ timezone: body.timezone_name })
-      .where(eq(adAccounts.id, account.id));
+      .set({ ...(timezone ? { timezone } : {}), ...(currency ? { currency } : {}) })
+      .where(and(
+        eq(adAccounts.id, account.id),
+        eq(adAccounts.metaAccountId, account.metaAccountId),
+      ));
   } catch {
-    // Missing timezone falls back to the browser clock in the UI.
+    // Leave missing metadata unknown and retry on the next sync.
   }
 }
 

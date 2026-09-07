@@ -59,13 +59,15 @@ const FIXTURE_DDL = [
      meta_account_id text NOT NULL UNIQUE,
      organization_id text,
      timezone text,
+     currency text,
      is_disabled boolean NOT NULL DEFAULT false,
      meta_access_token text,
      data_date_end date
    )`,
   `CREATE TABLE account_sync_run (
      id text PRIMARY KEY, organization_id text NOT NULL, account_id text NOT NULL,
-     result text, requested_at timestamp NOT NULL DEFAULT now(), finished_at timestamp
+     result text, requested_at timestamp NOT NULL DEFAULT now(), finished_at timestamp,
+     date_from date, date_to date, breakdowns_requested jsonb, breakdowns_completed jsonb
    )`,
   `CREATE TABLE campaign (
      id text PRIMARY KEY,
@@ -280,6 +282,21 @@ describeIfDb("ad-creative portfolio aggregates", () => {
       expect(roas.leaderboards.topPerformers.truncation).toBe("possibly_truncated");
     });
 
+    it("historical ranking includes paused and archived ads with deterministic ties and aligned samples", async () => {
+      await winner("active", 20, 200);
+      await winner("paused_b", 1, 1000, 100, "paused");
+      await winner("archived_a", 1, 1000, 100, "archived");
+      await winner("under_floor", 100, 1000, 49, "paused");
+      await winner("unprofitable", 100, 99, 100, "archived");
+      const defaults = await caller.adCreative.dashboardStats({ from: FROM, to: TO, sortBy: "roas" });
+      expect(defaults.topPerformers.map((row) => row.id)).toEqual(["active"]);
+      const historical = await caller.adCreative.dashboardStats({ from: FROM, to: TO, rankingMode: "historical", sortBy: "roas", statuses: ["active"], limit: 1 });
+      expect(historical.topPerformers.map((row) => row.id)).toEqual(["archived_a"]);
+      expect(historical.leaderboards.samples).toEqual([expect.objectContaining({ creativeId: "archived_a", conversions: 1, observedDays: 1, adCount: 1, warnings: ["low_conversion_sample"] })]);
+      expect(historical.topPerformers[0].conversions).toBe("1");
+      expect(historical.leaderboards.topPerformers.truncation).toBe("possibly_truncated");
+    });
+
     it("enforces spend, profit and active qualification and handles null/zero metrics", async () => {
       await winner("null_conversions", undefined, 200);
       await winner("zero_conversions", 0, 200);
@@ -352,6 +369,10 @@ describeIfDb("ad-creative portfolio aggregates", () => {
       const result = await read.adCreative.dashboardStats({ from: FROM, to: TO });
       expect(result.reporting.meta).toMatchObject({ freshness: "never_synced", timezoneState: "mixed", allAccountsConnected: false });
       expect(result.reporting.meta?.accounts.map((row) => row.accountId)).toEqual(["acc_1", "acc_2"]);
+      expect(result.reporting.meta?.accounts[0].requestedWindowAttempts.attempts).toMatchObject([
+        { runId: "run", outcome: "partial_success", basis: "meta_insight_request_dates", dateFrom: null, dateTo: null },
+      ]);
+      expect(result.reporting.meta?.accounts[1].requestedWindowAttempts.attempts).toEqual([]);
       const other = createApiKeyCaller({ organizationId: "other-org", scopes: ["read"] });
       const isolated = await other.adCreative.dashboardStats({ from: FROM, to: TO, accountId: "acc_1" });
       expect(isolated.topPerformers).toEqual([]);
@@ -725,6 +746,14 @@ describeIfDb("ad-creative portfolio aggregates", () => {
       });
       expect(num(day.spend)).toBeCloseTo(350, 6);
       expect(num(day.purchaseValue)).toBeCloseTo(800, 6);
+    });
+
+    it.each([null, "USD", "INR"])("exposes authoritative nullable account currency %s without converting Meta revenue", async (currency) => {
+      await testDb!.execute(sql`UPDATE ad_account SET currency = ${currency} WHERE id = 'acc_1'`);
+      const [account] = await caller.adCreative.getMerAccountBreakdown({ from: FROM, to: TO });
+      expect(account.currency).toBe(currency);
+      expect(num(account.revenue)).toBeCloseTo(800, 6);
+      expect(num(account.spend)).toBeCloseTo(350, 6);
     });
 
     it("counts creative-less ads in the MER account breakdown", async () => {

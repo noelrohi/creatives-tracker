@@ -40,21 +40,44 @@ describe("reporting evidence query isolation", () => {
     execute.mockResolvedValue({ rows: [] });
     const result = await loadAnalyticsReporting({ organizationId: "org-a", accountId: "account-b" });
     const query = compile(execute.mock.calls[0][0]);
-    expect(query.params.filter((value) => value === "org-a")).toHaveLength(3);
+    expect(query.params.filter((value) => value === "org-a")).toHaveLength(4);
     expect(query.params).toContain("account-b");
     expect(query.sql).toContain("LEFT JOIN LATERAL");
+    expect(query.sql).toContain("'currency', a.currency");
+    expect(query.sql).toContain("'basis', 'meta_insight_request_dates'");
+    expect(query.sql).toContain("r.breakdowns_completed");
+    expect(query.params).toContain(10);
+    expect(query.sql).toMatch(/ORDER BY r.requested_at DESC, r.id ASC LIMIT \$\d+/);
+    expect(query.sql).not.toContain("r.error_message");
+    expect(result.meta?.coverage.state).toBe("unknown");
     expect(query.sql).not.toContain("AND a.is_disabled");
     expect(query.sql).not.toContain("AND a.meta_access_token");
     expect(query.sql).toContain("AT TIME ZONE 'UTC'");
     expect(result.meta?.freshness).toBe("no_accounts");
   });
 
+  it("exposes account-scoped authoritative currency through reporting", async () => {
+    execute.mockResolvedValue({ rows: [{ evidence: {
+      accountId: "account-a", timezone: "Asia/Tokyo", currency: "USD", connection: "connected",
+      observedImportedThrough: null, lastSuccessMs: null, latestAttempt: null,
+    } }] });
+    const result = await loadAnalyticsReporting({ organizationId: "org-a", accountId: "account-a" });
+    expect(result.meta?.accounts[0].currency).toBe("USD");
+    expect(result.meta?.currencyEvidence).toMatchObject({ state: "uniform", currency: "USD", aggregateAmountsUsable: true });
+  });
+
   it("scopes Shopify evidence to org and store and excludes local rebucketing from ingestion success", async () => {
     execute.mockResolvedValue({ rows: [{ evidence: { lastSuccessMs: null, latestAttempt: null } }] });
     const result = await loadAnalyticsReporting({ organizationId: "org-a", store: { id: "store-a", ianaTimezone: "Asia/Tokyo" }, includeMeta: false });
     const query = compile(execute.mock.calls[0][0]);
-    expect(query.params).toEqual(["org-a", "store-a", "org-a", "store-a"]);
-    expect(query.sql).toContain("r.phase IN ('incremental', 'backfill')");
+    expect(query.params).toEqual(["org-a", "store-a", 10, "org-a", "store-a", "org-a", "store-a"]);
+    expect(query.sql.match(/r.phase IN \('incremental', 'backfill'\)/g)).toHaveLength(3);
+    expect(query.sql).toContain("shopify_incremental_updated_at");
+    expect(query.sql).toContain("shopify_backfill_created_at");
+    expect(query.sql).toContain("utc_day_labels_not_exact_query_bounds");
+    expect(query.sql).toMatch(/ORDER BY r.requested_at DESC, r.id ASC LIMIT \$\d+/);
+    expect(query.sql).not.toContain("r.error");
+    expect(result.shopify?.requestedWindowAttempts).toMatchObject({ limit: 10, attempts: [] });
     expect(result).toMatchObject({ meta: null, shopify: { freshness: "never_synced", storeId: "store-a" } });
   });
 });
