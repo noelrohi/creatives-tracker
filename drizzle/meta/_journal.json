@@ -505,6 +505,13 @@
       "when": 1788699718937,
       "tag": "0071_exotic_epoch",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1788749983355,
+      "tag": "0072_fluffy_warbound",
+      "breakpoints": true
     }
   ]
 }

@@ -35,10 +35,32 @@ Existing metrics, attribution \`range\` and connector health fields remain.
   Account evidence includes lagging, never-synced and disconnected accounts.
 - \`sortBy=conversions|roas\` affects only top performers, before LIMIT.
   Conversions-first remains the default; complete ties use creative ID.
+  For historical questions use \`rankingMode=historical\`: the top list ignores
+  current status filters and does not require a currently active ad. Default
+  \`current_active\` behavior is unchanged. Both modes retain spend >= 50 and
+  ROAS >= 1 eligibility; inspect sample counts and low-conversion warnings.
+  This ranks observed performance, not historical ad-status snapshots.
   \`leaderboards\` describes eligibility, ordering, filter asymmetries, lifetime
   exceptions and health scope. Surviving/attention exclude only the returned top
   IDs, so changing the top sort or limit changes their membership. A full capped
   list is possibly truncated, not proof of the total eligible population.
+
+### Answering historical business questions
+
+Use explicit date bounds resolved from the original question's date, not the
+current date. For example, “yesterday” asked September 3, 2026 means September 2.
+A Monday-start week-to-date on September 1 means August 31–September 1.
+
+Distinguish Shopify-derived net sales (discounted item sales less item refunds,
+excluding shipping/tax) from Meta-attributed purchase value. Neither a successful
+order sync nor order-derived totals establish reconciliation with Shopify's
+reporting UI. Order access does not imply ShopifyQL reporting access.
+
+Read currency evidence before combining Meta amounts: never infer account
+currency from Shopify currency or timezone, and never silently sum mixed or
+unknown currencies. Read requested-window attempt evidence as sync history,
+not a promise that the selected historical period is complete or final.
+Missing data is not zero; a disabled account with no observed rows is unavailable.
 
 ### Shopify fulfillment summary
 
@@ -50,8 +72,22 @@ are separate; missing/unrecognized statuses stay unknown. Status is the latest
 observed current status, not historical status at the window end. A complete
 classification of observed rows is not proof of complete ingestion or source zero.
 Older status changes refresh through updated-at sync subject to Shopify access;
-legacy rows need the explicit operator fulfillment backfill. No customer/order
-identifiers or fulfillment mutations are exposed by this summary.
+legacy rows need the explicit operator fulfillment backfill. Read
+\`answer.unfulfilledCount\`, which is null for partial/unknown classification,
+instead of treating \`observedUnfulfilledCount: 0\` as a complete answer.
+An available answer is still limited to observed orders, with unknown source
+coverage. No customer/order identifiers or fulfillment mutations are exposed
+by this summary.
+
+### Shopify storefront conversion availability
+
+\`GET attribution/conversionAvailability\` accepts \`dateFrom\`/\`dateTo\` and
+checks the configured store's reporting access using a bounded read-only scope
+probe. A \`missing_read_reports\` blocker returns null numerator, denominator
+and rate. Granted scopes alone do not validate ShopifyQL access or session
+calendar/population semantics; those remain explicitly blocked until validated.
+No sessions are estimated from orders and no Meta conversion metric is used.
+The requested dates are not a claim that session data was fetched.
 
 ## Core semantics
 

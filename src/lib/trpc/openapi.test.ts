@@ -116,6 +116,7 @@ const EXPECTED_PROCEDURES = {
   signals: ["ingestFill", "rankedSignals", "ingestTestPlan", "planFeedback"],
   performanceSummary: ["monthlyOverview"],
   attribution: [
+    "conversionAvailability",
     "unfulfilledOrders",
     "overview",
     "metaCheck",
@@ -178,6 +179,18 @@ function getResponseSchema(operation: Operation) {
 }
 
 describe("analytics reporting contracts", () => {
+  it("documents blocked Shopify conversion without fabricated metrics", () => {
+    const document = generateOpenApiDocument(BASE_URL);
+    const operation = document.paths["/api/openapi/attribution/conversionAvailability"].get as Operation;
+    expect(getResponseSchema(operation)).toMatchObject({ properties: {
+      state: { enum: ["blocked"] },
+      numerator: { nullable: true, enum: [null] },
+      denominator: { nullable: true, enum: [null] },
+      rate: { nullable: true, enum: [null] },
+      blocker: { enum: expect.arrayContaining(["missing_read_reports"]) },
+    } });
+  });
+
   it("documents aggregate-only unfulfilled counts and unknown coverage", () => {
     const document = generateOpenApiDocument(BASE_URL);
     const operation = document.paths["/api/openapi/attribution/unfulfilledOrders"].get as Operation;

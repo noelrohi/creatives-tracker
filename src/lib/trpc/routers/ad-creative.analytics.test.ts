@@ -106,6 +106,30 @@ describe("adCreative analytics procedures", () => {
       expect(compileSql(mockState.executedSql[3])).toMatch(/ac.id ASC\s+LIMIT/);
     });
 
+    it.each(["conversions", "roas"] as const)("historical %s ranking drops current eligibility and status filters only for top performers", async (sortBy) => {
+      const caller = createMockCaller({ role: "member", organizationId: "org_history" });
+      const result = await caller.adCreative.dashboardStats({ rankingMode: "historical", sortBy, statuses: ["active"], accountId: "acct_history", teamId: "team_history", limit: 3 });
+      const top = compileSql(mockState.executedSql[1]);
+      const having = top.slice(top.indexOf("HAVING"));
+      expect(having).not.toContain("bool_or");
+      expect(having).toContain("HAVING sum(pl.spend) >= 50");
+      expect(having).toContain("/ nullif(sum(pl.spend), 0) >= 1");
+      expect(having).toMatch(/ac.id ASC\s+LIMIT/);
+      expect(top).not.toContain("END IN (");
+      expect(top).toContain("count(DISTINCT pl.date_start)");
+      expect(top).toContain("count(DISTINCT ad.id)");
+      expect(compileParams(mockState.executedSql[1])).toEqual(expect.arrayContaining(["org_history", "acct_history", "team_history"]));
+      expect(compileSql(mockState.executedSql[0])).toContain("END IN (");
+      expect(compileSql(mockState.executedSql[2])).toContain("AND bool_or(");
+      expect(result.leaderboards).toMatchObject({ rankingMode: "historical", rankingModeAppliesTo: "topPerformers", historicalStatusReconstructed: false, qualification: { requiresCurrentlyActiveAd: false, minSpend: 50, minRoas: 1, minConversions: null }, topPerformers: { ignoredFilters: ["statuses"] } });
+    });
+
+    it("rejects unsupported ranking modes before querying", async () => {
+      const caller = createMockCaller({ role: "member" });
+      await expect(caller.adCreative.dashboardStats({ rankingMode: "other" as "historical" })).rejects.toThrow();
+      expect(mockDb.execute).not.toHaveBeenCalled();
+    });
+
     it("rejects unsupported sort modes before querying", async () => {
       const caller = createMockCaller({ role: "member" });
       await expect(caller.adCreative.dashboardStats({ sortBy: "spend" as "roas" })).rejects.toThrow();

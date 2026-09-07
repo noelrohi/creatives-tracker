@@ -22,6 +22,8 @@ export const adAccounts = pgTable(
      * account's first sync after this column landed.
      */
     timezone: text("timezone"),
+    /** Authoritative Meta account currency; null until observed from Meta. No FX conversion. */
+    currency: text("currency"),
     organizationId: text("organization_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")

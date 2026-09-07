@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { buildReporting, type EffectiveWindow, type MetaAccountEvidence, type SyncEvidence } from "./analytics-reporting";
+import { buildReporting, REQUESTED_WINDOW_ATTEMPT_LIMIT, type EffectiveWindow, type MetaAccountEvidence, type SyncEvidence } from "./analytics-reporting";
 
 export async function resolveDashboardWindow(input?: { from?: string; to?: string; days?: number }): Promise<EffectiveWindow> {
   const explicit = Boolean(input?.from && input?.to);
@@ -35,10 +35,11 @@ export async function loadAnalyticsReporting(input: {
   const [metaResult, shopifyResult] = await Promise.all([
     input.includeMeta !== false ? db.execute<{ evidence: MetaAccountEvidence }>(sql`
       SELECT json_build_object(
-        'accountId', a.id, 'timezone', a.timezone,
+        'accountId', a.id, 'timezone', a.timezone, 'currency', a.currency,
         'connection', CASE WHEN a.is_disabled THEN 'disabled' WHEN a.meta_access_token IS NULL THEN 'disconnected' ELSE 'connected' END,
         'observedImportedThrough', a.data_date_end::text,
         'lastSuccessMs', good.last_success_ms,
+        'requestedWindowAttempts', recent.attempts,
         'latestAttempt', CASE WHEN latest.id IS NULL THEN NULL ELSE json_build_object(
           'requestedMs', extract(epoch FROM latest.requested_at AT TIME ZONE 'UTC') * 1000,
           'finishedMs', extract(epoch FROM latest.finished_at AT TIME ZONE 'UTC') * 1000,
@@ -57,12 +58,51 @@ export async function loadAnalyticsReporting(input: {
         WHERE r.organization_id = ${input.organizationId} AND r.account_id = a.id
         ORDER BY r.requested_at DESC, r.id ASC LIMIT 1
       ) latest ON true
+      LEFT JOIN LATERAL (
+        SELECT coalesce(json_agg(json_build_object(
+          'runId', r.id,
+          'requestedMs', extract(epoch FROM r.requested_at AT TIME ZONE 'UTC') * 1000,
+          'finishedMs', extract(epoch FROM r.finished_at AT TIME ZONE 'UTC') * 1000,
+          'dateFrom', r.date_from::text, 'dateTo', r.date_to::text,
+          'basis', 'meta_insight_request_dates',
+          'windowPrecision', 'inclusive_account_calendar_dates',
+          'result', r.result,
+          'breakdownsRequested', r.breakdowns_requested,
+          'breakdownsCompleted', r.breakdowns_completed
+        ) ORDER BY r.requested_at DESC, r.id ASC), '[]'::json) AS attempts
+        FROM (
+          SELECT r.id, r.requested_at, r.finished_at, r.date_from, r.date_to,
+            r.result, r.breakdowns_requested, r.breakdowns_completed
+          FROM account_sync_run r
+          WHERE r.organization_id = ${input.organizationId} AND r.account_id = a.id
+          ORDER BY r.requested_at DESC, r.id ASC LIMIT ${REQUESTED_WINDOW_ATTEMPT_LIMIT}
+        ) r
+      ) recent ON true
       WHERE a.organization_id = ${input.organizationId}
         ${input.accountId ? sql`AND a.id = ${input.accountId}` : sql``}
       ORDER BY a.id
     `) : null,
     input.store ? db.execute<{ evidence: SyncEvidence }>(sql`
       SELECT json_build_object(
+        'requestedWindowAttempts', (
+          SELECT coalesce(json_agg(json_build_object(
+            'runId', r.id,
+            'requestedMs', extract(epoch FROM r.requested_at AT TIME ZONE 'UTC') * 1000,
+            'finishedMs', extract(epoch FROM r.finished_at AT TIME ZONE 'UTC') * 1000,
+            'dateFrom', r.date_from::text, 'dateTo', r.date_to::text,
+            'basis', CASE WHEN r.phase = 'incremental' THEN 'shopify_incremental_updated_at' ELSE 'shopify_backfill_created_at' END,
+            'windowPrecision', 'utc_day_labels_not_exact_query_bounds',
+            'result', r.result,
+            'breakdownsRequested', NULL, 'breakdownsCompleted', NULL
+          ) ORDER BY r.requested_at DESC, r.id ASC), '[]'::json)
+          FROM (
+            SELECT r.id, r.requested_at, r.finished_at, r.date_from, r.date_to, r.phase, r.result
+            FROM shopify_sync_run r
+            WHERE r.organization_id = ${input.organizationId} AND r.store_id = ${input.store.id}
+              AND r.phase IN ('incremental', 'backfill')
+            ORDER BY r.requested_at DESC, r.id ASC LIMIT ${REQUESTED_WINDOW_ATTEMPT_LIMIT}
+          ) r
+        ),
         'lastSuccessMs', (
           SELECT extract(epoch FROM max(r.finished_at) AT TIME ZONE 'UTC') * 1000
           FROM shopify_sync_run r WHERE r.organization_id = ${input.organizationId}

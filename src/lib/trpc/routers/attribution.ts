@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { DAY_PATTERN } from "@/lib/day";
 import { analyticsMetadataShape, explicitStoreWindow } from "@/lib/analytics-reporting";
 import { loadAnalyticsReporting } from "@/lib/analytics-reporting-queries";
+import { conversionAvailabilitySchema, getShopifyConversionAvailability } from "@/lib/shopify-conversion-capability";
 import { fulfillmentSummarySchema } from "@/lib/shopify-fulfillment";
 import { getUnfulfilledOrders } from "@/lib/shopify-fulfillment-queries";
 import { shopifySyncRuns } from "@/schema/shopify";
@@ -31,6 +32,8 @@ import {
   dateRangeShape,
   orderedRange,
   requireStore,
+  shopifyNetSalesDefinition,
+  shopifyNetSalesDefinitionSchema,
 } from "./attribution.shared";
 
 const bucketSchema = z.enum(ATTRIBUTION_BUCKETS);
@@ -49,8 +52,9 @@ export function computeAov(
 // also serve the web UI, and output parsing strips anything undeclared.
 const rangeSchema = z.object({ dateFrom: z.string(), dateTo: z.string() });
 
-async function rangeEvidence(organizationId: string, store: { id: string; ianaTimezone: string }, range: { dateFrom: string; dateTo: string }, basis: "store" | "mixed" | "refund" = "store", includeMeta = false) {
+async function rangeEvidence(organizationId: string, store: { id: string; ianaTimezone: string; currency: string | null }, range: { dateFrom: string; dateTo: string }, basis: "store" | "mixed" | "refund" = "store", includeMeta = false) {
   return {
+    salesDefinition: shopifyNetSalesDefinition(store, basis === "refund" ? "refund_amounts_only" : "order_amounts_minus_refund_amounts"),
     effectiveWindow: explicitStoreWindow(range, basis),
     reporting: await loadAnalyticsReporting({ organizationId, store, includeMeta }),
   };
@@ -66,8 +70,10 @@ const syncHealthSchema = z.object({
   meta: connectorHealthSchema,
 });
 
+const salesMetadataShape = { ...analyticsMetadataShape, salesDefinition: shopifyNetSalesDefinitionSchema };
+
 const overviewOutputSchema = z.object({
-  ...analyticsMetadataShape,
+  ...salesMetadataShape,
   store: z.object({
     id: z.string(),
     shopDomain: z.string(),
@@ -97,7 +103,7 @@ const overviewOutputSchema = z.object({
 });
 
 const metaCheckOutputSchema = z.object({
-  ...analyticsMetadataShape,
+  ...salesMetadataShape,
   range: rangeSchema,
   claims: z.object({
     claimed: z.string().nullable(),
@@ -114,7 +120,7 @@ const metaCheckOutputSchema = z.object({
 });
 
 const campaignLedgerOutputSchema = z.object({
-  ...analyticsMetadataShape,
+  ...salesMetadataShape,
   range: rangeSchema,
   campaigns: z.array(
     z.object({
@@ -139,7 +145,7 @@ const campaignLedgerOutputSchema = z.object({
 });
 
 const dailySeriesOutputSchema = z.object({
-  ...analyticsMetadataShape,
+  ...salesMetadataShape,
   range: rangeSchema,
   days: z.array(
     z.object({
@@ -152,13 +158,14 @@ const dailySeriesOutputSchema = z.object({
 });
 
 const refundsTotalOutputSchema = z.object({
-  ...analyticsMetadataShape,
+  ...salesMetadataShape,
   range: rangeSchema,
   total: z.string(),
   count: z.number().int(),
 });
 
 const hourlySeriesOutputSchema = z.object({
+  salesDefinition: shopifyNetSalesDefinitionSchema,
   day: z.string(),
   hours: z.array(
     z.object({
@@ -183,6 +190,26 @@ const syncStatusOutputSchema = z.object({
 });
 
 export const attributionRouter = router({
+  conversionAvailability: orgProcedure
+    .meta(openApiQueryMeta("attribution", "conversionAvailability", "Shopify storefront conversion availability", "Read-only granted-scope check for the organization's connected store using server-configured Shopify access. Missing read_reports returns null numerator, denominator and rate with a blocker. Granted scopes alone do not validate ShopifyQL or session-start calendar semantics; no sessions are estimated from orders. The requested inclusive range is not a claim of source coverage or a validated store-calendar window."))
+    .input(dateRangeSchema)
+    .output(conversionAvailabilitySchema.extend({
+      storeId: z.string(),
+      requestedRange: rangeSchema,
+      requestedTimezone: z.string(),
+      checkedAt: z.iso.datetime(),
+    }))
+    .query(async ({ input, ctx }) => {
+      const store = await requireStore(ctx.organizationId);
+      return {
+        ...await getShopifyConversionAvailability(store),
+        storeId: store.id,
+        requestedRange: input,
+        requestedTimezone: store.ianaTimezone,
+        checkedAt: new Date().toISOString(),
+      };
+    }),
+
   unfulfilledOrders: orgProcedure
     .meta(openApiQueryMeta("attribution", "unfulfilledOrders", "Observed unfulfilled order counts", "Inclusive store-calendar creation-day selection, excluding cancelled and test orders independently of financial status. Counts latest observed UNFULFILLED, OPEN and RESTOCKED statuses only; partial/fulfilled/other statuses are separate and missing statuses remain unknown. This is not status-as-of the window end or a guarantee of complete source coverage. Old orders refresh through updated-at sync subject to Shopify historical access; legacy rows need an explicit status backfill. Aggregate only; no customer/order identifiers or fulfillment mutations."))
     .input(dateRangeSchema)
@@ -484,6 +511,7 @@ export const attributionRouter = router({
         timeZone: store.ianaTimezone,
       });
       return {
+        salesDefinition: shopifyNetSalesDefinition(store, "order_amounts_only"),
         day: input.day,
         hours: hours.map((row) => ({
           hour: row.hour,
@@ -517,7 +545,7 @@ export const attributionRouter = router({
         cursor: input.cursor ?? null,
       });
 
-      return { orders, nextCursor };
+      return { orders, nextCursor, salesDefinition: shopifyNetSalesDefinition(store, "order_amounts_only") };
     }),
 
   /**
