@@ -4,9 +4,31 @@
 
 Compared 2026-09-07. Adsolute HEAD `7a750e4`; ecomconn HEAD `c0536219bd25f1dde4187524f9cb138485658760`. Both working trees were clean before this audit. No provider calls, migrations, credentials changes, or implementation performed.
 
-**Approved target (scope clarified after Round 0):** all four shipped Klaviyo data-read capabilities in ecomconn, exposed through Adsolute's existing org-authorized OpenAPI. Preserve Adsolute's existing functionality. No new CLI, streaming export platform, general connection onboarding, custody system, MCP tools, or ecomconn control plane. The user approved this direction; the focused written design awaits review.
+**Approved target (scope clarified after Round 0):** all four shipped Klaviyo data-read capabilities in ecomconn, exposed through Adsolute's existing org-authorized OpenAPI. Preserve Adsolute's existing functionality. No new CLI, streaming export platform, general connection onboarding, custody system, MCP tools, or ecomconn control plane. The user approved the focused written design. Three implementation/verification rounds are complete; the current matrix below supersedes Round 0 gap statuses. Local code parity is implemented; live-provider certification remains explicitly pending.
 
 Status: **Present** = implemented equivalent; **Partial** = some behavior exists but parity is not established; **Missing** = no equivalent found; **Extra** = Adsolute functionality to preserve. These are source findings, not live-provider certification.
+
+## Current matrix — Round 3 (local parity verified; live certification pending)
+
+All four OpenAPI reads are composed under `klaviyoReads`. Existing evidence/admin procedures are unchanged. “Implemented” below means fixture/contract-backed code, not live-provider certification.
+
+| In-scope capability | Round 0 | Round 3 | Implementation / verification evidence |
+|---|---|---|---|
+| Six campaign channel/archive chains | Partial | Implemented | `collection-reads.ts`, `.test.ts`; email/SMS/mobile_push × false/true |
+| Full campaign and reviewed message fields | Partial | Implemented | Same; schedule/send times, subject/preview, parent joins and PII canaries |
+| Paginated metric catalog via OpenAPI | Internal only | Implemented | `collection-reads.ts`; `klaviyo-reads.test.ts` HTTP response test |
+| Arbitrary selected-metric events | Missing | Implemented | Ordered 1–20 request-selected metric IDs, per-metric pagination; no persistent allowlist UI |
+| Minimized event envelope/profile external ID | Partial | Implemented | Collection fixtures and mismatch/minimization tests |
+| Bounded 365-day historical reads | Missing | Implemented | Positive half-open event windows, no future end, current lookback validation on continuation |
+| Full 17 campaign statistics and nullable provider values | Five only | Implemented | `campaign-value-reads.ts`, `.test.ts`; named field parity with ecomconn |
+| Campaign/message/channel and explicit conversion metric | Partial | Implemented | Fixed report grouping and explicit `conversionMetricId` input |
+| Account-local report window semantics | Partial | Implemented with limitations exposed | Requested instant/provider wall windows, IANA zone, precision/DST warnings; existing reports unchanged |
+| Report continuation/completeness | Unresolved in source | Explicitly unverified | Provider docs still lack next-cursor response contract; never assert complete totals |
+| Org/read-authorized OpenAPI | Missing | Implemented | `read-service.ts`, `klaviyo-reads.ts`; actual HTTP adapter auth/scope/org tests |
+| Declared JSON input/output and API guide | Missing | Implemented | Zod schemas, generated OpenAPI tests, `/api/openapi/guide` |
+| Safe transport/errors and bounded reads | Partial | Implemented | `read-transport.ts`, `.test.ts`; fixed paths/revision, rejected redirects, 16 MiB, 25-second budget, retry guidance |
+| Existing Lab/jobs/claims/flows/privacy/admin gates | Extra | Preserved; regression checks completed | No edits to those modules; 156 component tests, existing unit regressions, admin-API denial tests, isolated DB comparison with three confirmed pre-existing failures |
+| CLI, NDJSON export platform, general onboarding/custody/UI | Missing | Out of approved scope | User explicitly selected OpenAPI data reads only |
 
 ### Source key
 
@@ -113,15 +135,64 @@ Round 0 command:
 bun run test src/lib/klaviyo/client.test.ts src/lib/klaviyo/dimensions.test.ts src/lib/klaviyo/event-normalizer.test.ts src/lib/klaviyo/reports.test.ts src/lib/trpc/routers/klaviyo.test.ts
 ```
 
-Result: **5 files, 141 tests passed**. A Node `module.register()` deprecation warning was emitted. This is a narrow regression baseline, not full-suite or live parity verification. ecomconn tests were inspected, not run. No implementation round has started.
+Result: **5 files, 141 tests passed**. A Node `module.register()` deprecation warning was emitted. This is a narrow regression baseline, not full-suite or live parity verification. ecomconn tests were inspected, not run.
+
+### Round 1 — provider readers
+
+Added independent transport, collection and report readers with adjacent mocked tests. Reused the existing credential binding and API infrastructure rather than modifying evidence ingestion. Primary reporting reference inspected: https://developers.klaviyo.com/en/v2026-07-15/reference/query_campaign_values . It confirms the 17 requested statistic names, account-local offset-ignored times, required campaign/message grouping, and query `page_cursor` without a documented next-cursor response field.
+
+### Round 2 — OpenAPI integration and recompare
+
+Added four typed GET routes plus service authority checks and guide documentation. Actual HTTP adapter tests cover bearer authentication, read-scope denial, forged org headers, cross-org continuations, snapshots, array query encoding, minimized records, report metadata and unchanged admin-only controls.
+
+Comparison found and corrected overly strict collection scope/relationship handling, nullable fields and report numeric constraints. Added adversarial continuation-clock tests to prevent caller-edited state from widening historical authority. A full unit run during that test-first correction passed 113 files and caught four newly added red tests; all were fixed and the final stable suite passes.
+
+Executed so far:
+
+- OpenAPI + read-service suites: **3 files, 70 tests passed** before the final HTTP success cases.
+- Typecheck: passed.
+- Lint: passed with 9 warnings in unchanged files.
+- Component suite: **19 files, 156 tests passed**.
+- Build: completed successfully with `DATABASE_URL` explicitly redirected to unreachable local port 1 to prevent configured-DB access. Existing Better Auth resource initialization logged expected local connection-refused errors; build compilation, typechecking and prerendering still completed. This does not verify runtime database configuration.
+- Isolated local PostgreSQL regression suite and independent review results are recorded in Round 3 below.
+
+### Round 3 — final recompare and verification
+
+Independent review found one remaining nullable-event mismatch: numeric `$event_id` and missing/null `event_properties` incorrectly failed an entire page. Corrected the source-compatible null projections, including absent nullable metric/profile attributes, while retaining identity/relationship and finite-number validation. Recompare also found that filtering campaigns by message channel does not restrict all included messages to that channel; added mixed-channel fixtures and preserved every included message's own channel. No existing evidence code was changed.
+
+The follow-up independent review reported no remaining actionable standards or in-scope requirements findings. Public read interfaces differ deliberately from ecomconn's delivery framework: bounded JSON pages, per-request metric selection and explicit conversion metric, using Adsolute's existing configured connection and authorization. No streaming protocol or connection-management feature is implied.
+
+Final executed checks:
+
+| Check | Result |
+|---|---|
+| `bun run test --exclude '**/*.integration.test.ts'` | **114 files, 1,812 tests passed** |
+| `bun run test:components` | **19 files, 156 tests passed** |
+| `bun run typecheck` | Passed |
+| `bun run lint` | 0 errors; 9 warnings in unchanged files |
+| `git diff --check` | Passed |
+| `DATABASE_URL=postgresql://build:build@127.0.0.1:1/adsolute_build bun run build` | Exit 0; compilation/types/prerendering passed. Expected existing auth-initialization connection errors against the deliberately unreachable local DB; no configured DB used |
+| All `src/lib/klaviyo/*.integration.test.ts` on a fresh isolated PostgreSQL 16 cluster | **11 files, 172 tests: 169 passed, 3 failed, 0 skipped** |
+| Three failing DB files on untouched `git archive c98efac` | **49 tests: 46 passed, same 3 failed** |
+| Same three DB files rerun on current source, separate fresh cluster | **49 tests: 46 passed, same 3 failed** |
+
+Confirmed pre-existing DB failures (left unchanged, not attributed to this implementation):
+
+- `src/lib/klaviyo/claim-repository.integration.test.ts:993`: expired-lease reaper returned `changed: false`, expected true.
+- `src/lib/klaviyo/dimension-repository.integration.test.ts:486`: expired dimension run reused, expected replacement.
+- `src/lib/klaviyo/report-repository.integration.test.ts:486`: replacement returned `pending`, expected `started`.
+
+DB verification used explicit synthetic URLs, disabled env-file loading and blocked external networking. Temporary clusters were stopped. No production migration, deployment, credential change, Klaviyo data request, or Trigger run was performed.
+
+**Remaining operator input:** authorize a bounded live-account smoke test if live certification is desired. That must verify the configured account/scopes, actual campaign/message/event shapes and report behavior; it may consume scarce report quota. Report continuation and exact DST/hour-rounding semantics remain unverified until provider/account evidence resolves them. These limitations are visible in API responses, not silently marked complete.
 
 For each later round record: changed rows; source/test paths; commands and results; new gaps; unresolved blockers. Mark a row verified only for the layers actually exercised (unit, integration, UI, live).
 
 ## Approval and blockers
 
-- **Written design review required before implementation by repository skill.** The user approved OpenAPI data parity, explicitly excluding a CLI/export platform. Review the linked focused spec next.
+- **Design gate cleared.** The user approved the written OpenAPI-only design. No further product-scope decision is blocking implementation.
 - **Credential custody is no longer a design blocker:** reuse the existing server-side pilot credential provider and org-scoped connection lookup. Organizations without that configured connection receive an explicit unavailable/not-configured error. General multi-account setup is out of scope.
 - **Permissions:** new read procedures use existing org/read authorization; current session-admin evidence reads, sync/review mutations and uninstall remain unchanged. No new scope-editing capabilities.
 - **Live report completeness:** ecomconn unconditionally stops after one response; its docs explicitly leave report pagination unresolved. Port the implemented contract but do not copy silent completeness assumptions. Live-account evidence may be needed; unresolved completeness must remain visible.
 - **Report interval semantics:** source serializes account-local wall time with a `Z` suffix, subtracts a second from the exclusive end, and acknowledges provider hour rounding. Validate pinned provider behavior rather than interpreting these strings as UTC or blindly replacing existing reporting semantics. DST and non-hour-aligned intervals require tests.
-- **Deployment/live verification:** provider scopes, vault configuration, DB migrations and Trigger deployment may require operator input. Missing credentials should block live certification, not fixture-backed implementation. No production actions or live calls have been authorized/performed here.
+- **Deployment/live verification:** live smoke testing needs separate operator authorization and the configured pilot's provider scopes. No new vault configuration, DB migration or Trigger deployment is required by this implementation. No production actions or live provider calls have been performed.

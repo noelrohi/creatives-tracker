@@ -38,6 +38,10 @@ const TAG_METADATA: Record<string, { name: string; description: string }> = {
     name: "API Keys",
     description: "Manage organization-scoped API keys",
   },
+  klaviyoReads: {
+    name: "Klaviyo Reads",
+    description: "Live minimized Klaviyo data for the organization's configured connection; separate from attribution evidence",
+  },
   team: {
     name: "Teams",
     description: "Manage teams for creative ownership",

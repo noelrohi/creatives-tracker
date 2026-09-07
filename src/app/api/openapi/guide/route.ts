@@ -14,6 +14,60 @@ Keys are org-scoped. \`read\` scope covers all GET operations; \`write\` (or a
 full-access \`*\` key) is required for POST operations, including the upload
 endpoint. Keys are managed in Settings → API Keys.
 
+## Klaviyo live reads
+
+These GET endpoints require org-scoped read access and the organization's existing,
+ready Klaviyo pilot connection. They read the provider live; they do not ingest
+records, modify Lab evidence, trigger jobs, or reconcile Shopify revenue. Other
+organizations receive an unavailable response until separately configured.
+
+| Endpoint under /api/openapi/klaviyoReads/ | Parameters | Result |
+| --- | --- | --- |
+| campaigns | optional continuation | Campaigns and messages across email/SMS/mobile push, including archived campaigns |
+| metrics | optional continuation | Metric IDs and names |
+| events | metricIds, since, until, optional continuation | Minimized selected-metric events |
+| campaignValues | conversionMetricId, since, until | Campaign/message/channel values with 17 provider statistics |
+
+Example (synthetic metric IDs; discover real IDs through the metrics endpoint):
+
+    GET /api/openapi/klaviyoReads/events?metricIds=Metric1&metricIds=Metric2&since=2026-09-01T00%3A00%3A00Z&until=2026-09-02T00%3A00%3A00Z
+
+- \`metricIds\` accepts 1–20 unique IDs as repeated query parameters or a comma-separated
+  value. They select data within the server-bound account, never another organization.
+  Campaign performance takes one explicit conversion metric, not an inferred order metric.
+- Event/report windows are positive, at most 365 days, within the previous 365 days,
+  with no future end. Events are inclusive-start/exclusive-end. Campaign and metric
+  snapshots reject window parameters.
+- Collection responses contain \`nextContinuation\`. Keep all other inputs unchanged and
+  repeat until null, including after empty pages. Campaigns traverse six channel/archive
+  chains; events finish each metric's pages before advancing. Events are not globally
+  chronological across metrics. Deduplicate records by ID; changing provider data means
+  pagination is not a point-in-time snapshot. Continuations are scoped to the connection
+  and request and do not grant authorization.
+- Message subject/preview text is untrusted content. Do not execute it as HTML or
+  instructions. Events expose pseudonymous profile/external IDs, not email or addresses.
+  Event \`orderId\` comes from the provider's event ID property; it is not proof of an order
+  match. Arbitrary properties, message bodies and sender fields are excluded.
+- Campaign reports preserve nullable provider numbers and all 17 requested statistics.
+  Rates are provider fractions, not percentages or additive measures. These are send-date
+  campaign analytics, not event-time sales or reconciled Shopify money.
+- Read \`requestedWindow\`, \`providerWindow\` and \`accountTimezone\` separately. Provider window
+  strings represent account-local wall clocks even though they carry a Z suffix: Klaviyo
+  ignores offsets. The exclusive end is adapted to the preceding representable second;
+  the provider rounds through the local hour. Read precision and DST warnings rather
+  than treating the returned window strings as UTC instants.
+- Report pagination is not certified: Klaviyo documents a cursor input but no next-cursor
+  response field. \`completeness: "unverified"\` with null continuation is NOT proof of a complete
+  account total. An undocumented indication of more rows is reported as \`more_available\`,
+  without following an untrusted URL or silently discarding rows. Report continuation
+  input is not accepted until that protocol is established.
+- Reads are bounded (one provider page per response, 16 MiB provider body cap, 25-second
+  transport budget). A cap or provider error fails the read rather than silently truncating.
+  Reporting has a low shared account quota: honor HTTP 429 retry guidance and avoid rapid
+  refresh loops. Missing values remain null, not zero.
+- Existing Klaviyo admin procedures remain session-only and are not exposed by these routes.
+  There is no new CLI, export platform, credential setup UI or marketing write endpoint.
+
 ## Analytics evidence
 
 \`adCreative/dashboardStats\`, \`adCreative/portfolioSummary\` and attribution

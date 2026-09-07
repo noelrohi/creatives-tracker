@@ -4,7 +4,7 @@
 
 Expose the four Klaviyo data-read capabilities implemented in ecomconn through Adsolute's existing OpenAPI infrastructure. Add the missing provider fields and reads while preserving the current Klaviyo Lab, evidence ingestion, matching, attribution, privacy lifecycle and scheduled jobs.
 
-The user clarified that API/CLI/export-platform parity was not intended and approved OpenAPI data parity. This written design is the remaining pre-implementation review gate.
+The user clarified that API/CLI/export-platform parity was not intended and approved OpenAPI data parity. The user subsequently approved this written design; implementation is authorized within this scope.
 
 Comparison and verification log: `docs/klaviyo-parity-matrix.md`.
 
@@ -114,4 +114,4 @@ Run fixture/unit checks without provider calls. DB integration checks may need a
 
 Every in-scope matrix row must identify implementation evidence and executed verification, with live-only limitations marked separately. Deferred/out-of-scope rows remain visible but are not parity failures for the user-approved OpenAPI target. Preserve all Adsolute-only regression boundaries listed in the matrix.
 
-Before implementation, user reviews this written spec as required by the repository brainstorming workflow. The referenced `writing-plans` skill is not available in the installed skill list; after approval, record an ordinary focused implementation plan instead of claiming to invoke an unavailable skill.
+Written-spec review is complete. The referenced `writing-plans` skill is not available in the installed skill list; implementation follows `docs/superpowers/plans/2026-09-07-klaviyo-openapi-parity.md` instead.
