@@ -6,21 +6,29 @@ import {
   tool,
 } from "ai";
 import { logger, metadata, task, tags } from "@trigger.dev/sdk";
+import sharp from "sharp";
 import { and, eq, gte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { openai } from "@/lib/ai";
-import { pastePatch, pasteSourceRegion } from "@/lib/image-composite";
+import { pastePatch, pasteSourceRegion, pixelBox } from "@/lib/image-composite";
 import { readImageDimensions, studioFormatForDimensions } from "@/lib/image-dimensions";
 import { buildKeepMask, clampRegion, expandRegion, type ProductRegion } from "@/lib/image-mask";
 import { matteProduct, type MatteResult } from "@/lib/image-matte";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
+import {
+  buildProductMatchPrompt,
+  pickProductMatch,
+  productMatchSchema,
+  type ProductMatchCandidate,
+} from "@/lib/product-match";
 import { isHttpUrl } from "@/lib/remote-image";
-import { getStudioBrandProfile } from "@/lib/studio-brand";
+import { getStudioBrandProfile, type StudioBrandProfile } from "@/lib/studio-brand";
 import { putStudioObject, readStudioImage } from "@/lib/studio-storage";
 import {
   loadStudioContextLibrary,
   readStudioContextSection,
+  type StudioContextLibrary,
 } from "@/lib/studio-context";
 import {
   failStudioGeneration,
@@ -107,6 +115,11 @@ const productLocationSchema = z.object({
   tile: locatorBoxSchema
     .nullable()
     .describe("Box around the card, tile, panel, or pedestal the product sits inside, or null."),
+  landing: locatorBoxSchema
+    .nullable()
+    .describe(
+      "On a generated scene with no product drawn: the empty area reserved for it, boxed as the product's footprint so its bottom edge rests on the surface; else null.",
+    ),
   confidence: z.number().min(0).max(1),
   note: z.string(),
 });
@@ -124,18 +137,40 @@ function pct(region: ProductRegion) {
 }
 
 /**
+ * `region` of `bytes` as PNG bytes, so a vision call can be shown the product
+ * alone rather than the whole ad around it.
+ */
+async function cropRegion(bytes: Uint8Array, region: ProductRegion) {
+  const meta = await sharp(bytes, { failOn: "none" }).metadata();
+  // Same reason as the matte: the region describes the image as it is seen, so
+  // orient first and box against the oriented size.
+  const size = meta.autoOrient;
+  if (!size?.width || !size?.height) throw new Error("cropRegion: could not read image dimensions");
+  const box = pixelBox(clampRegion(region), size.width, size.height);
+  if (box.width <= 0 || box.height <= 0) throw new Error("cropRegion: the region is empty after clamping");
+  const cropped = await sharp(bytes, { failOn: "none" }).autoOrient().extract(box).png().toBuffer();
+  return new Uint8Array(cropped);
+}
+
+/**
  * Finds the product in an image, tightly, plus the card or pedestal it sits on
- * when there is one. On the source, `tile ?? product` is what an edit protects
- * and `product` is what the transplant cuts out; on a generated output,
- * `product` is where the source's product gets pasted. Returns null on failure
- * or when the image shows no product: on the source that sends the run down the
+ * when there is one, and — on a generated output that was asked to leave the
+ * product out — the empty area reserved for it. On the source, `tile ?? product`
+ * is what an edit protects and `product` is what the transplant cuts out; on an
+ * asset (a brand product photo), `product` is what the fallback matte cuts; on
+ * an output, `product ?? landing` is the paste target. Returns null on failure
+ * or when the image offers neither: on the source that sends the run down the
  * generate path, on an output it skips the transplant.
  */
 async function locateProduct(
   bytes: Uint8Array,
   brandName: string | null,
-  label: "source" | "output",
-): Promise<{ product: ProductRegion; tile: ProductRegion | null } | null> {
+  label: "source" | "output" | "asset",
+): Promise<{
+  product: ProductRegion | null;
+  tile: ProductRegion | null;
+  landing: ProductRegion | null;
+} | null> {
   try {
     const result = await generateObject({
       model: openai(LOCATOR_MODEL),
@@ -144,11 +179,12 @@ async function locateProduct(
         `Locate the advertised physical product${brandName ? ` (${brandName})` : ""} in this static ad.`,
         "product: one normalized bounding box (x, y, w, h in 0-1 from the top-left) that covers the physical product itself as tightly as you can. Exclude its packaging, case, pedestal, card, panel, shadow, and any text, badge, or prop around it. When several units of the product appear, box the main one. When the packaging is itself the advertised product, box the packaging.",
         "tile: the card, tile, panel, or pedestal area with its own background that the product sits inside, or the packaging or case it sits in, on, or beside, when there is one, else null. Its edges must fall on a natural boundary, and it must not reach over headline text or unrelated props outside it.",
-        "Return product: null when no physical product is visible (a text-only or lifestyle ad); tile is null then too.",
+        "landing: only when no product is drawn and the image clearly leaves an empty, plainly lit area for one (a bare pedestal top, an empty card, a clear tabletop): the box where the product should be placed, sized like its footprint and resting on the surface. Null otherwise.",
+        "Return product: null when no physical product is visible; tile is null then too; landing may still be set on a generated scene.",
       ].join("\n"),
       messages: [{ role: "user", content: [{ type: "image", image: bytes }] }],
     });
-    const { product, tile, confidence, note } = result.object;
+    const { product, tile, landing, confidence, note } = result.object;
     const region = product ? clampRegion(product) : null;
     const area = region ? region.w * region.h : 0;
     // Too small is noise; a source box that fills the canvas leaves the
@@ -172,11 +208,29 @@ async function locateProduct(
       containsCentre(tileRegion, region)
         ? tileRegion
         : null;
+    // The landing area only means something on a generated output: it is the
+    // room the model was asked to leave for the real product. A drawn product
+    // wins over it (pasting over a product is the older target, and a scene
+    // with both is one the model half-obeyed), and a source ad or a product
+    // photo has no landing area to speak of.
+    const landingRegion = landing ? clampRegion(landing) : null;
+    const landingArea = landingRegion ? landingRegion.w * landingRegion.h : 0;
+    const usableLanding =
+      label === "output" &&
+      landingRegion !== null &&
+      !usable &&
+      confidence >= 0.4 &&
+      landingArea >= 0.005 &&
+      landingArea <= 0.95
+        ? landingRegion
+        : null;
     logger.info("Product locator", {
       label,
       found: Boolean(product),
-      tile: usableTile,
+      tile: usable ? usableTile : null,
       tileDropped: Boolean(tileRegion) && !usableTile,
+      landing: usableLanding,
+      landingDropped: Boolean(landingRegion) && !usableLanding,
       confidence,
       area,
       usable,
@@ -195,10 +249,138 @@ async function locateProduct(
                 // No check left to fail: `usable` and the chain agree.
                 : null,
     });
-    return usable && region ? { product: region, tile: usableTile } : null;
+    if (!usable && !usableLanding) return null;
+    return {
+      product: usable && region ? region : null,
+      tile: usable ? usableTile : null,
+      landing: usableLanding,
+    };
   } catch (error) {
     logger.warn("Product locator failed", {
       label,
+      error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    });
+    return null;
+  }
+}
+
+/**
+ * Cuts the product at `box` out of `bytes`, trying the margins narrowest
+ * first. The box is tight, so the matte cuts an expanded one: the margin keeps
+ * the product's anti-aliased edge out of the border ring the flood starts
+ * from. Too wide a margin reaches the tile's own label or a neighbouring prop
+ * and the border stops reading as background (measured on the R3 source: 3%
+ * swallows the tile's gold caption and the matte falls back), so widen only
+ * when the narrow cut failed.
+ */
+async function matteWithMargins(
+  bytes: Uint8Array,
+  box: ProductRegion,
+  label: "source" | "asset",
+): Promise<MatteResult> {
+  let fallback: MatteResult | null = null;
+  let matted: MatteResult | null = null;
+  let chosen = MATTE_MARGINS[0];
+  for (const margin of MATTE_MARGINS) {
+    const cut = await matteProduct({ source: bytes, region: expandRegion(box, margin) });
+    // The narrowest cut is what an unmatted result reports: least foreign
+    // background, and nothing pastes it anyway.
+    fallback ??= cut;
+    if (cut.matted) {
+      matted = cut;
+      chosen = margin;
+      break;
+    }
+  }
+  const matte = matted ?? fallback;
+  if (!matte) throw new Error("matteWithMargins: no margin was tried");
+  logger.info("Matted the product", {
+    label,
+    matted: matte.matted,
+    margin: chosen,
+    coverage: matte.coverage,
+    region: matte.region,
+  });
+  return matte;
+}
+
+/** A matted cut of the real product, pasted into every generate attempt. */
+type ProductPatch = {
+  matte: MatteResult;
+  source: "source" | "asset";
+  assetImageUrl: string | null;
+};
+
+/**
+ * The fallback for a source that will not matte (no flat border to flood
+ * from): ask which of the brand's product photos shows the same product, then
+ * matte that instead — a photo on a studio background mattes where a busy ad
+ * does not. Anything that goes wrong returns null, which simply means no
+ * patch: the agent then draws the product itself, as it did before the
+ * transplant existed.
+ */
+async function matteFromProductPhoto(args: {
+  sourceBytes: Uint8Array;
+  sourceProductBox: ProductRegion;
+  brand: StudioBrandProfile | null;
+  library: StudioContextLibrary;
+  fetchBytes: (url: string) => Promise<Uint8Array>;
+  onStep: (label: string) => void;
+}): Promise<ProductPatch | null> {
+  const { sourceBytes, sourceProductBox, brand, library, fetchBytes, onStep } = args;
+  try {
+    // Candidates: the brand profile's product photo, then library product images.
+    const candidates: ProductMatchCandidate[] = [
+      ...(brand?.productImageUrl
+        ? [{ imageUrl: brand.productImageUrl, label: "brand product photo" }]
+        : []),
+      ...library.images
+        .filter((image) => image.kind === "product")
+        .map((image) => ({ imageUrl: image.imageUrl, label: `${image.title}: ${image.description}` })),
+    ].filter((candidate, index, all) => all.findIndex((c) => c.imageUrl === candidate.imageUrl) === index);
+    if (candidates.length === 0) {
+      logger.info("No product photo to fall back to");
+      return null;
+    }
+    onStep("matching the product photo");
+    // The crop is the product alone: the match is about this product, not the
+    // ad it sits in.
+    const crop = await cropRegion(sourceBytes, expandRegion(sourceProductBox, 0.01));
+    const result = await generateObject({
+      model: openai(LOCATOR_MODEL),
+      schema: productMatchSchema,
+      system: buildProductMatchPrompt(brand?.brandName ?? null, candidates),
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "image", image: crop },
+            ...(await Promise.all(
+              candidates.map(async (candidate) => ({
+                type: "image" as const,
+                image: await fetchBytes(candidate.imageUrl),
+              })),
+            )),
+          ],
+        },
+      ],
+    });
+    const chosen = pickProductMatch(result.object, candidates);
+    logger.info("Product photo match", {
+      candidates: candidates.length,
+      match: result.object.match,
+      confidence: result.object.confidence,
+      note: result.object.note,
+      chosen: chosen?.imageUrl ?? null,
+    });
+    if (!chosen) return null;
+    const assetBytes = await fetchBytes(chosen.imageUrl);
+    const located = await locateProduct(assetBytes, brand?.brandName ?? null, "asset");
+    if (!located?.product) return null;
+    const cut = await matteWithMargins(assetBytes, located.product, "asset");
+    return cut.matted ? { matte: cut, source: "asset", assetImageUrl: chosen.imageUrl } : null;
+  } catch (error) {
+    logger.warn("Product photo fallback failed; no patch", {
       error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
     });
     return null;
@@ -405,10 +587,14 @@ export const generateVariationTask = task({
           ),
         );
 
+      // The source path wants the product itself — an edit protects it and the
+      // transplant cuts it out — so a result carrying only a landing area is
+      // nothing to work with here.
       let located: { product: ProductRegion; tile: ProductRegion | null } | null = null;
       if (source.kind === "creative" && !payload.withoutSourceImage && sourceDimensions) {
         onStep("locating the product in the source");
-        located = await locateProduct(sourceBytes, brand?.brandName ?? null, "source");
+        const result = await locateProduct(sourceBytes, brand?.brandName ?? null, "source");
+        located = result?.product ? { product: result.product, tile: result.tile } : null;
       }
       // An edit protects the whole tile the product sits on so its seam falls on
       // a natural boundary; the transplant cuts the product alone.
@@ -416,46 +602,29 @@ export const generateVariationTask = task({
         ? (located.tile ?? located.product)
         : null;
       const sourceProductBox = located?.product ?? null;
-      // The source product's matte is the same for every attempt; cut it once.
-      let sourceMatte: Promise<MatteResult> | null = null;
-      const matteSource = () =>
-        (sourceMatte ??= (async () => {
-          // Guarded by the caller: the transplant only runs with a located box.
-          if (!sourceProductBox) throw new Error("matteSource: no product box was located");
-          // The product box is tight, so the matte cuts an expanded one: the
-          // margin keeps the product's anti-aliased edge out of the border ring
-          // the flood starts from. Too wide a margin reaches the tile's own
-          // label or a neighbouring prop and the border stops reading as
-          // background (measured on the R3 source: the mask's 3% swallows the
-          // tile's gold caption and the matte falls back), so widen only when
-          // the narrow cut failed.
-          let fallback: MatteResult | null = null;
-          let matted: MatteResult | null = null;
-          let chosen = MATTE_MARGINS[0];
-          for (const margin of MATTE_MARGINS) {
-            const cut = await matteProduct({
-              source: sourceBytes,
-              region: expandRegion(sourceProductBox, margin),
-            });
-            // The narrowest cut is what an unmatted result reports: least
-            // foreign background, and nothing pastes it anyway.
-            fallback ??= cut;
-            if (cut.matted) {
-              matted = cut;
-              chosen = margin;
-              break;
-            }
-          }
-          const matte = matted ?? fallback;
-          if (!matte) throw new Error("matteSource: no margin was tried");
-          logger.info("Matted the source product", {
-            matted: matte.matted,
-            margin: chosen,
-            coverage: matte.coverage,
-            region: matte.region,
+      // The transplant needs a matted cut of the real product. Resolve it now,
+      // before the agent runs, so the prompt only promises an empty-scene
+      // transplant when a cut exists: an empty pedestal with nothing pasted
+      // into it is worse than a redrawn product. The cut is the same for every
+      // attempt, so it is made once.
+      let productPatch: ProductPatch | null = null;
+      if (sourceProductBox) {
+        onStep("cutting out the product");
+        const cut = await matteWithMargins(sourceBytes, sourceProductBox, "source");
+        if (cut.matted) productPatch = { matte: cut, source: "source", assetImageUrl: null };
+        // An unmatted cut is a rectangle carrying the source's own background,
+        // and the live batch showed it fails review on the seam every time. A
+        // matching product photo is the better cut when there is one.
+        else
+          productPatch = await matteFromProductPhoto({
+            sourceBytes,
+            sourceProductBox,
+            brand,
+            library,
+            fetchBytes,
+            onStep,
           });
-          return matte;
-        })());
+      }
 
       const input: VariationRunInput = {
         source,
@@ -466,6 +635,7 @@ export const generateVariationTask = task({
         library,
         format,
         useSourceLayout: !payload.withoutSourceImage,
+        productPatch: productPatch ? { source: productPatch.source } : null,
       };
 
       const run = createVariationRun(input, {
@@ -525,48 +695,54 @@ export const generateVariationTask = task({
               });
             }
           }
-          // Generate mode composes freely, so the model's own product is
-          // wherever it decided to put it: locate it there and cover it with
-          // the source's real product. Every failure here is recoverable — the
-          // model's product stays, `transplant` stays null, and the review is
-          // told the paste did not run.
+          // Generate mode composes freely: the model was asked to leave an
+          // empty landing area for the real product, and it may have drawn a
+          // product there anyway. Locate whichever the output offers and paste
+          // the patch into it. Every failure here is recoverable — whatever the
+          // model drew stays, `transplant` stays null, and the review is told
+          // the paste did not run.
           let transplant: VariationTransplant | null = null;
-          if (mode === "generate" && sourceProductBox && source.kind === "creative" && !payload.withoutSourceImage) {
+          if (mode === "generate" && productPatch) {
             try {
               onStep(`locating the product in attempt ${attempt}`);
               const locatedOutput = await locateProduct(produced, brand?.brandName ?? null, "output");
-              if (locatedOutput) {
-                // The tight product box: the paste covers the model's product
-                // and leaves the card or pedestal it drew around it.
-                const to = locatedOutput.product;
-                const matte = await matteSource();
-                if (matte.matted) {
-                  const pastedPatch = await pastePatch({ output: produced, patch: matte.patch, region: to });
-                  produced = pastedPatch.bytes;
-                  // The matte crops to what it kept, so record that region
-                  // rather than the box it was asked to cut from.
-                  transplant = { from: matte.region, to, target: "product", patchSource: "source", matted: matte.matted };
-                  logger.info("Transplanted source product", {
-                    attempt,
-                    from: matte.region,
-                    to,
-                    tile: locatedOutput.tile,
-                    matted: matte.matted,
-                    coverage: matte.coverage,
-                    box: pastedPatch.box,
-                  });
-                } else {
-                  // The unmatted cut is a rectangle carrying the source's own
-                  // background, and the live batch showed it fails review on
-                  // the seam every time. Keeping the model's product is the
-                  // pre-transplant behaviour, which reviews on its own merits.
-                  logger.warn(
-                    "Transplant skipped: the source product did not matte; keeping the model's product",
-                    { attempt, coverage: matte.coverage, region: matte.region },
-                  );
-                }
+              // A drawn product is the safer target: the paste covers it and
+              // leaves the card or pedestal the model drew around it. The
+              // landing area is the empty surface left instead, with nothing
+              // underneath to leak around the edges.
+              const to = locatedOutput?.product ?? locatedOutput?.landing ?? null;
+              if (to) {
+                const target = locatedOutput?.product ? "product" : "landing";
+                const pastedPatch = await pastePatch({
+                  output: produced,
+                  patch: productPatch.matte.patch,
+                  region: to,
+                  // A product placed on a surface rests on it; a product
+                  // covering another one sits where that one was.
+                  align: target === "landing" ? "bottom" : "center",
+                });
+                produced = pastedPatch.bytes;
+                // The matte crops to what it kept, so record that region
+                // rather than the box it was asked to cut from.
+                transplant = {
+                  from: productPatch.matte.region,
+                  to,
+                  target,
+                  patchSource: productPatch.source,
+                  assetImageUrl: productPatch.assetImageUrl,
+                  matted: true,
+                };
+                logger.info("Transplanted product", {
+                  attempt,
+                  ...transplant,
+                  tile: locatedOutput?.tile ?? null,
+                  box: pastedPatch.box,
+                });
               } else {
-                logger.warn("Transplant skipped: product not located in the output", { attempt });
+                logger.warn(
+                  "Transplant skipped: neither a product nor a landing area was located in the output",
+                  { attempt },
+                );
               }
             } catch (error) {
               logger.warn("Transplant failed; keeping the model's product", {
@@ -586,15 +762,12 @@ export const generateVariationTask = task({
         },
         reviewImage: async ({ imageUrl, prompt, mode, keepRegion, transplant }) => {
           // The same gate the transplant block runs under. When it holds and
-          // `transplant` is still null (the output locator missed, the source
-          // did not matte, or the paste threw), the product on screen is the
-          // model's own but the prompt forbade describing its markings, so
-          // judging it against the product photo would fail it for obeying us.
-          const transplantExpected =
-            mode === "generate" &&
-            Boolean(sourceProductBox) &&
-            source.kind === "creative" &&
-            !payload.withoutSourceImage;
+          // `transplant` is still null (the output locator found neither a
+          // product nor a landing area, or the paste threw), the image is
+          // whatever the model drew after being told not to draw the product,
+          // so judging it against the product photo would fail it for obeying
+          // us.
+          const transplantExpected = mode === "generate" && Boolean(productPatch);
           try {
             const content: Array<
               { type: "text"; text: string } | { type: "image"; image: Uint8Array }
@@ -617,7 +790,7 @@ export const generateVariationTask = task({
                 mode === "edit"
                   ? `You are a strict creative reviewer for paid-social static ads. The first image is the generated ad, produced by editing the second image (the source); ${pastedUrls.has(imageUrl) ? "the source's product was pasted back into its box after the edit" : "the step that pastes the source's product back did not run, so the product you see is the image model's own re-render"}.`
                   : transplant
-                    ? "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the source's own product was cut out of the second image (the source) and pasted over the product the model drew."
+                    ? `You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the real product was cut out of ${transplant.patchSource === "asset" ? "the brand's product photo" : "the second image (the source)"} and ${transplant.target === "landing" ? "pasted into the empty area the model left for it" : "pasted over the product the model drew"}.`
                     : "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second, when present, is the advertiser's real product photo.",
                 "Checklist (all must hold for pass = true):",
                 mode === "edit" && keepRegion && pastedUrls.has(imageUrl)
@@ -625,9 +798,9 @@ export const generateVariationTask = task({
                   : mode === "edit"
                     ? "- The product matches the source image in shape, openings, material, and markings; no invented logos or text on it."
                     : transplant
-                      ? `- The source's product now sits in the box ${pct(transplant.to)}. Check: it is a plausible size for the scene; its lighting and colour do not clash with the surroundings; no remnant of the model's own product shows around its edges; nothing important is covered; and no second copy of the product appears anywhere else in the image. Name which failed.`
+                      ? `- The source's product now sits in the box ${pct(transplant.to)}. Check: it is a plausible size for the scene; its lighting and colour do not clash with the surroundings; no remnant of the model's own product shows around its edges; nothing important is covered; and no second copy of the product appears anywhere else in the image; and the product rests on the surface rather than floating above it or sinking into it. Name which failed.`
                       : transplantExpected
-                        ? "- The product is a plausible rendering of the product photo; the step that pastes the real product did not run, so do not fail the attempt on its markings or exact shape."
+                        ? "- The product is a plausible rendering of the product photo; the step that pastes the real product did not run, so do not fail the attempt on its markings or exact shape, and the scene may show an empty landing area; do not fail it for that alone."
                         : "- The product matches the product photo in shape, openings, material, and markings; no invented logos or text on it.",
                 "- Every line of ad copy (headline, subhead, badges, CTA, tile labels) is legible and matches the quoted copy in the prompt, with no garbled or invented copy. Incidental labels on props and packaging inside the scene (a shampoo bottle, a book spine) are fine and are not ad copy.",
                 `- No logos or brand marks other than ${brand?.brandName ?? "the advertiser's"}; no platform UI, no watermarks.`,
