@@ -16,6 +16,8 @@ export function pixelBox(region: ProductRegion, width: number, height: number): 
   return { left, top, width: right - left, height: bottom - top };
 }
 
+export type PasteAlign = "center" | "bottom";
+
 /**
  * Uniform-scales the source box into the output box so the product keeps its
  * proportions. The two boxes differ in aspect whenever the source's shape
@@ -24,13 +26,13 @@ export function pixelBox(region: ProductRegion, width: number, height: number): 
  * module exists to preserve defeats the point; a thin band of the model's own
  * render is left at the box edge instead.
  */
-function fitBox(from: PasteBox, to: PasteBox): PasteBox {
+function fitBox(from: PasteBox, to: PasteBox, align: PasteAlign = "center"): PasteBox {
   const scale = Math.min(to.width / from.width, to.height / from.height);
   const width = Math.max(1, Math.round(from.width * scale));
   const height = Math.max(1, Math.round(from.height * scale));
   return {
     left: to.left + Math.round((to.width - width) / 2),
-    top: to.top + Math.round((to.height - height) / 2),
+    top: align === "bottom" ? to.top + to.height - height : to.top + Math.round((to.height - height) / 2),
     width,
     height,
   };
@@ -90,6 +92,8 @@ export async function pastePatch(input: {
   output: Uint8Array;
   patch: Uint8Array;
   region: ProductRegion;
+  /** Where the fitted patch sits inside the box: centred, or resting on the box's bottom edge for a product placed on a surface. */
+  align?: PasteAlign;
 }): Promise<{ bytes: Uint8Array; box: PasteBox }> {
   const region = clampRegion(input.region);
   const [outputMeta, patchMeta] = await Promise.all([
@@ -102,7 +106,7 @@ export async function pastePatch(input: {
   }
   const to = pixelBox(region, outputSize.width, outputSize.height);
   if (to.width <= 0 || to.height <= 0) throw new Error("pastePatch: the region is empty after clamping");
-  const paste = fitBox({ left: 0, top: 0, width: patchMeta.width, height: patchMeta.height }, to);
+  const paste = fitBox({ left: 0, top: 0, width: patchMeta.width, height: patchMeta.height }, to, input.align);
   const resized = await sharp(input.patch).resize(paste.width, paste.height, { fit: "fill" }).png().toBuffer();
   const bytes = await sharp(input.output)
     .autoOrient()

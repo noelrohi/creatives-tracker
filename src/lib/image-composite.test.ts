@@ -95,4 +95,16 @@ describe("pastePatch", () => {
     expect(await pixel(bytes, 15, 11)).toEqual([0, 255, 0]); // transparent half shows the output
     expect(await pixel(bytes, 10, 11)).toEqual([0, 255, 0]); // band left of the centred patch
   });
+
+  it("bottom-aligns the patch inside the box when asked, so the product rests on the surface", async () => {
+    const rgba = new Uint8Array(4 * 4 * 4);
+    for (let i = 0; i < 16; i += 1) rgba.set([255, 0, 0, 255], i * 4);
+    const patch = encodePng(4, 4, rgba);
+    const output = solid(20, 20, [0, 255, 0]);
+    // Box is 4 wide by 8 tall at (10, 6); a 4x4 patch fits at width 4 and sits at the bottom: top 6+8-4.
+    const { bytes, box } = await pastePatch({ output, patch, region: { x: 0.5, y: 0.3, w: 0.2, h: 0.4 }, align: "bottom" });
+    expect(box).toEqual({ left: 10, top: 10, width: 4, height: 4 });
+    expect(await pixel(bytes, 11, 12)).toEqual([255, 0, 0]);
+    expect(await pixel(bytes, 11, 7)).toEqual([0, 255, 0]); // empty band above the bottom-aligned patch
+  });
 });
