@@ -76,6 +76,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * enough to stay off whatever sits next to it in the ad.
  */
 const MATTE_MARGINS = [0.01, 0.02, 0.03];
+/** A landing area is the product's footprint on a surface, not a hero product filling the frame. */
+const MAX_LANDING_AREA = 0.5;
+/** The product-match crop is upscaled to at least this on its longer side. */
+const MATCH_CROP_MIN_EDGE = 512;
 const MODERATION_REASONS = [
   "claims",
   "likeness",
@@ -148,7 +152,18 @@ async function cropRegion(bytes: Uint8Array, region: ProductRegion) {
   if (!size?.width || !size?.height) throw new Error("cropRegion: could not read image dimensions");
   const box = pixelBox(clampRegion(region), size.width, size.height);
   if (box.width <= 0 || box.height <= 0) throw new Error("cropRegion: the region is empty after clamping");
-  const cropped = await sharp(bytes, { failOn: "none" }).autoOrient().extract(box).png().toBuffer();
+  const pipeline = sharp(bytes, { failOn: "none" }).autoOrient().extract(box);
+  // A tiny crop is thin evidence for "same model" — the R1/R2 confusion is the
+  // likely symptom — so a small product box is upscaled before the vision call.
+  if (Math.max(box.width, box.height) < MATCH_CROP_MIN_EDGE) {
+    pipeline.resize({
+      ...(box.width >= box.height
+        ? { width: MATCH_CROP_MIN_EDGE }
+        : { height: MATCH_CROP_MIN_EDGE }),
+      withoutEnlargement: false,
+    });
+  }
+  const cropped = await pipeline.png().toBuffer();
   return new Uint8Array(cropped);
 }
 
@@ -221,22 +236,23 @@ async function locateProduct(
       !usable &&
       confidence >= 0.4 &&
       landingArea >= 0.005 &&
-      landingArea <= 0.95
+      landingArea <= MAX_LANDING_AREA
         ? landingRegion
         : null;
     logger.info("Product locator", {
       label,
       found: Boolean(product),
       tile: usable ? usableTile : null,
-      tileDropped: Boolean(tileRegion) && !usableTile,
+      tileDropped: Boolean(tileRegion) && !(usable && usableTile),
       landing: usableLanding,
       landingDropped: Boolean(landingRegion) && !usableLanding,
       confidence,
       area,
       usable,
       note,
-      // Only meaningful on a rejection; a usable box has no failed check.
-      reason: usable
+      // Only meaningful on a rejection; a call that returns a usable product
+      // box or a usable landing area has no failed check to report.
+      reason: usable || usableLanding
         ? null
         : !region
           ? "none"
@@ -343,32 +359,47 @@ async function matteFromProductPhoto(args: {
       return null;
     }
     onStep("matching the product photo");
+    // One unreachable photo must not abort the match. Fetch them one at a time
+    // and drop the ones that fail, then number the prompt off the survivors and
+    // index the answer back into that same list: the model's 1-based answer
+    // only lines up with the images it was actually shown.
+    const fetched: Array<{ candidate: ProductMatchCandidate; bytes: Uint8Array }> = [];
+    for (const candidate of candidates) {
+      try {
+        fetched.push({ candidate, bytes: await fetchBytes(candidate.imageUrl) });
+      } catch (error) {
+        logger.warn("Candidate product photo could not be read; skipping it", {
+          imageUrl: candidate.imageUrl,
+          error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+        });
+      }
+    }
+    if (fetched.length === 0) {
+      logger.info("No product photo to fall back to");
+      return null;
+    }
+    const shown = fetched.map((entry) => entry.candidate);
     // The crop is the product alone: the match is about this product, not the
     // ad it sits in.
     const crop = await cropRegion(sourceBytes, expandRegion(sourceProductBox, 0.01));
     const result = await generateObject({
       model: openai(LOCATOR_MODEL),
       schema: productMatchSchema,
-      system: buildProductMatchPrompt(brand?.brandName ?? null, candidates),
+      system: buildProductMatchPrompt(brand?.brandName ?? null, shown),
       messages: [
         {
           role: "user",
           content: [
             { type: "image", image: crop },
-            ...(await Promise.all(
-              candidates.map(async (candidate) => ({
-                type: "image" as const,
-                image: await fetchBytes(candidate.imageUrl),
-              })),
-            )),
+            ...fetched.map((entry) => ({ type: "image" as const, image: entry.bytes })),
           ],
         },
       ],
     });
-    const chosen = pickProductMatch(result.object, candidates);
+    const chosen = pickProductMatch(result.object, shown);
     logger.info("Product photo match", {
-      candidates: candidates.length,
-      labels: candidates.map((candidate) => candidate.label),
+      candidates: shown.length,
+      labels: shown.map((candidate) => candidate.label),
       match: result.object.match,
       confidence: result.object.confidence,
       note: result.object.note,
@@ -611,20 +642,28 @@ export const generateVariationTask = task({
       let productPatch: ProductPatch | null = null;
       if (sourceProductBox) {
         onStep("cutting out the product");
-        const cut = await matteWithMargins(sourceBytes, sourceProductBox, "source");
-        if (cut.matted) productPatch = { matte: cut, source: "source", assetImageUrl: null };
-        // An unmatted cut is a rectangle carrying the source's own background,
-        // and the live batch showed it fails review on the seam every time. A
-        // matching product photo is the better cut when there is one.
-        else
-          productPatch = await matteFromProductPhoto({
-            sourceBytes,
-            sourceProductBox,
-            brand,
-            library,
-            fetchBytes,
-            onStep,
+        try {
+          const cut = await matteWithMargins(sourceBytes, sourceProductBox, "source");
+          if (cut.matted) productPatch = { matte: cut, source: "source", assetImageUrl: null };
+          // An unmatted cut is a rectangle carrying the source's own background,
+          // and the live batch showed it fails review on the seam every time. A
+          // matching product photo is the better cut when there is one.
+          else
+            productPatch = await matteFromProductPhoto({
+              sourceBytes,
+              sourceProductBox,
+              brand,
+              library,
+              fetchBytes,
+              onStep,
+            });
+        } catch (error) {
+          // No patch is a supported state — the agent draws the product itself
+          // — so a matte that throws must not take the whole run with it.
+          logger.warn("Source matte failed; no patch", {
+            error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
           });
+        }
       }
 
       const input: VariationRunInput = {
@@ -769,6 +808,11 @@ export const generateVariationTask = task({
           // so judging it against the product photo would fail it for obeying
           // us.
           const transplantExpected = mode === "generate" && Boolean(productPatch);
+          // The photo the patch was cut from, when there is one. The third
+          // image, the premise, and the same-model check all key off this one
+          // value so they cannot describe a different set of images.
+          const assetPhoto =
+            transplant?.patchSource === "asset" ? (transplant.assetImageUrl ?? null) : null;
           try {
             const content: Array<
               { type: "text"; text: string } | { type: "image"; image: Uint8Array }
@@ -787,8 +831,8 @@ export const generateVariationTask = task({
             // A wrong-SKU match is the asset fallback's known failure mode, and
             // the review cannot see it without the photo the patch was cut
             // from: attach it third so the two products can be compared.
-            if (transplant?.patchSource === "asset" && transplant.assetImageUrl) {
-              content.push({ type: "image", image: await fetchBytes(transplant.assetImageUrl) });
+            if (assetPhoto) {
+              content.push({ type: "image", image: await fetchBytes(assetPhoto) });
             }
             const result = await generateObject({
               model: openai(REVIEW_MODEL),
@@ -797,12 +841,12 @@ export const generateVariationTask = task({
                 mode === "edit"
                   ? `You are a strict creative reviewer for paid-social static ads. The first image is the generated ad, produced by editing the second image (the source); ${pastedUrls.has(imageUrl) ? "the source's product was pasted back into its box after the edit" : "the step that pastes the source's product back did not run, so the product you see is the image model's own re-render"}.`
                   : transplant
-                    ? transplant.patchSource === "asset"
+                    ? assetPhoto
                       ? `You are a strict creative reviewer for paid-social static ads. The first image is the generated ad, the second is the source ad it varies, and the third is the brand's product photo; the real product was cut out of that third image and ${transplant.target === "landing" ? "pasted into the empty area the model left for it" : "pasted over the product the model drew"}.`
                       : `You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the real product was cut out of the second image (the source) and ${transplant.target === "landing" ? "pasted into the empty area the model left for it" : "pasted over the product the model drew"}.`
                     : "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second, when present, is the advertiser's real product photo.",
                 "Checklist (all must hold for pass = true):",
-                transplant?.patchSource === "asset"
+                assetPhoto
                   ? "- The third image is the product photo the pasted product was cut from. The pasted product must be the same model as the product in the source (second image): same silhouette, openings, thickness, and colour. If it is a different model, fail and say so."
                   : null,
                 mode === "edit" && keepRegion && pastedUrls.has(imageUrl)
@@ -810,7 +854,7 @@ export const generateVariationTask = task({
                   : mode === "edit"
                     ? "- The product matches the source image in shape, openings, material, and markings; no invented logos or text on it."
                     : transplant
-                      ? `- The source's product now sits in the box ${pct(transplant.to)}. Check: it is a plausible size for the scene; its lighting and colour do not clash with the surroundings; no remnant of the model's own product shows around its edges; nothing important is covered; and no second copy of the product appears anywhere else in the image; and the product rests on the surface rather than floating above it or sinking into it. Name which failed.`
+                      ? `- ${assetPhoto ? "The pasted product" : "The source's product"} now sits in the box ${pct(transplant.to)}. Check: it is a plausible size for the scene; its lighting and colour do not clash with the surroundings; no remnant of the model's own product shows around its edges; nothing important is covered; and no second copy of the product appears anywhere else in the image; and the product rests on the surface rather than floating above it or sinking into it. Name which failed.`
                       : transplantExpected
                         ? "- The product is not pasted in on this attempt (the paste step did not run), so the product you see, if any, is the model's own rendering: do not fail it on markings or exact shape, and an empty landing area beside it is acceptable. But the ad must still show the product somewhere; if no product is visible at all, fail and say 'no product visible'."
                         : "- The product matches the product photo in shape, openings, material, and markings; no invented logos or text on it.",
