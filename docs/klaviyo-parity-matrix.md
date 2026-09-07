@@ -1,14 +1,39 @@
 # Klaviyo parity: ecomconn → Adsolute
 
+## Revised target — Postgres snapshots
+
+The user corrected the architecture after reviewing PR #264: all four OpenAPI reads must be served from **Adsolute Postgres snapshots**, not live Klaviyo calls. They chose snapshot history with latest-by-default reads, daily background refresh plus explicit manual refresh, and `not_available` for missing scopes without automatic fetching or job enqueueing. The revised data flow is approved; the written spec awaits review.
+
+Design: `docs/superpowers/specs/2026-09-07-klaviyo-postgres-snapshots-design.md`.
+
+| Requirement | Current branch / PR #264 | Revised target |
+|---|---|---|
+| Campaign/message, metric, event and 17-statistic report field contracts | Implemented and fixture-tested | Reuse in background collectors; persist reviewed fields |
+| Provider transport and pagination | Implemented on GET path | Move exclusively behind durable background jobs |
+| Durable source-data snapshots | Missing for the expanded OpenAPI contracts | Versioned, org/connection-scoped Postgres storage |
+| Atomic publication and snapshot history | Not implemented for new endpoints | Latest successful snapshot plus retained older observations |
+| Daily refresh and explicit manual sync | Not implemented for new endpoints | Durable configured collection, no GET-triggered jobs |
+| OpenAPI data source | Live Klaviyo | Postgres only, including when provider credentials are unavailable |
+| Pagination | Provider cursor/traversal state | Stable DB pages pinned to a published snapshot |
+| Missing scope/window | Fetches live | `not_available`; explicit sync required |
+| Failure/freshness | Request-time provider errors | Keep prior good snapshot; expose age and refresh status |
+| Report semantics | Warnings and unverified completeness already exposed | Persist the same limitations separately from collection success |
+| Event privacy/history lifecycle | Ephemeral output only | Private profile-to-email-suppression-HMAC associations; erasure/suppression across staging and all historical versions |
+| Existing Lab/evidence/claims/flows/admin access | Unchanged | Preserve while adding snapshot storage |
+
+**No snapshot implementation has started.** PR #264 is now draft while its architecture is revised. The live-read test results below are useful baseline/parser evidence only; they do not verify this revised architecture. Production migrations, deployment, daily activation and live backfills require separate authorization.
+
+Design self-review identified a privacy gap: current email erasure can discover profiles only through canonical event HMACs, so it would miss snapshot-only profiles. The new spec requires worker-only transient email resolution, private versioned suppression-HMAC associations, and fail-closed collection when identifiable rows cannot be made safely erasable. No plaintext email is added to stored/public records. New published history is retained without automatic age pruning in this slice; existing 90-day attribution-evidence retention remains unchanged.
+
 ## Round 0 — source comparison and regression baseline
 
 Compared 2026-09-07. Adsolute HEAD `7a750e4`; ecomconn HEAD `c0536219bd25f1dde4187524f9cb138485658760`. Both working trees were clean before this audit. No provider calls, migrations, credentials changes, or implementation performed.
 
-**Approved target (scope clarified after Round 0):** all four shipped Klaviyo data-read capabilities in ecomconn, exposed through Adsolute's existing org-authorized OpenAPI. Preserve Adsolute's existing functionality. No new CLI, streaming export platform, general connection onboarding, custody system, MCP tools, or ecomconn control plane. The user approved the focused written design. Three implementation/verification rounds are complete; the current matrix below supersedes Round 0 gap statuses. Local code parity is implemented; live-provider certification remains explicitly pending.
+**Approved target (scope clarified after Round 0):** all four shipped Klaviyo data-read capabilities in ecomconn, exposed through Adsolute's existing org-authorized OpenAPI. Preserve Adsolute's existing functionality. No new CLI, streaming export platform, general connection onboarding, custody system, MCP tools, or ecomconn control plane. The user initially approved the live-read design and three implementation/verification rounds were completed. They subsequently corrected the architecture to Postgres snapshots; the revised target above now governs the work. The following records describe the earlier implementation, not snapshot completion.
 
 Status: **Present** = implemented equivalent; **Partial** = some behavior exists but parity is not established; **Missing** = no equivalent found; **Extra** = Adsolute functionality to preserve. These are source findings, not live-provider certification.
 
-## Current matrix — Round 3 (local parity verified; live certification pending)
+## Previous live-read implementation — Round 3 (superseded architecture)
 
 All four OpenAPI reads are composed under `klaviyoReads`. Existing evidence/admin procedures are unchanged. “Implemented” below means fixture/contract-backed code, not live-provider certification.
 
@@ -190,9 +215,9 @@ For each later round record: changed rows; source/test paths; commands and resul
 
 ## Approval and blockers
 
-- **Design gate cleared.** The user approved the written OpenAPI-only design. No further product-scope decision is blocking implementation.
+- **Architecture revised:** the user approved the Postgres snapshot data flow. Review the new written snapshot design before implementation; the prior live-read approval no longer describes the target.
 - **Credential custody is no longer a design blocker:** reuse the existing server-side pilot credential provider and org-scoped connection lookup. Organizations without that configured connection receive an explicit unavailable/not-configured error. General multi-account setup is out of scope.
 - **Permissions:** new read procedures use existing org/read authorization; current session-admin evidence reads, sync/review mutations and uninstall remain unchanged. No new scope-editing capabilities.
 - **Live report completeness:** ecomconn unconditionally stops after one response; its docs explicitly leave report pagination unresolved. Port the implemented contract but do not copy silent completeness assumptions. Live-account evidence may be needed; unresolved completeness must remain visible.
 - **Report interval semantics:** source serializes account-local wall time with a `Z` suffix, subtracts a second from the exclusive end, and acknowledges provider hour rounding. Validate pinned provider behavior rather than interpreting these strings as UTC or blindly replacing existing reporting semantics. DST and non-hour-aligned intervals require tests.
-- **Deployment/live verification:** live smoke testing needs separate operator authorization and the configured pilot's provider scopes. No new vault configuration, DB migration or Trigger deployment is required by this implementation. No production actions or live provider calls have been performed.
+- **Deployment/live verification:** the snapshot revision requires generated DB migrations and background-job deployment, unlike the earlier live-only PR. Applying production migrations, activating daily refresh, and running live backfills/smoke tests require separate operator authorization. No such production actions have been performed.

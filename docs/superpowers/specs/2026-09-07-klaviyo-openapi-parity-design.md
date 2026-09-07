@@ -1,5 +1,7 @@
 # Klaviyo read parity through OpenAPI
 
+> Superseded: the user corrected the live-read architecture to durable Postgres snapshots. See `2026-09-07-klaviyo-postgres-snapshots-design.md`. Preserve this document as the design history of the first PR implementation, not the current target.
+
 ## Approved direction
 
 Expose the four Klaviyo data-read capabilities implemented in ecomconn through Adsolute's existing OpenAPI infrastructure. Add the missing provider fields and reads while preserving the current Klaviyo Lab, evidence ingestion, matching, attribution, privacy lifecycle and scheduled jobs.

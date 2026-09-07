@@ -1,5 +1,7 @@
 # Klaviyo OpenAPI parity implementation plan
 
+> Completed plan for the superseded live-read implementation. The current target is `../specs/2026-09-07-klaviyo-postgres-snapshots-design.md`; these checkmarks do not indicate that snapshot storage is implemented.
+
 Approved spec: `../specs/2026-09-07-klaviyo-openapi-parity-design.md`.
 Results: `docs/klaviyo-parity-matrix.md`, Round 3.
 
