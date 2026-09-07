@@ -545,7 +545,7 @@ export const generateVariationTask = task({
                   produced = pastedPatch.bytes;
                   // The matte crops to what it kept, so record that region
                   // rather than the box it was asked to cut from.
-                  transplant = { from: matte.region, to, matted: matte.matted };
+                  transplant = { from: matte.region, to, target: "product", patchSource: "source", matted: matte.matted };
                   logger.info("Transplanted source product", {
                     attempt,
                     from: matte.region,

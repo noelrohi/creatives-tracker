@@ -60,7 +60,9 @@ function PlanDisclosure({ plan }: { plan: VariationPlan }) {
         ) : null}
         {plan.transplantedProduct ? (
           <p className="text-muted-foreground">
-            {plan.transplantedProduct.matted ? "Product transplanted from the source." : "Product transplanted from the source (rectangle fallback)."}
+            {plan.transplantedProduct.patchSource === "asset"
+              ? "Product transplanted from the product photo."
+              : "Product transplanted from the source."}
           </p>
         ) : null}
         {plan.synthesized ? <p className="text-muted-foreground">The agent did not write a full plan for this image.</p> : null}

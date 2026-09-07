@@ -449,7 +449,7 @@ describe("createVariationRun.finish", () => {
   });
 
   it("records a transplant reported by produceImage and stamps it on the plan", async () => {
-    const transplant = { from: region, to: { x: 0.5, y: 0.55, w: 0.3, h: 0.3 }, matted: true };
+    const transplant = { from: region, to: { x: 0.5, y: 0.55, w: 0.3, h: 0.3 }, target: "product" as const, patchSource: "source" as const, matted: true };
     const d = deps({ produceImage: vi.fn(async () => ({ imageUrl: "https://blob.test/out-1.png", transplant })) });
     const run = createVariationRun(editInput, d);
     const result = await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
@@ -462,7 +462,7 @@ describe("createVariationRun.finish", () => {
   });
 
   it("ignores a transplant reported on an edit attempt", async () => {
-    const transplant = { from: region, to: { x: 0.5, y: 0.55, w: 0.3, h: 0.3 }, matted: true };
+    const transplant = { from: region, to: { x: 0.5, y: 0.55, w: 0.3, h: 0.3 }, target: "product" as const, patchSource: "source" as const, matted: true };
     const run = createVariationRun(
       editInput,
       deps({ produceImage: vi.fn(async () => ({ imageUrl: "https://blob.test/out-1.png", transplant })) }),

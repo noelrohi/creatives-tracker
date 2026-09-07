@@ -7,11 +7,17 @@ export type VariationEvidence = {
 };
 
 export type VariationTransplant = {
-  /** Where the product was cut from in the source. */
+  /** Where the product was cut from: a region of the source ad, or of the product photo when `patchSource` is "asset". */
   from: ProductRegion;
-  /** Where the model drew its product in the output, now covered by the source's. */
+  /** The output box the product was pasted into. */
   to: ProductRegion;
-  /** False when the cut fell back to a rectangle instead of a matte; a generate-mode transplant is only recorded when the matte held, so it is true there. */
+  /** Whether `to` was the product the model drew (covered) or the empty landing area it left. */
+  target: "product" | "landing";
+  /** Where the patch came from: the source ad, or a matched brand product photo. */
+  patchSource: "source" | "asset";
+  /** The product photo the patch was cut from, when `patchSource` is "asset". */
+  assetImageUrl?: string | null;
+  /** True: a generate-mode transplant is only recorded when the matte held. */
   matted: boolean;
 };
 
