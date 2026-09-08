@@ -23,6 +23,7 @@ import {
 import { CoverageSummary } from "./coverage-summary";
 import { LabFilterBar } from "./filter-bar";
 import { LabHeader } from "./lab-header";
+import { LedgerDetailSheet } from "./ledger/ledger-detail-sheet";
 import { LedgerMessageRows } from "./ledger/ledger-message-rows";
 import { LedgerTable } from "./ledger/ledger-table";
 import { ListHealthTable } from "./list-health-table";
@@ -531,6 +532,7 @@ export function KlaviyoPlayground() {
       ) : null}
 
       <OrderDetailSheet lab={lab} />
+      <LedgerDetailSheet lab={lab} range={range} />
     </div>
   );
 }
