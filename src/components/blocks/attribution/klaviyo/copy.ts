@@ -1,7 +1,7 @@
 export const LAB_VIEWS = [
   "orders",
   "unmatched",
-  "reports",
+  "ledger",
   "probe",
   "list-health",
 ] as const;
@@ -39,7 +39,6 @@ export const DETAIL_TABS = [
   "inspector",
 ] as const;
 export const JOURNEY_LOOKBACKS = [7, 30, 90] as const;
-export const REPORT_KINDS = ["campaign", "flow"] as const;
 
 export type LabView = (typeof LAB_VIEWS)[number];
 export type LabRange = (typeof LAB_RANGES)[number];
@@ -49,7 +48,19 @@ export type ClaimTypeFilter = (typeof CLAIM_TYPE_FILTERS)[number];
 export type ChannelFilter = (typeof CHANNEL_FILTERS)[number];
 export type DetailTab = (typeof DETAIL_TABS)[number];
 export type JourneyLookback = (typeof JOURNEY_LOOKBACKS)[number];
-export type ReportKind = (typeof REPORT_KINDS)[number];
+
+export const LEDGER_KIND_FILTERS = ["all", "campaign", "flow"] as const;
+export const LEDGER_CHANNEL_FILTERS = ["all", "email", "sms"] as const;
+export type LedgerKindFilter = (typeof LEDGER_KIND_FILTERS)[number];
+export type LedgerChannelFilter = (typeof LEDGER_CHANNEL_FILTERS)[number];
+
+/** Mirrors KLAVIYO_REPORT_KINDS for the browser (reports.ts is server-side). */
+export const LEDGER_REFRESH_KINDS = [
+  "campaign",
+  "flow",
+  "campaign_message",
+  "flow_message",
+] as const;
 
 export const ADVISORY_BANNER =
   "Advisory evidence only — production attribution stays unchanged.";
@@ -133,4 +144,37 @@ export const listHealth = {
   undiscovered:
     "Run discovery to enable list tracking — the consent metrics haven't been synced for this connection yet.",
   error: "Couldn’t load list health.",
+} as const;
+
+export const ledger = {
+  tab: "Campaigns",
+  caption: (timezone: string, from: string, to: string) =>
+    `Send dates use ${timezone} account days · ${from} → ${to}`,
+  asOf: (iso: string) => `as of ${iso}`,
+  refresh: "Refresh report",
+  noReport: "No report for this range yet",
+  noRows: "No campaigns or flows in this range",
+  noResults: "No results match your filters",
+  clearFilters: "Clear filters",
+  error: "Couldn’t load campaigns.",
+  retry: "Retry",
+  ongoing: "ongoing",
+  loadingMessages: "Loading messages",
+  noMessages: "No messages",
+  messagesError: "Couldn’t load messages.",
+  columns: {
+    name: "Name",
+    sent: "Sent",
+    recipients: "Recipients",
+    delivered: "Delivered",
+    open: "Open",
+    click: "Click",
+    orders: "Orders",
+    revenue: "We confirm",
+    klaviyoSays: "Klaviyo says",
+    unsub: "Unsub",
+  },
+  chips: { campaign: "CMP", flow: "FLW", email: "EMAIL", sms: "SMS" },
+  sourceFilter: "Filtered to one campaign or flow",
+  clearSource: "Show all orders",
 } as const;

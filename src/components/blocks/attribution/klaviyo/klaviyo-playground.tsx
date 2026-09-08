@@ -13,16 +13,23 @@ import { ArrowLeft } from "@/components/icons";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getUserFacingErrorMessage } from "@/lib/errors";
 import { useTRPC } from "@/lib/trpc/client";
-import { ADVISORY_BANNER, LAB_VIEWS, type LabView } from "./copy";
+import {
+  ADVISORY_BANNER,
+  LAB_VIEWS,
+  LEDGER_REFRESH_KINDS,
+  ledger as ledgerCopy,
+  type LabView,
+} from "./copy";
 import { CoverageSummary } from "./coverage-summary";
 import { LabFilterBar } from "./filter-bar";
 import { LabHeader } from "./lab-header";
+import { LedgerMessageRows } from "./ledger/ledger-message-rows";
+import { LedgerTable } from "./ledger/ledger-table";
 import { ListHealthTable } from "./list-health-table";
 import { OrderDetailSheet } from "./order-detail-sheet";
 import { OrdersTable } from "./orders-table";
 import { LabPanelState } from "./panel-state";
 import { ProbePanel } from "./probe-panel";
-import { ReportsTable } from "./reports-table";
 import { SyncRunsPanel } from "./sync-runs-panel";
 import { UnmatchedEventsTable } from "./unmatched-events-table";
 import { resolveLabDayRange, useKlaviyoLabState } from "./use-klaviyo-lab-state";
@@ -36,7 +43,7 @@ function clickInstant(): number {
 const VIEW_LABELS: Record<LabView, string> = {
   orders: "Orders",
   unmatched: "Unmatched events",
-  reports: "Reports",
+  ledger: ledgerCopy.tab,
   probe: "Probe & runs",
   "list-health": "List health",
 };
@@ -473,8 +480,8 @@ export function KlaviyoPlayground() {
               <UnmatchedView range={range} lab={lab} />
             </>
           ) : null}
-          {view === "reports" ? (
-            <ReportsView
+          {view === "ledger" ? (
+            <LedgerView
               range={range}
               lab={lab}
               accountTimezone={health.data?.connection?.timezone ?? "UTC"}
@@ -483,7 +490,7 @@ export function KlaviyoPlayground() {
                 refreshReports.mutate({
                   dateFrom: range.dateFrom,
                   dateTo: range.dateTo,
-                  kinds: [lab.state.reportKind],
+                  kinds: [...LEDGER_REFRESH_KINDS],
                 })
               }
             />
@@ -575,6 +582,7 @@ function OrdersView(props: {
           state.productStatus === "all" ? undefined : state.productStatus,
         claimType: state.claimType === "all" ? undefined : state.claimType,
         channel: state.channel === "all" ? undefined : state.channel,
+        sourceObjectId: state.source ?? undefined,
         bucket:
           state.bucket === "all"
             ? undefined
@@ -601,7 +609,8 @@ function OrdersView(props: {
     state.productStatus !== "all" ||
     state.claimType !== "all" ||
     state.channel !== "all" ||
-    state.bucket !== "all";
+    state.bucket !== "all" ||
+    state.source !== null;
   return (
     <OrdersTable
       data={
@@ -654,7 +663,7 @@ function UnmatchedView(props: {
   );
 }
 
-function ReportsView(props: {
+function LedgerView(props: {
   range: { dateFrom: string; dateTo: string };
   lab: ReturnType<typeof useKlaviyoLabState>;
   accountTimezone: string;
@@ -662,24 +671,50 @@ function ReportsView(props: {
   onRefresh: () => void;
 }) {
   const trpc = useTRPC();
-  const reports = useQuery(
-    trpc.klaviyo.reports.queryOptions({
+  const { state } = props.lab;
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const search = state.q?.trim() ?? "";
+  const list = useQuery(
+    trpc.klaviyo.ledger.list.queryOptions({
       dateFrom: props.range.dateFrom,
       dateTo: props.range.dateTo,
-      kind: props.lab.state.reportKind,
-      limit: 50,
+      kind: state.ledgerKind === "all" ? undefined : state.ledgerKind,
+      channel: state.ledgerChannel === "all" ? undefined : state.ledgerChannel,
+      search: search === "" ? undefined : search,
     }),
   );
+  const filtered =
+    state.ledgerKind !== "all" ||
+    state.ledgerChannel !== "all" ||
+    search !== "";
+  const sort = { column: state.sort, direction: state.dir };
   return (
-    <ReportsTable
-      data={reports.data ?? null}
-      error={reports.isError}
-      accountTimezone={props.accountTimezone}
-      kind={props.lab.state.reportKind}
-      range={props.range}
+    <LedgerTable
+      data={list.data ?? null}
+      error={list.isError}
+      filtered={filtered}
       busy={props.busy}
-      onRetry={() => void reports.refetch()}
+      accountTimezone={props.accountTimezone}
+      range={props.range}
+      sort={sort}
+      onToggleSort={props.lab.toggleSort}
+      expanded={expanded}
+      onToggleExpand={(objectId) =>
+        setExpanded((current) => {
+          const next = new Set(current);
+          if (!next.delete(objectId)) next.add(objectId);
+          return next;
+        })
+      }
+      renderMessageRows={(row) => (
+        <LedgerMessageRows parent={row} range={props.range} sort={sort} />
+      )}
+      onOpenSource={props.lab.openSource}
       onRefresh={props.onRefresh}
+      onRetry={() => void list.refetch()}
+      onClearFilters={props.lab.clearFilters}
     />
   );
 }

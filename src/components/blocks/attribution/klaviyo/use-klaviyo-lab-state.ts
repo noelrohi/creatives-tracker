@@ -15,13 +15,21 @@ import {
   JOURNEY_LOOKBACKS,
   LAB_RANGES,
   LAB_VIEWS,
+  LEDGER_CHANNEL_FILTERS,
+  LEDGER_KIND_FILTERS,
   ORDER_STATUS_FILTERS,
   PRODUCT_STATUS_FILTERS,
-  REPORT_KINDS,
   type JourneyLookback,
   type LabRange,
   type LabView,
 } from "./copy";
+import {
+  DEFAULT_LEDGER_SORT,
+  LEDGER_SORT_COLUMNS,
+  LEDGER_SORT_DIRECTIONS,
+  nextLedgerSort,
+  type LedgerSortColumn,
+} from "./ledger/ledger-sort";
 
 export type ResolvedDayRange = {
   dateFrom: string;
@@ -32,7 +40,7 @@ export type ResolvedDayRange = {
 /**
  * Pure inclusive-day range resolver. `today` is the applicable
  * timezone-local calendar day (store today for orders/unmatched/probe,
- * account today for reports); the UI never calls `new Date(day)` to build
+ * account today for the ledger); the UI never calls `new Date(day)` to build
  * the backend window — the router owns the one timezone conversion.
  */
 export function resolveLabDayRange(input: {
@@ -43,7 +51,7 @@ export function resolveLabDayRange(input: {
   storeToday: string;
   accountToday: string;
 }): ResolvedDayRange {
-  const timezoneKind = input.view === "reports" ? "account" : "store";
+  const timezoneKind = input.view === "ledger" ? "account" : "store";
   const today = timezoneKind === "account" ? input.accountToday : input.storeToday;
   if (input.range !== "custom") {
     const days = input.range === "last7" ? 7 : input.range === "last30" ? 30 : 90;
@@ -82,7 +90,17 @@ const parsers = {
   candidate: parseAsString,
   detail: parseAsStringLiteral(DETAIL_TABS).withDefault("explanation"),
   lookback: parseAsInteger,
-  reportKind: parseAsStringLiteral(REPORT_KINDS).withDefault("campaign"),
+  ledgerKind: parseAsStringLiteral(LEDGER_KIND_FILTERS).withDefault("all"),
+  ledgerChannel:
+    parseAsStringLiteral(LEDGER_CHANNEL_FILTERS).withDefault("all"),
+  q: parseAsString,
+  source: parseAsString,
+  sort: parseAsStringLiteral(LEDGER_SORT_COLUMNS).withDefault(
+    DEFAULT_LEDGER_SORT.column,
+  ),
+  dir: parseAsStringLiteral(LEDGER_SORT_DIRECTIONS).withDefault(
+    DEFAULT_LEDGER_SORT.direction,
+  ),
 };
 
 /**
@@ -99,6 +117,9 @@ export function useKlaviyoLabState() {
     void setState({
       view,
       ...(view === "orders" ? {} : { order: null, candidate: null }),
+      // `source` means "open sheet" on the ledger and "filter" on orders; any
+      // other view drops it so it cannot float.
+      ...(view === "orders" || view === "ledger" ? {} : { source: null }),
     });
   };
   const closeDetail = () => {
@@ -118,7 +139,27 @@ export function useKlaviyoLabState() {
       claimType: "all",
       channel: "all",
       bucket: "all",
+      source: null,
+      q: null,
+      ledgerKind: "all",
+      ledgerChannel: "all",
     });
+  };
+  const openSource = (objectId: string) => void setState({ source: objectId });
+  const closeSource = () => void setState({ source: null });
+  const viewOrdersForSource = (objectId: string) =>
+    void setState({
+      view: "orders",
+      source: objectId,
+      order: null,
+      candidate: null,
+    });
+  const toggleSort = (column: LedgerSortColumn) => {
+    const next = nextLedgerSort(
+      { column: state.sort, direction: state.dir },
+      column,
+    );
+    void setState({ sort: next.column, dir: next.direction });
   };
   return {
     state,
@@ -127,6 +168,10 @@ export function useKlaviyoLabState() {
     openOrder,
     closeDetail,
     clearFilters,
+    openSource,
+    closeSource,
+    viewOrdersForSource,
+    toggleSort,
     lookback: resolveJourneyLookback(state.lookback),
   };
 }

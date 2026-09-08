@@ -1,5 +1,8 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { X } from "@/components/icons";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -15,16 +18,18 @@ import {
   ORDER_STATUS_FILTERS,
   ORDER_STATUS_LABELS,
   PRODUCT_STATUS_FILTERS,
-  REPORT_KINDS,
+  ledger as ledgerCopy,
   type LabView,
+  type LedgerChannelFilter,
+  type LedgerKindFilter,
 } from "./copy";
 import type { useKlaviyoLabState } from "./use-klaviyo-lab-state";
 
 /**
  * View-scoped filters: orders show the full evidence filter set, unmatched
- * shows date and channel only, reports show account-day date, channel, and
- * report kind, probe shows none. Hidden filters never enter query input.
- * The visible timezone label follows the active view's semantics.
+ * shows date and channel only, the ledger shows account-day date, kind,
+ * channel, and search, probe shows none. Hidden filters never enter query
+ * input. The visible timezone label follows the active view's semantics.
  */
 export function LabFilterBar(props: {
   view: LabView;
@@ -35,8 +40,8 @@ export function LabFilterBar(props: {
 }) {
   const { state, setState } = props.lab;
   const timezoneLabel =
-    props.view === "reports"
-      ? `Report dates use ${props.accountTimezone} message-send days`
+    props.view === "ledger"
+      ? `Send dates use ${props.accountTimezone} account days`
       : `Order dates use ${props.storeTimezone} store days`;
 
   return (
@@ -139,7 +144,7 @@ export function LabFilterBar(props: {
         </>
       ) : null}
 
-      {props.view === "orders" || props.view === "unmatched" || props.view === "reports" ? (
+      {props.view === "orders" || props.view === "unmatched" ? (
         <Select
           value={state.channel}
           onValueChange={(value) =>
@@ -159,25 +164,83 @@ export function LabFilterBar(props: {
         </Select>
       ) : null}
 
-      {props.view === "reports" ? (
-        <Select
-          value={state.reportKind}
-          onValueChange={(value) =>
-            void setState({ reportKind: value as (typeof REPORT_KINDS)[number] })
-          }
-        >
-          <SelectTrigger className="h-8 w-32" aria-label="Report kind">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {REPORT_KINDS.map((value) => (
-              <SelectItem key={value} value={value}>
-                {value}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      {props.view === "ledger" ? (
+        <>
+          <Select
+            value={state.ledgerKind}
+            onValueChange={(value) =>
+              void setState({ ledgerKind: value as LedgerKindFilter })
+            }
+          >
+            <SelectTrigger className="h-8 w-36" aria-label="Kind">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Campaigns &amp; flows</SelectItem>
+              <SelectItem value="campaign">Campaigns</SelectItem>
+              <SelectItem value="flow">Flows</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select
+            value={state.ledgerChannel}
+            onValueChange={(value) =>
+              void setState({ ledgerChannel: value as LedgerChannelFilter })
+            }
+          >
+            <SelectTrigger className="h-8 w-32" aria-label="Channel">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All channels</SelectItem>
+              <SelectItem value="email">Email</SelectItem>
+              <SelectItem value="sms">SMS</SelectItem>
+            </SelectContent>
+          </Select>
+          <LedgerSearch
+            value={state.q ?? ""}
+            onChange={(q) => void setState({ q: q === "" ? null : q })}
+          />
+        </>
+      ) : null}
+
+      {props.view === "orders" && state.source !== null ? (
+        <span className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs">
+          {ledgerCopy.sourceFilter}
+          <button
+            type="button"
+            aria-label={ledgerCopy.clearSource}
+            className="text-muted-foreground hover:text-foreground"
+            onClick={() => void setState({ source: null })}
+          >
+            <X className="size-3" />
+          </button>
+        </span>
       ) : null}
     </div>
+  );
+}
+
+/** Debounced so each keystroke does not become a ledger query. */
+function LedgerSearch({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    if (draft === value) return;
+    const timer = setTimeout(() => onChange(draft), 300);
+    return () => clearTimeout(timer);
+  }, [draft, onChange, value]);
+  return (
+    <Input
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      placeholder="Search campaigns and flows"
+      aria-label="Search"
+      className="h-8 w-56"
+    />
   );
 }
