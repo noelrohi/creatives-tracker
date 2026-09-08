@@ -519,6 +519,13 @@
       "when": 1788764382096,
       "tag": "0073_curious_lucky_pierre",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1788842699285,
+      "tag": "0074_klaviyo_campaign_ledger",
+      "breakpoints": true
     }
   ]
 }

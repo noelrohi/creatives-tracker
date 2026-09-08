@@ -279,6 +279,7 @@ describeIfDb("Klaviyo dimension repository on PostgreSQL", () => {
       "0056_klaviyo_source_core.sql",
       "0057_klaviyo_advisory_matching.sql",
       "0058_klaviyo_claims_reporting.sql",
+      "0074_klaviyo_campaign_ledger.sql",
     ]) {
       for (const statement of migrationStatements(migration)) {
         await testPool!.query(statement);
