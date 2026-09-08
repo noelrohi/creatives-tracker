@@ -6,7 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { applyMatchFixture, migrationStatements } from "./match-test-harness";
+import { MATCH_FIXTURE_MIGRATIONS, applyMatchFixture, migrationStatements } from "./match-test-harness";
 import { readFileSync } from "node:fs";
 import { computeIdentityCryptoKeyChecks, type IdentityScope } from "@/lib/identity-hmac";
 
@@ -44,8 +44,11 @@ export async function createSnapshotTestDatabase() {
     const journal = JSON.parse(readFileSync("drizzle/meta/_journal.json", "utf8")) as { entries: { idx: number; tag: string }[] };
     // 0000→0011 cannot replay from zero (pre-existing duplicate ad_account).
     // Use the repository's prerequisite fixture, not weakened snapshot DDL.
+    // Skip whatever applyMatchFixture already applied (it reaches past 0073
+    // now), otherwise a migration replays twice and fails on ADD COLUMN.
+    const alreadyApplied = new Set<string>(MATCH_FIXTURE_MIGRATIONS.map(file => file.replace(/\.sql$/, "")));
     const migrations = ["0064_grey_tempest", "0066_shiny_stepford_cuckoos", "0070_majestic_peter_parker", "0071_exotic_epoch",
-      ...journal.entries.filter(entry => entry.idx >= 73).map(entry => entry.tag)];
+      ...journal.entries.filter(entry => entry.idx >= 73 && !alreadyApplied.has(entry.tag)).map(entry => entry.tag)];
     for (const migration of migrations) {
       for (const statement of migrationStatements(`${migration}.sql`)) await pool.query(statement);
     }

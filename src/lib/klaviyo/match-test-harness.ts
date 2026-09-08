@@ -97,15 +97,22 @@ export const MATCH_FIXTURE_DDL = [
    )`,
 ];
 
+/**
+ * Generated migrations the fixture applies on top of MATCH_FIXTURE_DDL.
+ * Harnesses that replay further journal entries must skip these, or a
+ * migration runs twice and fails on its first ADD COLUMN.
+ */
+export const MATCH_FIXTURE_MIGRATIONS = [
+  "0055_klaviyo_shopify_evidence.sql",
+  "0056_klaviyo_source_core.sql",
+  "0057_klaviyo_advisory_matching.sql",
+  "0058_klaviyo_claims_reporting.sql",
+  "0074_klaviyo_campaign_ledger.sql",
+] as const;
+
 export async function applyMatchFixture(pool: Pool): Promise<void> {
   for (const statement of MATCH_FIXTURE_DDL) await pool.query(statement);
-  for (const migration of [
-    "0055_klaviyo_shopify_evidence.sql",
-    "0056_klaviyo_source_core.sql",
-    "0057_klaviyo_advisory_matching.sql",
-    "0058_klaviyo_claims_reporting.sql",
-    "0074_klaviyo_campaign_ledger.sql",
-  ]) {
+  for (const migration of MATCH_FIXTURE_MIGRATIONS) {
     for (const statement of migrationStatements(migration)) {
       await pool.query(statement);
     }
