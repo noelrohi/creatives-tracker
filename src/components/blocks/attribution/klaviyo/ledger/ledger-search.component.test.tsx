@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LedgerSearch } from "./ledger/ledger-search";
+import { LedgerSearch } from "./ledger-search";
 
 beforeEach(() => {
   vi.useFakeTimers();
