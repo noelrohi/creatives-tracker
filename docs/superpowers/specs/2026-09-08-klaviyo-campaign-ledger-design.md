@@ -98,8 +98,12 @@ existing one-`current`-per-scope guarantee.
   today and is always null) alongside the parent `campaign_object_id` or
   `flow_object_id`.
 - The parent kinds `campaign` and `flow` keep sending **no** grouping on the
-  wire, exactly as today, so their request fingerprints and facts are
-  byte-identical to the current ones.
+  wire, so their request body shape is unchanged. Their publication-scope
+  fingerprints *do* change, because the statistics list is part of the
+  fingerprint; that is intended — it makes the next scheduled preflight see
+  every slot as stale and refresh it once with the nine statistics. Prior
+  current generations are superseded by window and kind at publication
+  (§3.3 supersession), so no stale slot lingers.
 - The nightly refresh and the lab's Refresh button run four kinds instead of
   two, keeping the existing 1.1s spacing between report calls and the 24h
   freshness rule.

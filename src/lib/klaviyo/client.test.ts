@@ -1088,4 +1088,40 @@ describe("queryValuesReport", () => {
     ).rejects.toThrow("report request is invalid");
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("omits group_by for parent kinds and sends it only for message kinds", async () => {
+    // mockImplementation (not mockResolvedValue) so each call gets a fresh
+    // Response — the two queryValuesReport calls below each consume a body.
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(() =>
+      Promise.resolve(
+        jsonResponse({
+          data: { type: "campaign-values-report", id: "r", attributes: { results: [] } },
+        }),
+      ),
+    );
+    const client = clientWith(fetchMock);
+    await client.queryValuesReport({ request, pageCursor: null });
+    const parentBody = JSON.parse(
+      (fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string,
+    );
+    expect(Object.keys(parentBody.data.attributes).sort()).toEqual([
+      "conversion_metric_id",
+      "statistics",
+      "timeframe",
+    ]);
+
+    await client.queryValuesReport({
+      request: {
+        ...request,
+        kind: "flow_message",
+        grouping: ["flow_message_id"],
+      },
+      pageCursor: null,
+    });
+    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(new URL(url).pathname).toBe("/api/flow-values-reports");
+    const messageBody = JSON.parse(init.body as string);
+    expect(messageBody.data.type).toBe("flow-values-report");
+    expect(messageBody.data.attributes.group_by).toEqual(["flow_message_id"]);
+  });
 });

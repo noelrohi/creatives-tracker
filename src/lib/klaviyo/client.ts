@@ -2,6 +2,8 @@ import "server-only";
 
 import {
   assertExactReportRequest,
+  reportEndpointKind,
+  wireGroupBy,
   type KlaviyoReportRequest,
 } from "@/lib/klaviyo/reports";
 
@@ -669,7 +671,8 @@ export class KlaviyoApiClient {
   }): Promise<KlaviyoCompoundPage> {
     assertExactReportRequest(input.request);
     assertRequestCursor(input.pageCursor);
-    const isCampaign = input.request.kind === "campaign";
+    const isCampaign = reportEndpointKind(input.request.kind) === "campaign";
+    const groupBy = wireGroupBy(input.request);
     const body = {
       data: {
         type: isCampaign ? "campaign-values-report" : "flow-values-report",
@@ -680,6 +683,7 @@ export class KlaviyoApiClient {
           },
           conversion_metric_id: input.request.conversionExternalMetricId,
           statistics: [...input.request.statistics],
+          ...(groupBy !== null ? { group_by: groupBy } : {}),
           ...(input.pageCursor !== null
             ? { page_cursor: input.pageCursor }
             : {}),

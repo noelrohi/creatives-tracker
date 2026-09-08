@@ -4,8 +4,22 @@ import type { JsonValue } from "@/lib/klaviyo/types";
 export const KLAVIYO_REPORT_FRESHNESS_MS = 24 * 60 * 60 * 1000;
 export const KLAVIYO_REPORT_MIN_INTERVAL_MS = 1_100;
 
-export const KLAVIYO_REPORT_KINDS = ["campaign", "flow"] as const;
+export const KLAVIYO_REPORT_KINDS = [
+  "campaign",
+  "flow",
+  "campaign_message",
+  "flow_message",
+] as const;
 export type KlaviyoReportKind = (typeof KLAVIYO_REPORT_KINDS)[number];
+
+/** Which provider endpoint a kind queries; message kinds share their parent's. */
+export function reportEndpointKind(kind: KlaviyoReportKind): "campaign" | "flow" {
+  return kind === "campaign" || kind === "campaign_message" ? "campaign" : "flow";
+}
+
+export function isMessageReportKind(kind: KlaviyoReportKind): boolean {
+  return kind === "campaign_message" || kind === "flow_message";
+}
 
 // Wire names pinned to the 2026-07-15 reporting revision: the provider
 // uses suffix form (clicks_unique), verified against the live endpoint.
@@ -15,6 +29,10 @@ export const KLAVIYO_REPORT_STATISTICS = [
   "recipients",
   "clicks_unique",
   "opens_unique",
+  "delivered",
+  "bounced",
+  "unsubscribes",
+  "spam_complaints",
 ] as const;
 export type KlaviyoReportStatistic = (typeof KLAVIYO_REPORT_STATISTICS)[number];
 
@@ -27,6 +45,8 @@ export const KLAVIYO_REPORT_GROUPINGS = [
   "campaign_id",
   "flow_id",
   "send_channel",
+  "campaign_message_id",
+  "flow_message_id",
 ] as const;
 export type KlaviyoReportGrouping = (typeof KLAVIYO_REPORT_GROUPINGS)[number];
 
@@ -41,6 +61,18 @@ export type KlaviyoReportRequest = {
   apiRevision: string;
   asOf: string;
 };
+
+/**
+ * Only message kinds put a grouping on the wire. Parent kinds keep the
+ * provider's default grouping exactly as before this feature, so their
+ * request body shape is unchanged (their fingerprints still move with the
+ * widened statistics list, which is intended: it forces one refresh).
+ */
+export function wireGroupBy(request: KlaviyoReportRequest): string[] | null {
+  if (request.kind === "campaign_message") return ["campaign_message_id"];
+  if (request.kind === "flow_message") return ["flow_message_id"];
+  return null;
+}
 
 function isIsoInstant(value: unknown): value is string {
   return typeof value === "string" && !Number.isNaN(Date.parse(value));
@@ -146,6 +178,10 @@ export type NormalizedReportFact = {
     recipients: string | null;
     uniqueClicks: string | null;
     uniqueOpens: string | null;
+    delivered: string | null;
+    bounced: string | null;
+    unsubscribes: string | null;
+    spamComplaints: string | null;
   };
   additionalStatistics: Record<string, JsonValue>;
   factFingerprint: string;
@@ -160,6 +196,10 @@ const STATISTIC_COLUMN_BY_KEY: Record<
   recipients: "recipients",
   clicks_unique: "uniqueClicks",
   opens_unique: "uniqueOpens",
+  delivered: "delivered",
+  bounced: "bounced",
+  unsubscribes: "unsubscribes",
+  spam_complaints: "spamComplaints",
 };
 
 const MAX_ADDITIONAL_STATISTICS = 16;
@@ -208,6 +248,10 @@ export function normalizeReportRows(input: {
       recipients: null,
       uniqueClicks: null,
       uniqueOpens: null,
+      delivered: null,
+      bounced: null,
+      unsubscribes: null,
+      spamComplaints: null,
     };
     const additionalStatistics: Record<string, JsonValue> = {};
     for (const [key, rawValue] of Object.entries(statisticsSource)) {
@@ -251,10 +295,11 @@ export function normalizeReportRows(input: {
       }
     }
 
+    const endpoint = reportEndpointKind(input.kind);
     const fact: NormalizedReportFact = {
       reportKind: input.kind,
-      campaignExternalId: input.kind === "campaign" ? campaignId : null,
-      flowExternalId: input.kind === "flow" ? flowId : null,
+      campaignExternalId: endpoint === "campaign" ? campaignId : null,
+      flowExternalId: endpoint === "flow" ? flowId : null,
       messageExternalId: messageId,
       grouping,
       statistics,
