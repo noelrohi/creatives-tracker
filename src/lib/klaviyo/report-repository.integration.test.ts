@@ -147,7 +147,10 @@ function fakeReportClient(
         if (request.kind === "campaign_message") {
           return reportPage([
             {
-              groupings: { campaign_message_id: "message-ext-1" },
+              groupings: {
+                campaign_id: "campaign-ext-1",
+                campaign_message_id: "message-ext-1",
+              },
               statistics: { recipients: 200, conversions: 3 },
             },
             {

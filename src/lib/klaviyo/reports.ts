@@ -67,10 +67,18 @@ export type KlaviyoReportRequest = {
  * provider's default grouping exactly as before this feature, so their
  * request body shape is unchanged (their fingerprints still move with the
  * widened statistics list, which is intended: it forces one refresh).
+ *
+ * Revision 2026-07-15 rejects the message id grouped alone (400 "Grouping
+ * by campaign_id/flow_id is required") — the parent id must be grouped
+ * alongside the message id (verified live 2026-09-08).
  */
 export function wireGroupBy(request: KlaviyoReportRequest): string[] | null {
-  if (request.kind === "campaign_message") return ["campaign_message_id"];
-  if (request.kind === "flow_message") return ["flow_message_id"];
+  if (request.kind === "campaign_message") {
+    return ["campaign_id", "campaign_message_id"];
+  }
+  if (request.kind === "flow_message") {
+    return ["flow_id", "flow_message_id"];
+  }
   return null;
 }
 

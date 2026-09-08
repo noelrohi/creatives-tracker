@@ -104,8 +104,8 @@ const GROUPING_BY_KIND: Record<
 > = {
   campaign: ["campaign_id", "send_date"],
   flow: ["flow_id", "send_date"],
-  campaign_message: ["campaign_message_id"],
-  flow_message: ["flow_message_id"],
+  campaign_message: ["campaign_id", "campaign_message_id"],
+  flow_message: ["flow_id", "flow_message_id"],
 };
 
 export function reportRequestForKind(

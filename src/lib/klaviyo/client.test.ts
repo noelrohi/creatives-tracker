@@ -1114,7 +1114,7 @@ describe("queryValuesReport", () => {
       request: {
         ...request,
         kind: "flow_message",
-        grouping: ["flow_message_id"],
+        grouping: ["flow_id", "flow_message_id"],
       },
       pageCursor: null,
     });
@@ -1122,6 +1122,6 @@ describe("queryValuesReport", () => {
     expect(new URL(url).pathname).toBe("/api/flow-values-reports");
     const messageBody = JSON.parse(init.body as string);
     expect(messageBody.data.type).toBe("flow-values-report");
-    expect(messageBody.data.attributes.group_by).toEqual(["flow_message_id"]);
+    expect(messageBody.data.attributes.group_by).toEqual(["flow_id", "flow_message_id"]);
   });
 });

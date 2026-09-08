@@ -91,9 +91,11 @@ generation with the existing staging → current → superseded lifecycle and th
 existing one-`current`-per-scope guarantee.
 
 - `campaign_message` calls the campaign endpoint with an explicit
-  `group_by: ["campaign_message_id"]`; `flow_message` calls the flow endpoint
-  with `group_by: ["flow_message_id"]`. These two grouping keys are added to
-  the grouping allowlist.
+  `group_by: ["campaign_id", "campaign_message_id"]`; `flow_message` calls the
+  flow endpoint with `group_by: ["flow_id", "flow_message_id"]`. These
+  grouping keys are added to the grouping allowlist. Revision `2026-07-15`
+  requires the parent id grouped alongside the message id (verified live
+  2026-09-08).
 - Facts for the message kinds set `message_object_id` (a column that exists
   today and is always null) alongside the parent `campaign_object_id` or
   `flow_object_id`.

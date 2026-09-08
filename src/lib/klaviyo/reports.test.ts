@@ -181,17 +181,22 @@ describe("message report kinds and the nine statistics", () => {
     expect(isMessageReportKind("flow_message")).toBe(true);
   });
 
-  it("sends group_by only for message kinds", () => {
+  it("sends group_by only for message kinds, with the parent id alongside the message id", () => {
     expect(wireGroupBy(reportRequest())).toBeNull();
     expect(wireGroupBy(reportRequest({ kind: "flow", grouping: ["flow_id"] }))).toBeNull();
     expect(
       wireGroupBy(
-        reportRequest({ kind: "campaign_message", grouping: ["campaign_message_id"] }),
+        reportRequest({
+          kind: "campaign_message",
+          grouping: ["campaign_id", "campaign_message_id"],
+        }),
       ),
-    ).toEqual(["campaign_message_id"]);
+    ).toEqual(["campaign_id", "campaign_message_id"]);
     expect(
-      wireGroupBy(reportRequest({ kind: "flow_message", grouping: ["flow_message_id"] })),
-    ).toEqual(["flow_message_id"]);
+      wireGroupBy(
+        reportRequest({ kind: "flow_message", grouping: ["flow_id", "flow_message_id"] }),
+      ),
+    ).toEqual(["flow_id", "flow_message_id"]);
   });
 
   it("accepts the four new statistics and message groupings", () => {
@@ -211,7 +216,7 @@ describe("message report kinds and the nine statistics", () => {
         reportRequest({
           kind: "campaign_message",
           statistics: ["delivered", "unsubscribes"],
-          grouping: ["campaign_message_id"],
+          grouping: ["campaign_id", "campaign_message_id"],
         }),
       ),
     ).not.toThrow();
