@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { LEDGER_REFRESH_KINDS } from "@/components/blocks/attribution/klaviyo/copy";
 import {
   assertExactReportRequest,
   normalizeReportRows,
@@ -168,6 +169,13 @@ import {
 } from "@/lib/klaviyo/reports";
 
 describe("message report kinds and the nine statistics", () => {
+  // reports.ts is server-side, so the refresh button ships its own copy of the
+  // kind list; a kind added on one side and not the other silently stops being
+  // refreshed.
+  it("keeps the client refresh kinds mirror in sync", () => {
+    expect([...LEDGER_REFRESH_KINDS]).toEqual([...KLAVIYO_REPORT_KINDS]);
+  });
+
   it("exposes four kinds routed to two endpoints", () => {
     expect([...KLAVIYO_REPORT_KINDS]).toEqual([
       "campaign",

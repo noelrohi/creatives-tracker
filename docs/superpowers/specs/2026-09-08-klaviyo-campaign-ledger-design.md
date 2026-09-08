@@ -53,8 +53,8 @@ day, top products, and message variants.
   currently discards.
 
 The campaign list request adds `send_time,scheduled_at` to its sparse fields.
-Both new fields join the source checksum, so the next dimension refresh
-rewrites every existing campaign with its send time. No backfill script.
+The upsert's on-conflict `set` writes both fields unconditionally, so the next
+dimension refresh rewrites every existing campaign with its send time. No backfill script.
 
 ### 3.2 Report facts
 
