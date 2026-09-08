@@ -11,6 +11,7 @@ import {
   it,
   vi,
 } from "vitest";
+import { KlaviyoApiError } from "@/lib/klaviyo/client";
 import type { KlaviyoCompoundPage } from "@/lib/klaviyo/client";
 import type {
   KlaviyoCredentialProvider,
@@ -100,6 +101,7 @@ function reportPage(
 function fakeReportClient(
   spacerLog: number[] = [],
   campaignConversions = 3,
+  options: { rejectMessageGrouping?: boolean } = {},
 ) {
   void spacerLog;
   return {
@@ -110,29 +112,57 @@ function fakeReportClient(
           pageCursor: string | null;
         }) => Promise<KlaviyoCompoundPage>
       >()
-      .mockImplementation(async ({ request }) =>
-        request.kind === "campaign"
-          ? reportPage([
-              {
-                groupings: { campaign_id: "campaign-ext-1", send_date: "2026-07-15" },
-                statistics: {
-                  conversions: campaignConversions,
-                  conversion_value: "99.50",
-                },
+      .mockImplementation(async ({ request }) => {
+        if (request.kind === "campaign") {
+          return reportPage([
+            {
+              groupings: { campaign_id: "campaign-ext-1", send_date: "2026-07-15" },
+              statistics: {
+                conversions: campaignConversions,
+                conversion_value: "99.50",
+                recipients: 200,
+                delivered: 198,
+                unsubscribes: 4,
+                bounced: 2,
+                spam_complaints: 0,
               },
-            ])
-          : reportPage([
-              {
-                groupings: { flow_id: "flow-ext-1", send_date: "2026-07-16" },
-                statistics: { conversions: 2 },
-              },
-            ]),
-      ),
+            },
+          ]);
+        }
+        if (request.kind === "flow") {
+          return reportPage([
+            {
+              groupings: { flow_id: "flow-ext-1", send_date: "2026-07-16" },
+              statistics: { conversions: 2 },
+            },
+          ]);
+        }
+        if (options.rejectMessageGrouping) {
+          throw new KlaviyoApiError(
+            "Klaviyo API request failed (400)",
+            400,
+            false,
+          );
+        }
+        if (request.kind === "campaign_message") {
+          return reportPage([
+            {
+              groupings: { campaign_message_id: "message-ext-1" },
+              statistics: { recipients: 200, conversions: 3 },
+            },
+            {
+              groupings: { campaign_message_id: "message-ext-unknown" },
+              statistics: { recipients: 1 },
+            },
+          ]);
+        }
+        return reportPage([]);
+      }),
   };
 }
 
 async function startRun(
-  kinds: Array<"campaign" | "flow">,
+  kinds: Array<"campaign" | "flow" | "campaign_message" | "flow_message">,
   reason: "manual" | "scheduled" = "manual",
   now = new Date(),
   window = WINDOW,
@@ -215,6 +245,15 @@ describeIfDb("Klaviyo report repository on PostgreSQL", () => {
        VALUES ('campaign-row-1', 'org-a', 'store-a', 'connection-a',
          'campaign', 'campaign-ext-1', 'Summer Sale', '{}', 'checksum',
          '2026-07-15')`,
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_marketing_object
+         (id, organization_id, shopify_store_id, connection_id, object_type,
+          external_id, parent_id, name, tracking_projection, source_checksum,
+          api_revision)
+       VALUES ('message-row-1', 'org-a', 'store-a', 'connection-a',
+         'campaign_message', 'message-ext-1', 'campaign-row-1', 'Variant A',
+         '{}', 'checksum', '2026-07-15')`,
     );
   });
 
@@ -497,6 +536,142 @@ describeIfDb("Klaviyo report repository on PostgreSQL", () => {
       [first.syncRunId],
     );
     expect(staleGenerations.rows).toEqual([{ status: "failed" }]);
+  });
+
+  it("stores the four new statistics on parent facts", async () => {
+    const start = await startRun(["campaign"]);
+    if (start.kind !== "started") throw new Error("expected started");
+    await repository.processReportBatch(
+      { scope, syncRunId: start.syncRunId },
+      {
+        createClient: () => fakeReportClient(),
+        credentialProvider: fakeCredentialProvider,
+        spacer: async () => {},
+      },
+    );
+    const facts = await testPool!.query(
+      `SELECT recipients, delivered, unsubscribes, bounced, spam_complaints
+         FROM klaviyo_report_fact WHERE report_kind = 'campaign'`,
+    );
+    expect(facts.rows[0]).toEqual({
+      recipients: "200",
+      delivered: "198",
+      unsubscribes: "4",
+      bounced: "2",
+      spam_complaints: "0",
+    });
+  });
+
+  it("resolves message facts to the message and its parent, skipping unknown messages", async () => {
+    const start = await startRun(["campaign", "campaign_message"]);
+    if (start.kind !== "started") throw new Error("expected started");
+    const client = fakeReportClient();
+    const result = await repository.processReportBatch(
+      { scope, syncRunId: start.syncRunId },
+      {
+        createClient: () => client,
+        credentialProvider: fakeCredentialProvider,
+        spacer: async () => {},
+      },
+    );
+    expect(result.done).toBe(true);
+    const messageCall = client.queryValuesReport.mock.calls.find(
+      ([input]) => input.request.kind === "campaign_message",
+    );
+    expect(messageCall).toBeDefined();
+    const facts = await testPool!.query(
+      `SELECT report_kind, campaign_object_id, message_object_id, recipients
+         FROM klaviyo_report_fact WHERE report_kind = 'campaign_message'`,
+    );
+    expect(facts.rows).toEqual([
+      {
+        report_kind: "campaign_message",
+        campaign_object_id: "campaign-row-1",
+        message_object_id: "message-row-1",
+        recipients: "200",
+      },
+    ]);
+    const generations = await testPool!.query(
+      `SELECT kind, status, fact_count FROM klaviyo_report_generation
+        WHERE sync_run_id = $1 ORDER BY kind`,
+      [start.syncRunId],
+    );
+    expect(generations.rows).toEqual([
+      { kind: "campaign", status: "current", fact_count: 1 },
+      { kind: "campaign_message", status: "current", fact_count: 1 },
+    ]);
+  });
+
+  it("fails only the message generation when the revision rejects the grouping", async () => {
+    const start = await startRun(["campaign", "campaign_message"]);
+    if (start.kind !== "started") throw new Error("expected started");
+    const result = await repository.processReportBatch(
+      { scope, syncRunId: start.syncRunId },
+      {
+        createClient: () =>
+          fakeReportClient([], 3, { rejectMessageGrouping: true }),
+        credentialProvider: fakeCredentialProvider,
+        spacer: async () => {},
+      },
+    );
+    expect(result.done).toBe(true);
+    const generations = await testPool!.query(
+      `SELECT kind, status, failure_reason FROM klaviyo_report_generation
+        WHERE sync_run_id = $1 ORDER BY kind`,
+      [start.syncRunId],
+    );
+    expect(generations.rows).toEqual([
+      { kind: "campaign", status: "current", failure_reason: null },
+      {
+        kind: "campaign_message",
+        status: "failed",
+        failure_reason: "grouping_unsupported",
+      },
+    ]);
+    const run = await testPool!.query(
+      `SELECT status FROM klaviyo_sync_run WHERE id = $1`,
+      [start.syncRunId],
+    );
+    expect(run.rows[0].status).toBe("success");
+  });
+
+  it("supersedes a prior current generation for the same window and kind even when its fingerprint differs", async () => {
+    // A finished report run from "before the statistics list widened", with
+    // a current generation whose scope fingerprint no new request can match.
+    await testPool!.query(
+      `INSERT INTO klaviyo_sync_run
+         (id, organization_id, shopify_store_id, connection_id, operation,
+          trigger_type, status, checkpoint, request_parameters,
+          requested_from, requested_to)
+       VALUES ('old-run', 'org-a', 'store-a', 'connection-a', 'reports',
+         'manual', 'success', NULL, '{}', $1, $2)`,
+      [WINDOW.from.toISOString(), WINDOW.to.toISOString()],
+    );
+    await testPool!.query(
+      `INSERT INTO klaviyo_report_generation
+         (id, organization_id, shopify_store_id, connection_id, sync_run_id,
+          kind, requested_from, requested_to, account_timezone,
+          publication_scope_fingerprint, refresh_fingerprint, status,
+          fact_count, published_at)
+       VALUES ('old-gen', 'org-a', 'store-a', 'connection-a', 'old-run',
+         'campaign', $1, $2, 'America/New_York', 'old-scope', 'old-refresh',
+         'current', 0, now())`,
+      [WINDOW.from.toISOString(), WINDOW.to.toISOString()],
+    );
+    const start = await startRun(["campaign"]);
+    if (start.kind !== "started") throw new Error("expected started");
+    await repository.processReportBatch(
+      { scope, syncRunId: start.syncRunId },
+      {
+        createClient: () => fakeReportClient(),
+        credentialProvider: fakeCredentialProvider,
+        spacer: async () => {},
+      },
+    );
+    const old = await testPool!.query(
+      `SELECT status FROM klaviyo_report_generation WHERE id = 'old-gen'`,
+    );
+    expect(old.rows[0].status).toBe("superseded");
   });
 });
 

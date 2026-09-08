@@ -481,7 +481,9 @@ export const klaviyoRouter = router({
       z.object({
         dateFrom: storeDaySchema,
         dateTo: storeDaySchema,
-        kinds: z.array(z.enum(["campaign", "flow"])).min(1),
+        kinds: z
+          .array(z.enum(["campaign", "flow", "campaign_message", "flow_message"]))
+          .min(1),
       }),
     )
     .mutation(async ({ input, ctx }) => {
