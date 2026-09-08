@@ -1,8 +1,13 @@
 import "server-only";
 
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { KlaviyoApiClient, KLAVIYO_API_REVISIONS } from "@/lib/klaviyo/client";
+import {
+  KlaviyoApiClient,
+  KlaviyoApiError,
+  KLAVIYO_API_REVISIONS,
+  type KlaviyoCompoundPage,
+} from "@/lib/klaviyo/client";
 import {
   EnvironmentKlaviyoCredentialProvider,
   type KlaviyoCredentialProvider,
@@ -12,10 +17,12 @@ import {
   KLAVIYO_REPORT_KINDS,
   KLAVIYO_REPORT_MIN_INTERVAL_MS,
   KLAVIYO_REPORT_STATISTICS,
+  isMessageReportKind,
   normalizeReportRows,
   publicationScopeFingerprint,
   refreshFingerprint,
   refreshSetFingerprint,
+  reportEndpointKind,
   type KlaviyoReportKind,
   type KlaviyoReportRequest,
 } from "@/lib/klaviyo/reports";
@@ -86,6 +93,21 @@ function assertExactReportRunParameters(
   }
 }
 
+/**
+ * Each kind's grouping. Only message kinds put theirs on the wire (see
+ * `wireGroupBy`); the parent kinds' entries stay in the request so their
+ * fingerprints keep naming the slot they actually describe.
+ */
+const GROUPING_BY_KIND: Record<
+  KlaviyoReportKind,
+  KlaviyoReportRequest["grouping"]
+> = {
+  campaign: ["campaign_id", "send_date"],
+  flow: ["flow_id", "send_date"],
+  campaign_message: ["campaign_id", "campaign_message_id"],
+  flow_message: ["flow_id", "flow_message_id"],
+};
+
 export function reportRequestForKind(
   parameters: ReportRunParameters,
   kind: KlaviyoReportKind,
@@ -98,7 +120,7 @@ export function reportRequestForKind(
     conversionExternalMetricId: parameters.conversionExternalMetricId,
     timeframe: { from: parameters.from, to: parameters.to },
     statistics: [...KLAVIYO_REPORT_STATISTICS],
-    grouping: kind === "campaign" ? ["campaign_id", "send_date"] : ["flow_id", "send_date"],
+    grouping: [...GROUPING_BY_KIND[kind]],
     apiRevision: KLAVIYO_API_REVISIONS.reports,
     asOf: parameters.asOf,
   };
@@ -487,14 +509,20 @@ export async function processReportBatch(
       id: klaviyoReportGenerations.id,
       kind: klaviyoReportGenerations.kind,
       status: klaviyoReportGenerations.status,
+      failureReason: klaviyoReportGenerations.failureReason,
       requestFingerprintKind: klaviyoReportGenerations.refreshFingerprint,
     })
     .from(klaviyoReportGenerations)
     .where(eq(klaviyoReportGenerations.syncRunId, input.syncRunId))
     .orderBy(asc(klaviyoReportGenerations.kind));
+  // A `failed` sibling is tolerated: the message-grouping fallback below
+  // fails one generation mid-run and a later batch must resume past it.
   if (
     generations.length === 0 ||
-    generations.some((generation) => generation.status !== "staging")
+    generations.some(
+      (generation) =>
+        generation.status !== "staging" && generation.status !== "failed",
+    )
   ) {
     throw new Error("Klaviyo report staging generations are not intact");
   }
@@ -527,6 +555,18 @@ export async function processReportBatch(
       });
       return { done: true, checkpoint: null };
     }
+    if (generation.status === "failed") {
+      checkpoint = await advanceKindLocked(input, checkpoint, now());
+      if (checkpoint.kindIndex >= generations.length) {
+        await publishTerminalReportSync({
+          scope: input.scope,
+          syncRunId: input.syncRunId,
+          now: now(),
+        });
+        return { done: true, checkpoint: null };
+      }
+      continue;
+    }
     await renewKlaviyoSyncRunHeartbeat({
       scope: input.scope,
       syncRunId: input.syncRunId,
@@ -539,10 +579,41 @@ export async function processReportBatch(
       generation.kind,
       input.scope.connectionId,
     );
-    const page = await client.queryValuesReport({
-      request,
-      pageCursor: checkpoint.cursor,
-    });
+    let page: KlaviyoCompoundPage;
+    try {
+      page = await client.queryValuesReport({
+        request,
+        pageCursor: checkpoint.cursor,
+      });
+    } catch (error) {
+      if (
+        error instanceof KlaviyoApiError &&
+        error.status === 400 &&
+        isMessageReportKind(generation.kind)
+      ) {
+        // The pinned revision rejected the message grouping: fail only this
+        // generation and let the parent kinds publish (spec §3.3 fallback).
+        requestsUsed += 1;
+        await withKlaviyoConnectionLock(input.scope, async (tx) => {
+          await tx
+            .update(klaviyoReportGenerations)
+            .set({ status: "failed", failureReason: "grouping_unsupported" })
+            .where(eq(klaviyoReportGenerations.id, generation.id));
+        });
+        generation.status = "failed";
+        checkpoint = await advanceKindLocked(input, checkpoint, now());
+        if (checkpoint.kindIndex >= generations.length) {
+          await publishTerminalReportSync({
+            scope: input.scope,
+            syncRunId: input.syncRunId,
+            now: now(),
+          });
+          return { done: true, checkpoint: null };
+        }
+        continue;
+      }
+      throw error;
+    }
     requestsUsed += 1;
     const { rows, nextCursor } = extractReportRows(page);
     const requestFingerprintValue = refreshFingerprint(
@@ -585,19 +656,42 @@ export async function processReportBatch(
       ) {
         throw new Error("Klaviyo report checkpoint moved; replay this batch");
       }
+      let insertedFacts = 0;
+      const endpoint = reportEndpointKind(generation.kind);
       for (const fact of facts) {
-        const campaignObjectId = await resolveReportObject(
+        let campaignObjectId = await resolveReportObject(
           tx,
           input.scope,
           "campaign",
           fact.campaignExternalId,
         );
-        const flowObjectId = await resolveReportObject(
+        let flowObjectId = await resolveReportObject(
           tx,
           input.scope,
           "flow",
           fact.flowExternalId,
         );
+        let messageObjectId: string | null = null;
+        if (isMessageReportKind(generation.kind)) {
+          const message = await resolveMessageObject(
+            tx,
+            input.scope,
+            generation.kind === "campaign_message"
+              ? "campaign_message"
+              : "flow_message",
+            fact.messageExternalId,
+          );
+          // A message fact that names no known message is unusable: skip it
+          // (rows_read - rows_inserted on the run records how many).
+          if (message === null) continue;
+          messageObjectId = message.id;
+          if (endpoint === "campaign" && campaignObjectId === null) {
+            campaignObjectId = message.parentId;
+          }
+          if (endpoint === "flow" && flowObjectId === null) {
+            flowObjectId = message.parentId;
+          }
+        }
         await tx
           .insert(klaviyoReportFacts)
           .values({
@@ -609,7 +703,7 @@ export async function processReportBatch(
             conversionMetricId: parameters.conversionMetricRowId,
             campaignObjectId,
             flowObjectId,
-            messageObjectId: null,
+            messageObjectId,
             requestedFrom: new Date(parameters.from),
             requestedTo: new Date(parameters.to),
             accountTimezone: parameters.accountTimezone,
@@ -621,6 +715,10 @@ export async function processReportBatch(
             recipients: fact.statistics.recipients,
             uniqueClicks: fact.statistics.uniqueClicks,
             uniqueOpens: fact.statistics.uniqueOpens,
+            delivered: fact.statistics.delivered,
+            bounced: fact.statistics.bounced,
+            unsubscribes: fact.statistics.unsubscribes,
+            spamComplaints: fact.statistics.spamComplaints,
             additionalStatistics: fact.additionalStatistics,
             apiRevision: request.apiRevision,
             asOf: new Date(parameters.asOf),
@@ -632,6 +730,7 @@ export async function processReportBatch(
               klaviyoReportFacts.factFingerprint,
             ],
           });
+        insertedFacts += 1;
       }
       await tx
         .update(klaviyoReportGenerations)
@@ -646,7 +745,7 @@ export async function processReportBatch(
           checkpoint: nextCheckpoint,
           heartbeatAt: now(),
           rowsRead: sql`${klaviyoSyncRuns.rowsRead} + ${rows.length}`,
-          rowsInserted: sql`${klaviyoSyncRuns.rowsInserted} + ${facts.length}`,
+          rowsInserted: sql`${klaviyoSyncRuns.rowsInserted} + ${insertedFacts}`,
           apiRevision: request.apiRevision,
         })
         .where(
@@ -668,6 +767,66 @@ export async function processReportBatch(
     }
   }
   return { done: false, checkpoint };
+}
+
+/** Move the checkpoint to the next kind under the lock, guarding against a moved checkpoint. */
+async function advanceKindLocked(
+  input: { scope: KlaviyoConnectionScope; syncRunId: string },
+  checkpoint: KlaviyoReportSyncCheckpoint,
+  now: Date,
+): Promise<KlaviyoReportSyncCheckpoint> {
+  const next: KlaviyoReportSyncCheckpoint = {
+    operation: "reports",
+    kindIndex: checkpoint.kindIndex + 1,
+    cursor: null,
+    page: 0,
+  };
+  await withKlaviyoConnectionLock(input.scope, async (tx) => {
+    const [locked] = await tx
+      .select({ checkpoint: klaviyoSyncRuns.checkpoint })
+      .from(klaviyoSyncRuns)
+      .where(
+        and(
+          eq(klaviyoSyncRuns.id, input.syncRunId),
+          eq(klaviyoSyncRuns.status, "running"),
+        ),
+      )
+      .for("update");
+    if (!locked) throw new Error("Klaviyo report run is not active");
+    assertExactReportSyncCheckpoint(locked.checkpoint);
+    if (locked.checkpoint.kindIndex !== checkpoint.kindIndex) {
+      throw new Error("Klaviyo report checkpoint moved; replay this batch");
+    }
+    await tx
+      .update(klaviyoSyncRuns)
+      .set({ checkpoint: next, heartbeatAt: now })
+      .where(eq(klaviyoSyncRuns.id, input.syncRunId));
+  });
+  return next;
+}
+
+async function resolveMessageObject(
+  tx: KlaviyoStoreTransaction,
+  scope: KlaviyoConnectionScope,
+  objectType: "campaign_message" | "flow_message",
+  externalId: string | null,
+): Promise<{ id: string; parentId: string | null } | null> {
+  if (externalId === null) return null;
+  const [row] = await tx
+    .select({
+      id: klaviyoMarketingObjects.id,
+      parentId: klaviyoMarketingObjects.parentId,
+    })
+    .from(klaviyoMarketingObjects)
+    .where(
+      and(
+        eq(klaviyoMarketingObjects.connectionId, scope.connectionId),
+        eq(klaviyoMarketingObjects.objectType, objectType),
+        eq(klaviyoMarketingObjects.externalId, externalId),
+      ),
+    )
+    .limit(1);
+  return row ?? null;
 }
 
 async function resolveReportObject(
@@ -712,20 +871,61 @@ export async function publishTerminalReportSync(input: {
         id: klaviyoReportGenerations.id,
         kind: klaviyoReportGenerations.kind,
         status: klaviyoReportGenerations.status,
+        failureReason: klaviyoReportGenerations.failureReason,
         publicationScopeFingerprint:
           klaviyoReportGenerations.publicationScopeFingerprint,
+        requestedFrom: klaviyoReportGenerations.requestedFrom,
+        requestedTo: klaviyoReportGenerations.requestedTo,
       })
       .from(klaviyoReportGenerations)
       .where(eq(klaviyoReportGenerations.syncRunId, input.syncRunId))
       .orderBy(asc(klaviyoReportGenerations.kind))
       .for("update");
+    // Only `staging` rows publish. A `failed` sibling from the message
+    // grouping fallback is tolerated, but a run with nothing left to
+    // publish must not be treated as a success.
+    const stagingOnly = staging.filter(
+      (generation) => generation.status === "staging",
+    );
+    if (
+      stagingOnly.length === 0 &&
+      staging.length > 0 &&
+      staging.every(
+        (generation) =>
+          generation.status === "failed" &&
+          generation.failureReason === "grouping_unsupported",
+      )
+    ) {
+      // The pinned revision rejects every staged kind's grouping. There is
+      // nothing to publish and nothing to retry, so finish the run as a
+      // success — otherwise the nightly fails forever once the parent kinds
+      // are fresh. Nothing becomes `current` and `lastReportSyncedAt` stays
+      // put, so reads keep serving the previous current generations.
+      await finishKlaviyoSyncRun(
+        {
+          scope: input.scope,
+          syncRunId: input.syncRunId,
+          operation: "reports",
+          status: "success",
+        },
+        tx,
+      );
+      return { publishedKinds: [] };
+    }
     if (
       staging.length === 0 ||
-      staging.some((generation) => generation.status !== "staging")
+      staging.some(
+        (generation) =>
+          generation.status !== "staging" && generation.status !== "failed",
+      ) ||
+      stagingOnly.length === 0
     ) {
       throw new Error("Klaviyo report staging generations are not intact");
     }
-    for (const generation of staging) {
+    for (const generation of stagingOnly) {
+      // Supersede by logical slot (window + kind) as well as fingerprint, so a
+      // fingerprint change (e.g. a widened statistics list) cannot leave a
+      // stale `current` beside the new one.
       await tx
         .update(klaviyoReportGenerations)
         .set({ status: "superseded", supersededAt: input.now })
@@ -735,11 +935,24 @@ export async function publishTerminalReportSync(input: {
               klaviyoReportGenerations.connectionId,
               input.scope.connectionId,
             ),
-            eq(
-              klaviyoReportGenerations.publicationScopeFingerprint,
-              generation.publicationScopeFingerprint,
-            ),
             eq(klaviyoReportGenerations.status, "current"),
+            or(
+              eq(
+                klaviyoReportGenerations.publicationScopeFingerprint,
+                generation.publicationScopeFingerprint,
+              ),
+              and(
+                eq(klaviyoReportGenerations.kind, generation.kind),
+                eq(
+                  klaviyoReportGenerations.requestedFrom,
+                  generation.requestedFrom,
+                ),
+                eq(
+                  klaviyoReportGenerations.requestedTo,
+                  generation.requestedTo,
+                ),
+              ),
+            ),
           ),
         );
       await tx
@@ -766,7 +979,7 @@ export async function publishTerminalReportSync(input: {
           eq(klaviyoConnections.id, input.scope.connectionId),
         ),
       );
-    return { publishedKinds: staging.map((generation) => generation.kind) };
+    return { publishedKinds: stagingOnly.map((generation) => generation.kind) };
   });
 }
 
@@ -792,8 +1005,13 @@ export async function listCurrentReportFacts(input: {
     recipients: string | null;
     uniqueClicks: string | null;
     uniqueOpens: string | null;
+    delivered: string | null;
+    bounced: string | null;
+    unsubscribes: string | null;
+    spamComplaints: string | null;
     campaignObjectId: string | null;
     flowObjectId: string | null;
+    messageObjectId: string | null;
     asOf: Date;
   }>;
 }> {
@@ -826,8 +1044,13 @@ export async function listCurrentReportFacts(input: {
       recipients: klaviyoReportFacts.recipients,
       uniqueClicks: klaviyoReportFacts.uniqueClicks,
       uniqueOpens: klaviyoReportFacts.uniqueOpens,
+      delivered: klaviyoReportFacts.delivered,
+      bounced: klaviyoReportFacts.bounced,
+      unsubscribes: klaviyoReportFacts.unsubscribes,
+      spamComplaints: klaviyoReportFacts.spamComplaints,
       campaignObjectId: klaviyoReportFacts.campaignObjectId,
       flowObjectId: klaviyoReportFacts.flowObjectId,
+      messageObjectId: klaviyoReportFacts.messageObjectId,
       asOf: klaviyoReportFacts.asOf,
     })
     .from(klaviyoReportFacts)

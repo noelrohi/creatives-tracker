@@ -239,6 +239,8 @@ function marketingObject(
     status: "sent",
     providerCreatedAt: new Date("2026-07-01T00:00:00Z"),
     providerUpdatedAt: null,
+    sentAt: new Date("2026-07-03T09:00:00Z"),
+    subject: null,
     trackingProjection: {},
     ...overrides,
   };
@@ -279,6 +281,7 @@ describeIfDb("Klaviyo dimension repository on PostgreSQL", () => {
       "0056_klaviyo_source_core.sql",
       "0057_klaviyo_advisory_matching.sql",
       "0058_klaviyo_claims_reporting.sql",
+      "0074_klaviyo_campaign_ledger.sql",
     ]) {
       for (const statement of migrationStatements(migration)) {
         await testPool!.query(statement);
@@ -333,6 +336,10 @@ describeIfDb("Klaviyo dimension repository on PostgreSQL", () => {
       nextCheckpoint: checkpoint1,
       now: new Date(),
     });
+    const persisted = await testPool!.query(
+      `SELECT sent_at::text AS sent_at FROM klaviyo_marketing_object WHERE external_id = 'campaign-1'`,
+    );
+    expect(persisted.rows[0].sent_at).toBe("2026-07-03 09:00:00");
     await repository.commitKlaviyoDimensionPage({
       scope,
       syncRunId,

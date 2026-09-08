@@ -14,6 +14,11 @@ import { selectLatestMatchInputs } from "@/lib/klaviyo/match-service";
 import { loadEmailAttribution } from "@/lib/klaviyo/email-attribution";
 import { loadListHealth } from "@/lib/klaviyo/list-health";
 import {
+  loadLedgerDetail,
+  loadLedgerMessages,
+  loadLedgerRows,
+} from "@/lib/klaviyo/campaign-ledger";
+import {
   listEvidenceOrders,
   listUnmatchedEvents,
   loadEvidenceCoverage,
@@ -25,7 +30,6 @@ import {
 } from "@/lib/klaviyo/queries";
 import {
   failReportSync,
-  listCurrentReportFacts,
   startOrResumeReportSync,
 } from "@/lib/klaviyo/report-repository";
 import { startOrResumeOrderCoreSync } from "@/lib/klaviyo/source-runner";
@@ -61,6 +65,15 @@ async function requirePilotConnection(
     });
   }
   return connection;
+}
+
+/** Report and ledger days use the bound Klaviyo ACCOUNT timezone (send-date semantics). */
+function accountWindow(connection: ConnectionRecord, days: { dateFrom: string; dateTo: string }) {
+  return inclusiveStoreDaysToHalfOpenUtc({
+    dateFrom: days.dateFrom,
+    dateTo: days.dateTo,
+    timeZone: connection.accountTimezone ?? "UTC",
+  });
 }
 
 /**
@@ -332,6 +345,7 @@ export const klaviyoRouter = router({
             "untracked",
           ])
           .optional(),
+        sourceObjectId: resourceIdSchema.optional(),
         cursor: z.string().nullish(),
         limit: z.number().int().min(1).max(100).optional(),
       }),
@@ -351,6 +365,7 @@ export const klaviyoRouter = router({
         claimType: input.claimType,
         channel: input.channel,
         bucket: input.bucket,
+        sourceObjectId: input.sourceObjectId,
         cursor: input.cursor,
         limit: input.limit,
       });
@@ -446,54 +461,76 @@ export const klaviyoRouter = router({
       return response;
     }),
 
-  reports: orgAdminProcedure
-    .input(
-      z.object({
-        dateFrom: storeDaySchema,
-        dateTo: storeDaySchema,
-        kind: z.enum(["campaign", "flow"]),
-        limit: z.number().int().min(1).max(200).optional(),
-        offset: z.number().int().min(0).optional(),
+  ledger: router({
+    list: orgAdminProcedure
+      .input(
+        z.object({
+          dateFrom: storeDaySchema,
+          dateTo: storeDaySchema,
+          kind: z.enum(["campaign", "flow"]).optional(),
+          channel: z.enum(["email", "sms"]).optional(),
+          search: z.string().trim().max(200).optional(),
+        }),
+      )
+      .query(async ({ input, ctx }) => {
+        const connection = await requirePilotConnection(ctx.organizationId);
+        return loadLedgerRows({
+          scope: connection,
+          window: accountWindow(connection, input),
+          kind: input.kind,
+          channel: input.channel,
+          search: input.search,
+        });
       }),
-    )
-    .query(async ({ input, ctx }) => {
-      const connection = await requirePilotConnection(ctx.organizationId);
-      // Report calendar days use the bound Klaviyo account timezone
-      // (send-date semantics) — never the Shopify store conversion.
-      const accountWindow = inclusiveStoreDaysToHalfOpenUtc({
-        dateFrom: input.dateFrom,
-        dateTo: input.dateTo,
-        timeZone: connection.accountTimezone ?? "UTC",
-      });
-      // Facts come only from the requested slot's single current
-      // generation; staging, failed, and superseded rows never surface.
-      return listCurrentReportFacts({
-        scope: connection,
-        kind: input.kind,
-        window: accountWindow,
-        limit: input.limit,
-        offset: input.offset,
-      });
-    }),
+    messages: orgAdminProcedure
+      .input(
+        z.object({ dateFrom: storeDaySchema, dateTo: storeDaySchema, objectId: resourceIdSchema }),
+      )
+      .query(async ({ input, ctx }) => {
+        const connection = await requirePilotConnection(ctx.organizationId);
+        const messages = await loadLedgerMessages({
+          scope: connection,
+          window: accountWindow(connection, input),
+          objectId: input.objectId,
+        });
+        if (messages === null) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Not found" });
+        }
+        return messages;
+      }),
+    detail: orgAdminProcedure
+      .input(
+        z.object({ dateFrom: storeDaySchema, dateTo: storeDaySchema, objectId: resourceIdSchema }),
+      )
+      .query(async ({ input, ctx }) => {
+        const connection = await requirePilotConnection(ctx.organizationId);
+        const detail = await loadLedgerDetail({
+          scope: connection,
+          window: accountWindow(connection, input),
+          objectId: input.objectId,
+        });
+        if (detail === null) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Not found" });
+        }
+        return detail;
+      }),
+  }),
 
   refreshReports: orgAdminProcedure
     .input(
       z.object({
         dateFrom: storeDaySchema,
         dateTo: storeDaySchema,
-        kinds: z.array(z.enum(["campaign", "flow"])).min(1),
+        kinds: z
+          .array(z.enum(["campaign", "flow", "campaign_message", "flow_message"]))
+          .min(1),
       }),
     )
     .mutation(async ({ input, ctx }) => {
       const connection = await requirePilotConnection(ctx.organizationId);
       // Inclusive browser calendar dates convert through the connection's
       // account timezone into the half-open internal window (DST-safe).
-      const accountTimezone = connection.accountTimezone ?? "UTC";
-      const window = inclusiveStoreDaysToHalfOpenUtc({
-        dateFrom: input.dateFrom,
-        dateTo: input.dateTo,
-        timeZone: accountTimezone,
-      });
+      const window = accountWindow(connection, input);
       const prepared = await startOrResumeReportSync({
         scope: connection,
         window,

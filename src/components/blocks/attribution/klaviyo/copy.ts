@@ -1,9 +1,10 @@
+// Tab order: the two summary views first, then the evidence ledgers.
 export const LAB_VIEWS = [
+  "ledger",
+  "list-health",
   "orders",
   "unmatched",
-  "reports",
   "probe",
-  "list-health",
 ] as const;
 export const LAB_RANGES = ["last7", "last30", "last90", "custom"] as const;
 export const ORDER_STATUS_FILTERS = [
@@ -39,7 +40,6 @@ export const DETAIL_TABS = [
   "inspector",
 ] as const;
 export const JOURNEY_LOOKBACKS = [7, 30, 90] as const;
-export const REPORT_KINDS = ["campaign", "flow"] as const;
 
 export type LabView = (typeof LAB_VIEWS)[number];
 export type LabRange = (typeof LAB_RANGES)[number];
@@ -49,7 +49,19 @@ export type ClaimTypeFilter = (typeof CLAIM_TYPE_FILTERS)[number];
 export type ChannelFilter = (typeof CHANNEL_FILTERS)[number];
 export type DetailTab = (typeof DETAIL_TABS)[number];
 export type JourneyLookback = (typeof JOURNEY_LOOKBACKS)[number];
-export type ReportKind = (typeof REPORT_KINDS)[number];
+
+export const LEDGER_KIND_FILTERS = ["all", "campaign", "flow"] as const;
+export const LEDGER_CHANNEL_FILTERS = ["all", "email", "sms"] as const;
+export type LedgerKindFilter = (typeof LEDGER_KIND_FILTERS)[number];
+export type LedgerChannelFilter = (typeof LEDGER_CHANNEL_FILTERS)[number];
+
+/** Mirrors KLAVIYO_REPORT_KINDS for the browser (reports.ts is server-side). */
+export const LEDGER_REFRESH_KINDS = [
+  "campaign",
+  "flow",
+  "campaign_message",
+  "flow_message",
+] as const;
 
 export const ADVISORY_BANNER =
   "Advisory evidence only — production attribution stays unchanged.";
@@ -133,4 +145,70 @@ export const listHealth = {
   undiscovered:
     "Run discovery to enable list tracking — the consent metrics haven't been synced for this connection yet.",
   error: "Couldn’t load list health.",
+} as const;
+
+export const ledger = {
+  tab: "Campaigns",
+  caption: (timezone: string, from: string, to: string) =>
+    `Send dates use ${timezone} account days · ${from} → ${to}`,
+  asOf: (iso: string) => `as of ${iso}`,
+  refresh: "Refresh report",
+  noReport: "No report for this range yet",
+  noRows: "No campaigns or flows in this range",
+  noResults: "No results match your filters",
+  clearFilters: "Clear filters",
+  error: "Couldn’t load campaigns.",
+  retry: "Retry",
+  ongoing: "ongoing",
+  loadingMessages: "Loading messages",
+  noMessages: "No messages",
+  messagesError: "Couldn’t load messages.",
+  columns: {
+    name: "Name",
+    sent: "Sent",
+    recipients: "Recipients",
+    delivered: "Delivered",
+    open: "Open",
+    click: "Click",
+    orders: "Orders",
+    revenue: "We confirm",
+    klaviyoSays: "Klaviyo says",
+    unsub: "Unsub",
+  },
+  chips: { campaign: "CMP", flow: "FLW", email: "EMAIL", sms: "SMS" },
+  sourceFilter: "Filtered to one campaign or flow",
+  clearSource: "Show all orders",
+  sheet: {
+    title: "Campaign detail",
+    advisory: "Advisory evidence only",
+    sentAt: (day: string) => `Sent ${day}`,
+    subject: (subject: string) => `Subject: “${subject}”`,
+    funnel: "Funnel",
+    recipients: "recipients",
+    delivered: "delivered",
+    opened: "opened",
+    clicked: "clicked",
+    ordered: "ordered ✓",
+    revenue: "Revenue",
+    weConfirm: "We confirm",
+    weConfirmNote: (orders: number) => `${orders} order${orders === 1 ? "" : "s"}, refund-net`,
+    klaviyoSays: "Klaviyo says",
+    unconfirmed: (orders: number) => `${orders} order${orders === 1 ? "" : "s"} we couldn’t confirm`,
+    perRecipient: "Per recipient",
+    aov: (amount: string) => `AOV ${amount}`,
+    listImpact: "List impact",
+    unsubscribed: "Unsubscribed",
+    spam: "Spam complaints",
+    bounced: "Bounced",
+    ordersByDayOffset: "Confirmed orders by day after send",
+    ordersByDayCalendar: "Confirmed orders by day",
+    // No count: the orders view keeps its own date window and confirmed-only
+    // filter, so it cannot promise the sheet's number.
+    viewOrders: "View orders in Orders →",
+    topProducts: "Top products",
+    variants: "Variants (A/B)",
+    emails: "Emails in this flow",
+    loading: "Loading campaign detail",
+    error: "Couldn’t load this campaign.",
+  },
 } as const;

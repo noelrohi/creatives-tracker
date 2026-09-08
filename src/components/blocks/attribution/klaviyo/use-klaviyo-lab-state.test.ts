@@ -72,10 +72,10 @@ describe("resolveLabDayRange", () => {
     });
   });
 
-  it("resolves reports from account today with the account timezone label", () => {
+  it("resolves the ledger from account today with the account timezone label", () => {
     const input = {
       ...BASE,
-      view: "reports" as const,
+      view: "ledger" as const,
       range: "last7" as const,
       storeToday: "2026-07-31",
       accountToday: "2026-07-30",

@@ -192,6 +192,27 @@ describe("Klaviyo source schema", () => {
       expect(observationDefinition).not.toContain(`"${forbiddenColumn}"`);
     }
   });
+
+  it("exposes the campaign ledger columns and four report kinds", async () => {
+    const claim = await import("@/schema/klaviyo-claim");
+    expect([...claim.reportKinds]).toEqual([
+      "campaign",
+      "flow",
+      "campaign_message",
+      "flow_message",
+    ]);
+    expect(claim.klaviyoMarketingObjects.sentAt.name).toBe("sent_at");
+    expect(claim.klaviyoMarketingObjects.subject.name).toBe("subject");
+    expect(claim.klaviyoReportFacts.delivered.name).toBe("delivered");
+    expect(claim.klaviyoReportFacts.bounced.name).toBe("bounced");
+    expect(claim.klaviyoReportFacts.unsubscribes.name).toBe("unsubscribes");
+    expect(claim.klaviyoReportFacts.spamComplaints.name).toBe(
+      "spam_complaints",
+    );
+    expect(claim.klaviyoReportGenerations.failureReason.name).toBe(
+      "failure_reason",
+    );
+  });
 });
 
 const baseConnectionString = resolveConnectionString();

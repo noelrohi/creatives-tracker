@@ -20,6 +20,10 @@ export type NormalizedMarketingObject = {
   status: string | null;
   providerCreatedAt: Date | null;
   providerUpdatedAt: Date | null;
+  /** Campaigns: `send_time` else `scheduled_at`; null for drafts and flows. */
+  sentAt: Date | null;
+  /** Messages: the subject line inside the definition; null elsewhere. */
+  subject: string | null;
   trackingProjection: Record<string, string>;
 };
 
@@ -146,9 +150,27 @@ function stableChecksum(value: unknown): string {
 }
 
 /**
+ * Read a dotted path (e.g. "content.subject") out of a definition object.
+ * Any non-object segment along the way short-circuits to undefined.
+ */
+function readDefinitionPath(
+  definition: Record<string, unknown>,
+  path: string,
+): unknown {
+  let current: unknown = definition;
+  for (const segment of path.split(".")) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+}
+
+/**
  * Hoist allowlisted scalar fields out of a message `definition` object:
- * this revision exposes label/name/channel only inside it. Nothing else in
- * the definition (template content, sender addresses) is ever read.
+ * this revision exposes label/name/channel/subject only inside it. Nothing
+ * else in the definition (template content, sender addresses) is ever read.
  */
 function withDefinitionFields(
   resource: KlaviyoResource,
@@ -160,9 +182,12 @@ function withDefinitionFields(
     return resource;
   }
   const hoisted: Record<string, unknown> = { ...attributes };
-  for (const [target, sourceKey] of Object.entries(mapping)) {
+  for (const [target, sourcePath] of Object.entries(mapping)) {
     if (hoisted[target] === undefined) {
-      hoisted[target] = (definition as Record<string, unknown>)[sourceKey];
+      hoisted[target] = readDefinitionPath(
+        definition as Record<string, unknown>,
+        sourcePath,
+      );
     }
   }
   delete hoisted.definition;
@@ -178,6 +203,8 @@ function normalizeObject(input: {
   createdKey: string;
   updatedKey: string;
   nameKey: string;
+  sentKeys?: string[];
+  subjectKey?: string;
   warnings: string[];
 }): NormalizedMarketingObject | null {
   const attributes = input.resource.attributes ?? {};
@@ -187,6 +214,11 @@ function normalizeObject(input: {
     return null;
   }
   const channelAttribute = boundedShortText(attributes.channel);
+  let sentAt: Date | null = null;
+  for (const key of input.sentKeys ?? []) {
+    sentAt = providerTimestamp(attributes[key]);
+    if (sentAt !== null) break;
+  }
   return {
     objectType: input.objectType,
     externalId: input.resource.id,
@@ -197,6 +229,11 @@ function normalizeObject(input: {
     status: boundedShortText(attributes.status),
     providerCreatedAt: providerTimestamp(attributes[input.createdKey]),
     providerUpdatedAt: providerTimestamp(attributes[input.updatedKey]),
+    sentAt,
+    subject:
+      input.subjectKey === undefined
+        ? null
+        : boundedName(attributes[input.subjectKey]),
     trackingProjection: {},
   };
 }
@@ -294,6 +331,7 @@ export function normalizeDimensionSnapshot(
         createdKey: "created_at",
         updatedKey: "updated_at",
         nameKey: "name",
+        sentKeys: ["send_time", "scheduled_at"],
         warnings,
       }),
     );
@@ -312,6 +350,7 @@ export function normalizeDimensionSnapshot(
         resource: withDefinitionFields(message.resource, {
           label: "label",
           channel: "channel",
+          subject: "content.subject",
         }),
         channel: null,
         parentExternalId: message.campaignExternalId,
@@ -319,6 +358,7 @@ export function normalizeDimensionSnapshot(
         createdKey: "created_at",
         updatedKey: "updated_at",
         nameKey: "label",
+        subjectKey: "subject",
         warnings,
       }),
     );
@@ -359,13 +399,17 @@ export function normalizeDimensionSnapshot(
     push(
       normalizeObject({
         objectType: "flow_message",
-        resource: withDefinitionFields(message.resource, { name: "name" }),
+        resource: withDefinitionFields(message.resource, {
+          name: "name",
+          subject: "content.subject",
+        }),
         channel: null,
         parentExternalId: flowExternalId,
         parentObjectType: "flow",
         createdKey: "created",
         updatedKey: "updated",
         nameKey: "name",
+        subjectKey: "subject",
         warnings,
       }),
     );

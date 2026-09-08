@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { LEDGER_REFRESH_KINDS } from "@/components/blocks/attribution/klaviyo/copy";
 import {
   assertExactReportRequest,
   normalizeReportRows,
@@ -156,5 +157,126 @@ describe("normalizeReportRows", () => {
       ],
     });
     expect(JSON.stringify(facts)).not.toContain("gid://shopify/Order");
+  });
+});
+
+import {
+  KLAVIYO_REPORT_KINDS,
+  KLAVIYO_REPORT_STATISTICS,
+  isMessageReportKind,
+  reportEndpointKind,
+  wireGroupBy,
+} from "@/lib/klaviyo/reports";
+
+describe("message report kinds and the nine statistics", () => {
+  // reports.ts is server-side, so the refresh button ships its own copy of the
+  // kind list; a kind added on one side and not the other silently stops being
+  // refreshed.
+  it("keeps the client refresh kinds mirror in sync", () => {
+    expect([...LEDGER_REFRESH_KINDS]).toEqual([...KLAVIYO_REPORT_KINDS]);
+  });
+
+  it("exposes four kinds routed to two endpoints", () => {
+    expect([...KLAVIYO_REPORT_KINDS]).toEqual([
+      "campaign",
+      "flow",
+      "campaign_message",
+      "flow_message",
+    ]);
+    expect(reportEndpointKind("campaign_message")).toBe("campaign");
+    expect(reportEndpointKind("flow_message")).toBe("flow");
+    expect(isMessageReportKind("campaign")).toBe(false);
+    expect(isMessageReportKind("flow_message")).toBe(true);
+  });
+
+  it("sends group_by only for message kinds, with the parent id alongside the message id", () => {
+    expect(wireGroupBy(reportRequest())).toBeNull();
+    expect(wireGroupBy(reportRequest({ kind: "flow", grouping: ["flow_id"] }))).toBeNull();
+    expect(
+      wireGroupBy(
+        reportRequest({
+          kind: "campaign_message",
+          grouping: ["campaign_id", "campaign_message_id"],
+        }),
+      ),
+    ).toEqual(["campaign_id", "campaign_message_id"]);
+    expect(
+      wireGroupBy(
+        reportRequest({ kind: "flow_message", grouping: ["flow_id", "flow_message_id"] }),
+      ),
+    ).toEqual(["flow_id", "flow_message_id"]);
+  });
+
+  it("accepts the four new statistics and message groupings", () => {
+    expect([...KLAVIYO_REPORT_STATISTICS]).toEqual([
+      "conversions",
+      "conversion_value",
+      "recipients",
+      "clicks_unique",
+      "opens_unique",
+      "delivered",
+      "bounced",
+      "unsubscribes",
+      "spam_complaints",
+    ]);
+    expect(() =>
+      assertExactReportRequest(
+        reportRequest({
+          kind: "campaign_message",
+          statistics: ["delivered", "unsubscribes"],
+          grouping: ["campaign_id", "campaign_message_id"],
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it("normalizes the new statistics into typed columns and keeps the message id", () => {
+    const { facts, warnings } = normalizeReportRows({
+      kind: "campaign_message",
+      requestFingerprint: "req",
+      rows: [
+        {
+          groupings: { campaign_id: "camp-1", campaign_message_id: "msg-1" },
+          statistics: {
+            recipients: 100,
+            delivered: "99",
+            bounced: 1,
+            unsubscribes: 2,
+            spam_complaints: 0,
+            opens_unique: 40,
+            conversion_value: "12.50",
+          },
+        },
+      ],
+    });
+    expect(warnings).toEqual([]);
+    expect(facts[0]).toMatchObject({
+      reportKind: "campaign_message",
+      campaignExternalId: "camp-1",
+      flowExternalId: null,
+      messageExternalId: "msg-1",
+      statistics: {
+        recipients: "100",
+        delivered: "99",
+        bounced: "1",
+        unsubscribes: "2",
+        spamComplaints: "0",
+        uniqueOpens: "40",
+        uniqueClicks: null,
+        conversions: null,
+        conversionValue: "12.50",
+      },
+    });
+    expect(facts[0].additionalStatistics).toEqual({});
+  });
+
+  it("changes the fingerprint when the statistics list changes", () => {
+    const withGrouping = reportRequest();
+    expect(publicationScopeFingerprint(withGrouping, "UTC")).not.toBe(
+      publicationScopeFingerprint(
+        reportRequest({ statistics: ["conversions", "delivered"] }),
+        "UTC",
+      ),
+    );
   });
 });

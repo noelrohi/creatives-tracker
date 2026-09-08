@@ -42,10 +42,12 @@ const mocks = vi.hoisted(() => {
     loadOrderInspector: vi.fn(),
     loadOrderJourney: vi.fn(),
     failReportSync: vi.fn(),
-    listCurrentReportFacts: vi.fn(),
     startOrResumeReportSync: vi.fn(),
     selectLatestMatchInputs: vi.fn(),
     triggerOrRepairMatchInvocation: vi.fn(),
+    loadLedgerRows: vi.fn(),
+    loadLedgerMessages: vi.fn(),
+    loadLedgerDetail: vi.fn(),
   };
 });
 
@@ -74,8 +76,12 @@ vi.mock("@/lib/klaviyo/list-health", () => ({
 }));
 vi.mock("@/lib/klaviyo/report-repository", () => ({
   failReportSync: mocks.failReportSync,
-  listCurrentReportFacts: mocks.listCurrentReportFacts,
   startOrResumeReportSync: mocks.startOrResumeReportSync,
+}));
+vi.mock("@/lib/klaviyo/campaign-ledger", () => ({
+  loadLedgerRows: mocks.loadLedgerRows,
+  loadLedgerMessages: mocks.loadLedgerMessages,
+  loadLedgerDetail: mocks.loadLedgerDetail,
 }));
 vi.mock("@/lib/klaviyo/match-service", () => ({
   selectLatestMatchInputs: mocks.selectLatestMatchInputs,
@@ -270,6 +276,12 @@ beforeEach(() => {
   });
   mocks.idempotencyCreate.mockImplementation(async (key: string) => ({ key }));
   mocks.taskTrigger.mockResolvedValue({ id: "trigger-run-1" });
+  mocks.loadLedgerRows.mockResolvedValue({
+    rows: [],
+    report: { asOf: null, hasCampaignGeneration: false, hasFlowGeneration: false },
+  });
+  mocks.loadLedgerMessages.mockResolvedValue([]);
+  mocks.loadLedgerDetail.mockResolvedValue({ object: {} });
 });
 
 const PROCEDURE_CALLS: Array<[string, (caller: ReturnType<typeof sessionCaller>) => Promise<unknown>]> = [
@@ -333,6 +345,9 @@ const PROCEDURE_CALLS: Array<[string, (caller: ReturnType<typeof sessionCaller>)
     "matchInvocationStatus",
     (caller) => caller.matchInvocationStatus({ triggerRunId: "run" }),
   ],
+  ["ledger.list", (caller) => caller.ledger.list({ dateFrom: "2026-07-01", dateTo: "2026-07-31" })],
+  ["ledger.messages", (caller) => caller.ledger.messages({ dateFrom: "2026-07-01", dateTo: "2026-07-31", objectId: "obj" })],
+  ["ledger.detail", (caller) => caller.ledger.detail({ dateFrom: "2026-07-01", dateTo: "2026-07-31", objectId: "obj" })],
 ];
 
 describe("klaviyo router RBAC", () => {
@@ -720,31 +735,6 @@ describe("claims, journey, inspector, and report procedures", () => {
     });
   });
 
-  it("reads report facts only through the current-slot query", async () => {
-    mocks.listCurrentReportFacts.mockResolvedValue({
-      generationId: "generation-1",
-      publishedAt: new Date(),
-      facts: [],
-    });
-    const caller = sessionCaller("admin");
-    await caller.reports({
-      dateFrom: "2026-07-01",
-      dateTo: "2026-07-31",
-      kind: "flow",
-      limit: 10,
-    });
-    expect(mocks.listCurrentReportFacts).toHaveBeenCalledWith({
-      scope: mocks.connection,
-      kind: "flow",
-      window: {
-        from: new Date("2026-07-01T07:00:00.000Z"),
-        to: new Date("2026-08-01T07:00:00.000Z"),
-      },
-      limit: 10,
-      offset: undefined,
-    });
-  });
-
   it("refreshReports supplies server-derived manual reason and the exact global key", async () => {
     mocks.startOrResumeReportSync.mockResolvedValue({
       kind: "started",
@@ -968,5 +958,62 @@ describe("browser day-range timezone contract", () => {
     await expect(workerCaller().health()).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
+  });
+});
+
+describe("campaign ledger procedures", () => {
+  it("derives the window through the ACCOUNT timezone and forwards filters", async () => {
+    mocks.loadLedgerRows.mockResolvedValue({ rows: [], report: { asOf: null, hasCampaignGeneration: false, hasFlowGeneration: false } });
+    await sessionCaller("admin").ledger.list({
+      dateFrom: "2026-07-01",
+      dateTo: "2026-07-31",
+      kind: "flow",
+      channel: "sms",
+      search: "  sale ",
+    });
+    expect(mocks.loadLedgerRows).toHaveBeenCalledWith({
+      scope: mocks.connection,
+      window: {
+        from: new Date("2026-07-01T07:00:00.000Z"),
+        to: new Date("2026-08-01T07:00:00.000Z"),
+      },
+      kind: "flow",
+      channel: "sms",
+      search: "sale",
+    });
+  });
+
+  it("caps the search string", async () => {
+    await expect(
+      sessionCaller("admin").ledger.list({ dateFrom: "2026-07-01", dateTo: "2026-07-31", search: "x".repeat(201) }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("maps an unknown object to NOT_FOUND for messages and detail", async () => {
+    mocks.loadLedgerMessages.mockResolvedValue(null);
+    mocks.loadLedgerDetail.mockResolvedValue(null);
+    const caller = sessionCaller("admin");
+    await expect(
+      caller.ledger.messages({ dateFrom: "2026-07-01", dateTo: "2026-07-31", objectId: "nope" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      caller.ledger.detail({ dateFrom: "2026-07-01", dateTo: "2026-07-31", objectId: "nope" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("forwards sourceObjectId to the orders ledger", async () => {
+    mocks.listEvidenceOrders.mockResolvedValue({ items: [], nextCursor: null });
+    await sessionCaller("admin").orders({
+      dateFrom: "2026-07-01",
+      dateTo: "2026-07-31",
+      sourceObjectId: "camp-1",
+    });
+    expect(mocks.listEvidenceOrders).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceObjectId: "camp-1" }),
+    );
+  });
+
+  it("no longer exposes the raw reports procedure", () => {
+    expect((klaviyoRouter as unknown as { reports?: unknown }).reports).toBeUndefined();
   });
 });

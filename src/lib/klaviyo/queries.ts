@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, desc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   MATCHER_VERSION,
@@ -126,6 +126,7 @@ export async function listEvidenceOrders(input: {
   claimType?: OrderClaimTypeFilter;
   channel?: OrderChannelFilter;
   bucket?: string;
+  sourceObjectId?: string;
   cursor?: string | null;
   limit?: number;
 }): Promise<{ items: OrderLedgerRow[]; nextCursor: string | null }> {
@@ -163,6 +164,24 @@ export async function listEvidenceOrders(input: {
     conditions.push(
       channelPredicate(input.channel, klaviyoOrderMatchResults.selectedEventId),
     );
+  }
+  if (input.sourceObjectId) {
+    // Same primary-claim rule and confirmed status as the campaign ledger,
+    // so every row the source link lands on is an order the ledger counted.
+    // The orders view keeps its OWN date window, so the two sets still differ
+    // whenever an order falls outside it — the link promises no count.
+    conditions.push(eq(klaviyoOrderMatchResults.status, "confirmed"));
+    conditions.push(isNotNull(klaviyoOrderMatchResults.selectedEventId));
+    conditions.push(sql`(
+      select coalesce(c.campaign_object_id, c.flow_object_id)
+        from klaviyo_attribution_claim c
+       where c.connection_id = ${klaviyoOrderMatchResults.connectionId}
+         and c.conversion_event_id = ${klaviyoOrderMatchResults.selectedEventId}
+         and (c.campaign_object_id is not null or c.flow_object_id is not null)
+         and c.bot_click is distinct from 1
+       order by c.interaction_occurred_at desc nulls last,
+                c.klaviyo_attribution_id desc
+       limit 1) = ${input.sourceObjectId}`);
   }
 
   const rows = await db

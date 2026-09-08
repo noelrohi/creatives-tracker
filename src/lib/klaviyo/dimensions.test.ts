@@ -157,7 +157,7 @@ describe("normalizeDimensionSnapshot", () => {
                 definition: {
                   label: "Definition Label",
                   channel: "email",
-                  content: { subject: "never read" },
+                  content: { subject: "Sale subject" },
                 },
                 created_at: "2026-07-01T00:00:00Z",
               },
@@ -201,8 +201,48 @@ describe("normalizeDimensionSnapshot", () => {
     );
     expect(flowMessage?.name).toBe("Definition Name");
     // Nothing else from the definition survives normalization.
+    expect(message?.subject).toBe("Sale subject");
     expect(JSON.stringify(snapshot)).not.toContain("x@y.com");
-    expect(JSON.stringify(snapshot)).not.toContain("never read");
+  });
+
+  it("reads campaign send time with a scheduled_at fallback and leaves flows unsent", () => {
+    const snapshot = normalizeDimensionSnapshot(
+      traversal({
+        campaigns: [
+          {
+            channel: "email",
+            resource: {
+              type: "campaign",
+              id: "sent",
+              attributes: {
+                name: "Sent",
+                send_time: "2026-09-01T09:00:00Z",
+                scheduled_at: "2026-08-31T09:00:00Z",
+              },
+            },
+          },
+          {
+            channel: "email",
+            resource: {
+              type: "campaign",
+              id: "scheduled",
+              attributes: { name: "Scheduled", scheduled_at: "2026-09-02T09:00:00Z" },
+            },
+          },
+          {
+            channel: "email",
+            resource: { type: "campaign", id: "draft", attributes: { name: "Draft" } },
+          },
+        ],
+        flows: [{ type: "flow", id: "flow-1", attributes: { name: "Welcome" } }],
+      }),
+    );
+    const byId = new Map(snapshot.objects.map((object) => [object.externalId, object]));
+    expect(byId.get("sent")?.sentAt?.toISOString()).toBe("2026-09-01T09:00:00.000Z");
+    expect(byId.get("scheduled")?.sentAt?.toISOString()).toBe("2026-09-02T09:00:00.000Z");
+    expect(byId.get("draft")?.sentAt).toBeNull();
+    expect(byId.get("flow-1")?.sentAt).toBeNull();
+    expect(byId.get("sent")?.subject).toBeNull();
   });
 
   it("keeps the same external ID distinct across object types", () => {

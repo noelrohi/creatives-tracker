@@ -2,6 +2,8 @@ import "server-only";
 
 import {
   assertExactReportRequest,
+  reportEndpointKind,
+  wireGroupBy,
   type KlaviyoReportRequest,
 } from "@/lib/klaviyo/reports";
 
@@ -517,7 +519,8 @@ export class KlaviyoApiClient {
     assertRequestCursor(input.cursor);
     const params = new URLSearchParams({
       filter: `equals(messages.channel,'${input.channel}')`,
-      "fields[campaign]": "name,status,archived,created_at,updated_at",
+      "fields[campaign]":
+        "name,status,archived,created_at,updated_at,send_time,scheduled_at",
       sort: "id",
     });
     if (input.cursor !== null) params.set("page[cursor]", input.cursor);
@@ -669,7 +672,8 @@ export class KlaviyoApiClient {
   }): Promise<KlaviyoCompoundPage> {
     assertExactReportRequest(input.request);
     assertRequestCursor(input.pageCursor);
-    const isCampaign = input.request.kind === "campaign";
+    const isCampaign = reportEndpointKind(input.request.kind) === "campaign";
+    const groupBy = wireGroupBy(input.request);
     const body = {
       data: {
         type: isCampaign ? "campaign-values-report" : "flow-values-report",
@@ -680,6 +684,7 @@ export class KlaviyoApiClient {
           },
           conversion_metric_id: input.request.conversionExternalMetricId,
           statistics: [...input.request.statistics],
+          ...(groupBy !== null ? { group_by: groupBy } : {}),
           ...(input.pageCursor !== null
             ? { page_cursor: input.pageCursor }
             : {}),

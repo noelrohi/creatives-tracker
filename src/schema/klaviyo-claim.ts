@@ -62,7 +62,12 @@ export const claimReplayRunStatuses = [
 ] as const;
 export type ClaimReplayRunStatus = (typeof claimReplayRunStatuses)[number];
 
-export const reportKinds = ["campaign", "flow"] as const;
+export const reportKinds = [
+  "campaign",
+  "flow",
+  "campaign_message",
+  "flow_message",
+] as const;
 export type ReportKind = (typeof reportKinds)[number];
 
 export const reportGenerationStatuses = [
@@ -93,6 +98,10 @@ export const klaviyoMarketingObjects = pgTable(
     status: text("status"),
     providerCreatedAt: timestamp("provider_created_at"),
     providerUpdatedAt: timestamp("provider_updated_at"),
+    /** Campaigns only: Klaviyo `send_time`, else `scheduled_at`; null for drafts and flows. */
+    sentAt: timestamp("sent_at"),
+    /** Message rows only: the subject line inside the message definition. */
+    subject: text("subject"),
     trackingProjection: jsonb("tracking_projection")
       .$type<Record<string, JsonValue>>()
       .notNull()
@@ -624,6 +633,8 @@ export const klaviyoReportGenerations = pgTable(
     refreshFingerprint: text("refresh_fingerprint").notNull(),
     status: text("status").$type<ReportGenerationStatus>().notNull(),
     factCount: integer("fact_count").notNull().default(0),
+    /** Set only on `failed`; `grouping_unsupported` when the revision rejected a message grouping. */
+    failureReason: text("failure_reason"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     publishedAt: timestamp("published_at"),
     supersededAt: timestamp("superseded_at"),
@@ -671,7 +682,7 @@ export const klaviyoReportGenerations = pgTable(
     }).onDelete("cascade"),
     check(
       "klaviyo_report_generation_kind_check",
-      sql`(${table.kind})::text in ('campaign', 'flow')`,
+      sql`(${table.kind})::text in ('campaign', 'flow', 'campaign_message', 'flow_message')`,
     ),
     check(
       "klaviyo_report_generation_status_check",
@@ -732,6 +743,10 @@ export const klaviyoReportFacts = pgTable(
     recipients: numeric("recipients"),
     uniqueClicks: numeric("unique_clicks"),
     uniqueOpens: numeric("unique_opens"),
+    delivered: numeric("delivered"),
+    bounced: numeric("bounced"),
+    unsubscribes: numeric("unsubscribes"),
+    spamComplaints: numeric("spam_complaints"),
     additionalStatistics: jsonb("additional_statistics")
       .$type<Record<string, JsonValue>>()
       .notNull()
@@ -795,7 +810,7 @@ export const klaviyoReportFacts = pgTable(
     }),
     check(
       "klaviyo_report_fact_kind_check",
-      sql`(${table.reportKind})::text in ('campaign', 'flow')`,
+      sql`(${table.reportKind})::text in ('campaign', 'flow', 'campaign_message', 'flow_message')`,
     ),
     check(
       "klaviyo_report_fact_window_check",
