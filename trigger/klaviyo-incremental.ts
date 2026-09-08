@@ -29,6 +29,7 @@ import {
   selectLatestMatchInputs,
 } from "@/lib/klaviyo/match-service";
 import { startOrResumeReportSync } from "@/lib/klaviyo/report-repository";
+import { nightlyReportWindow } from "@/lib/klaviyo/report-window";
 import { KLAVIYO_REPORT_KINDS } from "@/lib/klaviyo/reports";
 import { startOrResumeDimensionSync } from "@/lib/klaviyo/dimension-repository";
 import {
@@ -568,18 +569,13 @@ function buildChildren(): IncrementalChildren {
       await flushStage("reports");
       const connection = await getConnectionRecord(scope);
       if (!connection) return { ok: false };
-      const today = new Date();
-      // Report windows are keyed by the Klaviyo ACCOUNT timezone — the same
-      // conversion the lab's router applies — so the nightly generation is
-      // the exact slot the ledger reads for "last 30 days".
+      // Report windows are keyed by the Klaviyo ACCOUNT timezone, and so are
+      // the DAYS themselves — the lab derives its "last 30 days" from
+      // `todayInAccountTz`, and `loadLedgerRows` matches requested_from/to by
+      // exact equality. Deriving the days from UTC instead put the nightly
+      // slot a day ahead of the ledger's for every account east of UTC.
       const accountTimezone = connection.accountTimezone ?? "UTC";
-      const window = inclusiveStoreDaysToHalfOpenUtc({
-        dateFrom: new Date(today.getTime() - 29 * 24 * 60 * 60 * 1000)
-          .toISOString()
-          .slice(0, 10),
-        dateTo: today.toISOString().slice(0, 10),
-        timeZone: accountTimezone,
-      });
+      const window = nightlyReportWindow(new Date(), accountTimezone);
       // The incremental supervisor is the only scheduled-reason caller and
       // never triggers when preflight returns all-fresh.
       const prepared = await startOrResumeReportSync({
