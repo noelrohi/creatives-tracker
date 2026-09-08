@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, desc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   MATCHER_VERSION,
@@ -166,8 +166,12 @@ export async function listEvidenceOrders(input: {
     );
   }
   if (input.sourceObjectId) {
-    // Same primary-claim rule as the campaign ledger, so "View all N orders"
-    // lands on exactly the N orders the ledger counted.
+    // Same primary-claim rule and confirmed status as the campaign ledger,
+    // so every row the source link lands on is an order the ledger counted.
+    // The orders view keeps its OWN date window, so the two sets still differ
+    // whenever an order falls outside it — the link promises no count.
+    conditions.push(eq(klaviyoOrderMatchResults.status, "confirmed"));
+    conditions.push(isNotNull(klaviyoOrderMatchResults.selectedEventId));
     conditions.push(sql`(
       select coalesce(c.campaign_object_id, c.flow_object_id)
         from klaviyo_attribution_claim c

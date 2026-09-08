@@ -684,6 +684,22 @@ describeIfDb("Klaviyo campaign ledger on PostgreSQL", () => {
       interactionOccurredAt: "2026-07-23T00:00:00Z",
       botClick: 1,
     });
+    // A candidate-status order whose primary claim also names camp-july: the
+    // ledger counts only confirmed orders, so the source link must not show
+    // it either.
+    await seedOrder("order-cand", "9105", "9.00", {
+      createdAt: "2026-07-24T12:00:00Z",
+      orderDay: "2026-07-24",
+    });
+    await seedEvent("event-cand", "external-event-cand", "2026-07-24T12:05:00Z");
+    await seedOrderResult("res-cand", "order-cand", "candidate", "event-cand");
+    await seedClaim({
+      id: "claim-cand",
+      conversionEventId: "event-cand",
+      attributionId: "attr-cand",
+      campaignObjectId: "camp-july",
+      interactionOccurredAt: "2026-07-23T10:00:00Z",
+    });
     const july = await listEvidenceOrders({ scope, window: { from: new Date("2026-07-01T00:00:00Z"), to: new Date("2026-09-01T00:00:00Z") }, sourceObjectId: "camp-july" });
     expect(july.items.map((item) => item.orderId).sort()).toEqual(["order-a", "order-late"]);
     const flow = await listEvidenceOrders({ scope, window, sourceObjectId: "flow-welcome" });

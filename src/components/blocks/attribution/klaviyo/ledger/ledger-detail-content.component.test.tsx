@@ -52,7 +52,7 @@ describe("LedgerDetailContent", () => {
     expect(screen.getByTestId("list-unsubscribed")).toHaveTextContent("0.2%");
     expect(screen.getByText("Confirmed orders by day after send")).toBeVisible();
     expect(screen.getAllByTestId("day-bar")).toHaveLength(14);
-    await userEvent.click(screen.getByRole("button", { name: "View all 212 orders in Orders →" }));
+    await userEvent.click(screen.getByRole("button", { name: "View orders in Orders →" }));
     expect(onViewOrders).toHaveBeenCalledOnce();
     expect(screen.getByText("Vitamin C Serum")).toBeVisible();
     expect(screen.getByText("Variants (A/B)")).toBeVisible();

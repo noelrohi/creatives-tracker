@@ -44,7 +44,19 @@ export function LedgerDetailSheet({
           ) : !detail.data ? (
             <LabPanelState kind="loading" title={copy.sheet.loading} body="" />
           ) : (
-            <LedgerDetailContent detail={detail.data} onViewOrders={() => lab.viewOrdersForSource(detail.data.object.objectId)} />
+            <LedgerDetailContent
+              detail={detail.data}
+              onViewOrders={() =>
+                lab.viewOrdersForSource(
+                  detail.data.object.objectId,
+                  // A campaign's orders run past the ledger window; the send
+                  // day is only a range START, so the UTC day is enough.
+                  detail.data.object.objectType === "campaign" && detail.data.object.sentAt
+                    ? new Date(detail.data.object.sentAt).toISOString().slice(0, 10)
+                    : null,
+                )
+              }
+            />
           )}
         </div>
       </SheetContent>

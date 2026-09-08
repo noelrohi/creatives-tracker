@@ -385,8 +385,10 @@ export async function seedOrderResult(
   const runId = options?.runId ?? "match-run-1";
   const supersededAt = options?.supersededAt ?? null;
   // The selection-shape check requires confirmed rows to point at a
-  // deterministic candidate edge in the same run; statuses without a
-  // selected event must leave all three selection columns null.
+  // DETERMINISTIC candidate edge and candidate rows at a DIAGNOSTIC one, both
+  // in the same run; statuses without a selected event must leave all three
+  // selection columns null.
+  const selectedClass = status === "candidate" ? "diagnostic" : "deterministic";
   let selectedCandidateId: string | null = null;
   if (selectedEventId !== null) {
     selectedCandidateId = `${id}-cand`;
@@ -396,9 +398,9 @@ export async function seedOrderResult(
           event_id, order_id, candidate_class, method, feature_vector,
           weights, tolerances, score, confidence, reason_codes)
        VALUES ($1, 'org-a', 'store-a', 'connection-a', $4,
-         $2, $3, 'deterministic', 'explicit_order_id', '{}', '{}', '{}',
+         $2, $3, $5, 'explicit_order_id', '{}', '{}', '{}',
          '1', '1', '[]')`,
-      [selectedCandidateId, selectedEventId, orderId, runId],
+      [selectedCandidateId, selectedEventId, orderId, runId, selectedClass],
     );
   }
   // Superseded rows need published_at <= superseded_at and a supersession
@@ -418,7 +420,7 @@ export async function seedOrderResult(
       orderId,
       status,
       selectedCandidateId,
-      selectedCandidateId === null ? null : "deterministic",
+      selectedCandidateId === null ? null : selectedClass,
       selectedEventId,
       runId,
       supersededAt,

@@ -86,7 +86,7 @@ export function LedgerDetailContent({ detail, onViewOrders }: { detail: LedgerDe
       <Block title={detail.ordersByDay.mode === "offset" ? copy.sheet.ordersByDayOffset : copy.sheet.ordersByDayCalendar}>
         <LedgerDayBars ordersByDay={detail.ordersByDay} />
         <Button variant="link" size="sm" className="h-auto p-0 text-[11.5px]" onClick={onViewOrders}>
-          {copy.sheet.viewOrders(ours.orderCount)}
+          {copy.sheet.viewOrders}
         </Button>
       </Block>
 

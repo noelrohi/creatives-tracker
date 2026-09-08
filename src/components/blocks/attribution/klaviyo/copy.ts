@@ -201,7 +201,9 @@ export const ledger = {
     bounced: "Bounced",
     ordersByDayOffset: "Confirmed orders by day after send",
     ordersByDayCalendar: "Confirmed orders by day",
-    viewOrders: (orders: number) => `View all ${orders} order${orders === 1 ? "" : "s"} in Orders →`,
+    // No count: the orders view keeps its own date window and confirmed-only
+    // filter, so it cannot promise the sheet's number.
+    viewOrders: "View orders in Orders →",
     topProducts: "Top products",
     variants: "Variants (A/B)",
     emails: "Emails in this flow",

@@ -147,12 +147,19 @@ export function useKlaviyoLabState() {
   };
   const openSource = (objectId: string) => void setState({ source: objectId });
   const closeSource = () => void setState({ source: null });
-  const viewOrdersForSource = (objectId: string) =>
+  /**
+   * A campaign's orders are unwindowed on the ledger but the orders view has
+   * its own date range, so a send's later orders would fall outside the
+   * current range. `sentDay` (campaigns only; flows pass null) reopens the
+   * range as an open-ended custom range starting at the send day.
+   */
+  const viewOrdersForSource = (objectId: string, sentDay?: string | null) =>
     void setState({
       view: "orders",
       source: objectId,
       order: null,
       candidate: null,
+      ...(sentDay ? { range: "custom" as const, from: sentDay, to: null } : {}),
     });
   const toggleSort = (column: LedgerSortColumn) => {
     const next = nextLedgerSort(
