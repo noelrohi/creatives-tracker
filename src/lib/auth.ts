@@ -152,6 +152,11 @@ export const auth = betterAuth({
     cimd({
       fetchClientMetadataResource,
       metadataProfile: "mcp-2026-07-28",
+      // Vercel Connect sends private, max-age=0, must-revalidate metadata.
+      // Consent and token authentication each resolve it, so the default
+      // one-second fetch interval rejects an immediate code exchange.
+      // Honor those cache headers; retain the concurrency/per-minute limits.
+      metadataFetchPolicy: { minimumFetchInterval: 0 },
     }),
   ],
 });
