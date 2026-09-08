@@ -608,6 +608,28 @@ describeIfDb("Klaviyo campaign ledger on PostgreSQL", () => {
 
   it("filters the orders ledger by the same primary-claim rule", async () => {
     await seedLedgerWorld();
+    // A second, EARLIER non-bot claim on order-a's event naming flow-welcome:
+    // if the predicate were a naive "any claim names it" exists(), order-a
+    // would wrongly show up under flow-welcome too. The primary-claim rule
+    // (latest non-bot claim wins) must keep order-a under camp-july only.
+    await seedClaim({
+      id: "claim-a-older",
+      conversionEventId: "event-a",
+      attributionId: "attr-a-older",
+      flowObjectId: "flow-welcome",
+      interactionOccurredAt: "2026-07-09T08:00:00Z",
+    });
+    // A later BOT claim on order-flow-in's event naming camp-july: a
+    // predicate that didn't exclude bot clicks would wrongly pull
+    // order-flow-in into camp-july's orders.
+    await seedClaim({
+      id: "claim-flow-in-bot",
+      conversionEventId: "event-flow-in",
+      attributionId: "attr-flow-in-bot",
+      campaignObjectId: "camp-july",
+      interactionOccurredAt: "2026-07-23T00:00:00Z",
+      botClick: 1,
+    });
     const july = await listEvidenceOrders({ scope, window: { from: new Date("2026-07-01T00:00:00Z"), to: new Date("2026-09-01T00:00:00Z") }, sourceObjectId: "camp-july" });
     expect(july.items.map((item) => item.orderId).sort()).toEqual(["order-a", "order-late"]);
     const flow = await listEvidenceOrders({ scope, window, sourceObjectId: "flow-welcome" });
