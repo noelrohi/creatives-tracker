@@ -2,6 +2,11 @@ import "server-only";
 
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
+import {
+  QUALIFYING_CLAIM,
+  emailLinkJoin,
+  utcTimestamp,
+} from "@/lib/klaviyo/email-link-sql";
 import type { HalfOpenUtcWindow } from "@/lib/klaviyo/queries";
 import type { KlaviyoConnectionScope } from "@/lib/klaviyo/types";
 import { klaviyoMarketingObjects } from "@/schema/klaviyo-claim";
@@ -74,18 +79,6 @@ export type EmailAttributionSummary = {
 const ZERO_BUCKET: EmailAttributionBucket = { orders: 0, revenue: "0.00" };
 
 /**
- * A claim qualifies an order as email-linked when it points at a campaign
- * or flow and is not a bot click. `r` is the current (unsuperseded)
- * order-match-result alias in the enclosing query.
- */
-const QUALIFYING_CLAIM = sql`
-  select 1 from klaviyo_attribution_claim c
-   where c.connection_id = r.connection_id
-     and c.conversion_event_id = r.selected_event_id
-     and (c.campaign_object_id is not null or c.flow_object_id is not null)
-     and c.bot_click is distinct from 1`;
-
-/**
  * A conversion whose claims have never been fetched. Distinguishing this
  * from a real "no campaign/flow link" matters: an unfetched order is not
  * evidence that email did nothing, and conflating them overstated the
@@ -96,24 +89,6 @@ const CLAIMS_COVERED = sql`
    where s.connection_id = r.connection_id
      and s.conversion_event_id = r.selected_event_id
      and s.status = 'complete'`;
-
-/**
- * Last non-bot touch decides campaign-vs-flow assignment. Ties on
- * timestamp (or all-null timestamps) break deterministically on the
- * provider attribution id.
- */
-const PRIMARY_CLAIM_LATERAL = sql`
-  select case when c.campaign_object_id is not null then 'campaign'
-              else 'flow' end as kind,
-         coalesce(c.campaign_object_id, c.flow_object_id) as object_id
-    from klaviyo_attribution_claim c
-   where c.connection_id = r.connection_id
-     and c.conversion_event_id = r.selected_event_id
-     and (c.campaign_object_id is not null or c.flow_object_id is not null)
-     and c.bot_click is distinct from 1
-   order by c.interaction_occurred_at desc nulls last,
-            c.klaviyo_attribution_id desc
-   limit 1`;
 
 /**
  * Bucket assignment shared by the order partition and its refund mirror.
@@ -136,17 +111,6 @@ const BUCKET_CASE = sql`
     else 'no_email_link'
   end`;
 
-/**
- * node-postgres serializes a raw Date parameter for a naive `timestamp`
- * column in the PROCESS's local time, while these columns store UTC wall
- * time — off-UTC environments would shift every window boundary by the
- * local offset. Interpolate the UTC ISO text and cast; Postgres drops the
- * trailing Z and keeps the UTC wall-clock value.
- */
-function utcTimestamp(value: Date) {
-  return sql`${value.toISOString()}::timestamp`;
-}
-
 /** Left join of the current match result onto an `o` shopify_order alias. */
 function currentResultLeftJoin(scope: KlaviyoConnectionScope) {
   return sql`
@@ -156,23 +120,6 @@ function currentResultLeftJoin(scope: KlaviyoConnectionScope) {
      and r.connection_id = ${scope.connectionId}
      and r.order_id = o.id
      and r.superseded_at is null`;
-}
-
-/**
- * Confirms an `o` shopify_order alias as email-linked and exposes the
- * primary claim as `pc` (kind, object_id).
- */
-function emailLinkJoin(scope: KlaviyoConnectionScope) {
-  return sql`
-    join klaviyo_order_match_result r
-      on r.organization_id = o.organization_id
-     and r.shopify_store_id = o.store_id
-     and r.connection_id = ${scope.connectionId}
-     and r.order_id = o.id
-     and r.superseded_at is null
-     and r.status = 'confirmed'
-     and r.selected_event_id is not null
-    cross join lateral (${PRIMARY_CLAIM_LATERAL}) pc`;
 }
 
 function emailLinkedFrom(scope: KlaviyoConnectionScope, window: HalfOpenUtcWindow) {
