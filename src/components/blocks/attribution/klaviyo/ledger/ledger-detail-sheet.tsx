@@ -33,10 +33,13 @@ export function LedgerDetailSheet({
   if (objectId === null) return null;
   return (
     <Sheet open onOpenChange={(open) => { if (!open) lab.closeSource(); }}>
-      <SheetContent side="right" // The Sheet primitive caps a right sheet with `data-[side=right]:sm:max-w-sm`;
-        // a plain `sm:max-w-none` loses to that attribute selector, so the
-        // override must carry the same variant.
-        className="w-full overflow-y-auto data-[side=right]:sm:w-[50vw] data-[side=right]:sm:max-w-none sm:min-w-[380px]">
+      {/* The Sheet primitive caps a right sheet with
+          `data-[side=right]:sm:max-w-sm`; a plain `sm:max-w-none` loses to
+          that attribute selector, so the override carries the same variant. */}
+      <SheetContent
+        side="right"
+        className="w-full overflow-y-auto data-[side=right]:sm:w-[50vw] data-[side=right]:sm:max-w-none sm:min-w-[380px]"
+      >
         <SheetHeader>
           <SheetTitle>{copy.sheet.title}</SheetTitle>
           <p className="text-xs text-muted-foreground">{copy.sheet.advisory}</p>
