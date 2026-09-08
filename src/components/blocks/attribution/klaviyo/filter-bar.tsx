@@ -1,8 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { X } from "@/components/icons";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -23,6 +21,7 @@ import {
   type LedgerChannelFilter,
   type LedgerKindFilter,
 } from "./copy";
+import { LedgerSearch } from "./ledger/ledger-search";
 import type { useKlaviyoLabState } from "./use-klaviyo-lab-state";
 
 /**
@@ -217,30 +216,5 @@ export function LabFilterBar(props: {
         </span>
       ) : null}
     </div>
-  );
-}
-
-/** Debounced so each keystroke does not become a ledger query. */
-function LedgerSearch({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  const [draft, setDraft] = useState(value);
-  useEffect(() => {
-    if (draft === value) return;
-    const timer = setTimeout(() => onChange(draft), 300);
-    return () => clearTimeout(timer);
-  }, [draft, onChange, value]);
-  return (
-    <Input
-      value={draft}
-      onChange={(event) => setDraft(event.target.value)}
-      placeholder="Search campaigns and flows"
-      aria-label="Search"
-      className="h-8 w-56"
-    />
   );
 }
