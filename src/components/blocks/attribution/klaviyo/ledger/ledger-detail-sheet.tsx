@@ -33,7 +33,7 @@ export function LedgerDetailSheet({
   if (objectId === null) return null;
   return (
     <Sheet open onOpenChange={(open) => { if (!open) lab.closeSource(); }}>
-      <SheetContent side="right" className="w-full overflow-y-auto sm:w-[33vw] sm:min-w-[380px] sm:max-w-none">
+      <SheetContent side="right" className="w-full overflow-y-auto sm:w-[66vw] sm:min-w-[380px] sm:max-w-none">
         <SheetHeader>
           <SheetTitle>{copy.sheet.title}</SheetTitle>
           <p className="text-xs text-muted-foreground">{copy.sheet.advisory}</p>

@@ -137,7 +137,17 @@ export function LedgerRow({
               {chip.label}
             </Badge>
           ))}
-          <span className="truncate">{row.name}</span>
+          {/* A clickable row reads as a link: primary colour, underline on
+              hover, so "this opens something" is visible before hovering. */}
+          <span
+            className={cn(
+              "truncate",
+              onOpen &&
+                "font-medium text-primary underline-offset-2 group-hover:underline",
+            )}
+          >
+            {row.name}
+          </span>
           {!isParent(row) && row.subject ? (
             <span className="truncate text-[11px] text-muted-foreground">
               · {row.subject}

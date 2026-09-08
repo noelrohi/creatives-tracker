@@ -1,9 +1,10 @@
+// Tab order: the two summary views first, then the evidence ledgers.
 export const LAB_VIEWS = [
+  "ledger",
+  "list-health",
   "orders",
   "unmatched",
-  "ledger",
   "probe",
-  "list-health",
 ] as const;
 export const LAB_RANGES = ["last7", "last30", "last90", "custom"] as const;
 export const ORDER_STATUS_FILTERS = [
