@@ -17,6 +17,18 @@ describe("nightlyReportWindow", () => {
     );
   });
 
+  it("matches the pilot account's Bangkok day (UTC+7)", () => {
+    // 20:30Z is 03:30 on 09-09 in Bangkok — the pilot account's timezone,
+    // squarely inside the class the UTC-day bug broke.
+    expect(nightlyReportWindow(now, "Asia/Bangkok")).toEqual(
+      inclusiveStoreDaysToHalfOpenUtc({
+        dateFrom: "2026-08-11",
+        dateTo: "2026-09-09",
+        timeZone: "Asia/Bangkok",
+      }),
+    );
+  });
+
   it("uses the account timezone's own calendar day west of UTC", () => {
     // 20:30Z is still 09-08 in Los Angeles.
     expect(nightlyReportWindow(now, "America/Los_Angeles")).toEqual(

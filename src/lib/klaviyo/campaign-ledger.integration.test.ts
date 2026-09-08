@@ -1,7 +1,7 @@
 // The loaders read naive `timestamp` columns holding UTC wall time, and
 // node-postgres parses those in the PROCESS's zone. Pin a non-UTC zone so the
 // suite fails if that conversion is ever dropped; CI's TZ=UTC would hide it.
-process.env.TZ = "America/New_York";
+process.env.TZ = "Asia/Bangkok";
 
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
