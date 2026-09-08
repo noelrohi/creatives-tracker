@@ -519,7 +519,8 @@ export class KlaviyoApiClient {
     assertRequestCursor(input.cursor);
     const params = new URLSearchParams({
       filter: `equals(messages.channel,'${input.channel}')`,
-      "fields[campaign]": "name,status,archived,created_at,updated_at",
+      "fields[campaign]":
+        "name,status,archived,created_at,updated_at,send_time,scheduled_at",
       sort: "id",
     });
     if (input.cursor !== null) params.set("page[cursor]", input.cursor);
