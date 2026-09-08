@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  keepPreviousData,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -678,15 +679,18 @@ function LedgerView(props: {
     () => new Set(),
   );
   const search = state.q?.trim() ?? "";
-  const list = useQuery(
-    trpc.klaviyo.ledger.list.queryOptions({
+  const list = useQuery({
+    ...trpc.klaviyo.ledger.list.queryOptions({
       dateFrom: props.range.dateFrom,
       dateTo: props.range.dateTo,
       kind: state.ledgerKind === "all" ? undefined : state.ledgerKind,
       channel: state.ledgerChannel === "all" ? undefined : state.ledgerChannel,
       search: search === "" ? undefined : search,
     }),
-  );
+    // Typing in the search box or flipping a filter re-keys the query; without
+    // this the table blanks to its empty state between keystrokes.
+    placeholderData: keepPreviousData,
+  });
   const filtered =
     state.ledgerKind !== "all" ||
     state.ledgerChannel !== "all" ||

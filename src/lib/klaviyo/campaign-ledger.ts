@@ -192,8 +192,13 @@ function statsOf(row: FactRow): LedgerKlaviyoStats {
 /**
  * Email-linked orders under the ledger's window rule, as a CTE named
  * `linked`. Campaign orders are unwindowed; flow orders are kept when the
- * primary claim's interaction is inside the window. Optionally restricted
- * to one campaign or flow.
+ * primary claim's interaction is inside the window.
+ *
+ * `objectIds` bounds the scan to the campaigns and flows the caller will
+ * actually render — one id for a single-object read, the listed page's ids
+ * for the list. Without it a campaign read scans every email-linked order the
+ * store ever had, because campaign orders carry no date filter. `null` means
+ * "every object", which no caller needs today.
  *
  * `revenue` is the order's LIFETIME refund-net money — refunds are not
  * re-windowed here, unlike the attribution panel's in-window mirror. Every
@@ -203,7 +208,7 @@ function statsOf(row: FactRow): LedgerKlaviyoStats {
 function linkedOrdersCte(
   scope: KlaviyoConnectionScope,
   window: HalfOpenUtcWindow,
-  objectId: string | null,
+  objectIds: readonly string[] | null,
 ) {
   return sql`
     linked as (
@@ -222,7 +227,14 @@ function linkedOrdersCte(
          and (pc.kind = 'campaign'
               or (pc.interaction_occurred_at >= ${utcTimestamp(window.from)}
                   and pc.interaction_occurred_at < ${utcTimestamp(window.to)}))
-         ${objectId === null ? sql`` : sql`and pc.object_id = ${objectId}`}
+         ${
+           objectIds === null
+             ? sql``
+             : sql`and pc.object_id in (${sql.join(
+                 objectIds.map((id) => sql`${id}`),
+                 sql`, `,
+               )})`
+         }
     )`;
 }
 
@@ -230,21 +242,23 @@ function linkedOrdersCte(
 async function loadOurSide(
   scope: KlaviyoConnectionScope,
   window: HalfOpenUtcWindow,
-  objectId: string | null,
+  objectIds: readonly string[] | null,
   byMessage: boolean,
 ): Promise<Map<string, { orderCount: number; revenue: string }>> {
+  const result = new Map<string, { orderCount: number; revenue: string }>();
+  // Nothing listed, nothing to scan.
+  if (objectIds !== null && objectIds.length === 0) return result;
   const rows = await db.execute<{
     key: string | null;
     orders: number;
     revenue: string;
   }>(sql`
-    with ${linkedOrdersCte(scope, window, objectId)}
+    with ${linkedOrdersCte(scope, window, objectIds)}
     select ${byMessage ? sql`l.message_object_id` : sql`l.object_id`} as key,
            count(*)::int as orders,
            round(coalesce(sum(l.revenue), 0), 2)::text as revenue
       from linked l
      group by 1`);
-  const result = new Map<string, { orderCount: number; revenue: string }>();
   for (const row of rows.rows) {
     if (row.key === null) continue;
     result.set(row.key, { orderCount: row.orders, revenue: row.revenue });
@@ -392,7 +406,7 @@ export async function loadLedgerRows(input: {
      order by o.sent_at desc nulls last, o.name asc, o.id asc`);
 
   const [ours, klaviyo, report] = await Promise.all([
-    loadOurSide(scope, window, null, false),
+    loadOurSide(scope, window, objects.rows.map((object) => object.id), false),
     loadKlaviyoSide(scope, window, ["campaign", "flow"], null),
     loadReportMeta(scope, window),
   ]);
@@ -469,7 +483,7 @@ export async function loadLedgerMessages(input: {
   const messageKind =
     parent.object_type === "campaign" ? "campaign_message" : "flow_message";
   const [ours, klaviyo] = await Promise.all([
-    loadOurSide(scope, window, objectId, true),
+    loadOurSide(scope, window, [objectId], true),
     loadKlaviyoSide(scope, window, [messageKind], objectId),
   ]);
   return messages.rows.map((message) => {
@@ -510,7 +524,7 @@ export async function loadLedgerDetail(input: {
   const sentAt = utcDateOf(object.sent_at);
 
   const [ours, klaviyoMap] = await Promise.all([
-    loadOurSide(scope, window, objectId, false),
+    loadOurSide(scope, window, [objectId], false),
     loadKlaviyoSide(scope, window, [object.object_type], objectId),
   ]);
   const own = ours.get(objectId) ?? ZERO_OURS;
@@ -525,7 +539,7 @@ export async function loadLedgerDetail(input: {
       orders: number;
       revenue: string;
     }>(sql`
-      with ${linkedOrdersCte(scope, window, objectId)}
+      with ${linkedOrdersCte(scope, window, [objectId])}
       select day_offset, count(*)::int as orders,
              round(sum(revenue), 2)::text as revenue
         from (select floor(extract(epoch from
@@ -553,7 +567,7 @@ export async function loadLedgerDetail(input: {
       orders: number;
       revenue: string;
     }>(sql`
-      with ${linkedOrdersCte(scope, window, objectId)}
+      with ${linkedOrdersCte(scope, window, [objectId])}
       select to_char(order_created_at, 'YYYY-MM-DD') as day,
              count(*)::int as orders,
              round(sum(revenue), 2)::text as revenue
@@ -582,7 +596,7 @@ export async function loadLedgerDetail(input: {
     order_count: number;
     order_revenue: string;
   }>(sql`
-    with ${linkedOrdersCte(scope, window, objectId)}
+    with ${linkedOrdersCte(scope, window, [objectId])}
     select product_key,
            min(title) as title,
            sum(units)::int as units,
