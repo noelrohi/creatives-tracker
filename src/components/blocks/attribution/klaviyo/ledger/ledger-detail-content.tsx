@@ -97,7 +97,7 @@ export function LedgerDetailContent({ detail, onViewOrders }: { detail: LedgerDe
               {detail.topProducts.map((product) => (
                 <tr key={product.productKey} className="border-b border-border/60">
                   <td className="py-0.5 pr-2">{product.title}</td>
-                  <td className="py-0.5 text-right font-mono tabular-nums">{formatCount(product.units)} units</td>
+                  <td className="whitespace-nowrap py-0.5 pl-2 text-right font-mono tabular-nums">{formatCount(product.units)} units</td>
                   <td className="py-0.5 text-right font-mono tabular-nums">{formatCurrency(product.orderRevenue)}</td>
                 </tr>
               ))}
