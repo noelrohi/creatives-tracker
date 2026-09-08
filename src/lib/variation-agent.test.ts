@@ -216,6 +216,7 @@ describe("createVariationRun.readContext", () => {
     );
     const result = await run.readContext({ documentId: "doc_testi" });
     expect(result).toMatchObject({ truncated: true, totalSections: 250 });
+    expect(JSON.stringify(result).length).toBeLessThanOrEqual(MAX_READ_CHARS);
     const listed = (result as { sections: unknown[] }).sections;
     expect(listed.length).toBeGreaterThan(0);
     expect(listed.length).toBeLessThan(250);
@@ -258,6 +259,29 @@ describe("createVariationRun.generateImage", () => {
     await run.generateImage({ prompt: "NO MORE JAW PAIN!", referenceImageIds: [], keepSourceLayout: true });
     expect(run.state.claimsFlags).toBe(2);
     expect(resolveVariationOutcome(run.state)).toEqual({ kind: "failed", reason: "claims", attempts: [] });
+  });
+
+  it("ends the run with reason claims after two flagged prompts in a row even when an attempt exists", async () => {
+    const run = createVariationRun(input, deps({ reviewImage: vi.fn(async () => ({ pass: false, notes: ["weak"] })) }));
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    const bad = { prompt: "no more jaw pain", referenceImageIds: [], keepSourceLayout: true };
+    await run.generateImage(bad);
+    const second = await run.generateImage(bad);
+    expect(second).toMatchObject({ error: expect.stringContaining("no more images this run") });
+    const third = await run.generateImage({ prompt: "clean", referenceImageIds: [], keepSourceLayout: true });
+    expect(third).toMatchObject({ error: expect.stringContaining("no more images") });
+    expect(run.state.attempts).toHaveLength(1);
+    expect(resolveVariationOutcome(run.state)).toMatchObject({ kind: "failed", reason: "claims" });
+  });
+
+  it("resets the claims streak on a clean prompt", async () => {
+    const run = createVariationRun(input, deps());
+    await run.generateImage({ prompt: "no more jaw pain", referenceImageIds: [], keepSourceLayout: true });
+    await run.generateImage({ prompt: "clean", referenceImageIds: [], keepSourceLayout: true });
+    expect(run.state.claimsFlags).toBe(0);
+    await run.generateImage({ prompt: "no more jaw pain", referenceImageIds: [], keepSourceLayout: true });
+    expect(run.state.claimsFlags).toBe(1);
+    expect(resolveVariationOutcome(run.state).kind).toBe("ready");
   });
 
   it("passes references in order (product photo, chosen context images, source last), records the attempt with its review, and reports steps", async () => {

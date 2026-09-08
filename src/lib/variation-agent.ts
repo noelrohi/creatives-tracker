@@ -21,6 +21,8 @@ export const MAX_STEPS = 12;
 export const MAX_CONTEXT_READS = 6;
 export const MAX_IMAGE_ATTEMPTS = 2;
 export const MAX_READ_CHARS = 8_000;
+/** Flagged prompts in a row that end the run with reason "claims". */
+export const MAX_CLAIMS_FLAGS = 2;
 
 const MAX_INDEXED_SECTIONS = 40;
 
@@ -94,6 +96,7 @@ export type VariationRunState = {
   contextReads: number;
   /** Image-model calls made, including ones the model blocked: each one cost a call. */
   imageCalls: number;
+  /** Prompts flagged for a prohibited claim in a row; a clean prompt resets it. */
   claimsFlags: number;
   attempts: VariationAttempt[];
   plan: VariationPlan | null;
@@ -353,22 +356,28 @@ export function createVariationRun(
     if (!raw.sectionId) {
       state.contextReads += 1;
       deps.onStep(`listing ${doc.title.toLowerCase()}`);
-      // A listing obeys the same per-call character cap as a section read:
-      // entries are added until their serialized size would exceed it.
+      // A listing obeys the same per-call character cap as a section read,
+      // measured on the whole serialized reply (envelope included): entries
+      // are added while the reply would still fit.
       const sections: { sectionId: string; path: string }[] = [];
-      let chars = 2;
+      const envelope = (list: unknown[], truncated: boolean) =>
+        JSON.stringify({
+          documentId: doc.id,
+          sections: list,
+          ...(truncated ? { truncated: true, totalSections: doc.sections.length } : {}),
+        });
+      let chars = envelope([], true).length;
       for (const section of doc.sections) {
         const entry = { sectionId: section.id, path: section.path };
         chars += JSON.stringify(entry).length + 1;
         if (chars > MAX_READ_CHARS) break;
         sections.push(entry);
       }
+      const truncated = sections.length < doc.sections.length;
       return {
         documentId: doc.id,
         sections,
-        ...(sections.length < doc.sections.length
-          ? { truncated: true, totalSections: doc.sections.length }
-          : {}),
+        ...(truncated ? { truncated: true, totalSections: doc.sections.length } : {}),
       };
     }
 
@@ -400,15 +409,22 @@ export function createVariationRun(
       };
     }
 
+    if (state.claimsFlags >= MAX_CLAIMS_FLAGS) {
+      return {
+        error: `Two prompts in a row stated a prohibited claim, so this run makes no more images. Call finish with a passing attempt if you have one.`,
+      };
+    }
     const violations = scanTextForClaims(raw.prompt, prohibitedClaims);
     if (violations.length > 0) {
       state.claimsFlags += 1;
       return {
         error: `The prompt states or implies a prohibited claim: ${violations
           .map((violation) => `"${violation.claim}"`)
-          .join(", ")}. Rewrite it with soft, supportive wording.`,
+          .join(", ")}. Rewrite it with soft, supportive wording.${state.claimsFlags >= MAX_CLAIMS_FLAGS ? " That was the second flagged prompt in a row: no more images this run." : ""}`,
       };
     }
+    // A clean prompt breaks the streak: only consecutive flags end the run.
+    state.claimsFlags = 0;
 
     const editAvailable = editModeAvailable(input);
     // Generate is the default and only an explicit mode "edit" leaves it:
@@ -569,8 +585,10 @@ export function resolveVariationOutcome(state: VariationRunState): VariationOutc
     };
   }
 
-  // Two consecutive flagged prompts end the run: the threshold comes from the spec.
-  if (state.claimsFlags >= 2 && state.attempts.length === 0) {
+  // Two consecutive flagged prompts end the run with reason "claims", whatever
+  // came before them: the threshold comes from the spec. A passing attempt
+  // still ships (checked above); a rejected one does not rescue the run.
+  if (state.claimsFlags >= MAX_CLAIMS_FLAGS) {
     return { kind: "failed", reason: "claims", attempts: state.attempts };
   }
   // A moderation block is the more specific story: when the last image call was

@@ -752,7 +752,7 @@ export default function CreativeDetailPage() {
         {/* Variations tab */}
         {canMakeVariations ? (
           <TabsContent value="variations" className="pt-4">
-            <CreativeVariationsTab creativeId={id} readOnly={!canWriteVariations} />
+            <CreativeVariationsTab key={id} creativeId={id} readOnly={!canWriteVariations} />
           </TabsContent>
         ) : null}
       </Tabs>

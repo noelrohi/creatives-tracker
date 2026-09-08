@@ -1,6 +1,9 @@
 # Variation product compositing — design addendum
 
-Date: 2026-09-04. Status: proposed, awaiting approval. Extends
+Date: 2026-09-04. Status: implemented and measured; superseded as the default
+by `2026-09-04-variation-product-transplant-design.md` and
+`2026-09-07-variation-empty-scene-transplant-design.md` (edit mode with the
+rectangle paste stays opt-in; see §8). Extends
 `2026-09-03-static-ad-variations-design.md` §2.
 
 ## Problem
