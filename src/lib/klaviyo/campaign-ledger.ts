@@ -81,7 +81,7 @@ export type LedgerProduct = {
   orderRevenue: string;
 };
 
-export type LedgerDayPoint = { label: string; orders: number; netSales: string };
+export type LedgerDayPoint = { label: string; orders: number; revenue: string };
 
 export type LedgerDetail = {
   object: {
@@ -194,6 +194,11 @@ function statsOf(row: FactRow): LedgerKlaviyoStats {
  * `linked`. Campaign orders are unwindowed; flow orders are kept when the
  * primary claim's interaction is inside the window. Optionally restricted
  * to one campaign or flow.
+ *
+ * `revenue` is the order's LIFETIME refund-net money — refunds are not
+ * re-windowed here, unlike the attribution panel's in-window mirror. Every
+ * consumer sums this one column, so the headline, the day strip and the
+ * product table can never disagree about what one order was worth.
  */
 function linkedOrdersCte(
   scope: KlaviyoConnectionScope,
@@ -203,7 +208,13 @@ function linkedOrdersCte(
   return sql`
     linked as (
       select pc.kind, pc.object_id, pc.message_object_id,
-             o.id as order_id, o.net_sales, o.order_created_at
+             o.id as order_id, o.order_created_at,
+             o.net_sales - coalesce((
+               select sum(rf.amount)
+                 from shopify_refund rf
+                where rf.organization_id = o.organization_id
+                  and rf.store_id = o.store_id
+                  and rf.order_id = o.id), 0) as revenue
         from shopify_order o
         ${emailLinkJoin(scope)}
        where o.organization_id = ${scope.organizationId}
@@ -227,21 +238,11 @@ async function loadOurSide(
     orders: number;
     revenue: string;
   }>(sql`
-    with ${linkedOrdersCte(scope, window, objectId)},
-    refunds as (
-      select rf.order_id, sum(rf.amount) as refunded
-        from shopify_refund rf
-       where rf.organization_id = ${scope.organizationId}
-         and rf.store_id = ${scope.storeId}
-         and rf.order_id in (select order_id from linked)
-       group by rf.order_id
-    )
+    with ${linkedOrdersCte(scope, window, objectId)}
     select ${byMessage ? sql`l.message_object_id` : sql`l.object_id`} as key,
            count(*)::int as orders,
-           round(coalesce(sum(l.net_sales), 0) - coalesce(sum(rf.refunded), 0), 2)::text
-             as revenue
+           round(coalesce(sum(l.revenue), 0), 2)::text as revenue
       from linked l
-      left join refunds rf on rf.order_id = l.order_id
      group by 1`);
   const result = new Map<string, { orderCount: number; revenue: string }>();
   for (const row of rows.rows) {
@@ -364,7 +365,11 @@ export async function loadLedgerRows(input: {
             or (o.sent_at >= ${utcTimestamp(window.from)}
                 and o.sent_at < ${utcTimestamp(window.to)}))
        ${input.kind ? sql`and o.object_type = ${input.kind}` : sql``}
-       ${input.channel ? sql`and o.channel = ${input.channel}` : sql``}
+       ${
+         input.channel
+           ? sql`and (o.object_type = 'flow' or o.channel = ${input.channel})`
+           : sql``
+       }
        ${search ? sql`and o.name ilike ${likePattern(search)}` : sql``}
      order by o.sent_at desc nulls last, o.name asc, o.id asc`);
 
@@ -500,15 +505,15 @@ export async function loadLedgerDetail(input: {
     const rows = await db.execute<{
       day_offset: number;
       orders: number;
-      net_sales: string;
+      revenue: string;
     }>(sql`
       with ${linkedOrdersCte(scope, window, objectId)}
       select day_offset, count(*)::int as orders,
-             round(sum(net_sales), 2)::text as net_sales
+             round(sum(revenue), 2)::text as revenue
         from (select floor(extract(epoch from
                        (order_created_at - ${utcTimestamp(sentAt)})) / 86400)::int
                        as day_offset,
-                     net_sales
+                     revenue
                 from linked) d
        where day_offset between 0 and ${OFFSET_DAYS - 1}
        group by 1 order by 1`);
@@ -520,7 +525,7 @@ export async function loadLedgerDetail(input: {
         return {
           label: String(offset),
           orders: row?.orders ?? 0,
-          netSales: row?.net_sales ?? "0.00",
+          revenue: row?.revenue ?? "0.00",
         };
       }),
     };
@@ -528,12 +533,12 @@ export async function loadLedgerDetail(input: {
     const rows = await db.execute<{
       day: string;
       orders: number;
-      net_sales: string;
+      revenue: string;
     }>(sql`
       with ${linkedOrdersCte(scope, window, objectId)}
       select to_char(order_created_at, 'YYYY-MM-DD') as day,
              count(*)::int as orders,
-             round(sum(net_sales), 2)::text as net_sales
+             round(sum(revenue), 2)::text as revenue
         from linked
        group by 1 order by 1`);
     const byDay = new Map(rows.rows.map((row) => [row.day, row]));
@@ -544,7 +549,7 @@ export async function loadLedgerDetail(input: {
       points.push({
         label: day,
         orders: row?.orders ?? 0,
-        netSales: row?.net_sales ?? "0.00",
+        revenue: row?.revenue ?? "0.00",
       });
     }
     ordersByDay = { mode: "calendar", points };
@@ -564,14 +569,14 @@ export async function loadLedgerDetail(input: {
            min(title) as title,
            sum(units)::int as units,
            count(*)::int as order_count,
-           round(sum(net_sales), 2)::text as order_revenue
+           round(sum(revenue), 2)::text as order_revenue
       from (
         select coalesce(l.shopify_product_id, 'title:' || l.product_title)
                  as product_key,
                min(l.product_title) as title,
                sum(l.quantity) as units,
                l.order_id,
-               min(linked.net_sales) as net_sales
+               min(linked.revenue) as revenue
           from shopify_order_line l
           join linked on linked.order_id = l.order_id
          where l.organization_id = ${scope.organizationId}
@@ -579,7 +584,7 @@ export async function loadLedgerDetail(input: {
          group by 1, l.order_id
       ) per_order
      group by product_key
-     order by sum(net_sales) desc, product_key asc
+     order by sum(revenue) desc, product_key asc
      limit 10`);
 
   const messages =

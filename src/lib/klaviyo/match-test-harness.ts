@@ -138,6 +138,10 @@ export async function seedMatchWorld(
     identityDisposition: "available" | "unavailable" | "not_refreshed" | "suppressed";
   }) => string,
 ): Promise<{ orderCreatedAt: Date }> {
+  // These columns are naive `timestamp`s holding UTC wall time. A raw Date
+  // parameter is serialized by node-postgres in the PROCESS's zone, which
+  // would store a different wall time on every machine; interpolate the UTC
+  // ISO text so the seeded world is the same under any TZ.
   const orderCreatedAt = new Date("2026-07-20T10:00:00.000Z");
   await pool.query(
     `INSERT INTO organization (id, name, slug, created_at)
@@ -206,7 +210,7 @@ export async function seedMatchWorld(
        (id, organization_id, store_id, shopify_order_id, order_created_at,
         order_day, net_sales)
      VALUES ('order-a', 'org-a', 'store-a', '9001', $1, '2026-07-20', 42.5)`,
-    [orderCreatedAt],
+    [orderCreatedAt.toISOString()],
   );
   await pool.query(
     `INSERT INTO shopify_order_line
@@ -257,7 +261,7 @@ export async function seedMatchWorld(
      VALUES ('event-a', 'org-a', 'store-a', 'connection-a', 'metric-placed',
        'external-event-a', $1, '9001', '[]', '{}', '[]', '[]',
        'unavailable', 'event-checksum-a', '2026-07-15')`,
-    [new Date("2026-07-20T10:04:00.000Z")],
+    ["2026-07-20T10:04:00.000Z"],
   );
   await pool.query(
     `INSERT INTO klaviyo_event_run_observation
@@ -267,4 +271,182 @@ export async function seedMatchWorld(
        'event-checksum-a')`,
   );
   return { orderCreatedAt };
+}
+
+export type SeedOrderOptions = { createdAt?: string; orderDay?: string };
+
+export type SeedOrderResultOptions = { runId?: string; supersededAt?: string };
+
+export type SeedClaimInput = {
+  id: string;
+  conversionEventId: string;
+  attributionId: string;
+  campaignObjectId?: string | null;
+  flowObjectId?: string | null;
+  interactionOccurredAt?: string | null;
+  botClick?: number | null;
+};
+
+/**
+ * Insert one published match run all result rows can hang off. The
+ * terminal-shape check requires every window, checksum, and count column
+ * to be populated on a 'published' row.
+ */
+export async function seedPublishedRun(
+  pool: Pool,
+  id = "match-run-1",
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO klaviyo_match_run
+       (id, organization_id, shopify_store_id, connection_id, source_run_id,
+        shopify_evidence_run_id, matcher_version, publication_scope_fingerprint,
+        invocation_fingerprint, status, started_at, completed_at, published_at,
+        event_window_from, event_window_to, shopify_window_from,
+        shopify_window_to, klaviyo_source_checksum, shopify_evidence_checksum,
+        rule_checksum, config_checksum, expected_order_count,
+        expected_event_count, result_order_count, result_event_count,
+        candidate_count)
+     VALUES ($1, 'org-a', 'store-a', 'connection-a', 'source-run-a',
+       'evidence-run-a', 'klaviyo-v1', $1 || '-scope-fp', $1 || '-invocation-fp',
+       'published', now(), now(), now(),
+       '2026-07-01T00:00:00Z', '2026-08-01T00:00:00Z', '2026-07-01T00:00:00Z',
+       '2026-08-01T00:00:00Z', 'source-checksum-1', 'evidence-checksum-1',
+       'rule-checksum-1', 'config-checksum-1', 0, 0, 0, 0, 0)`,
+    [id],
+  );
+}
+
+export async function seedOrder(
+  pool: Pool,
+  id: string,
+  shopifyOrderId: string,
+  netSales: string,
+  options?: SeedOrderOptions,
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO shopify_order
+       (id, organization_id, store_id, shopify_order_id, order_created_at,
+        order_day, net_sales)
+     VALUES ($1, 'org-a', 'store-a', $2, $4, $5, $3)`,
+    [
+      id,
+      shopifyOrderId,
+      netSales,
+      options?.createdAt ?? "2026-07-21T12:00:00Z",
+      options?.orderDay ?? "2026-07-21",
+    ],
+  );
+}
+
+export async function seedRefund(
+  pool: Pool,
+  id: string,
+  orderId: string,
+  refundDay: string,
+  amount: string,
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO shopify_refund
+       (id, organization_id, store_id, order_id, shopify_refund_id,
+        refund_day, amount)
+     VALUES ($1, 'org-a', 'store-a', $2, $1 || '-shopify', $3, $4)`,
+    [id, orderId, refundDay, amount],
+  );
+}
+
+export async function seedEvent(
+  pool: Pool,
+  id: string,
+  externalEventId: string,
+  occurredAt = "2026-07-21T12:05:00Z",
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO klaviyo_event
+       (id, organization_id, shopify_store_id, connection_id, metric_id,
+        external_event_id, occurred_at, explicit_order_id_candidate,
+        attribution_relationship_ids, redacted_properties,
+        key_type_fingerprint, warnings, product_evidence_completeness,
+        source_checksum, api_revision)
+     VALUES ($1, 'org-a', 'store-a', 'connection-a', 'metric-placed',
+       $2, $3, NULL, '[]', '{}', '[]', '[]',
+       'unavailable', $2 || '-checksum', '2026-07-15')`,
+    [id, externalEventId, occurredAt],
+  );
+}
+
+export async function seedOrderResult(
+  pool: Pool,
+  id: string,
+  orderId: string,
+  status: string,
+  selectedEventId: string | null,
+  options?: SeedOrderResultOptions,
+): Promise<void> {
+  const runId = options?.runId ?? "match-run-1";
+  const supersededAt = options?.supersededAt ?? null;
+  // The selection-shape check requires confirmed rows to point at a
+  // deterministic candidate edge in the same run; statuses without a
+  // selected event must leave all three selection columns null.
+  let selectedCandidateId: string | null = null;
+  if (selectedEventId !== null) {
+    selectedCandidateId = `${id}-cand`;
+    await pool.query(
+      `INSERT INTO klaviyo_match_candidate
+         (id, organization_id, shopify_store_id, connection_id, run_id,
+          event_id, order_id, candidate_class, method, feature_vector,
+          weights, tolerances, score, confidence, reason_codes)
+       VALUES ($1, 'org-a', 'store-a', 'connection-a', $4,
+         $2, $3, 'deterministic', 'explicit_order_id', '{}', '{}', '{}',
+         '1', '1', '[]')`,
+      [selectedCandidateId, selectedEventId, orderId, runId],
+    );
+  }
+  // Superseded rows need published_at <= superseded_at and a supersession
+  // reason; they are exempt from the current-row partial unique index but
+  // must live in a different run than the current row (run+order unique).
+  await pool.query(
+    `INSERT INTO klaviyo_order_match_result
+       (id, organization_id, shopify_store_id, connection_id, run_id, order_id,
+        status, selected_candidate_id, selected_class, selected_event_id,
+        reason_codes, matcher_version, published_at, superseded_at,
+        supersession_reason)
+     VALUES ($1, 'org-a', 'store-a', 'connection-a', $7, $2,
+       $3, $4, $5, $6, '[]', 'klaviyo-v1', coalesce($8::timestamp, now()),
+       $8, $9)`,
+    [
+      id,
+      orderId,
+      status,
+      selectedCandidateId,
+      selectedCandidateId === null ? null : "deterministic",
+      selectedEventId,
+      runId,
+      supersededAt,
+      supersededAt === null ? null : "entity_replaced",
+    ],
+  );
+}
+
+export async function seedClaim(
+  pool: Pool,
+  input: SeedClaimInput,
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO klaviyo_attribution_claim
+       (id, organization_id, shopify_store_id, connection_id,
+        conversion_event_id, klaviyo_attribution_id, campaign_object_id,
+        flow_object_id, interaction_occurred_at, bot_click,
+        unknown_reason_codes, source_checksum, api_revision)
+     VALUES ($1, 'org-a', 'store-a', 'connection-a', $2, $3, $4, $5, $6, $7,
+       '[]', $1 || '-checksum', '2026-07-15')`,
+    [
+      input.id,
+      input.conversionEventId,
+      input.attributionId,
+      input.campaignObjectId ?? null,
+      input.flowObjectId ?? null,
+      input.interactionOccurredAt ?? null,
+      input.botClick ?? null,
+    ],
+  );
 }

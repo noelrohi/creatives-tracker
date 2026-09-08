@@ -1,11 +1,25 @@
+// The loaders read naive `timestamp` columns holding UTC wall time, and
+// node-postgres parses those in the PROCESS's zone. Pin a non-UTC zone so the
+// suite fails if that conversion is ever dropped; CI's TZ=UTC would hide it.
+process.env.TZ = "America/New_York";
+
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MATCH_SCOPE,
+  type SeedClaimInput,
+  type SeedOrderOptions,
+  type SeedOrderResultOptions,
   applyMatchFixture,
   resolveConnectionString,
+  seedClaim as seedClaimIn,
+  seedEvent as seedEventIn,
   seedMatchWorld,
+  seedOrder as seedOrderIn,
+  seedOrderResult as seedOrderResultIn,
+  seedPublishedRun as seedPublishedRunIn,
+  seedRefund as seedRefundIn,
   withDatabase,
 } from "@/lib/klaviyo/match-test-harness";
 
@@ -40,166 +54,32 @@ const window = {
 };
 
 /**
- * Insert one published match run all result rows can hang off. The
- * terminal-shape check requires every window, checksum, and count column
- * to be populated on a 'published' row.
+ * The generic order/event/claim seeds live in the harness, shared with the
+ * attribution suite; these bind them to this file's pool.
  */
-async function seedPublishedRun(id = "match-run-1"): Promise<void> {
-  await testPool!.query(
-    `INSERT INTO klaviyo_match_run
-       (id, organization_id, shopify_store_id, connection_id, source_run_id,
-        shopify_evidence_run_id, matcher_version, publication_scope_fingerprint,
-        invocation_fingerprint, status, started_at, completed_at, published_at,
-        event_window_from, event_window_to, shopify_window_from,
-        shopify_window_to, klaviyo_source_checksum, shopify_evidence_checksum,
-        rule_checksum, config_checksum, expected_order_count,
-        expected_event_count, result_order_count, result_event_count,
-        candidate_count)
-     VALUES ($1, 'org-a', 'store-a', 'connection-a', 'source-run-a',
-       'evidence-run-a', 'klaviyo-v1', $1 || '-scope-fp', $1 || '-invocation-fp',
-       'published', now(), now(), now(),
-       '2026-07-01T00:00:00Z', '2026-08-01T00:00:00Z', '2026-07-01T00:00:00Z',
-       '2026-08-01T00:00:00Z', 'source-checksum-1', 'evidence-checksum-1',
-       'rule-checksum-1', 'config-checksum-1', 0, 0, 0, 0, 0)`,
-    [id],
-  );
-}
-
-async function seedOrder(
+const seedPublishedRun = (id?: string) => seedPublishedRunIn(testPool!, id);
+const seedOrder = (
   id: string,
   shopifyOrderId: string,
   netSales: string,
-  options?: { createdAt?: string; orderDay?: string },
-): Promise<void> {
-  await testPool!.query(
-    `INSERT INTO shopify_order
-       (id, organization_id, store_id, shopify_order_id, order_created_at,
-        order_day, net_sales)
-     VALUES ($1, 'org-a', 'store-a', $2, $4, $5, $3)`,
-    [
-      id,
-      shopifyOrderId,
-      netSales,
-      options?.createdAt ?? "2026-07-21T12:00:00Z",
-      options?.orderDay ?? "2026-07-21",
-    ],
-  );
-}
-
-async function seedRefund(
+  options?: SeedOrderOptions,
+) => seedOrderIn(testPool!, id, shopifyOrderId, netSales, options);
+const seedRefund = (
   id: string,
   orderId: string,
   refundDay: string,
   amount: string,
-): Promise<void> {
-  await testPool!.query(
-    `INSERT INTO shopify_refund
-       (id, organization_id, store_id, order_id, shopify_refund_id,
-        refund_day, amount)
-     VALUES ($1, 'org-a', 'store-a', $2, $1 || '-shopify', $3, $4)`,
-    [id, orderId, refundDay, amount],
-  );
-}
-
-async function seedEvent(
-  id: string,
-  externalEventId: string,
-  occurredAt = "2026-07-21T12:05:00Z",
-): Promise<void> {
-  await testPool!.query(
-    `INSERT INTO klaviyo_event
-       (id, organization_id, shopify_store_id, connection_id, metric_id,
-        external_event_id, occurred_at, explicit_order_id_candidate,
-        attribution_relationship_ids, redacted_properties,
-        key_type_fingerprint, warnings, product_evidence_completeness,
-        source_checksum, api_revision)
-     VALUES ($1, 'org-a', 'store-a', 'connection-a', 'metric-placed',
-       $2, $3, NULL, '[]', '{}', '[]', '[]',
-       'unavailable', $2 || '-checksum', '2026-07-15')`,
-    [id, externalEventId, occurredAt],
-  );
-}
-
-async function seedOrderResult(
+) => seedRefundIn(testPool!, id, orderId, refundDay, amount);
+const seedEvent = (id: string, externalEventId: string, occurredAt?: string) =>
+  seedEventIn(testPool!, id, externalEventId, occurredAt);
+const seedOrderResult = (
   id: string,
   orderId: string,
   status: string,
   selectedEventId: string | null,
-  options?: { runId?: string; supersededAt?: string },
-): Promise<void> {
-  const runId = options?.runId ?? "match-run-1";
-  const supersededAt = options?.supersededAt ?? null;
-  // The selection-shape check requires confirmed rows to point at a
-  // deterministic candidate edge in the same run; statuses without a
-  // selected event must leave all three selection columns null.
-  let selectedCandidateId: string | null = null;
-  if (selectedEventId !== null) {
-    selectedCandidateId = `${id}-cand`;
-    await testPool!.query(
-      `INSERT INTO klaviyo_match_candidate
-         (id, organization_id, shopify_store_id, connection_id, run_id,
-          event_id, order_id, candidate_class, method, feature_vector,
-          weights, tolerances, score, confidence, reason_codes)
-       VALUES ($1, 'org-a', 'store-a', 'connection-a', $4,
-         $2, $3, 'deterministic', 'explicit_order_id', '{}', '{}', '{}',
-         '1', '1', '[]')`,
-      [selectedCandidateId, selectedEventId, orderId, runId],
-    );
-  }
-  // Superseded rows need published_at <= superseded_at and a supersession
-  // reason; they are exempt from the current-row partial unique index but
-  // must live in a different run than the current row (run+order unique).
-  await testPool!.query(
-    `INSERT INTO klaviyo_order_match_result
-       (id, organization_id, shopify_store_id, connection_id, run_id, order_id,
-        status, selected_candidate_id, selected_class, selected_event_id,
-        reason_codes, matcher_version, published_at, superseded_at,
-        supersession_reason)
-     VALUES ($1, 'org-a', 'store-a', 'connection-a', $7, $2,
-       $3, $4, $5, $6, '[]', 'klaviyo-v1', coalesce($8::timestamp, now()),
-       $8, $9)`,
-    [
-      id,
-      orderId,
-      status,
-      selectedCandidateId,
-      selectedCandidateId === null ? null : "deterministic",
-      selectedEventId,
-      runId,
-      supersededAt,
-      supersededAt === null ? null : "entity_replaced",
-    ],
-  );
-}
-
-async function seedClaim(input: {
-  id: string;
-  conversionEventId: string;
-  attributionId: string;
-  campaignObjectId?: string | null;
-  flowObjectId?: string | null;
-  interactionOccurredAt?: string | null;
-  botClick?: number | null;
-}): Promise<void> {
-  await testPool!.query(
-    `INSERT INTO klaviyo_attribution_claim
-       (id, organization_id, shopify_store_id, connection_id,
-        conversion_event_id, klaviyo_attribution_id, campaign_object_id,
-        flow_object_id, interaction_occurred_at, bot_click,
-        unknown_reason_codes, source_checksum, api_revision)
-     VALUES ($1, 'org-a', 'store-a', 'connection-a', $2, $3, $4, $5, $6, $7,
-       '[]', $1 || '-checksum', '2026-07-15')`,
-    [
-      input.id,
-      input.conversionEventId,
-      input.attributionId,
-      input.campaignObjectId ?? null,
-      input.flowObjectId ?? null,
-      input.interactionOccurredAt ?? null,
-      input.botClick ?? null,
-    ],
-  );
-}
+  options?: SeedOrderResultOptions,
+) => seedOrderResultIn(testPool!, id, orderId, status, selectedEventId, options);
+const seedClaim = (input: SeedClaimInput) => seedClaimIn(testPool!, input);
 
 async function seedObject(input: {
   id: string;
@@ -569,9 +449,18 @@ describeIfDb("Klaviyo campaign ledger on PostgreSQL", () => {
         (r) => r.objectId,
       ),
     ).toEqual(["flow-welcome"]);
-    expect((await loadLedgerRows({ scope, window, channel: "sms" })).rows).toEqual(
-      [],
-    );
+    // The channel filter is a CAMPAIGN filter: flows carry no channel and
+    // must survive it, or the UI's default "email" would hide every flow.
+    expect(
+      (await loadLedgerRows({ scope, window, channel: "email" })).rows.map(
+        (r) => r.objectId,
+      ),
+    ).toEqual(["camp-july", "flow-welcome"]);
+    expect(
+      (await loadLedgerRows({ scope, window, channel: "sms" })).rows.map(
+        (r) => r.objectId,
+      ),
+    ).toEqual(["flow-welcome"]);
     expect(
       (await loadLedgerRows({ scope, window, search: "july" })).rows.map(
         (r) => r.objectId,
@@ -656,18 +545,19 @@ describeIfDb("Klaviyo campaign ledger on PostgreSQL", () => {
     expect(detail?.ordersByDay.mode).toBe("offset");
     expect(detail?.ordersByDay.points).toHaveLength(14);
     // order-a is 10 days after the 07-10 send; order-late is 26 days after
-    // (outside the 14-day strip).
+    // (outside the 14-day strip). 42.50 less its 5.00 refund, the same money
+    // `ours` and the per-message rows report for it.
     expect(detail?.ordersByDay.points[10]).toEqual({
       label: "10",
       orders: 1,
-      netSales: "42.50",
+      revenue: "37.50",
     });
     expect(
       detail?.ordersByDay.points.reduce((sum, point) => sum + point.orders, 0),
     ).toBe(1);
     // seedMatchWorld gave order-a product 77 "Product" qty 2.
     expect(detail?.topProducts).toEqual([
-      { productKey: "77", title: "Product", units: 2, orderCount: 1, orderRevenue: "42.50" },
+      { productKey: "77", title: "Product", units: 2, orderCount: 1, orderRevenue: "37.50" },
     ]);
     expect(detail?.messages.map((message) => message.objectId)).toEqual([
       "msg-a",
@@ -686,7 +576,7 @@ describeIfDb("Klaviyo campaign ledger on PostgreSQL", () => {
     expect(detail?.ordersByDay.points).toHaveLength(31);
     expect(
       detail?.ordersByDay.points.find((point) => point.label === "2026-07-22"),
-    ).toEqual({ label: "2026-07-22", orders: 1, netSales: "30.00" });
+    ).toEqual({ label: "2026-07-22", orders: 1, revenue: "30.00" });
     expect(detail?.reconciliation).toEqual({
       unconfirmedOrders: null,
       revenuePerRecipient: null,
