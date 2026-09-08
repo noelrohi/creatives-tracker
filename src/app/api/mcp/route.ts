@@ -4,6 +4,8 @@ import * as z from "zod";
 import { auth, mcpResource } from "@/lib/auth";
 import { createCallerFactory, createMcpContext } from "@/lib/trpc/init";
 import { appRouter } from "@/lib/trpc/routers/_app";
+import { loadAnalyticsReporting } from "@/lib/analytics-reporting-queries";
+import { registerMetaTools } from "@/lib/mcp/meta-tools";
 
 const createCaller = createCallerFactory(appRouter);
 
@@ -42,12 +44,22 @@ const handler = createMcpHandler(
       return server;
     }
     const organizationId = ctx.authInfo?.extra?.organizationId;
-    const caller = createCaller(
-      await createMcpContext(
-        userId,
-        typeof organizationId === "string" ? organizationId : null,
-      ),
+    const context = await createMcpContext(
+      userId,
+      typeof organizationId === "string" ? organizationId : null,
     );
+    const caller = createCaller(context);
+
+    registerMetaTools(server, {
+      caller,
+      loadReporting: async (accountId) => {
+        if (!context.organizationId) throw new Error("Organization required");
+        return loadAnalyticsReporting({
+          organizationId: context.organizationId,
+          accountId,
+        });
+      },
+    });
 
     server.registerTool(
       "list_campaigns",
@@ -76,23 +88,6 @@ const handler = createMcpHandler(
       },
       async ({ months }) =>
         run(() => caller.performanceSummary.monthlyOverview({ months })),
-    );
-
-    server.registerTool(
-      "list_findings",
-      {
-        description:
-          "Automated data-quality and performance findings for the organization, filtered by status.",
-        inputSchema: z.object({
-          status: z
-            .enum(["open", "handled", "snoozed"])
-            .default("open")
-            .describe(
-              "open = unresolved, handled = resolved, snoozed = muted types",
-            ),
-        }),
-      },
-      async ({ status }) => run(() => caller.findings.list({ status })),
     );
 
     return server;
