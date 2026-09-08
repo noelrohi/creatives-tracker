@@ -176,10 +176,12 @@ export function KlaviyoPlayground() {
       if (announcedRuns[run.id] !== undefined) continue;
       const timer = setTimeout(() => {
         setAnnouncedRuns((prior) => ({ ...prior, [run.id]: run.status }));
+        // "run", not "sync": a reports refresh is not an events sync and the
+        // toast should not suggest one was triggered.
         if (run.status === "success") {
-          toast.success(`${run.operation} sync complete`);
+          toast.success(`${run.operation} run complete`);
         } else {
-          toast.error(`${run.operation} sync ${run.status}`);
+          toast.error(`${run.operation} run ${run.status}`);
         }
         void queryClient.invalidateQueries();
       }, 0);
@@ -379,6 +381,14 @@ export function KlaviyoPlayground() {
     syncRuns.data?.items.some(
       (run) => run.status === "running" && !run.stale,
     ) ?? false;
+  // The report refresh has its own single-concurrency queue, so its button
+  // stays locked while a reports run is live — not just while the click is
+  // awaiting confirmation.
+  const reportRunning =
+    syncRuns.data?.items.some(
+      (run) =>
+        run.operation === "reports" && run.status === "running" && !run.stale,
+    ) ?? false;
 
   return (
     <div className="space-y-4 overflow-x-hidden p-6">
@@ -487,7 +497,9 @@ export function KlaviyoPlayground() {
               range={range}
               lab={lab}
               accountTimezone={health.data?.connection?.timezone ?? "UTC"}
-              busy={anyMutationPending || queuedOperation !== null}
+              busy={
+                anyMutationPending || queuedOperation !== null || reportRunning
+              }
               onRefresh={() =>
                 refreshReports.mutate({
                   dateFrom: range.dateFrom,
