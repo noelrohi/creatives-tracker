@@ -48,6 +48,9 @@ async function defaultOrganizationId(userId: string) {
 }
 
 export const auth = betterAuth({
+  // Vercel Connect publishes client metadata on connect.vercel.com, but
+  // hosts private_key_jwt verification keys on this separate origin.
+  trustedOrigins: ["https://kms.vercel.com"],
   database: drizzleAdapter(db, {
     provider: "pg",
     schema: { ...authSchema, ...oauthSchema },
