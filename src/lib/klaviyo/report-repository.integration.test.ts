@@ -603,7 +603,46 @@ describeIfDb("Klaviyo report repository on PostgreSQL", () => {
   });
 
   it("fails only the message generation when the revision rejects the grouping", async () => {
-    const start = await startRun(["campaign", "campaign_message"]);
+    // The rejected kind sits between two parent kinds, so the batch loop has
+    // to carry on to `flow` after failing `campaign_message` mid-run.
+    const start = await startRun(["campaign", "campaign_message", "flow"]);
+    if (start.kind !== "started") throw new Error("expected started");
+    const client = fakeReportClient([], 3, { rejectMessageGrouping: true });
+    const result = await repository.processReportBatch(
+      { scope, syncRunId: start.syncRunId },
+      {
+        createClient: () => client,
+        credentialProvider: fakeCredentialProvider,
+        spacer: async () => {},
+      },
+    );
+    expect(result.done).toBe(true);
+    expect(
+      client.queryValuesReport.mock.calls.map(([input]) => input.request.kind),
+    ).toEqual(["campaign", "campaign_message", "flow"]);
+    const generations = await testPool!.query(
+      `SELECT kind, status, failure_reason FROM klaviyo_report_generation
+        WHERE sync_run_id = $1 ORDER BY kind`,
+      [start.syncRunId],
+    );
+    expect(generations.rows).toEqual([
+      { kind: "campaign", status: "current", failure_reason: null },
+      {
+        kind: "campaign_message",
+        status: "failed",
+        failure_reason: "grouping_unsupported",
+      },
+      { kind: "flow", status: "current", failure_reason: null },
+    ]);
+    const run = await testPool!.query(
+      `SELECT status FROM klaviyo_sync_run WHERE id = $1`,
+      [start.syncRunId],
+    );
+    expect(run.rows[0].status).toBe("success");
+  });
+
+  it("ends a run as success without publishing when every staged kind was grouping-unsupported", async () => {
+    const start = await startRun(["campaign_message", "flow_message"]);
     if (start.kind !== "started") throw new Error("expected started");
     const result = await repository.processReportBatch(
       { scope, syncRunId: start.syncRunId },
@@ -621,9 +660,13 @@ describeIfDb("Klaviyo report repository on PostgreSQL", () => {
       [start.syncRunId],
     );
     expect(generations.rows).toEqual([
-      { kind: "campaign", status: "current", failure_reason: null },
       {
         kind: "campaign_message",
+        status: "failed",
+        failure_reason: "grouping_unsupported",
+      },
+      {
+        kind: "flow_message",
         status: "failed",
         failure_reason: "grouping_unsupported",
       },
@@ -633,6 +676,12 @@ describeIfDb("Klaviyo report repository on PostgreSQL", () => {
       [start.syncRunId],
     );
     expect(run.rows[0].status).toBe("success");
+    // Nothing was published, so the freshness clock must not move.
+    const connection = await testPool!.query(
+      `SELECT last_report_synced_at FROM klaviyo_connection
+        WHERE id = 'connection-a'`,
+    );
+    expect(connection.rows[0].last_report_synced_at).toBeNull();
   });
 
   it("supersedes a prior current generation for the same window and kind even when its fingerprint differs", async () => {

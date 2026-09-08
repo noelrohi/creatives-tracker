@@ -888,6 +888,31 @@ export async function publishTerminalReportSync(input: {
       (generation) => generation.status === "staging",
     );
     if (
+      stagingOnly.length === 0 &&
+      staging.length > 0 &&
+      staging.every(
+        (generation) =>
+          generation.status === "failed" &&
+          generation.failureReason === "grouping_unsupported",
+      )
+    ) {
+      // The pinned revision rejects every staged kind's grouping. There is
+      // nothing to publish and nothing to retry, so finish the run as a
+      // success — otherwise the nightly fails forever once the parent kinds
+      // are fresh. Nothing becomes `current` and `lastReportSyncedAt` stays
+      // put, so reads keep serving the previous current generations.
+      await finishKlaviyoSyncRun(
+        {
+          scope: input.scope,
+          syncRunId: input.syncRunId,
+          operation: "reports",
+          status: "success",
+        },
+        tx,
+      );
+      return { publishedKinds: [] };
+    }
+    if (
       staging.length === 0 ||
       staging.some(
         (generation) =>
