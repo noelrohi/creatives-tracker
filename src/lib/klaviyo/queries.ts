@@ -126,6 +126,7 @@ export async function listEvidenceOrders(input: {
   claimType?: OrderClaimTypeFilter;
   channel?: OrderChannelFilter;
   bucket?: string;
+  sourceObjectId?: string;
   cursor?: string | null;
   limit?: number;
 }): Promise<{ items: OrderLedgerRow[]; nextCursor: string | null }> {
@@ -163,6 +164,20 @@ export async function listEvidenceOrders(input: {
     conditions.push(
       channelPredicate(input.channel, klaviyoOrderMatchResults.selectedEventId),
     );
+  }
+  if (input.sourceObjectId) {
+    // Same primary-claim rule as the campaign ledger, so "View all N orders"
+    // lands on exactly the N orders the ledger counted.
+    conditions.push(sql`(
+      select coalesce(c.campaign_object_id, c.flow_object_id)
+        from klaviyo_attribution_claim c
+       where c.connection_id = ${klaviyoOrderMatchResults.connectionId}
+         and c.conversion_event_id = ${klaviyoOrderMatchResults.selectedEventId}
+         and (c.campaign_object_id is not null or c.flow_object_id is not null)
+         and c.bot_click is distinct from 1
+       order by c.interaction_occurred_at desc nulls last,
+                c.klaviyo_attribution_id desc
+       limit 1) = ${input.sourceObjectId}`);
   }
 
   const rows = await db

@@ -44,6 +44,7 @@ const { loadEmailAttribution } = await import("@/lib/klaviyo/email-attribution")
 const { loadLedgerRows, loadLedgerMessages, loadLedgerDetail } = await import(
   "@/lib/klaviyo/campaign-ledger"
 );
+const { listEvidenceOrders } = await import("@/lib/klaviyo/queries");
 const describeIfDb = baseConnectionString ? describe : describe.skip;
 
 const scope = MATCH_SCOPE;
@@ -603,5 +604,13 @@ describeIfDb("Klaviyo campaign ledger on PostgreSQL", () => {
     const ledgerJuly = ledger.rows.find((row) => row.objectId === "camp-july");
     expect(ledgerJuly?.orderCount).toBe(panelJuly?.orderCount);
     expect(ledgerJuly?.revenue).toBe(panelJuly?.revenue);
+  });
+
+  it("filters the orders ledger by the same primary-claim rule", async () => {
+    await seedLedgerWorld();
+    const july = await listEvidenceOrders({ scope, window: { from: new Date("2026-07-01T00:00:00Z"), to: new Date("2026-09-01T00:00:00Z") }, sourceObjectId: "camp-july" });
+    expect(july.items.map((item) => item.orderId).sort()).toEqual(["order-a", "order-late"]);
+    const flow = await listEvidenceOrders({ scope, window, sourceObjectId: "flow-welcome" });
+    expect(flow.items.map((item) => item.orderId).sort()).toEqual(["order-flow-in", "order-flow-out"]);
   });
 });
