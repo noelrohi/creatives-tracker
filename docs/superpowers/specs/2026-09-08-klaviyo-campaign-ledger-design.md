@@ -26,7 +26,7 @@ day, top products, and message variants.
 | Scope | This feature only; the full lab redesign is a follow-up (§10) |
 | Rows | Campaigns and flows in one list, expandable to their messages |
 | Columns | "Funnel + trust": Recipients, Delivered, Open, Click, Orders, We confirm, Klaviyo says, Unsub |
-| Drill-down | Right-side sheet at two thirds of the viewport (widened from one third after the first walkthrough), seven blocks |
+| Drill-down | Right-side sheet at half of the viewport (adjusted after the first walkthrough), seven blocks |
 | Date range | Selects campaigns by **send time**, with their full results (Klaviyo's rule) |
 | Data source | Extend the existing report pipeline; no event ingestion, no live proxy |
 
@@ -273,7 +273,7 @@ folder. Clicking a row opens its sheet; the chevron only expands.
 
 ### 6.4 Sheet
 
-A right-side sheet at two thirds of the viewport width, minimum 380px,
+A right-side sheet at half of the viewport width, minimum 380px,
 scrollable, using the same primitive as the order-detail sheet. The seven
 blocks of §4.3 in order. The funnel is five equal cells; orders by day is plain
 div bars like list health's daily strip, no chart library. "View all N orders"

@@ -36,7 +36,7 @@ export function LedgerDetailSheet({
       <SheetContent side="right" // The Sheet primitive caps a right sheet with `data-[side=right]:sm:max-w-sm`;
         // a plain `sm:max-w-none` loses to that attribute selector, so the
         // override must carry the same variant.
-        className="w-full overflow-y-auto data-[side=right]:sm:w-[66vw] data-[side=right]:sm:max-w-none sm:min-w-[380px]">
+        className="w-full overflow-y-auto data-[side=right]:sm:w-[50vw] data-[side=right]:sm:max-w-none sm:min-w-[380px]">
         <SheetHeader>
           <SheetTitle>{copy.sheet.title}</SheetTitle>
           <p className="text-xs text-muted-foreground">{copy.sheet.advisory}</p>
