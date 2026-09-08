@@ -111,23 +111,42 @@ async function seedObject(input: {
 }
 
 /** One current generation per kind for the July window. */
-async function seedGeneration(kind: string, id = `gen-${kind}`): Promise<void> {
+async function seedGeneration(
+  kind: string,
+  id = `gen-${kind}`,
+  publishedAt = "2026-08-02T00:00:00Z",
+  syncRunId = "source-run-a",
+): Promise<void> {
   await testPool!.query(
     `INSERT INTO klaviyo_report_generation
        (id, organization_id, shopify_store_id, connection_id, sync_run_id,
         kind, requested_from, requested_to, account_timezone,
         publication_scope_fingerprint, refresh_fingerprint, status,
         fact_count, published_at)
-     VALUES ($1, 'org-a', 'store-a', 'connection-a', 'source-run-a', $2,
+     VALUES ($1, 'org-a', 'store-a', 'connection-a', $4, $2,
        '2026-07-01T00:00:00Z', '2026-08-01T00:00:00Z', 'UTC',
-       $1 || '-scope', $1 || '-refresh', 'current', 0, '2026-08-02T00:00:00Z')`,
-    [id, kind],
+       $1 || '-scope', $1 || '-refresh', 'current', 0, $3)`,
+    [id, kind, publishedAt, syncRunId],
+  );
+}
+
+/** A second reports run, so two generations of one kind can coexist. */
+async function seedReportRun(id: string): Promise<void> {
+  await testPool!.query(
+    `INSERT INTO klaviyo_sync_run
+       (id, organization_id, shopify_store_id, connection_id, operation,
+        trigger_type, status, checkpoint, request_parameters,
+        requested_from, requested_to)
+     VALUES ($1, 'org-a', 'store-a', 'connection-a', 'reports', 'scheduled',
+       'success', NULL, '{}', '2026-07-01T00:00:00Z', '2026-08-01T00:00:00Z')`,
+    [id],
   );
 }
 
 async function seedFact(input: {
   id: string;
   kind: string;
+  generationId?: string;
   campaignObjectId?: string | null;
   flowObjectId?: string | null;
   messageObjectId?: string | null;
@@ -155,7 +174,7 @@ async function seedFact(input: {
         grouping, request_fingerprint, fact_fingerprint, recipients, delivered,
         unique_opens, unique_clicks, bounced, unsubscribes, spam_complaints,
         conversions, conversion_value, api_revision, as_of)
-     VALUES ($1, 'org-a', 'store-a', 'connection-a', 'gen-' || $2, $2,
+     VALUES ($1, 'org-a', 'store-a', 'connection-a', $15, $2,
        'metric-placed', $3, $4, $5, '2026-07-01T00:00:00Z',
        '2026-08-01T00:00:00Z', 'UTC', '{}', $1 || '-req', $1 || '-fact',
        $6, $7, $8, $9, $10, $11, $12, $13, $14, '2026-07-15',
@@ -175,6 +194,7 @@ async function seedFact(input: {
       s.spam_complaints ?? null,
       s.conversions ?? null,
       s.conversion_value ?? null,
+      input.generationId ?? `gen-${input.kind}`,
     ],
   );
 }
@@ -441,6 +461,40 @@ describeIfDb("Klaviyo campaign ledger on PostgreSQL", () => {
       hasFlowGeneration: true,
     });
     expect(result.report.asOf?.toISOString()).toBe("2026-08-02T00:00:00.000Z");
+  });
+
+  it("reads only the newest current generation per kind", async () => {
+    await seedLedgerWorld();
+    // The unique index that keeps a generation `current` is per publication
+    // fingerprint, so a historical duplicate for the same kind and window can
+    // survive alongside the live one. Summing both would double the numbers.
+    await seedReportRun("source-run-old");
+    await seedGeneration("campaign", "gen-campaign", "2026-08-02T00:00:00Z");
+    await seedGeneration(
+      "campaign",
+      "gen-campaign-old",
+      "2026-08-01T00:00:00Z",
+      "source-run-old",
+    );
+    await seedFact({
+      id: "f-new",
+      kind: "campaign",
+      campaignObjectId: "camp-july",
+      stats: { recipients: "1000", delivered: "1000" },
+    });
+    await seedFact({
+      id: "f-old",
+      kind: "campaign",
+      generationId: "gen-campaign-old",
+      campaignObjectId: "camp-july",
+      stats: { recipients: "5000", delivered: "5000" },
+    });
+    const result = await loadLedgerRows({ scope, window });
+    expect(
+      result.rows.find((row) => row.objectId === "camp-july")?.klaviyo,
+    ).toMatchObject({ recipients: 1000, delivered: 1000 });
+    expect(result.report.asOf?.toISOString()).toBe("2026-08-02T00:00:00.000Z");
+    expect(result.report.hasCampaignGeneration).toBe(true);
   });
 
   it("filters by kind, channel, and name", async () => {

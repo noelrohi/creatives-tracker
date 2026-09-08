@@ -253,7 +253,40 @@ async function loadOurSide(
 }
 
 /**
- * Klaviyo's numbers from the current generations for this exact window,
+ * The ONE generation each kind's numbers come from, as a CTE named
+ * `current_generation`.
+ *
+ * The unique index that keeps a generation `current` is per publication
+ * fingerprint, not per (kind, window): a historical duplicate — the same kind
+ * and window published under a different fingerprint — can sit alongside the
+ * live one and would otherwise double every sum. `distinct on (kind)` keeps
+ * the newest published row per kind and drops the rest.
+ */
+function currentGenerationsCte(
+  scope: KlaviyoConnectionScope,
+  window: HalfOpenUtcWindow,
+  kinds: readonly string[],
+) {
+  return sql`
+    current_generation as (
+      select distinct on (kind) id, kind, published_at
+        from klaviyo_report_generation
+       where organization_id = ${scope.organizationId}
+         and shopify_store_id = ${scope.storeId}
+         and connection_id = ${scope.connectionId}
+         and status = 'current'
+         and kind in (${sql.join(
+           kinds.map((kind) => sql`${kind}`),
+           sql`, `,
+         )})
+         and requested_from = ${utcTimestamp(window.from)}
+         and requested_to = ${utcTimestamp(window.to)}
+       order by kind, published_at desc nulls last, id desc
+    )`;
+}
+
+/**
+ * Klaviyo's numbers from the current generation for this exact window,
  * summed per object (parent kinds arrive one row per send date). Keyed by
  * object id for parent kinds and by message id for message kinds.
  */
@@ -264,6 +297,7 @@ async function loadKlaviyoSide(
   objectId: string | null,
 ): Promise<Map<string, LedgerKlaviyoStats>> {
   const rows = await db.execute<FactRow>(sql`
+    with ${currentGenerationsCte(scope, window, kinds)}
     select g.kind,
            coalesce(f.campaign_object_id, f.flow_object_id) as object_id,
            f.message_object_id,
@@ -277,18 +311,8 @@ async function loadKlaviyoSide(
            sum(f.conversions)::text as conversions,
            round(sum(f.conversion_value), 2)::text as conversion_value
       from klaviyo_report_fact f
-      join klaviyo_report_generation g on g.id = f.generation_id
-     where g.organization_id = ${scope.organizationId}
-       and g.shopify_store_id = ${scope.storeId}
-       and g.connection_id = ${scope.connectionId}
-       and g.status = 'current'
-       and g.kind in (${sql.join(
-         kinds.map((kind) => sql`${kind}`),
-         sql`, `,
-       )})
-       and g.requested_from = ${utcTimestamp(window.from)}
-       and g.requested_to = ${utcTimestamp(window.to)}
-       and coalesce(f.campaign_object_id, f.flow_object_id) is not null
+      join current_generation g on g.id = f.generation_id
+     where coalesce(f.campaign_object_id, f.flow_object_id) is not null
        ${
          objectId === null
            ? sql``
@@ -308,15 +332,9 @@ async function loadReportMeta(
   window: HalfOpenUtcWindow,
 ): Promise<LedgerReportMeta> {
   const rows = await db.execute<{ kind: string; published_at: string | null }>(sql`
+    with ${currentGenerationsCte(scope, window, ["campaign", "flow"])}
     select kind, published_at::text as published_at
-      from klaviyo_report_generation
-     where organization_id = ${scope.organizationId}
-       and shopify_store_id = ${scope.storeId}
-       and connection_id = ${scope.connectionId}
-       and status = 'current'
-       and kind in ('campaign', 'flow')
-       and requested_from = ${utcTimestamp(window.from)}
-       and requested_to = ${utcTimestamp(window.to)}`);
+      from current_generation`);
   let asOf: Date | null = null;
   for (const row of rows.rows) {
     const publishedAt = utcDateOf(row.published_at);
