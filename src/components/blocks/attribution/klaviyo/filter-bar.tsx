@@ -9,6 +9,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { BUCKET_ORDER } from "@/components/blocks/attribution/buckets";
+import { DateRangePicker } from "@/components/blocks/dashboard/date-range-picker";
+import { formatDateOnly } from "@/lib/date";
+
+/**
+ * The picker works in local-time Dates; a "YYYY-MM-DD" lab day becomes local
+ * midnight so it round-trips through `formatDateOnly` unchanged.
+ */
+function dayToLocalDate(day: string): Date {
+  const [year, month, date] = day.split("-").map(Number);
+  return new Date(year, month - 1, date);
+}
 import {
   CHANNEL_FILTERS,
   CLAIM_TYPE_FILTERS,
@@ -47,9 +58,16 @@ export function LabFilterBar(props: {
     <div className="flex flex-wrap items-center gap-2 text-sm">
       <Select
         value={state.range}
-        onValueChange={(value) =>
-          void setState({ range: value as (typeof LAB_RANGES)[number] })
-        }
+        onValueChange={(value) => {
+          const range = value as (typeof LAB_RANGES)[number];
+          // Switching to Custom seeds the picker with the range currently
+          // shown, so nothing jumps until the user picks new dates.
+          void setState(
+            range === "custom"
+              ? { range, from: props.range.dateFrom, to: props.range.dateTo }
+              : { range },
+          );
+        }}
       >
         <SelectTrigger className="h-8 w-32" aria-label="Date range">
           <SelectValue />
@@ -61,6 +79,19 @@ export function LabFilterBar(props: {
           <SelectItem value="custom">Custom</SelectItem>
         </SelectContent>
       </Select>
+      {state.range === "custom" ? (
+        <DateRangePicker
+          from={dayToLocalDate(props.range.dateFrom)}
+          to={dayToLocalDate(props.range.dateTo)}
+          onChange={(range) => {
+            if (!range) return;
+            void setState({
+              from: formatDateOnly(range.from),
+              to: formatDateOnly(range.to),
+            });
+          }}
+        />
+      ) : null}
       <span className="text-xs text-muted-foreground">
         {props.range.dateFrom} → {props.range.dateTo} · {timezoneLabel}
       </span>

@@ -74,7 +74,9 @@ export function resolveJourneyLookback(value: number | null): JourneyLookback {
 }
 
 const parsers = {
-  view: parseAsStringLiteral(LAB_VIEWS).withDefault("orders"),
+  // The ledger is the lab's front page (spec §10); the evidence views sit
+  // behind it.
+  view: parseAsStringLiteral(LAB_VIEWS).withDefault("ledger"),
   range: parseAsStringLiteral(LAB_RANGES).withDefault("last30"),
   from: parseAsString,
   to: parseAsString,
