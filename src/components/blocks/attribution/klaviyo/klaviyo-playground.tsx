@@ -476,6 +476,12 @@ export function KlaviyoPlayground() {
           <LabFilterBar
             view={view}
             range={range}
+            // `range` is non-null only once storeToday resolved; the dateTo
+            // fallback is unreachable but keeps the prop a plain string.
+            today={
+              (range.timezoneKind === "account" ? accountToday : storeToday) ??
+              range.dateTo
+            }
             storeTimezone={health.data?.store?.ianaTimezone ?? "UTC"}
             accountTimezone={health.data?.connection?.timezone ?? "UTC"}
             lab={lab}

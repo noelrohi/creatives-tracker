@@ -58,6 +58,23 @@ describe("resolveLabDayRange", () => {
     });
   });
 
+  it("treats an impossible calendar day as malformed instead of shifting it", () => {
+    // "2026-02-31" matches the pattern but is not a day; Date would silently
+    // turn it into March 3, and the picker would then disagree with the
+    // range on screen.
+    const resolved = resolveLabDayRange({
+      ...BASE,
+      range: "custom",
+      from: "2026-02-31",
+      to: "2026-07-10",
+    });
+    expect(resolved).toEqual({
+      dateFrom: "2026-07-02",
+      dateTo: "2026-07-10",
+      timezoneKind: "store",
+    });
+  });
+
   it("falls back locally on malformed days instead of issuing invalid input", () => {
     const resolved = resolveLabDayRange({
       ...BASE,
