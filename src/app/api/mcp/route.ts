@@ -92,7 +92,7 @@ const handler = createMcpHandler(
 
     return server;
   },
-  { legacy: "reject" },
+  { legacy: "stateless" },
 );
 
 export const POST = requireMcpAuth(
