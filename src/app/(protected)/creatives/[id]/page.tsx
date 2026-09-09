@@ -23,6 +23,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CreativeAdsTab } from "@/components/blocks/creatives/creative-ads-tab";
 import { CreativePerformanceTab } from "@/components/blocks/creatives/creative-performance-tab";
+import { CreativeVariationsTab } from "@/components/blocks/creatives/creative-variations-tab";
 import { DateRangePicker } from "@/components/blocks/dashboard/date-range-picker";
 import { DemographicBreakdownChart } from "@/components/blocks/dashboard/demographic-chart";
 import { Field, FieldContent, FieldError, FieldLabel } from "@/components/ui/field";
@@ -69,10 +70,7 @@ import {
   type CreativeFormValues,
 } from "@/lib/creative-form";
 import type { MetaCreativePreview } from "@/lib/meta-creative-assets";
-
-function isVideoFileUrl(value: string | null | undefined) {
-  return Boolean(value?.match(/\.(mp4|webm|mov)(\?|$)/i));
-}
+import { isStaticImageCreative, isVideoFile } from "@/lib/studio-assets";
 
 export default function CreativeDetailPage() {
   const trpc = useTRPC();
@@ -82,6 +80,9 @@ export default function CreativeDetailPage() {
   const id = params.id as string;
   const { role } = useActiveOrganizationRole();
   const isReadOnly = role === "member";
+  // Variations write through Studio: stay read-only until the role is known,
+  // so a member never sees an enabled button while the role loads.
+  const canWriteVariations = role != null && role !== "member";
 
   const [creativeTab, setCreativeTab] = useQueryState("tab", parseAsString.withDefault("performance"));
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(formatDateOnly(subDays(new Date(), 29))));
@@ -108,6 +109,10 @@ export default function CreativeDetailPage() {
   }, [fromValue, toValue]);
 
   const creative = useQuery(trpc.adCreative.getById.queryOptions({ id }));
+  // Shares the sidebar's query, so this costs no extra request.
+  const { data: featureFlags } = useQuery(
+    trpc.orgSettings.getFeatureFlags.queryOptions(),
+  );
   const perf = useQuery(trpc.adCreative.getPerformance.queryOptions(dateParams));
   const dailyPerf = useQuery(trpc.adCreative.getDailyPerformance.queryOptions(dateParams));
   const linkedAds = useQuery(trpc.ad.listByCreative.queryOptions({
@@ -216,10 +221,18 @@ export default function CreativeDetailPage() {
   const displayAssetUrl = assetUrl ?? metaPreview?.assetUrl ?? null;
   const previewFormat = format ?? metaPreview?.format ?? creative.data?.format ?? null;
   const playableVideoUrl = metaPreview?.videoUrl
-    ?? (isVideoFileUrl(assetUrl) ? assetUrl : creative.data?.videoUrl ?? null);
+    ?? (isVideoFile(assetUrl) ? assetUrl : creative.data?.videoUrl ?? null);
   const adPreviewUrl = adPreviewQuery.data?.previewUrl ?? null;
   const isLoadingVideo = wantsVideo && adPreviewQuery.isLoading;
   const canFetchMetaPreview = (!displayAssetUrl || (previewFormat === "video" && !playableVideoUrl));
+  const canMakeVariations =
+    isStaticImageCreative(creative.data) &&
+    (featureFlags?.imageStudio ?? false) &&
+    (featureFlags?.creativeVariations ?? false);
+  // A shared ?tab=variations link can point at a creative that is no longer a
+  // static image, or arrive after Image Studio was turned off; fall back rather
+  // than rendering an empty tab body.
+  const activeTab = creativeTab === "variations" && !canMakeVariations ? "performance" : creativeTab;
 
   if (creative.isLoading) {
     return (
@@ -328,7 +341,7 @@ export default function CreativeDetailPage() {
             className="w-full max-h-[400px]"
           />
         ) : displayAssetUrl ? (
-          isVideoFileUrl(displayAssetUrl) ? (
+          isVideoFile(displayAssetUrl) ? (
             <video
               src={displayAssetUrl}
               controls
@@ -417,7 +430,7 @@ export default function CreativeDetailPage() {
         />
       </div>
 
-      <Tabs value={creativeTab} onValueChange={setCreativeTab}>
+      <Tabs value={activeTab} onValueChange={setCreativeTab}>
         <TabsList variant="line">
           <TabsTrigger value="performance">Performance</TabsTrigger>
           <TabsTrigger value="details">Details</TabsTrigger>
@@ -430,6 +443,17 @@ export default function CreativeDetailPage() {
             )}
           </TabsTrigger>
           <TabsTrigger value="demographics">Demographics</TabsTrigger>
+          {canMakeVariations ? (
+            <TabsTrigger value="variations">
+              Variations
+              <Badge
+                variant="outline"
+                className="ml-1 px-1.5 py-0 text-[9px] uppercase tracking-[0.08em] text-muted-foreground"
+              >
+                Beta
+              </Badge>
+            </TabsTrigger>
+          ) : null}
         </TabsList>
 
         {/* Performance tab */}
@@ -724,6 +748,13 @@ export default function CreativeDetailPage() {
             />
           ) : null}
         </TabsContent>
+
+        {/* Variations tab */}
+        {canMakeVariations ? (
+          <TabsContent value="variations" className="pt-4">
+            <CreativeVariationsTab key={id} creativeId={id} readOnly={!canWriteVariations} />
+          </TabsContent>
+        ) : null}
       </Tabs>
 
       {/* Delete dialog */}

@@ -34,6 +34,7 @@ describe.each([
 describe("canAccessMemberPath", () => {
   it("lets members reach every flag-gated route the sidebar shows them", () => {
     for (const def of featureFlagDefs) {
+      if (!def.href) continue;
       expect(canAccessMemberPath("member", def.href)).toBe(true);
       expect(canAccessMemberPath("member", `${def.href}/detail`)).toBe(true);
     }

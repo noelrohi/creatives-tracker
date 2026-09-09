@@ -13,6 +13,7 @@
 - **DB push:** disabled by design. Generate a migration with `bun run db:generate`, then apply it with `bun run db:migrate`
 - **DB studio:** `bun run db:studio`
 - **Trigger.dev:** `bun run trigger:dev` (local), `bun run trigger:deploy`
+- **Studio context seed:** `bun run studio:seed-context -- --org <id> --dir <folder> [--dry-run]` (folder needs a `context-manifest.json`; documents tiered core/reference, images uploaded to Blob). Set `STUDIO_LOCAL_STORAGE_DIR` in `.env` (dev only) to write Studio images to a local folder served at `/studio-local` instead of Blob
 
 ## Architecture
 
@@ -36,7 +37,7 @@ Main routes live under `src/app/(protected)/`:
 - Domain routers in `src/lib/trpc/routers/`, one file per domain, composed in `_app.ts` (Image Studio is split across `studio.*.ts`)
 - OpenAPI reference: `src/app/api/openapi/`
 - File upload endpoint: `src/app/api/upload/route.ts`
-- Background jobs live in `trigger/` (Trigger.dev): Meta/Shopify sync (`meta-sync.ts`, `shopify-sync.ts`, `shopify-evidence-sync.ts`), Studio image generation (`generate-static-ads.ts`, `generate-studio-suggestions.ts`), landing-page enrichment (`harvest-landing-pages.ts`, `classify-landing-pages.ts`, `enrich-creative-tags.ts`), attribution checks (`attribution-checks.ts`), and the Klaviyo pilot chain (`klaviyo-*.ts`)
+- Background jobs live in `trigger/` (Trigger.dev): Meta/Shopify sync (`meta-sync.ts`, `shopify-sync.ts`, `shopify-evidence-sync.ts`), Studio image generation (`generate-static-ads.ts`, `generate-studio-suggestions.ts`, `generate-variation.ts`), landing-page enrichment (`harvest-landing-pages.ts`, `classify-landing-pages.ts`, `enrich-creative-tags.ts`), attribution checks (`attribution-checks.ts`), and the Klaviyo pilot chain (`klaviyo-*.ts`)
 
 ### Auth
 

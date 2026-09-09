@@ -20,3 +20,9 @@ export async function isImageStudioEnabled(organizationId: string) {
   const flags = await getOrgFeatureFlags(organizationId);
   return flags.imageStudio === true;
 }
+
+/** Variations run through Image Studio, so they need both flags. */
+export async function isCreativeVariationsEnabled(organizationId: string) {
+  const flags = await getOrgFeatureFlags(organizationId);
+  return flags.imageStudio === true && flags.creativeVariations === true;
+}

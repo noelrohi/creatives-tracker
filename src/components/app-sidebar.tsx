@@ -147,9 +147,10 @@ export function AppSidebar() {
   const { data: featureFlags } = useQuery(
     trpc.orgSettings.getFeatureFlags.queryOptions(),
   );
-  const enabledFlagDefs = featureFlagDefs.filter(
-    (def) => featureFlags?.[def.key] ?? false,
-  );
+  // Flags without a page of their own (a tab, a button) have no nav item.
+  const enabledFlagDefs = featureFlagDefs
+    .filter((def): def is typeof def & { href: string } => def.href !== null)
+    .filter((def) => featureFlags?.[def.key] ?? false);
   const analyzeItems = enabledFlagDefs.filter((def) => def.group === "analyze");
   const toolsItems = enabledFlagDefs.filter((def) => def.group === "tools");
 

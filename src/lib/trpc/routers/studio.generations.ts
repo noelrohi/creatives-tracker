@@ -33,6 +33,7 @@ import type {
   generateStaticAdsTask,
   generateStaticAdVariantTask,
 } from "../../../../trigger/generate-static-ads";
+import type { generateVariationTask } from "../../../../trigger/generate-variation";
 import {
   createStudioGeneration,
   extendStudioWinner,
@@ -103,7 +104,7 @@ export const studioGenerationProcedures = {
     .input(z.object({ id: z.string() }))
     .output(queuedGenerationSchema)
     .mutation(async ({ input, ctx }) => {
-      const generation = await db.transaction(async (tx) => {
+      const claim = await db.transaction(async (tx) => {
         const [claimed] = await tx
           .update(studioGenerations)
           .set({ status: "generating", runId: null, updatedAt: new Date() })
@@ -116,7 +117,7 @@ export const studioGenerationProcedures = {
           )
           .returning();
         if (!claimed) return null;
-        await tx
+        const reset = await tx
           .update(studioVariants)
           .set({
             status: "pending",
@@ -126,6 +127,10 @@ export const studioGenerationProcedures = {
             markedAt: null,
             publishedAt: null,
             moderationReason: null,
+            // Variation agent output belongs to the run that produced it; a
+            // retry must not describe itself with the previous run's plan.
+            plan: null,
+            attempts: null,
             updatedAt: new Date(),
           })
           .where(
@@ -133,11 +138,49 @@ export const studioGenerationProcedures = {
               eq(studioVariants.generationId, claimed.id),
               eq(studioVariants.organizationId, ctx.organizationId),
             ),
-          );
-        return claimed;
+          )
+          .returning({ id: studioVariants.id, index: studioVariants.index });
+        return { generation: claimed, variants: reset };
       });
-      if (!generation) {
+      if (!claim) {
         throw new TRPCError({ code: "CONFLICT", message: "Only failed generations can be retried" });
+      }
+      const { generation, variants } = claim;
+      // A variation is one agent run, not a batch of static ads: "Retry all"
+      // has to re-run the agent that produced it.
+      if (generation.kind === "variation") {
+        const source = generation.sourceCreativeId
+          ? { kind: "creative" as const, id: generation.sourceCreativeId }
+          : generation.sourceCompetitorAdId
+            ? { kind: "competitor_ad" as const, id: generation.sourceCompetitorAdId }
+            : null;
+        const variantId = variants[0]?.id;
+        if (!source || !variantId) {
+          await failStudioGeneration(generation.id, ctx.organizationId);
+          throw new TRPCError({ code: "CONFLICT", message: "This variation has no source to retry from" });
+        }
+        try {
+          const handle = await tasks.trigger<typeof generateVariationTask>("generate-variation", {
+            organizationId: ctx.organizationId,
+            generationId: generation.id,
+            variantId,
+            source,
+            note: generation.note,
+          });
+          await db
+            .update(studioGenerations)
+            .set({ runId: handle.id, updatedAt: new Date() })
+            .where(
+              and(
+                eq(studioGenerations.id, generation.id),
+                eq(studioGenerations.organizationId, ctx.organizationId),
+              ),
+            );
+          return { runId: handle.id, generationId: generation.id };
+        } catch (error) {
+          await failStudioGeneration(generation.id, ctx.organizationId);
+          throw error;
+        }
       }
       try {
         const handle = await tasks.trigger<typeof generateStaticAdsTask>(
@@ -781,6 +824,10 @@ export const studioGenerationProcedures = {
             count: studioGenerations.count,
             format: studioGenerations.format,
             referenceImageUrls: studioGenerations.referenceImageUrls,
+            kind: studioGenerations.kind,
+            note: studioGenerations.note,
+            sourceCreativeId: studioGenerations.sourceCreativeId,
+            sourceCompetitorAdId: studioGenerations.sourceCompetitorAdId,
           })
           .from(studioVariants)
           .innerJoin(studioGenerations, eq(studioGenerations.id, studioVariants.generationId))
@@ -809,6 +856,10 @@ export const studioGenerationProcedures = {
             markedAt: null,
             publishedAt: null,
             moderationReason: null,
+            // Variation agent output belongs to the run that produced it; a
+            // retry must not describe itself with the previous run's plan.
+            plan: null,
+            attempts: null,
             retryWithoutImageAt: input.withoutReferenceImage ? new Date() : undefined,
             updatedAt: new Date(),
           })
@@ -819,6 +870,49 @@ export const studioGenerationProcedures = {
           .where(eq(studioGenerations.id, variant.generationId));
         return variant;
       });
+      const abandonRetry = async () => {
+        await db
+          .update(studioVariants)
+          .set({ status: "failed", updatedAt: new Date() })
+          .where(eq(studioVariants.id, claimed.id));
+        await finalizeStudioGenerationIfSettled(claimed.generationId, ctx.organizationId);
+      };
+      // Variations re-run the agent; the brand profile below is only read by the static-ad path.
+      if (claimed.kind === "variation") {
+        const source = claimed.sourceCreativeId
+          ? { kind: "creative" as const, id: claimed.sourceCreativeId }
+          : claimed.sourceCompetitorAdId
+            ? { kind: "competitor_ad" as const, id: claimed.sourceCompetitorAdId }
+            : null;
+        // createVariationGeneration always writes a source; this covers Phase 2 competitor rows and any row edited out from under us.
+        if (!source) {
+          await abandonRetry();
+          throw new TRPCError({ code: "CONFLICT", message: "This variation has no source to retry from" });
+        }
+        try {
+          const handle = await tasks.trigger<typeof generateVariationTask>("generate-variation", {
+            organizationId: ctx.organizationId,
+            generationId: claimed.generationId,
+            variantId: claimed.id,
+            source,
+            note: claimed.note,
+            withoutSourceImage: input.withoutReferenceImage, // same flag, agent-side name
+          });
+          await db
+            .update(studioGenerations)
+            .set({ runId: handle.id, updatedAt: new Date() })
+            .where(
+              and(
+                eq(studioGenerations.id, claimed.generationId),
+                eq(studioGenerations.organizationId, ctx.organizationId),
+              ),
+            );
+        } catch (error) {
+          await abandonRetry();
+          throw error;
+        }
+        return { ok: true as const, generationId: claimed.generationId, variantId: claimed.id };
+      }
       const brand = await getStudioBrandProfile(ctx.organizationId);
       const layoutReferenceUrls = input.withoutReferenceImage
         ? []
@@ -834,7 +928,7 @@ export const studioGenerationProcedures = {
       // siblings; fall back to the template prompt for pre-rewrite rows.
       const retryPrompt = claimed.prompt?.trim() || null;
       try {
-        await tasks.trigger<typeof generateStaticAdVariantTask>(
+        const handle = await tasks.trigger<typeof generateStaticAdVariantTask>(
           "generate-static-ad-variant",
           {
             generationId: claimed.generationId,
@@ -862,12 +956,17 @@ export const studioGenerationProcedures = {
             finalizeGeneration: true,
           },
         );
-      } catch (error) {
         await db
-          .update(studioVariants)
-          .set({ status: "failed", updatedAt: new Date() })
-          .where(eq(studioVariants.id, claimed.id));
-        await finalizeStudioGenerationIfSettled(claimed.generationId, ctx.organizationId);
+          .update(studioGenerations)
+          .set({ runId: handle.id, updatedAt: new Date() })
+          .where(
+            and(
+              eq(studioGenerations.id, claimed.generationId),
+              eq(studioGenerations.organizationId, ctx.organizationId),
+            ),
+          );
+      } catch (error) {
+        await abandonRetry();
         throw error;
       }
       return {

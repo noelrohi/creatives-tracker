@@ -15,4 +15,6 @@ export default defineConfig({
     },
   },
   maxDuration: 600,
+  // sharp is a native module: the bundler must not inline it.
+  build: { external: ["sharp"] },
 });

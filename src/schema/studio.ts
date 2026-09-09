@@ -8,6 +8,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import type { SuggestionElements } from "@/lib/studio-suggestions";
+import type { VariationAttempt, VariationPlan } from "@/lib/variation-agent-types";
 import { adCreatives } from "./ad-creative";
 import { organization } from "./auth";
 import { awarenessLevelEnum } from "./enums";
@@ -71,6 +72,109 @@ export const studioBrandProfiles = pgTable(
   },
   (table) => [
     uniqueIndex("studio_brand_profile_org_uidx").on(table.organizationId),
+  ],
+);
+
+export const STUDIO_CONTEXT_DOCUMENT_KINDS = [
+  "guideline",
+  "playbook",
+  "product",
+  "audience",
+  "testimonials",
+  "transcripts",
+  "other",
+] as const;
+export type StudioContextDocumentKind =
+  (typeof STUDIO_CONTEXT_DOCUMENT_KINDS)[number];
+
+export const STUDIO_CONTEXT_TIERS = ["core", "reference"] as const;
+export type StudioContextTier = (typeof STUDIO_CONTEXT_TIERS)[number];
+
+export const STUDIO_CONTEXT_IMAGE_KINDS = [
+  "product",
+  "packaging",
+  "before_after",
+  "logo",
+  "person",
+  "other",
+] as const;
+export type StudioContextImageKind =
+  (typeof STUDIO_CONTEXT_IMAGE_KINDS)[number];
+
+export const studioContextDocuments = pgTable(
+  "studio_context_document",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    organizationId: text("organization_id").notNull(),
+    title: text("title").notNull(),
+    // One line; the agent uses it to decide which reference documents to read.
+    description: text("description").notNull(),
+    kind: text("kind").$type<StudioContextDocumentKind>().notNull(),
+    // core: inlined into every run. reference: index only, read on demand.
+    tier: text("tier").$type<StudioContextTier>().notNull(),
+    sourceFilename: text("source_filename").notNull(),
+    mimeType: text("mime_type").notNull(),
+    content: text("content").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("studio_context_document_org_file_uidx").on(
+      table.organizationId,
+      table.sourceFilename,
+    ),
+    index("studio_context_document_org_idx").on(table.organizationId),
+  ],
+);
+
+export const studioContextSections = pgTable(
+  "studio_context_section",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    documentId: text("document_id")
+      .notNull()
+      .references(() => studioContextDocuments.id, { onDelete: "cascade" }),
+    ordinal: integer("ordinal").notNull(),
+    heading: text("heading").notNull(),
+    // Heading chain, e.g. "Athletic Performance > Recovery (part 2)".
+    path: text("path").notNull(),
+    content: text("content").notNull(),
+  },
+  (table) => [
+    index("studio_context_section_document_idx").on(
+      table.documentId,
+      table.ordinal,
+    ),
+  ],
+);
+
+export const studioContextImages = pgTable(
+  "studio_context_image",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    organizationId: text("organization_id").notNull(),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    kind: text("kind").$type<StudioContextImageKind>().notNull(),
+    imageUrl: text("image_url").notNull(),
+    sourceFilename: text("source_filename").notNull(),
+    width: integer("width").notNull(),
+    height: integer("height").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("studio_context_image_org_file_uidx").on(
+      table.organizationId,
+      table.sourceFilename,
+    ),
+    index("studio_context_image_org_idx").on(table.organizationId),
   ],
 );
 
@@ -172,6 +276,18 @@ export const studioGenerations = pgTable(
       () => studioCopyPackages.id,
       { onDelete: "set null" },
     ),
+    // "generation" for composer/suggestion output; "variation" when the
+    // variation agent produced it from a source creative or competitor ad.
+    kind: text("kind")
+      .$type<"generation" | "variation">()
+      .notNull()
+      .default("generation"),
+    // Provenance only: the id the variation agent was run from. No FK on
+    // purpose, so a competitor ad that is later deleted neither cascades into
+    // nor nulls out a finished variation's record.
+    sourceCompetitorAdId: text("source_competitor_ad_id"),
+    // The user's optional steering note for a variation.
+    note: text("note"),
     status: text("status").notNull().default("generating"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -301,6 +417,10 @@ export const studioVariants = pgTable(
     ),
     moderationReason: text("moderation_reason"),
     retryWithoutImageAt: timestamp("retry_without_image_at"),
+    // Variation agent output: the structured plan returned by its finish tool
+    // (or a synthesized one) and every image attempt with its review verdict.
+    plan: jsonb("plan").$type<VariationPlan | null>(),
+    attempts: jsonb("attempts").$type<VariationAttempt[] | null>(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },

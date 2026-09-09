@@ -15,8 +15,9 @@ import {
   studioVariants,
 } from "@/schema/studio";
 import { AWARENESS_LEVELS, type AwarenessLevel } from "@/lib/awareness";
-import { isImageStudioEnabled } from "@/lib/feature-flags.server";
+import { isCreativeVariationsEnabled, isImageStudioEnabled } from "@/lib/feature-flags.server";
 import { isHttpUrl } from "@/lib/remote-image";
+import { isStaticImageCreative } from "@/lib/studio-assets";
 import { getStudioBrandProfile } from "@/lib/studio-brand";
 import {
   fetchCreativePerformanceRows,
@@ -37,6 +38,7 @@ import {
   studioSlug,
 } from "@/lib/studio-taxonomy";
 import type { generateStaticAdsTask } from "../../../../trigger/generate-static-ads";
+import type { generateVariationTask } from "../../../../trigger/generate-variation";
 
 export const awarenessLevelSchema = z.enum(AWARENESS_LEVELS);
 export const studioFormatSchema = z
@@ -87,6 +89,22 @@ export const studioProcedure = orgProcedure.use(async ({ ctx, next }) => {
 });
 export const studioWriteProcedure = orgWriteProcedure.use(async ({ ctx, next }) => {
   await requireImageStudioEnabled(ctx.organizationId);
+  return next();
+});
+
+async function requireCreativeVariationsEnabled(organizationId: string) {
+  if (!(await isCreativeVariationsEnabled(organizationId))) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Creative variations are not enabled" });
+  }
+}
+
+/** Variations need Image Studio and the creativeVariations flag. */
+export const variationsProcedure = orgProcedure.use(async ({ ctx, next }) => {
+  await requireCreativeVariationsEnabled(ctx.organizationId);
+  return next();
+});
+export const variationsWriteProcedure = orgWriteProcedure.use(async ({ ctx, next }) => {
+  await requireCreativeVariationsEnabled(ctx.organizationId);
   return next();
 });
 
@@ -373,6 +391,92 @@ export async function createStudioGeneration(
         ),
       );
     return { runId: handle.id, generationId: generation.id };
+  } catch (error) {
+    await failStudioGeneration(generation.id, organizationId);
+    throw error;
+  }
+}
+
+export type CreateVariationGenerationParams = {
+  sourceCreativeId: string;
+  note?: string | null;
+};
+
+/**
+ * Scaffolds one variation generation (kind = "variation", count = 1) for a
+ * static image creative and queues the agent. The format starts as portrait;
+ * the task rewrites it from the source image's real dimensions.
+ */
+export async function createVariationGeneration(
+  organizationId: string,
+  params: CreateVariationGenerationParams,
+) {
+  const [source] = await db
+    .select({
+      id: adCreatives.id,
+      name: adCreatives.name,
+      assetUrl: adCreatives.assetUrl,
+      format: adCreatives.format,
+    })
+    .from(adCreatives)
+    .where(
+      and(
+        eq(adCreatives.id, params.sourceCreativeId),
+        eq(adCreatives.organizationId, organizationId),
+      ),
+    )
+    .limit(1);
+  if (!source) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Source creative not found" });
+  }
+  if (!isStaticImageCreative(source)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Variations need a static image creative",
+    });
+  }
+  const note = params.note?.trim() || null;
+  const [generation] = await db
+    .insert(studioGenerations)
+    .values({
+      organizationId,
+      kind: "variation",
+      brief: `Variation of ${source.name}`,
+      count: 1,
+      format: "portrait",
+      referenceImageUrls: [source.assetUrl],
+      sourceCreativeId: source.id,
+      note,
+    })
+    .returning();
+  const [variant] = await db
+    .insert(studioVariants)
+    .values({
+      generationId: generation.id,
+      organizationId,
+      index: 0,
+      status: "pending",
+    })
+    .returning();
+
+  try {
+    const handle = await tasks.trigger<typeof generateVariationTask>("generate-variation", {
+      organizationId,
+      generationId: generation.id,
+      variantId: variant.id,
+      source: { kind: "creative", id: source.id },
+      note,
+    });
+    await db
+      .update(studioGenerations)
+      .set({ runId: handle.id, updatedAt: new Date() })
+      .where(
+        and(
+          eq(studioGenerations.id, generation.id),
+          eq(studioGenerations.organizationId, organizationId),
+        ),
+      );
+    return { generationId: generation.id, variantId: variant.id, runId: handle.id };
   } catch (error) {
     await failStudioGeneration(generation.id, organizationId);
     throw error;

@@ -310,6 +310,7 @@ function getRequestBody(schema?: ZodTypeAny) {
 function collectOpenApiProcedures(
   record: Record<string, unknown>,
   routerName?: string,
+  prefix = "",
 ): OpenApiProcedure[] {
   const procedures: OpenApiProcedure[] = [];
 
@@ -319,7 +320,20 @@ function collectOpenApiProcedures(
       continue;
     }
 
-    if (!routerName || !isProcedure(value)) {
+    if (!routerName) {
+      continue;
+    }
+
+    // A nested namespace (studio.variations.*) keeps its dotted procedure name
+    // so the caller lookup and the REST path both resolve.
+    if (!isProcedure(value) && isRecord(value)) {
+      procedures.push(
+        ...collectOpenApiProcedures(value, routerName, `${prefix}${key}.`),
+      );
+      continue;
+    }
+
+    if (!isProcedure(value)) {
       continue;
     }
 
@@ -331,13 +345,14 @@ function collectOpenApiProcedures(
 
     const tagMeta = TAG_METADATA[routerName];
     const displayTag = tagMeta?.name ?? routerName;
+    const procedureName = `${prefix}${key}`;
 
     procedures.push({
       routerName,
-      procedureName: key,
+      procedureName,
       method: openapi.method,
       path: openapi.path,
-      summary: openapi.summary ?? humanizeProcedureName(key),
+      summary: openapi.summary ?? humanizeProcedureName(procedureName),
       description: openapi.description,
       tags: openapi.tags ?? [displayTag],
       inputSchema: getProcedureInputSchema(value),

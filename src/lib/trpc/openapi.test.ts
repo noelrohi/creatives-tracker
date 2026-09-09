@@ -316,6 +316,11 @@ describe("OpenAPI app inventory", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("documents nested namespaces", () => {
+    expect(document.paths["/api/openapi/studio/variations.create"]).toBeDefined();
+    expect(document.paths["/api/openapi/studio/variations.listForCreative"]).toBeDefined();
+  });
+
   it("omits internal and dead router operations", () => {
     expect(
       Object.keys(document.paths).some(
