@@ -526,6 +526,13 @@
       "when": 1788842699285,
       "tag": "0074_klaviyo_campaign_ledger",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1788920430529,
+      "tag": "0075_amazing_nomad",
+      "breakpoints": true
     }
   ]
 }
