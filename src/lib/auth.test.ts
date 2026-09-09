@@ -1,6 +1,16 @@
 import { createHash } from "node:crypto";
+import { once } from "node:events";
+import { createServer, type Socket } from "node:net";
+import type { BetterAuthPlugin } from "better-auth";
 import { decodeJwt, exportJWK, generateKeyPair, SignJWT } from "jose";
+import { Pool } from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const resourceStorage = vi.hoisted(() => ({
+  readResource: vi.fn<() => Promise<void>>(),
+  seedWrites: vi.fn(),
+  database: {} as Record<string, unknown[]>,
+}));
 
 vi.unmock("@/lib/auth");
 vi.mock("@/db", () => {
@@ -15,8 +25,8 @@ vi.mock("@/db", () => {
 vi.mock("better-auth/adapters/drizzle", async () => {
   const { memoryAdapter } = await import("better-auth/adapters/memory");
   return {
-    drizzleAdapter: () =>
-      memoryAdapter({
+    drizzleAdapter: () => {
+      const database = {
         oauthResource: [],
         oauthClient: [],
         oauthClientResource: [],
@@ -28,7 +38,24 @@ vi.mock("better-auth/adapters/drizzle", async () => {
         oauthAccessToken: [],
         oauthRefreshToken: [],
         jwks: [],
-      }),
+      };
+      resourceStorage.database = database;
+      const createAdapter = memoryAdapter(database);
+      return (options: Parameters<typeof createAdapter>[0]) => {
+        const adapter = createAdapter(options);
+        return {
+          ...adapter,
+          async findOne(args: Parameters<typeof adapter.findOne>[0]) {
+            if (args.model === "oauthResource") await resourceStorage.readResource();
+            return adapter.findOne(args);
+          },
+          async create(args: Parameters<typeof adapter.create>[0]) {
+            if (args.model === "oauthResource") resourceStorage.seedWrites();
+            return adapter.create(args);
+          },
+        };
+      };
+    },
   };
 });
 vi.mock("@/lib/cimd-fetch", () => ({
@@ -80,20 +107,23 @@ async function authorize(jwksOrigin: string) {
   return auth.handler(new Request(url));
 }
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+beforeEach(() => {
+  vi.resetModules();
+  resourceStorage.readResource.mockReset().mockResolvedValue(undefined);
+  resourceStorage.seedWrites.mockClear();
+  vi.stubEnv("NODE_ENV", "test");
+  vi.stubEnv("BETTER_AUTH_URL", "http://localhost:3000");
+  vi.stubEnv("BETTER_AUTH_SECRET", "test-secret-for-oauth-origin-regression-only");
+  vi.mocked(getOrganizationRole).mockResolvedValue("member");
+});
+
 describe("OAuth CIMD clients", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
-  });
-
-  beforeEach(() => {
-    vi.resetModules();
-    vi.stubEnv("BETTER_AUTH_URL", "http://localhost:3000");
-    vi.stubEnv("BETTER_AUTH_SECRET", "test-secret-for-oauth-origin-regression-only");
-    vi.mocked(getOrganizationRole).mockResolvedValue("member");
-  });
-
   it.each(["https://kms.vercel.com", "https://connect.vercel.com"])(
     "accepts client keys from %s and proceeds to sign-in",
     async (origin) => {
@@ -329,5 +359,161 @@ describe("OAuth CIMD clients", () => {
     const denied = await (await call()).text();
     expect(denied).toContain('"isError":true');
     expect(denied).not.toContain("oauth-test-org");
+  });
+});
+
+// A real pg connection is closed while pg is waiting for the server. No
+// external database or credentials are needed; all subsequent reads use the
+// memory adapter, so database recovery is independent of auth recovery.
+async function withDroppedConnection(
+  run: (drop: () => Promise<void>) => Promise<void>,
+) {
+  const sockets = new Set<Socket>();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on("error", () => {});
+    socket.on("close", () => sockets.delete(socket));
+    socket.once("data", () => socket.resetAndDestroy());
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Missing TCP port");
+  const pool = new Pool({
+    host: "127.0.0.1",
+    port: address.port,
+    user: "test",
+    database: "test",
+    ssl: false,
+    connectionTimeoutMillis: 1000,
+  });
+  try {
+    await run(async () => {
+      await pool.query("select 1 from oauth_resource limit 1");
+    });
+  } finally {
+    await pool.end();
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve, reject) => {
+      server.close(error => error ? reject(error) : resolve());
+    });
+  }
+}
+
+// Regression for https://github.com/better-auth/better-auth/issues/10887.
+// Exercise the installed provider so removing the Bun patch breaks these tests.
+describe("OAuth resource seeding", () => {
+  const base = "http://localhost:3000";
+  const request = (path = "get-session") => new Request(`${base}/api/auth/${path}`);
+  const register = () => new Request(`${base}/api/auth/oauth2/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      client_name: "Recovery test",
+      redirect_uris: ["https://client.example/callback"],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code"],
+      response_types: ["code"],
+    }),
+  });
+
+  it("initializes auth without touching resource storage, even when its connection is down", async () => {
+    await withDroppedConnection(async (drop) => {
+      const { readResource } = resourceStorage;
+      readResource.mockImplementation(drop);
+      const { auth } = await import("@/lib/auth");
+      const [context, session, response] = await Promise.all([
+        auth.$context,
+        auth.api.getSession({ headers: new Headers() }),
+        auth.handler(request()),
+      ]);
+      expect(context.baseURL).toBe(`${base}/api/auth`);
+      expect(session).toBeNull();
+      expect(response.status).toBe(200);
+      expect((await auth.handler(request("organization/list"))).status).toBe(401);
+      expect(readResource).not.toHaveBeenCalled();
+    });
+  });
+
+  it("recovers on the same instance after a real pg connection drop during the first OAuth resource access", async () => {
+    await withDroppedConnection(async (drop) => {
+      const { readResource, seedWrites } = resourceStorage;
+      let connectionError: unknown;
+      readResource.mockImplementationOnce(async () => {
+        try {
+          await drop();
+        } catch (error) {
+          connectionError = error;
+          throw error;
+        }
+      });
+      const { auth } = await import("@/lib/auth");
+      const { database } = resourceStorage;
+      await auth.$context;
+      expect((await auth.handler(register())).status).toBe(500);
+      expect(connectionError).toBeInstanceOf(Error);
+      expect((connectionError as Error).message).toMatch(/ECONNRESET|Connection terminated unexpectedly/);
+      expect(readResource).toHaveBeenCalledTimes(1);
+      expect(database.oauthClient).toHaveLength(0);
+      // No request replay or timed retry; unrelated auth is still usable.
+      expect((await auth.handler(request())).status).toBe(200);
+      expect((await auth.handler(request("organization/list"))).status).toBe(401);
+      expect(readResource).toHaveBeenCalledTimes(1);
+      const recovered = await auth.handler(register());
+      expect(recovered.status, await recovered.clone().text()).toBe(201);
+      expect((await recovered.json()).client_id).toEqual(expect.any(String));
+      expect(database.oauthClient).toHaveLength(1);
+      expect(seedWrites).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("shares the first seed across concurrent OAuth requests without blocking session or context access", async () => {
+    const { auth } = await import("@/lib/auth");
+    const { readResource, seedWrites, database } = resourceStorage;
+    await auth.$context;
+    let release!: () => void;
+    readResource.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    const pending = Promise.all(Array.from({ length: 3 }, () => auth.handler(register())));
+    await vi.waitFor(() => expect(readResource).toHaveBeenCalledTimes(1));
+    expect((await auth.handler(request())).status).toBe(200);
+    expect(await auth.api.getSession({ headers: new Headers() })).toBeNull();
+    expect((await auth.$context).baseURL).toBe(`${base}/api/auth`);
+    release();
+    for (const response of await pending) {
+      expect(response.status, await response.clone().text()).toBe(201);
+    }
+    // One seed read, then one lookup per request; only one resource insert.
+    expect(readResource).toHaveBeenCalledTimes(4);
+    expect(seedWrites).toHaveBeenCalledTimes(1);
+    expect(database.oauthClient).toHaveLength(3);
+  });
+
+  it("never replays an OAuth token POST after its body is consumed and execution loses its connection", async () => {
+    await withDroppedConnection(async (drop) => {
+      const { auth } = await import("@/lib/auth");
+      const context = await auth.$context;
+      const consumed = vi.fn();
+      const executeToken = vi.fn(async (req: Request) => {
+        consumed(await req.text());
+        await drop();
+      });
+      const plugins: BetterAuthPlugin[] = context.options.plugins;
+      plugins.push({
+        id: "oauth-execution-probe",
+        onRequest: async (req) => {
+          if (new URL(req.url).pathname === "/api/auth/oauth2/token") {
+            await executeToken(req);
+          }
+        },
+      });
+      const body = "grant_type=authorization_code&code=single-use";
+      await expect(auth.handler(new Request(`${base}/api/auth/oauth2/token`, {
+        method: "POST", body,
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      }))).rejects.toThrow(/ECONNRESET|Connection terminated unexpectedly/);
+      expect(executeToken).toHaveBeenCalledTimes(1);
+      expect(consumed).toHaveBeenCalledExactlyOnceWith(body);
+      expect((await auth.handler(request())).status).toBe(200);
+    });
   });
 });
