@@ -11,15 +11,7 @@ import {
 import { BUCKET_ORDER } from "@/components/blocks/attribution/buckets";
 import { DateRangePicker } from "@/components/blocks/dashboard/date-range-picker";
 import { formatDateOnly } from "@/lib/date";
-
-/**
- * The picker works in local-time Dates; a "YYYY-MM-DD" lab day becomes local
- * midnight so it round-trips through `formatDateOnly` unchanged.
- */
-function dayToLocalDate(day: string): Date {
-  const [year, month, date] = day.split("-").map(Number);
-  return new Date(year, month - 1, date);
-}
+import { isDay } from "@/lib/day";
 import {
   CHANNEL_FILTERS,
   CLAIM_TYPE_FILTERS,
@@ -36,6 +28,18 @@ import { LedgerSearch } from "./ledger/ledger-search";
 import type { useKlaviyoLabState } from "./use-klaviyo-lab-state";
 
 /**
+ * The picker works in local-time Dates that stand for CALENDAR DAYS, never
+ * instants: a lab day (already validated by the resolver) becomes local
+ * midnight, and `formatDateOnly` reads it back as the same day whatever the
+ * browser's zone. A malformed day falls back to the given day.
+ */
+function dayToLocalDate(day: string, fallback: string): Date {
+  const safe = isDay(day) ? day : fallback;
+  const [year, month, date] = safe.split("-").map(Number);
+  return new Date(year, month - 1, date);
+}
+
+/**
  * View-scoped filters: orders show the full evidence filter set, unmatched
  * shows date and channel only, the ledger shows account-day date, kind,
  * channel, and search, probe shows none. Hidden filters never enter query
@@ -44,6 +48,8 @@ import type { useKlaviyoLabState } from "./use-klaviyo-lab-state";
 export function LabFilterBar(props: {
   view: LabView;
   range: { dateFrom: string; dateTo: string };
+  /** Today in the active view's timezone (store or account), "YYYY-MM-DD". */
+  today: string;
   storeTimezone: string;
   accountTimezone: string;
   lab: ReturnType<typeof useKlaviyoLabState>;
@@ -80,9 +86,13 @@ export function LabFilterBar(props: {
         </SelectContent>
       </Select>
       {state.range === "custom" ? (
+        // Presets and the selectable ceiling follow the active timezone's
+        // today, not the browser's: a Melbourne store's current day must be
+        // pickable from Los Angeles, and "Yesterday" means the store's.
         <DateRangePicker
-          from={dayToLocalDate(props.range.dateFrom)}
-          to={dayToLocalDate(props.range.dateTo)}
+          from={dayToLocalDate(props.range.dateFrom, props.today)}
+          to={dayToLocalDate(props.range.dateTo, props.today)}
+          today={dayToLocalDate(props.today, props.today)}
           onChange={(range) => {
             if (!range) return;
             void setState({
