@@ -8,7 +8,7 @@
         "@ai-sdk/openai": "^3.0.47",
         "@better-auth/cimd": "^1.7.1",
         "@better-auth/mcp": "^1.7.1",
-        "@better-auth/oauth-provider": "^1.7.1",
+        "@better-auth/oauth-provider": "1.7.1",
         "@hookform/resolvers": "^5.2.2",
         "@iconify/react": "^6.0.2",
         "@modelcontextprotocol/server": "^2.0.0",
@@ -80,6 +80,9 @@
     "sharp",
     "unrs-resolver",
   ],
+  "patchedDependencies": {
+    "@better-auth/oauth-provider@1.7.1": "patches/@better-auth%2Foauth-provider@1.7.1.patch",
+  },
   "packages": {
     "@adobe/css-tools": ["@adobe/css-tools@4.5.0", "", {}, "sha512-6OzddxPio9UiWTCemp4N8cYLV2ZN1ncRnV1cVGtve7dhPOtRkleRyx32GQCYSwDYgaHU3USMm84tNsvKzRCa1Q=="],
 

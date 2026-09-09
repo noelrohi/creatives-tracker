@@ -1,6 +1,6 @@
 import { cimd } from "@better-auth/cimd";
 import { mcp } from "@better-auth/mcp";
-import { betterAuth, type BetterAuthOptions } from "better-auth";
+import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { createAuthMiddleware } from "better-auth/api";
 import { organization } from "better-auth/plugins";
@@ -8,7 +8,6 @@ import { jwt } from "better-auth/plugins/jwt";
 import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { fetchClientMetadataResource } from "@/lib/cimd-fetch";
-import { createRecoverableAuth } from "@/lib/recoverable-auth";
 import * as authSchema from "@/schema/auth";
 import * as oauthSchema from "@/schema/oauth";
 
@@ -48,7 +47,7 @@ async function defaultOrganizationId(userId: string) {
   return membership?.organizationId ?? null;
 }
 
-const authOptions = {
+export const auth = betterAuth({
   // Vercel Connect publishes client metadata on connect.vercel.com, but
   // hosts private_key_jwt verification keys on this separate origin.
   trustedOrigins: ["https://kms.vercel.com"],
@@ -160,6 +159,4 @@ const authOptions = {
       metadataFetchPolicy: { minimumFetchInterval: 0 },
     }),
   ],
-} satisfies BetterAuthOptions;
-
-export const auth = createRecoverableAuth(() => betterAuth(authOptions), authOptions);
+});

@@ -1,0 +1,15 @@
+diff --git a/dist/authorize-Crqw4_bR.mjs b/dist/authorize-Crqw4_bR.mjs
+index fdd19eb6333102dd77130d5ed142ad73f853b243..bf3bed20e791ae82c7afae161dd6883c377a3326 100644
+--- a/dist/authorize-Crqw4_bR.mjs
++++ b/dist/authorize-Crqw4_bR.mjs
+@@ -4398,7 +4398,9 @@ const oauthProvider = (options) => {
+ 		onRequest: handleIssuerMetadataRequest,
+ 		init: async (ctx) => {
+ 			if (ctx.options.secondaryStorage && ctx.options.session?.storeSessionInDatabase !== true) throw new BetterAuthError("OAuth Provider requires `session.storeSessionInDatabase: true` when using secondaryStorage");
+-			await seedResources(ctx, opts);
++			// Defer resource seeding to getResource -> seedResourcesOnce. A failed
++			// DB connection must not permanently reject the shared auth context.
++			// https://github.com/better-auth/better-auth/issues/10887
+ 			logEnforcePerClientResourcesResolution(opts);
+ 			if (!opts.disableJwtPlugin) {
+ 				const jwtPluginOptions = getJwtPlugin(ctx)?.options;
