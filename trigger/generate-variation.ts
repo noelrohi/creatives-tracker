@@ -196,7 +196,7 @@ async function locateProduct(
         `Locate the advertised physical product${brandName ? ` (${brandName})` : ""} in this static ad.`,
         "product: one normalized bounding box (x, y, w, h in 0-1 from the top-left) that covers the physical product itself as tightly as you can. Exclude its packaging, case, pedestal, card, panel, shadow, and any text, badge, or prop around it. When several units of the product appear, box the main one. When the packaging is itself the advertised product, box the packaging.",
         "tile: the card, tile, panel, or pedestal area with its own background that the product sits inside, or the packaging or case it sits in, on, or beside, when there is one, else null. Its edges must fall on a natural boundary, and it must not reach over headline text or unrelated props outside it.",
-        "landing: only when no product is drawn and the image clearly leaves an empty, plainly lit area for one (a bare pedestal top, an empty card, a clear tabletop): the box where the product should be placed, sized like its footprint and resting on the surface. Null otherwise.",
+        "landing: only when no product is drawn and the image clearly leaves an empty, plainly lit area for one (a clear patch of nightstand, tray, counter, shelf, or tabletop; a bare pedestal top; an empty card): the box where the product should be placed, sized like its footprint and resting on the surface. Null otherwise.",
         "Return product: null when no physical product is visible; tile is null then too; landing may still be set on a generated scene.",
       ].join("\n"),
       messages: [{ role: "user", content: [{ type: "image", image: bytes }] }],
@@ -808,6 +808,11 @@ export const generateVariationTask = task({
                   // A product placed on a surface rests on it; a product
                   // covering another one sits where that one was.
                   align: target === "landing" ? "bottom" : "center",
+                  // The product's relative width in the source, with a quarter
+                  // of headroom: a generous landing box must not inflate it.
+                  maxWidth: sourceProductBox ? sourceProductBox.w * 1.25 : undefined,
+                  shadow: true,
+                  matchLight: true,
                 });
                 produced = pastedPatch.bytes;
                 // The matte crops to what it kept, so record that region
@@ -825,6 +830,7 @@ export const generateVariationTask = task({
                   ...transplant,
                   tile: locatedOutput?.tile ?? null,
                   box: pastedPatch.box,
+                  blend: pastedPatch.blend,
                 });
               } else {
                 logger.warn(
@@ -939,6 +945,9 @@ export const generateVariationTask = task({
                       : transplantExpected
                         ? "- The product is not pasted in on this attempt (the paste step did not run), so the product in the generated ad, if any, is the model's own rendering: do not fail it on markings or exact shape, and an empty landing area beside it is acceptable. But the ad must still show the product somewhere; if no product is visible at all, fail and say 'no product visible'."
                         : `- The product matches ${productPhotoThird ? "the product photo (the third image)" : sourceSecond ? "the source's product" : "the product photo"} in shape, openings, material, and markings; no invented logos or text on it.`,
+                transplant
+                  ? "- If the scene shows a stand, pedestal, or platform under the product that the source ad does not have, say so in the notes; it is not a failure on its own."
+                  : null,
                 "- Every line of ad copy (headline, subhead, badges, CTA, tile labels) is legible and matches the quoted copy in the prompt, with no garbled or invented copy. Incidental labels on props and packaging inside the scene (a shampoo bottle, a book spine) are fine and are not ad copy.",
                 `- No logos or brand marks other than ${brand?.brandName ?? "the advertiser's"}; no platform UI, no watermarks.`,
                 "- The palette is consistent with a clean brand look: no clashing neon, no split panels unless the prompt asked for them.",
