@@ -10,11 +10,14 @@ import { buildClaimsConstraint, scanTextForClaims } from "@/lib/studio-claims";
 import type { StudioContextLibrary } from "@/lib/studio-context";
 import { moderationReasonFromError } from "@/lib/studio-moderation";
 import { studioSizeFor, type StudioFormat } from "@/lib/studio-prompt";
-import type {
-  VariationAttempt,
-  VariationPlan,
-  VariationReview,
-  VariationTransplant,
+import {
+  VARIATION_AXES,
+  VARIATION_FUNNELS,
+  type EarlierVariation,
+  type VariationAttempt,
+  type VariationPlan,
+  type VariationReview,
+  type VariationTransplant,
 } from "@/lib/variation-agent-types";
 
 export const MAX_STEPS = 12;
@@ -65,6 +68,8 @@ export type VariationRunInput = {
   format: StudioFormat;
   /** False on "retry without image": the source is never sent as a layout reference. */
   useSourceLayout: boolean;
+  /** Earlier variations of the same creative, newest first, so the agent rotates axes. */
+  earlierVariations?: EarlierVariation[];
 };
 
 export type VariationRunDeps = {
@@ -154,6 +159,36 @@ export const generateImageInputSchema = z.object({
   mode: z.enum(["edit", "generate"]).optional(),
   /** Override the protected region in edit mode (normalized 0-1 box). */
   keepRegion: productRegionSchema.optional(),
+});
+
+export const setBriefInputSchema = z.object({
+  funnel: z
+    .enum(VARIATION_FUNNELS)
+    .describe(
+      "tof: problem recognition or curiosity; mof: mechanism, education, comparison, objection handling; bof: price, offer, urgency, guarantee, strong proof.",
+    ),
+  lane: z
+    .string()
+    .min(1)
+    .describe(
+      "Format lane, e.g. product-led routine, testimonial card, before/after, offer badge, mechanism explainer, comparison, lifestyle, ugc.",
+    ),
+  mechanics: z
+    .string()
+    .min(1)
+    .describe(
+      "One sentence: what creates stopping power, comprehension, and purchase intent in the source.",
+    ),
+  locked: z
+    .array(z.string())
+    .describe(
+      "Elements that must not change: the product, a verified offer, the disclaimer, the logo, any user constraint.",
+    ),
+  axis: z.enum(VARIATION_AXES).describe("The one thing this variation tests."),
+  hypothesis: z
+    .string()
+    .min(1)
+    .describe('"By changing X while keeping Y and Z, we expect A because B."'),
 });
 
 export const finishInputSchema = z.object({ plan: variationPlanSchema });
