@@ -13,10 +13,7 @@ import {
   CLAIM_TYPE_FILTERS,
   DETAIL_TABS,
   JOURNEY_LOOKBACKS,
-  LAB_RANGES,
   LAB_VIEWS,
-  LEDGER_CHANNEL_FILTERS,
-  LEDGER_KIND_FILTERS,
   ORDER_STATUS_FILTERS,
   PRODUCT_STATUS_FILTERS,
   type JourneyLookback,
@@ -24,12 +21,9 @@ import {
   type LabView,
 } from "./copy";
 import {
-  DEFAULT_LEDGER_SORT,
-  LEDGER_SORT_COLUMNS,
-  LEDGER_SORT_DIRECTIONS,
-  nextLedgerSort,
-  type LedgerSortColumn,
-} from "./ledger/ledger-sort";
+  LEDGER_URL_PARSERS,
+  ledgerStateHelpers,
+} from "./ledger/ledger-url-state";
 
 export type ResolvedDayRange = {
   dateFrom: string;
@@ -73,13 +67,11 @@ export function resolveJourneyLookback(value: number | null): JourneyLookback {
     : 30;
 }
 
-const parsers = {
+export const LAB_URL_PARSERS = {
+  ...LEDGER_URL_PARSERS,
   // The ledger is the lab's front page (spec §10); the evidence views sit
   // behind it.
   view: parseAsStringLiteral(LAB_VIEWS).withDefault("ledger"),
-  range: parseAsStringLiteral(LAB_RANGES).withDefault("last30"),
-  from: parseAsString,
-  to: parseAsString,
   orderStatus: parseAsStringLiteral(ORDER_STATUS_FILTERS).withDefault("all"),
   productStatus: parseAsStringLiteral(PRODUCT_STATUS_FILTERS).withDefault("all"),
   claimType: parseAsStringLiteral(CLAIM_TYPE_FILTERS).withDefault("all"),
@@ -92,17 +84,6 @@ const parsers = {
   candidate: parseAsString,
   detail: parseAsStringLiteral(DETAIL_TABS).withDefault("explanation"),
   lookback: parseAsInteger,
-  ledgerKind: parseAsStringLiteral(LEDGER_KIND_FILTERS).withDefault("all"),
-  ledgerChannel:
-    parseAsStringLiteral(LEDGER_CHANNEL_FILTERS).withDefault("all"),
-  q: parseAsString,
-  source: parseAsString,
-  sort: parseAsStringLiteral(LEDGER_SORT_COLUMNS).withDefault(
-    DEFAULT_LEDGER_SORT.column,
-  ),
-  dir: parseAsStringLiteral(LEDGER_SORT_DIRECTIONS).withDefault(
-    DEFAULT_LEDGER_SORT.direction,
-  ),
 };
 
 /**
@@ -113,7 +94,9 @@ const parsers = {
  * detail so it cannot float over the other views.
  */
 export function useKlaviyoLabState() {
-  const [state, setState] = useQueryStates(parsers, { history: "replace" });
+  const [state, setState] = useQueryStates(LAB_URL_PARSERS, {
+    history: "replace",
+  });
 
   const setView = (view: LabView) => {
     void setState({
@@ -147,8 +130,7 @@ export function useKlaviyoLabState() {
       ledgerChannel: "all",
     });
   };
-  const openSource = (objectId: string) => void setState({ source: objectId });
-  const closeSource = () => void setState({ source: null });
+  const ledger = ledgerStateHelpers(state, setState);
   /**
    * A campaign's orders are unwindowed on the ledger but the orders view has
    * its own date range, so a send's later orders would fall outside the
@@ -163,13 +145,6 @@ export function useKlaviyoLabState() {
       candidate: null,
       ...(sentDay ? { range: "custom" as const, from: sentDay, to: null } : {}),
     });
-  const toggleSort = (column: LedgerSortColumn) => {
-    const next = nextLedgerSort(
-      { column: state.sort, direction: state.dir },
-      column,
-    );
-    void setState({ sort: next.column, dir: next.direction });
-  };
   return {
     state,
     setState,
@@ -177,10 +152,10 @@ export function useKlaviyoLabState() {
     openOrder,
     closeDetail,
     clearFilters,
-    openSource,
-    closeSource,
+    openSource: ledger.openSource,
+    closeSource: ledger.closeSource,
     viewOrdersForSource,
-    toggleSort,
+    toggleSort: ledger.toggleSort,
     lookback: resolveJourneyLookback(state.lookback),
   };
 }
