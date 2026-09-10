@@ -19,6 +19,8 @@ export type VariationTransplant = {
   assetImageUrl?: string | null;
   /** True: a generate-mode transplant is only recorded when the matte held. */
   matted: boolean;
+  /** The blend applied when pasting: brightness gain, per-channel gains, shadow opacity. */
+  blend?: { lightGain: number; channelGains: [number, number, number]; shadowOpacity: number } | null;
 };
 
 export const VARIATION_AXES = [

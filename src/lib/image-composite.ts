@@ -98,8 +98,13 @@ const clamp = (value: number, min: number, max: number) => Math.min(Math.max(val
 
 /** How far past the box each side of the sampling ring reaches. */
 const RING_MARGIN = 0.25;
-/** The gain bounds: a quarter stop either way, so the product keeps its own tone. */
-const GAIN_MIN = 0.75;
+/**
+ * The gain bounds. Brightening stops at a quarter stop so a pale product does
+ * not wash out; darkening may go to a half, because a lamp-lit night scene
+ * sits three to four times darker than a studio patch and a quarter stop left
+ * the product glowing (measured on the R3 nightstand run).
+ */
+const GAIN_MIN = 0.5;
 const GAIN_MAX = 1.25;
 /** How far the patch travels toward the room's colour balance: enough to feel lit by it, not enough to recolour it. */
 const CAST_STRENGTH = 0.15;

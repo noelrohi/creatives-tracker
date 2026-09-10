@@ -824,6 +824,7 @@ export const generateVariationTask = task({
                   patchSource: productPatch.source,
                   assetImageUrl: productPatch.assetImageUrl,
                   matted: true,
+                  blend: pastedPatch.blend,
                 };
                 logger.info("Transplanted product", {
                   attempt,

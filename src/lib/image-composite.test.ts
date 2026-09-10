@@ -146,8 +146,8 @@ describe("pastePatch", () => {
     const dark = await pastePatch({ output: solid(60, 60, [20, 20, 20]), patch, region: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 }, matchLight: true });
     const [darkR] = await pixel(dark.bytes, 30, 30);
     expect(darkR).toBeLessThan(200);
-    expect(darkR).toBeGreaterThanOrEqual(150); // 0.75 floor
-    expect(dark.blend.lightGain).toBeCloseTo(0.75, 2);
+    expect(darkR).toBeGreaterThanOrEqual(100); // 0.5 floor
+    expect(dark.blend.lightGain).toBeCloseTo(0.5, 2);
     const bright = await pastePatch({ output: solid(60, 60, [255, 255, 255]), patch, region: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 }, matchLight: true });
     const [brightR] = await pixel(bright.bytes, 30, 30);
     expect(brightR).toBeGreaterThan(200);
@@ -182,11 +182,11 @@ describe("pastePatch", () => {
     for (let i = 0; i < 16; i += 1) rgba.set([200, 200, 200, 255], i * 4);
     const patch = encodePng(4, 4, rgba);
     const region = { x: 0.25, y: 0.25, w: 0.5, h: 0.5 };
-    // A black ring: every channel's cast ratio is 0, and the floor 0.75 * 0.85 holds.
+    // A black ring: every channel's cast ratio is 0, and the floor 0.5 * 0.85 holds.
     const black = await pastePatch({ output: solid(60, 60, [0, 0, 0]), patch, region, matchLight: true });
     const dark = await pixel(black.bytes, 30, 30);
-    for (const channel of dark) expect(channel).toBeGreaterThanOrEqual(Math.floor(200 * 0.75 * 0.85));
-    expect(black.blend.lightGain).toBeCloseTo(0.75, 2);
+    for (const channel of dark) expect(channel).toBeGreaterThanOrEqual(Math.floor(200 * 0.5 * 0.85));
+    expect(black.blend.lightGain).toBeCloseTo(0.5, 2);
     // A saturated blue ring: blue's ratio is huge, and the ceiling 1.25 * 1.15 holds.
     const blue = await pastePatch({ output: solid(60, 60, [0, 0, 255]), patch, region, matchLight: true });
     expect(blue.blend.channelGains[2]).toBeLessThanOrEqual(1.25 * 1.15);
@@ -198,10 +198,10 @@ describe("pastePatch", () => {
     const grey = new Uint8Array(await sharp(encodePng(4, 4, rgba)).toColourspace("b-w").png().toBuffer());
     expect((await sharp(grey).metadata()).channels).toBeLessThan(3);
     const lit = await pastePatch({ output: solid(60, 60, [20, 20, 20]), patch: grey, region: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 }, matchLight: true });
-    expect(lit.blend.lightGain).toBeCloseTo(0.75, 2);
+    expect(lit.blend.lightGain).toBeCloseTo(0.5, 2);
     const [r] = await pixel(lit.bytes, 30, 30);
     expect(r).toBeLessThan(200);
-    expect(r).toBeGreaterThanOrEqual(Math.floor(200 * 0.75 * 0.85));
+    expect(r).toBeGreaterThanOrEqual(Math.floor(200 * 0.5 * 0.85));
   });
 
   it("leaves the output showing through the patch's transparent half while matching light", async () => {
