@@ -25,7 +25,7 @@
     "test:components": "vitest run --config vitest.components.config.ts"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^3.0.47",
+    "@ai-sdk/openai": "^3.0.112",
     "@better-auth/cimd": "^1.7.1",
     "@better-auth/mcp": "^1.7.1",
     "@better-auth/oauth-provider": "1.7.1",
