@@ -15,6 +15,8 @@ import {
   VARIATION_FUNNELS,
   type EarlierVariation,
   type VariationAttempt,
+  type VariationAxis,
+  type VariationBrief,
   type VariationPlan,
   type VariationReview,
   type VariationTransplant,
@@ -93,6 +95,8 @@ export type VariationRunDeps = {
     keepRegion: ProductRegion | null;
     /** The product transplanted into a generate result, if any. */
     transplant: VariationTransplant | null;
+    /** The brief this variation declared, so the review can check the axis. */
+    brief: VariationBrief | null;
   }) => Promise<VariationReview>;
   onStep: (label: string) => void;
 };
@@ -104,6 +108,8 @@ export type VariationRunState = {
   /** Prompts flagged for a prohibited claim in a row; a clean prompt resets it. */
   claimsFlags: number;
   attempts: VariationAttempt[];
+  /** The classification and the one test, set by setBrief before the first image. */
+  brief: VariationBrief | null;
   plan: VariationPlan | null;
   finished: boolean;
   /** Set by the first finish on a rejected attempt, which bounces; a second finish ships it. */
@@ -210,28 +216,40 @@ function describeRegion(region: ProductRegion) {
   return `${pct(region.x)} to ${pct(region.x + region.w)} across and ${pct(region.y)} to ${pct(region.y + region.h)} down`;
 }
 
+/** Axes whose whole point is a new composition: the source is not attached as a layout reference. */
+const SOURCE_FREE_AXES: VariationAxis[] = ["scene", "layout", "angle", "funnel"];
+
 function editModeAvailable(input: VariationRunInput) {
   return Boolean(input.sourceProductRegion) && input.useSourceLayout && input.source.kind === "creative";
 }
 
 const PROCEDURE = [
-  "You are the variation agent for a paid-social creative team. You receive one existing static ad (the source) and produce exactly one new variation of it as a finished image, then a plan explaining what you did.",
+  "You are the variation agent for a paid-social creative team. You receive one existing static ad (the source) and produce exactly one new variation of it as a finished image, then a plan explaining what you did. A variation is a test: one deliberate change with a stated hypothesis, not a restyle and not a rewording.",
   "",
   "Procedure:",
-  "1. Read the source image and its text. Identify its format lane (e.g. product-led routine, testimonial card, before/after, offer badge) and its angle.",
-  "2. Check the core context, especially the resolution log and playbook, for what worked and did not work in that lane. Read reference sections only when they add something specific (a testimonial to quote, a customer phrase to reuse).",
-  "3. Choose ONE primary change and keep everything else. Prefer moves the playbook supports: plain-language benefits, product-led minimal composition, soft claims (may / designed to support), ad-to-landing-page continuity.",
-  "4. Write a finished image prompt and call generateImage. The prompt must be self-contained and under 120 words: one plain-language description of subject, composition, lighting, palette, and mood. Quote exactly, in double quotes, every word that appears in the image (headline, offer, CTA) and keep it short. End with: No other text. No watermarks, platform UI, or third-party logos.",
-  "5. Read the review. If it failed, fix the specific problems and try once more. Then call finish with the attempt you are shipping. Finishing on an attempt the review rejected is allowed but bounces once; call finish again to confirm.",
+  "1. Read the source image and its text. Inventory what is visible: logo, headline, subhead, labels, CTA, offer, price, disclaimer, the product and its count and placement, people, scene, palette, typography, hierarchy.",
+  "2. Classify it: the format lane (product-led routine, testimonial card, before/after, offer badge, mechanism explainer, comparison, lifestyle, ugc); the funnel stage (tof: problem recognition or curiosity; mof: mechanism, education, comparison, objection handling; bof: price, offer, urgency, guarantee, strong proof); the message sequence (hook, explanation or proof, product, CTA); and its mechanics: what creates stopping power, what creates comprehension, what creates purchase intent. Separate the locked elements (product, verified offer, disclaimer, logo, any user constraint) from what may change. Flag factual risk: claims, prices, testimonials.",
+  "3. Check the core context, especially the resolution log and playbook, for what worked and did not work in that lane. Read reference sections only when they add something specific (a testimonial to quote, a customer phrase to reuse).",
+  "4. Choose ONE axis and write the hypothesis, then call setBrief. Axes: hook (the opening line or visual hook), angle (the argument: problem, mechanism, benefit, identity), funnel (move the ad to another stage), offer (how the offer is framed), proof (testimonial, numbers, comparison), scene (setting, props, lighting, the world the product sits in), layout (grid, hierarchy, where things sit), colour (palette and mood), copy (wording only). The hypothesis reads: By changing X while keeping Y and Z, we expect A because B.",
+  "5. Write a finished image prompt and call generateImage. The prompt is self-contained and under 180 words, in this order: the deliverable and format; the funnel objective in one line; hierarchy and composition (what reads first, second, third, and where); the product rule from the mode block; palette, lighting, and mood; every word that appears in the image quoted exactly in double quotes, kept short; the logo, CTA, and any disclaimer; exclusions. End with: No other text. No watermarks, platform UI, or third-party logos. On the scene, layout, angle, and funnel axes the source is not sent to the image model, so describe the whole composition yourself.",
+  "6. Read the review. If it failed, fix the specific problems and try once more: for 'only the words changed', redesign the scene or layout in the prompt rather than rewording. Then call finish with the attempt you are shipping. Finishing on an attempt the review rejected is allowed but bounces once; call finish again to confirm.",
+  "",
+  "Choosing the axis, in priority order:",
+  "- A CONSTRAINT FROM THE USER that names a change sets the axis.",
+  "- Edit distance follows performance. High ROAS or many purchases: the source is a control; keep its funnel, offer, and mechanics and test one entrance to them (hook, proof, colour). High CTR with low ROAS: attention without intent; repair message match or proof. Low CTR and low ROAS: a larger change is justified (scene, layout, angle). Few purchases: a signal, not a winner.",
+  "- Rotate. EARLIER VARIATIONS lists what this creative already tested. Do not repeat an axis until every other sensible axis has been used; prefer axes whose earlier attempts were marked good; avoid a hypothesis that was marked bad.",
+  "- copy is allowed only when the constraint asks for it or when scene and layout have both been used already. A synonym swap, a palette swap, or a reworded CTA is not a variation unless that is the deliberate test.",
+  "- funnel keeps the source's stage unless the constraint asks to move it. Moving to tof removes price, urgency, and hard CTA language; moving to bof needs a verified offer from the brand profile.",
   "",
   "Rules:",
   "- Any CONSTRAINT FROM THE USER is a hard constraint, not a suggestion.",
   "- Cite in evidence at least one document you actually used (core documents count; use their documentId), and only documents and sections you actually read.",
   "- Never quote a testimonial verbatim if it states a definitive medical outcome; soften it while keeping it authentic.",
+  "- Prefer moves the playbook supports: plain-language benefits, product-led minimal composition, soft claims (may / designed to support), ad-to-landing-page continuity.",
 ].join("\n");
 
 const REBRAND_MODE = [
-  "REBRAND MODE: the source is a competitor's ad. Keep its layout, composition, and visual hierarchy. In the prompt, state that you replace all source branding, logos, products, recognizable people, and copy with ours, and write short exact replacement copy in quotes for every text block the source shows. Never reuse the source's words or marks. In this mode the rebrand is the one change; the single-change rule in step 3 does not apply.",
+  "REBRAND MODE: the source is a competitor's ad. Keep its layout, composition, and visual hierarchy. In the prompt, state that you replace all source branding, logos, products, recognizable people, and copy with ours, and write short exact replacement copy in quotes for every text block the source shows. Never reuse the source's words or marks. In this mode the rebrand is the one change; the single-change rule in step 4 does not apply.",
 ].join("\n");
 
 const TOOLS_NOTE = [
@@ -318,10 +336,10 @@ export function buildVariationSystemPrompt(input: VariationRunInput) {
     input.productPatch
       ? "<mode>\nTRANSPLANT: the real product is pasted into your image afterwards, cut out of " +
         (input.productPatch.source === "asset" ? "the brand's product photo" : "the source ad") +
-        ". Do not draw the product, and do not draw anything that looks like it (no product-shaped object, no packaging, no logo) anywhere in the image. Instead leave an empty landing area for it: an evenly lit, plain surface (pedestal top, flat card area, tabletop) at about the position and size the product has in the source ad image, with nothing overlapping it and no text inside it. Name the product in the prompt only to say where its landing area is. Everything else in the prompt is yours to design. This staging is a constraint on how you draw the scene, not your one change.\n</mode>"
+        ". Do not draw the product, and do not draw anything that looks like it (no product-shaped object, no packaging, no logo) anywhere in the image. Instead leave an empty landing area for it: an evenly lit, plain surface (pedestal top, flat card area, tabletop) at about the position and size the product has in the source ad image when the source is attached (hook, offer, proof, colour, copy axes), or wherever your composition places the product, sized to read at a glance, on the scene, layout, angle, and funnel axes, with nothing overlapping it and no text inside it. Name the product in the prompt only to say where its landing area is. Everything else in the prompt is yours to design. This staging is a constraint on how you draw the scene, not your one change.\n</mode>"
       : null,
     editAvailable && input.sourceProductRegion
-      ? `<mode>\nEDIT MODE is available on request (pass mode "edit" to generateImage; the default is generate, which draws from the references and then transplants the source's real product, so a copy-only or CTA-only change still belongs in generate mode with the source kept as the layout reference). Edit mode is a last resort: measured runs show the image model reflows the layout under an edit mask, so the pasted box misaligns and the review rejects most edit attempts. Use it only when the CONSTRAINT FROM THE USER demands the source's exact pixels outside one region, never merely because the change is small. In edit mode the source is the canvas: the box ${describeRegion(input.sourceProductRegion)} of it holds the product; after the edit the source's pixels for that box are pasted back, so the product is preserved exactly, and everything outside that box is redrawn from your prompt alone. Because that rectangle is pasted over the result, the image model must keep the box at exactly the same position and size (no reflowed grid, no resized tiles) and must not draw the product anywhere else in the image; say both of those in the prompt. The prompt is still the self-contained description step 4 asks for, minus the product: describe the whole scene outside the kept box (background, lighting, palette, mood) and re-quote every line of copy the finished ad shows, including lines you are not changing. Anything you leave out is lost. Never describe or restyle the product itself; refer to it in plain words if you must (for example "the product in the lower-right tile is kept as is"). Keep the source's composition. If the review reports a misaligned box or a collision with a neighbouring element, move or resize keepRegion so its edges fall on a flat, unbroken area of the source (a plain background band, not a card edge). If it reports a second copy of the product, keep the box and rewrite the prompt to state that the product appears only inside that box. If it reports the box covering copy, shrink the box. Once in edit mode keepSourceLayout has no effect; to leave edit mode pass mode "generate", and do that only when the variation must move or replace the product.\n</mode>`
+      ? `<mode>\nEDIT MODE is available on request (pass mode "edit" to generateImage; the default is generate, which draws from the references and then transplants the source's real product, so a copy-only or CTA-only change still belongs in generate mode with the source kept as the layout reference). Edit mode is a last resort: measured runs show the image model reflows the layout under an edit mask, so the pasted box misaligns and the review rejects most edit attempts. Use it only when the CONSTRAINT FROM THE USER demands the source's exact pixels outside one region, never merely because the change is small. In edit mode the source is the canvas: the box ${describeRegion(input.sourceProductRegion)} of it holds the product; after the edit the source's pixels for that box are pasted back, so the product is preserved exactly, and everything outside that box is redrawn from your prompt alone. Because that rectangle is pasted over the result, the image model must keep the box at exactly the same position and size (no reflowed grid, no resized tiles) and must not draw the product anywhere else in the image; say both of those in the prompt. The prompt is still the self-contained description step 5 asks for, minus the product: describe the whole scene outside the kept box (background, lighting, palette, mood) and re-quote every line of copy the finished ad shows, including lines you are not changing. Anything you leave out is lost. Never describe or restyle the product itself; refer to it in plain words if you must (for example "the product in the lower-right tile is kept as is"). Keep the source's composition. If the review reports a misaligned box or a collision with a neighbouring element, move or resize keepRegion so its edges fall on a flat, unbroken area of the source (a plain background band, not a card edge). If it reports a second copy of the product, keep the box and rewrite the prompt to state that the product appears only inside that box. If it reports the box covering copy, shrink the box. Once in edit mode keepSourceLayout has no effect; to leave edit mode pass mode "generate", and do that only when the variation must move or replace the product.\n</mode>`
       : null,
     brandBlock(input.brand, { patchReady: Boolean(input.productPatch) }),
     ...core,
@@ -351,6 +369,16 @@ export function buildVariationUserContent(
     input.note?.trim()
       ? `CONSTRAINT FROM THE USER: ${escapeContextText(input.note.trim())}`
       : null,
+    input.earlierVariations?.length
+      ? `EARLIER VARIATIONS (newest first):\n${input.earlierVariations
+          .map((variation) => {
+            const detail = variation.hypothesis
+              ? `"${escapeContextText(variation.hypothesis)}"`
+              : escapeContextText(variation.summary ?? "no plan");
+            return `- ${variation.axis ?? "unclassified"} — ${detail} — ${variation.mark ? `marked ${variation.mark}` : "no mark"} — ${variation.status}`;
+          })
+          .join("\n")}`
+      : null,
     "The source image is attached. Produce one variation and finish with your plan.",
   ].filter((line): line is string => Boolean(line));
 
@@ -369,6 +397,7 @@ export function createVariationRun(
     imageCalls: 0,
     claimsFlags: 0,
     attempts: [],
+    brief: null,
     plan: null,
     finished: false,
     overrodeReview: false,
@@ -437,10 +466,31 @@ export function createVariationRun(
     };
   }
 
+  async function setBrief(raw: z.infer<typeof setBriefInputSchema>) {
+    // The brief drives the reference list and is stamped on the plan, so it is
+    // fixed once an image exists: a later swap would misdescribe that image.
+    if (state.attempts.length > 0) {
+      return {
+        error:
+          "The brief cannot change after an image was already generated; finish with what you have or generate again under the same brief.",
+      };
+    }
+    state.brief = raw;
+    deps.onStep("writing the brief");
+    return { ok: true as const };
+  }
+
   async function generateImage(raw: z.infer<typeof generateImageInputSchema>) {
     if (state.imageCalls >= MAX_IMAGE_ATTEMPTS) {
       return {
         error: `Image attempt budget of ${MAX_IMAGE_ATTEMPTS} reached. Call finish with the best attempt.`,
+      };
+    }
+
+    if (!state.brief) {
+      return {
+        error:
+          "Set the brief first (setBrief): classify the source, choose the axis, and state the hypothesis before generating.",
       };
     }
 
@@ -476,6 +526,10 @@ export function createVariationRun(
     }
     const keepRegion = mode === "edit" ? (raw.keepRegion ?? input.sourceProductRegion ?? null) : null;
 
+    // On the axes whose point is a new composition the source is withheld
+    // whatever the model asked for: attaching it makes the model copy it.
+    const sourceFree = SOURCE_FREE_AXES.includes(state.brief.axis);
+
     // Counted before the call: a blocked attempt still spent an image-model call.
     state.imageCalls += 1;
     const attempt = state.imageCalls;
@@ -499,7 +553,7 @@ export function createVariationRun(
         if (!image) ignoredReferenceIds.push(id);
         else if (!referenceImageUrls.includes(image.imageUrl)) referenceImageUrls.push(image.imageUrl);
       }
-      if (raw.keepSourceLayout && input.useSourceLayout) {
+      if (raw.keepSourceLayout && input.useSourceLayout && !sourceFree) {
         referenceImageUrls.push(input.source.imageUrl);
       }
     }
@@ -529,7 +583,7 @@ export function createVariationRun(
     const transplant = produced.transplant ?? null;
 
     deps.onStep(`reviewing attempt ${attempt}`);
-    const review = await deps.reviewImage({ imageUrl, prompt: raw.prompt, mode, keepRegion, transplant });
+    const review = await deps.reviewImage({ imageUrl, prompt: raw.prompt, mode, keepRegion, transplant, brief: state.brief });
     state.attempts.push({ attempt, imageUrl, prompt: raw.prompt, mode, keepRegion, transplant, review });
     return {
       attempt,
@@ -539,6 +593,13 @@ export function createVariationRun(
       transplant,
       review,
       attemptsRemaining: MAX_IMAGE_ATTEMPTS - state.imageCalls,
+      ...(sourceFree && raw.keepSourceLayout
+        ? {
+            sourceLayoutIgnored: true,
+            sourceLayoutIgnoredReason:
+              "On the scene, layout, angle, and funnel axes the source is not sent as a layout reference: the composition comes from your prompt.",
+          }
+        : {}),
       ...(ignoredReferenceIds.length > 0
         ? {
             ignoredReferenceIds,
@@ -576,13 +637,17 @@ export function createVariationRun(
       ...raw.plan,
       keptProductRegion: final.mode === "edit" ? (final.keepRegion ?? null) : null,
       transplantedProduct: final.mode === "generate" ? (final.transplant ?? null) : null,
+      funnel: state.brief?.funnel ?? null,
+      lane: state.brief?.lane ?? null,
+      axis: state.brief?.axis ?? null,
+      hypothesis: state.brief?.hypothesis ?? null,
     };
     state.finished = true;
     deps.onStep("finishing");
     return { ok: true as const };
   }
 
-  return { state, readContext, generateImage, finish };
+  return { state, readContext, setBrief, generateImage, finish };
 }
 
 export function resolveVariationOutcome(state: VariationRunState): VariationOutcome {
@@ -615,6 +680,10 @@ export function resolveVariationOutcome(state: VariationRunState): VariationOutc
         synthesized: true,
         keptProductRegion: passing.mode === "edit" ? (passing.keepRegion ?? null) : null,
         transplantedProduct: passing.mode === "generate" ? (passing.transplant ?? null) : null,
+        funnel: state.brief?.funnel ?? null,
+        lane: state.brief?.lane ?? null,
+        axis: state.brief?.axis ?? null,
+        hypothesis: state.brief?.hypothesis ?? null,
       },
       attempts: state.attempts,
     };

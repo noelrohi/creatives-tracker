@@ -65,6 +65,27 @@ const region = { x: 0.55, y: 0.6, w: 0.3, h: 0.3 };
 const editInput: VariationRunInput = { ...input, sourceProductRegion: region };
 const patchInput = { ...editInput, productPatch: { source: "source" as const } };
 
+const brief = {
+  funnel: "mof" as const,
+  lane: "product-led routine",
+  mechanics: "Recognisable morning routine grid makes the product feel like an obvious upgrade.",
+  locked: ["product", "disclaimer"],
+  axis: "scene" as const,
+  hypothesis:
+    "By moving the routine to a bathroom counter while keeping the copy and CTA, we expect higher CTR because the scene reads as real life.",
+};
+const copyBrief = { ...brief, axis: "copy" as const };
+
+const plan = {
+  summary: "Swapped clinical headline for plain language",
+  kept: ["product-led layout"],
+  changed: ["headline"],
+  rationale: "Resolution log favours plain language",
+  evidence: [{ documentId: "doc_log", title: "Resolution log" }],
+  inImageCopy: ["Better mornings"],
+  finalAttempt: 1,
+};
+
 function deps(overrides: Partial<VariationRunDeps> = {}): VariationRunDeps {
   return {
     readSection: vi.fn(async (_documentId: string, sectionId: string) =>
@@ -151,6 +172,13 @@ describe("buildVariationSystemPrompt", () => {
     expect(system).toContain("No product photo is attached");
   });
 
+  it("requires a brief before any image and allows a 180-word prompt", () => {
+    const system = buildVariationSystemPrompt(input);
+    expect(system).toContain("setBrief");
+    expect(system).toContain("under 180 words");
+    expect(system).not.toContain("under 120 words");
+  });
+
   it("keeps the draw-the-product prompt when no patch is ready even though a product was located", () => {
     const system = buildVariationSystemPrompt(editInput);
     expect(system).not.toContain("TRANSPLANT");
@@ -174,6 +202,20 @@ describe("buildVariationUserContent", () => {
     const bytes = new Uint8Array([1, 2, 3]);
     const content = buildVariationUserContent({ ...input, sourceImage: bytes });
     expect(content[1]).toEqual({ type: "image", image: bytes });
+  });
+
+  it("lists earlier variations, quoting the hypothesis and falling back to the summary", () => {
+    const text = (buildVariationUserContent({
+      ...input,
+      earlierVariations: [
+        { axis: "scene", hypothesis: "By moving…", summary: null, mark: "good", status: "ready" },
+        { axis: null, hypothesis: null, summary: "Reworded the headline", mark: null, status: "failed" },
+      ],
+    })[0] as { text: string }).text;
+    expect(text).toContain("EARLIER VARIATIONS (newest first):");
+    expect(text).toContain('- scene — "By moving…" — marked good — ready');
+    expect(text).toContain("- unclassified — Reworded the headline — no mark — failed");
+    expect((buildVariationUserContent(input)[0] as { text: string }).text).not.toContain("EARLIER VARIATIONS");
   });
 
   it("omits performance and note when absent", () => {
@@ -247,6 +289,7 @@ describe("createVariationRun.generateImage", () => {
   it("rejects a prompt containing a prohibited claim without spending an attempt", async () => {
     const d = deps();
     const run = createVariationRun(input, d);
+    await run.setBrief(copyBrief);
     const result = await run.generateImage({ prompt: 'Headline "No more jaw pain" over the product', referenceImageIds: [], keepSourceLayout: true });
     expect(result).toEqual({ error: 'The prompt states or implies a prohibited claim: "no more jaw pain". Rewrite it with soft, supportive wording.' });
     expect(d.produceImage).not.toHaveBeenCalled();
@@ -255,6 +298,7 @@ describe("createVariationRun.generateImage", () => {
 
   it("fails the run after two flagged prompts", async () => {
     const run = createVariationRun(input, deps());
+    await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "no more jaw pain", referenceImageIds: [], keepSourceLayout: true });
     await run.generateImage({ prompt: "NO MORE JAW PAIN!", referenceImageIds: [], keepSourceLayout: true });
     expect(run.state.claimsFlags).toBe(2);
@@ -263,6 +307,7 @@ describe("createVariationRun.generateImage", () => {
 
   it("ends the run with reason claims after two flagged prompts in a row even when an attempt exists", async () => {
     const run = createVariationRun(input, deps({ reviewImage: vi.fn(async () => ({ pass: false, notes: ["weak"] })) }));
+    await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
     const bad = { prompt: "no more jaw pain", referenceImageIds: [], keepSourceLayout: true };
     await run.generateImage(bad);
@@ -276,6 +321,7 @@ describe("createVariationRun.generateImage", () => {
 
   it("resets the claims streak on a clean prompt", async () => {
     const run = createVariationRun(input, deps());
+    await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "no more jaw pain", referenceImageIds: [], keepSourceLayout: true });
     await run.generateImage({ prompt: "clean", referenceImageIds: [], keepSourceLayout: true });
     expect(run.state.claimsFlags).toBe(0);
@@ -287,6 +333,7 @@ describe("createVariationRun.generateImage", () => {
   it("passes references in order (product photo, chosen context images, source last), records the attempt with its review, and reports steps", async () => {
     const d = deps();
     const run = createVariationRun(input, d);
+    await run.setBrief(copyBrief);
     const result = await run.generateImage({ prompt: "Product on a blue background", referenceImageIds: ["img_r3", "unknown"], keepSourceLayout: true });
     expect(d.produceImage).toHaveBeenCalledWith({
       prompt: "Product on a blue background",
@@ -296,7 +343,7 @@ describe("createVariationRun.generateImage", () => {
       format: "portrait",
       attempt: 1,
     });
-    expect(d.reviewImage).toHaveBeenCalledWith({ imageUrl: "https://blob.test/out-1.png", prompt: "Product on a blue background", mode: "generate", keepRegion: null, transplant: null });
+    expect(d.reviewImage).toHaveBeenCalledWith({ imageUrl: "https://blob.test/out-1.png", prompt: "Product on a blue background", mode: "generate", keepRegion: null, transplant: null, brief: copyBrief });
     expect(result).toEqual({ attempt: 1, imageUrl: "https://blob.test/out-1.png", mode: "generate", keepRegion: null, transplant: null, review: { pass: true, notes: [] }, attemptsRemaining: 1, ignoredReferenceIds: ["unknown"], ignoredReferenceReason: "Not in the image index; check the id." });
     expect(run.state.attempts).toHaveLength(1);
     expect(d.onStep).toHaveBeenCalledWith("generating image (attempt 1)");
@@ -306,6 +353,7 @@ describe("createVariationRun.generateImage", () => {
   it("drops the source image when useSourceLayout is false even if the model asks for it", async () => {
     const d = deps();
     const run = createVariationRun({ ...input, useSourceLayout: false }, d);
+    await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
     expect(d.produceImage).toHaveBeenCalledWith(expect.objectContaining({
       referenceImageUrls: ["https://blob.test/product.png"],
@@ -314,6 +362,7 @@ describe("createVariationRun.generateImage", () => {
 
   it("enforces the attempt budget", async () => {
     const run = createVariationRun(input, deps());
+    await run.setBrief(copyBrief);
     for (let i = 0; i < MAX_IMAGE_ATTEMPTS; i += 1) {
       await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: false });
     }
@@ -328,6 +377,7 @@ describe("createVariationRun.generateImage", () => {
     const run = createVariationRun(input, deps({
       produceImage: vi.fn(async () => { throw { responseBody: "moderation_blocked: likeness" }; }),
     }));
+    await run.setBrief(copyBrief);
     await expect(run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true })).resolves.toEqual({
       error: "The image model blocked this attempt (likeness). Try again without relying on people from the source, or set keepSourceLayout to false.",
     });
@@ -340,6 +390,7 @@ describe("createVariationRun.generateImage", () => {
       .mockRejectedValueOnce({ responseBody: "moderation_blocked: likeness" })
       .mockResolvedValue({ imageUrl: "https://blob.test/out-2.png" });
     const run = createVariationRun(input, deps({ produceImage }));
+    await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: false });
     await expect(run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: false })).resolves.toMatchObject({ error: expect.stringContaining("budget") });
@@ -353,6 +404,7 @@ describe("createVariationRun.generateImage", () => {
       ...input,
       library: { ...library, images: [{ id: "img_p", title: "Product", description: "d", kind: "product" as const, imageUrl: brand.productImageUrl }] },
     }, d);
+    await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "p", referenceImageIds: ["img_p"], keepSourceLayout: false });
     expect(d.produceImage).toHaveBeenCalledWith(expect.objectContaining({ mode: "generate", keepRegion: null, referenceImageUrls: ["https://blob.test/product.png"] }));
   });
@@ -360,6 +412,7 @@ describe("createVariationRun.generateImage", () => {
   it("defaults to generate mode even when a product region exists", async () => {
     const d = deps();
     const run = createVariationRun(editInput, d);
+    await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
     expect(d.produceImage).toHaveBeenCalledWith(expect.objectContaining({ mode: "generate", keepRegion: null }));
   });
@@ -367,6 +420,7 @@ describe("createVariationRun.generateImage", () => {
   it("uses edit mode when requested and sends only the source with the region", async () => {
     const d = deps();
     const run = createVariationRun(editInput, d);
+    await run.setBrief(copyBrief);
     const result = await run.generateImage({ prompt: "p", referenceImageIds: ["img_r3"], keepSourceLayout: true, mode: "edit" });
     expect(d.produceImage).toHaveBeenCalledWith({
       prompt: "p",
@@ -376,7 +430,7 @@ describe("createVariationRun.generateImage", () => {
       format: "portrait",
       attempt: 1,
     });
-    expect(d.reviewImage).toHaveBeenCalledWith({ imageUrl: "https://blob.test/out-1.png", prompt: "p", mode: "edit", keepRegion: region, transplant: null });
+    expect(d.reviewImage).toHaveBeenCalledWith({ imageUrl: "https://blob.test/out-1.png", prompt: "p", mode: "edit", keepRegion: region, transplant: null, brief: copyBrief });
     expect(result).toMatchObject({ mode: "edit", keepRegion: region });
     expect(result).toMatchObject({ ignoredReferenceIds: ["img_r3"] });
     expect((result as { ignoredReferenceReason: string }).ignoredReferenceReason).toContain("Edit mode");
@@ -386,6 +440,7 @@ describe("createVariationRun.generateImage", () => {
   it("uses generate mode when no region was found, and records it on the attempt", async () => {
     const d = deps();
     const run = createVariationRun(input, d);
+    await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
     expect(d.produceImage).toHaveBeenCalledWith(expect.objectContaining({ mode: "generate", keepRegion: null }));
     expect(run.state.attempts[0]).toMatchObject({ mode: "generate" });
@@ -394,6 +449,7 @@ describe("createVariationRun.generateImage", () => {
   it("honours an explicit generate mode and a keepRegion override in edit mode", async () => {
     const d = deps();
     const run = createVariationRun(editInput, d);
+    await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true, mode: "generate" });
     expect(d.produceImage).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "generate" }));
     const override = { x: 0.5, y: 0.5, w: 0.4, h: 0.4 };
@@ -404,6 +460,7 @@ describe("createVariationRun.generateImage", () => {
   it("rejects edit mode when it is unavailable without spending an attempt", async () => {
     const d = deps();
     const run = createVariationRun({ ...editInput, useSourceLayout: false }, d);
+    await run.setBrief(copyBrief);
     await expect(run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true, mode: "edit" })).resolves.toEqual({
       error: "Edit mode is not available on this run (no product region, the source is not in use, or the source is a competitor ad). Use mode \"generate\".",
     });
@@ -414,6 +471,7 @@ describe("createVariationRun.generateImage", () => {
   it("drops the source reference on keepSourceLayout false without it choosing the mode", async () => {
     const d = deps();
     const run = createVariationRun(editInput, d);
+    await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: false });
     expect(d.produceImage).toHaveBeenCalledWith(
       expect.objectContaining({ mode: "generate", keepRegion: null, referenceImageUrls: ["https://blob.test/product.png"] }),
@@ -429,7 +487,9 @@ describe("createVariationRun.generateImage", () => {
       ...editInput,
       source: { kind: "competitor_ad" as const, name: "Rival ad", imageUrl: "https://cdn.test/rival.png", text: "Buy now", performance: null },
     };
-    await createVariationRun(competitor, d).generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    const run = createVariationRun(competitor, d);
+    await run.setBrief(copyBrief);
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
     expect(d.produceImage).toHaveBeenCalledWith(expect.objectContaining({ mode: "generate", keepRegion: null }));
     expect(buildVariationSystemPrompt(competitor)).not.toContain("EDIT MODE");
   });
@@ -437,6 +497,7 @@ describe("createVariationRun.generateImage", () => {
   it("leaves the product photo out of the references when a product patch is ready", async () => {
     const d = deps();
     const run = createVariationRun({ ...editInput, productPatch: { source: "asset" } }, d);
+    await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "p", referenceImageIds: ["img_r3"], keepSourceLayout: true });
     expect(d.produceImage).toHaveBeenCalledWith(
       expect.objectContaining({ referenceImageUrls: ["https://blob.test/r3.png", "https://cdn.test/source.png"] }),
@@ -446,6 +507,7 @@ describe("createVariationRun.generateImage", () => {
   it("still sends the product photo first when no patch is ready", async () => {
     const d = deps();
     const run = createVariationRun(editInput, d);
+    await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
     expect(d.produceImage).toHaveBeenCalledWith(
       expect.objectContaining({ referenceImageUrls: ["https://blob.test/product.png", "https://cdn.test/source.png"] }),
@@ -453,17 +515,62 @@ describe("createVariationRun.generateImage", () => {
   });
 });
 
-describe("createVariationRun.finish", () => {
-  const plan = {
-    summary: "Swapped clinical headline for plain language",
-    kept: ["product-led layout"],
-    changed: ["headline"],
-    rationale: "Resolution log favours plain language",
-    evidence: [{ documentId: "doc_log", title: "Resolution log" }],
-    inImageCopy: ["Better mornings"],
-    finalAttempt: 1,
-  };
+describe("createVariationRun.setBrief", () => {
+  it("refuses generateImage until the brief is set, then records it", async () => {
+    const run = createVariationRun(input, deps());
+    await expect(run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true })).resolves.toMatchObject({ error: expect.stringContaining("Set the brief first") });
+    await expect(run.setBrief(brief)).resolves.toEqual({ ok: true });
+    expect(run.state.brief).toEqual(brief);
+    const result = await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    expect(result).toMatchObject({ attempt: 1 });
+  });
 
+  it("drops the source layout reference on scene, layout, angle, and funnel axes and says so", async () => {
+    const d = deps();
+    const run = createVariationRun(input, d);
+    await run.setBrief(brief);
+    const result = await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    expect(d.produceImage).toHaveBeenCalledWith(expect.objectContaining({ referenceImageUrls: ["https://blob.test/product.png"] }));
+    expect(result).toMatchObject({ sourceLayoutIgnored: true });
+  });
+
+  it("keeps the source layout reference on the other axes", async () => {
+    const d = deps();
+    const run = createVariationRun(input, d);
+    await run.setBrief(copyBrief);
+    const result = await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    expect(d.produceImage).toHaveBeenCalledWith(expect.objectContaining({ referenceImageUrls: ["https://blob.test/product.png", "https://cdn.test/source.png"] }));
+    expect(result).not.toHaveProperty("sourceLayoutIgnored");
+  });
+
+  it("passes the brief to the review and stamps it on the plan", async () => {
+    const d = deps();
+    const run = createVariationRun(input, d);
+    await run.setBrief(brief);
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    expect(d.reviewImage).toHaveBeenCalledWith(expect.objectContaining({ brief }));
+    await run.finish({ plan });
+    expect(run.state.plan).toMatchObject({ funnel: "mof", lane: "product-led routine", axis: "scene", hypothesis: brief.hypothesis });
+  });
+
+  it("stamps the brief on a synthesized plan too", async () => {
+    const run = createVariationRun(input, deps());
+    await run.setBrief(brief);
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    const outcome = resolveVariationOutcome(run.state);
+    expect(outcome).toMatchObject({ kind: "ready", plan: { synthesized: true, axis: "scene", funnel: "mof" } });
+  });
+
+  it("lets a second setBrief replace the first before any image, not after", async () => {
+    const run = createVariationRun(input, deps());
+    await run.setBrief(brief);
+    await expect(run.setBrief(copyBrief)).resolves.toEqual({ ok: true });
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    await expect(run.setBrief(brief)).resolves.toMatchObject({ error: expect.stringContaining("already generated") });
+  });
+});
+
+describe("createVariationRun.finish", () => {
   it("rejects finish before any attempt", async () => {
     const run = createVariationRun(input, deps());
     await expect(run.finish({ plan })).resolves.toEqual({ error: "Generate an image before finishing." });
@@ -471,12 +578,14 @@ describe("createVariationRun.finish", () => {
 
   it("rejects an unknown finalAttempt", async () => {
     const run = createVariationRun(input, deps());
+    await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
     await expect(run.finish({ plan: { ...plan, finalAttempt: 4 } })).resolves.toEqual({ error: "finalAttempt 4 does not exist. Attempts so far: 1." });
   });
 
   it("stores the plan and marks the run done", async () => {
     const run = createVariationRun(input, deps());
+    await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
     await expect(run.finish({ plan })).resolves.toEqual({ ok: true });
     expect(run.state.plan).toMatchObject(plan);
@@ -485,6 +594,7 @@ describe("createVariationRun.finish", () => {
 
   it("stamps the kept region of the final attempt onto the plan", async () => {
     const run = createVariationRun(editInput, deps());
+    await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true, mode: "edit" });
     await run.finish({ plan });
     expect(run.state.plan?.keptProductRegion).toEqual(region);
@@ -495,6 +605,7 @@ describe("createVariationRun.finish", () => {
       input,
       deps({ reviewImage: vi.fn(async () => ({ pass: false, notes: ["text illegible"] })) }),
     );
+    await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
     await expect(run.finish({ plan })).resolves.toEqual({
       error:
@@ -511,6 +622,7 @@ describe("createVariationRun.finish", () => {
     const transplant = { from: region, to: { x: 0.5, y: 0.55, w: 0.3, h: 0.3 }, target: "product" as const, patchSource: "source" as const, matted: true };
     const d = deps({ produceImage: vi.fn(async () => ({ imageUrl: "https://blob.test/out-1.png", transplant })) });
     const run = createVariationRun(editInput, d);
+    await run.setBrief(copyBrief);
     const result = await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
     expect(result).toMatchObject({ mode: "generate", transplant });
     expect(run.state.attempts[0]).toMatchObject({ transplant });
@@ -526,6 +638,7 @@ describe("createVariationRun.finish", () => {
       editInput,
       deps({ produceImage: vi.fn(async () => ({ imageUrl: "https://blob.test/out-1.png", transplant })) }),
     );
+    await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true, mode: "edit" });
     await run.finish({ plan });
     expect(run.state.plan?.transplantedProduct).toBeNull();
@@ -534,6 +647,7 @@ describe("createVariationRun.finish", () => {
 
   it("records no kept region when the shipped attempt was generated", async () => {
     const run = createVariationRun(input, deps());
+    await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
     await run.finish({ plan });
     expect(run.state.plan?.keptProductRegion).toBeNull();
@@ -545,33 +659,33 @@ describe("resolveVariationOutcome", () => {
 
   it("is ready with the finished plan", () => {
     const plan = { summary: "s", kept: [], changed: [], rationale: "r", evidence: [], inImageCopy: [], finalAttempt: 2 };
-    expect(resolveVariationOutcome({ attempts: [attempt(1, false), attempt(2, true)], plan, finished: true, contextReads: 0, imageCalls: 2, claimsFlags: 0, overrodeReview: false, moderationReason: null })).toEqual({
+    expect(resolveVariationOutcome({ attempts: [attempt(1, false), attempt(2, true)], plan, finished: true, contextReads: 0, imageCalls: 2, claimsFlags: 0, overrodeReview: false, brief: null, moderationReason: null })).toEqual({
       kind: "ready", imageUrl: "https://blob.test/2.png", plan, attempts: [attempt(1, false), attempt(2, true)],
     });
   });
 
   it("synthesizes a plan from the last passing attempt when finish was never called", () => {
-    const outcome = resolveVariationOutcome({ attempts: [attempt(1, true), attempt(2, false)], plan: null, finished: false, contextReads: 0, imageCalls: 2, claimsFlags: 0, overrodeReview: false, moderationReason: null });
+    const outcome = resolveVariationOutcome({ attempts: [attempt(1, true), attempt(2, false)], plan: null, finished: false, contextReads: 0, imageCalls: 2, claimsFlags: 0, overrodeReview: false, brief: null, moderationReason: null });
     expect(outcome).toMatchObject({ kind: "ready", imageUrl: "https://blob.test/1.png", plan: { finalAttempt: 1, synthesized: true } });
   });
 
   it("carries the kept region into a synthesized plan", () => {
     const edited = { attempt: 1, imageUrl: "https://blob.test/1.png", prompt: "p", mode: "edit" as const, keepRegion: region, review: { pass: true, notes: [] } };
-    const outcome = resolveVariationOutcome({ attempts: [edited], plan: null, finished: false, contextReads: 0, imageCalls: 1, claimsFlags: 0, overrodeReview: false, moderationReason: null });
+    const outcome = resolveVariationOutcome({ attempts: [edited], plan: null, finished: false, contextReads: 0, imageCalls: 1, claimsFlags: 0, overrodeReview: false, brief: null, moderationReason: null });
     expect(outcome).toMatchObject({ kind: "ready", plan: { keptProductRegion: region, synthesized: true } });
   });
 
   it("fails with review or no_image when nothing passed review", () => {
-    expect(resolveVariationOutcome({ attempts: [attempt(1, false)], plan: null, finished: false, contextReads: 0, imageCalls: 1, claimsFlags: 0, overrodeReview: false, moderationReason: null })).toEqual({ kind: "failed", reason: "review", attempts: [attempt(1, false)] });
-    expect(resolveVariationOutcome({ attempts: [], plan: null, finished: false, contextReads: 0, imageCalls: 0, claimsFlags: 0, overrodeReview: false, moderationReason: null })).toEqual({ kind: "failed", reason: "no_image", attempts: [] });
+    expect(resolveVariationOutcome({ attempts: [attempt(1, false)], plan: null, finished: false, contextReads: 0, imageCalls: 1, claimsFlags: 0, overrodeReview: false, brief: null, moderationReason: null })).toEqual({ kind: "failed", reason: "review", attempts: [attempt(1, false)] });
+    expect(resolveVariationOutcome({ attempts: [], plan: null, finished: false, contextReads: 0, imageCalls: 0, claimsFlags: 0, overrodeReview: false, brief: null, moderationReason: null })).toEqual({ kind: "failed", reason: "no_image", attempts: [] });
   });
 
   it("reports the moderation reason when that is why nothing was produced", () => {
-    expect(resolveVariationOutcome({ attempts: [], plan: null, finished: false, contextReads: 0, imageCalls: 1, claimsFlags: 0, overrodeReview: false, moderationReason: "logo" })).toEqual({ kind: "failed", reason: "logo", attempts: [] });
+    expect(resolveVariationOutcome({ attempts: [], plan: null, finished: false, contextReads: 0, imageCalls: 1, claimsFlags: 0, overrodeReview: false, brief: null, moderationReason: "logo" })).toEqual({ kind: "failed", reason: "logo", attempts: [] });
   });
 
   it("prefers the moderation reason when a later attempt was blocked after a failed review", () => {
-    expect(resolveVariationOutcome({ attempts: [attempt(1, false)], plan: null, finished: false, contextReads: 0, claimsFlags: 0, overrodeReview: false, imageCalls: 2, moderationReason: "likeness" })).toEqual({ kind: "failed", reason: "likeness", attempts: [attempt(1, false)] });
+    expect(resolveVariationOutcome({ attempts: [attempt(1, false)], plan: null, finished: false, contextReads: 0, claimsFlags: 0, overrodeReview: false, brief: null, imageCalls: 2, moderationReason: "likeness" })).toEqual({ kind: "failed", reason: "likeness", attempts: [attempt(1, false)] });
   });
 });
 
