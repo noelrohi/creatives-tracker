@@ -7,7 +7,7 @@ import {
 } from "ai";
 import { logger, metadata, task, tags } from "@trigger.dev/sdk";
 import sharp from "sharp";
-import { and, desc, eq, gte, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { openai } from "@/lib/ai";
@@ -690,9 +690,14 @@ export const generateVariationTask = task({
                   eq(studioGenerations.kind, "variation"),
                   eq(studioGenerations.sourceCreativeId, payload.source.id),
                   ne(studioGenerations.id, payload.generationId),
+                  // A variant with no plan carries neither an axis nor a
+                  // summary, so it would list as a blank line.
+                  isNotNull(studioVariants.plan),
                 ),
               )
-              .orderBy(desc(studioGenerations.createdAt))
+              // Several variations of one creative can share a timestamp to
+              // the millisecond; the id keeps the ten stable across runs.
+              .orderBy(desc(studioGenerations.createdAt), desc(studioGenerations.id))
               .limit(10)
           : [];
       const earlierVariations: EarlierVariation[] = earlierRows.map((row) => ({
@@ -869,18 +874,28 @@ export const generateVariationTask = task({
             // The strategic checklist compares the variation with the ad it
             // varies, so the source is the second image on every attempt that
             // has one — not only the edit and transplant attempts. A competitor
-            // source or a "retry without image" run keeps the product photo
-            // there instead.
+            // rebrand needs it too, to check that no source mark survived. Only
+            // a "retry without image" run has no source to show.
             const sourceSecond =
-              mode === "edit" ||
-              Boolean(transplant) ||
-              (source.kind === "creative" && !payload.withoutSourceImage);
-            // The photo the drawn product is judged against, when nothing was
-            // pasted in. Attaching the source must not cost the review that
-            // comparison, so the photo moves to third instead of dropping out.
+              mode === "edit" || Boolean(transplant) || !payload.withoutSourceImage;
+            // A rebrand keeps the competitor's layout on purpose, so it is
+            // judged on what was replaced rather than on a declared axis.
+            const rebrand = source.kind === "competitor_ad";
+            // The photo the drawn product is judged against, when no patch was
+            // cut for this run. Attaching the source must not cost the review
+            // that comparison, so the photo moves to third instead of dropping
+            // out. With a patch in hand the pasted product is the subject and
+            // the photo has no consumer, so it is not fetched at all.
             const productPhoto =
-              mode === "generate" && !transplant ? (brand?.productImageUrl ?? null) : null;
+              mode === "generate" && !productPatch ? (brand?.productImageUrl ?? null) : null;
             const productPhotoThird = sourceSecond && Boolean(productPhoto);
+            // The declared hypothesis on one line, closed with a full stop so
+            // the checklist sentence after it does not run on.
+            let hypothesis: string | null = null;
+            if (brief) {
+              const flat = brief.hypothesis.replace(/\s+/g, " ").trim();
+              hypothesis = /[.!?]$/.test(flat) ? flat : `${flat}.`;
+            }
             if (sourceSecond) {
               content.push({ type: "image", image: sourceBytes });
             }
@@ -904,13 +919,13 @@ export const generateVariationTask = task({
                       ? `You are a strict creative reviewer for paid-social static ads. The first image is the generated ad, the second is the source ad it varies, and the third is the brand's product photo; the real product was cut out of that third image and ${transplant.target === "landing" ? "pasted into the empty area the model left for it" : "pasted over the product the model drew"}.`
                       : `You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the real product was cut out of the second image (the source) and ${transplant.target === "landing" ? "pasted into the empty area the model left for it" : "pasted over the product the model drew"}.`
                     : sourceSecond
-                      ? productPhotoThird
-                        ? "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second is the source ad it varies; the third is the advertiser's real product photo."
-                        : "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second is the source ad it varies."
+                      ? `You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second is the ${rebrand ? "competitor ad it rebrands" : "source ad it varies"}${productPhotoThird ? "; the third is the advertiser's real product photo" : ""}.`
                       : "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second, when present, is the advertiser's real product photo.",
                 "Checklist (all must hold for pass = true):",
-                brief
-                  ? `- The variation declares axis "${brief.axis}": ${brief.hypothesis.replace(/\n/g, " ")} Compare with the source: the change on that axis must be visible in the image, not only in the words. For scene, layout, angle, or funnel, the composition or setting must differ from the source; if only the copy changed, fail and say "only the words changed". For hook, offer, proof, colour, or copy, the named element must differ while the rest stays recognisably the same ad.`
+                brief && sourceSecond
+                  ? rebrand
+                    ? "- This is a rebrand of a competitor ad: the layout is meant to stay; check instead that no source brand mark, logo, product, or line of source copy survives."
+                    : `- The variation declares axis "${brief.axis}": ${hypothesis} Compare with the source: the change on that axis must be visible in the image, not only in the words. For scene, layout, angle, or funnel, the composition or setting must differ from the source; if only the copy changed, fail and say "only the words changed". For hook, offer, proof, colour, or copy, the named element must differ while the rest stays recognisably the same ad.`
                   : null,
                 assetPhoto
                   ? "- The third image is the product photo the pasted product was cut from. The pasted product must be the same model as the product in the source (second image): same silhouette, openings, thickness, and colour. If it is a different model, fail and say so."
@@ -923,7 +938,7 @@ export const generateVariationTask = task({
                       ? `- ${assetPhoto ? "The pasted product" : "The source's product"} now sits in the box ${pct(transplant.to)}. Check: it is a plausible size for the scene; its lighting and colour do not clash with the surroundings; no remnant of the model's own product shows around its edges; nothing important is covered; and no second copy of the product appears anywhere else in the image; and the product rests on the surface rather than floating above it or sinking into it. Name which failed.`
                       : transplantExpected
                         ? "- The product is not pasted in on this attempt (the paste step did not run), so the product in the generated ad, if any, is the model's own rendering: do not fail it on markings or exact shape, and an empty landing area beside it is acceptable. But the ad must still show the product somewhere; if no product is visible at all, fail and say 'no product visible'."
-                        : `- The product matches the product photo${productPhotoThird ? " (the third image)" : ""} in shape, openings, material, and markings; no invented logos or text on it.`,
+                        : `- The product matches ${productPhotoThird ? "the product photo (the third image)" : sourceSecond ? "the source's product" : "the product photo"} in shape, openings, material, and markings; no invented logos or text on it.`,
                 "- Every line of ad copy (headline, subhead, badges, CTA, tile labels) is legible and matches the quoted copy in the prompt, with no garbled or invented copy. Incidental labels on props and packaging inside the scene (a shampoo bottle, a book spine) are fine and are not ad copy.",
                 `- No logos or brand marks other than ${brand?.brandName ?? "the advertiser's"}; no platform UI, no watermarks.`,
                 "- The palette is consistent with a clean brand look: no clashing neon, no split panels unless the prompt asked for them.",
@@ -1037,6 +1052,12 @@ export const generateVariationTask = task({
             inImageCopy: [],
             finalAttempt: 0,
             synthesized: true,
+            // A failed run still tested an axis: keeping the brief lets the
+            // next run's EARLIER VARIATIONS see what has already been tried.
+            funnel: run.state.brief?.funnel ?? null,
+            lane: run.state.brief?.lane ?? null,
+            axis: run.state.brief?.axis ?? null,
+            hypothesis: run.state.brief?.hypothesis ?? null,
           },
         });
       }
