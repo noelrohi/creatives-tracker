@@ -85,7 +85,9 @@ export async function pasteSourceRegion(input: {
 export type PasteBlend = {
   /** The brightness gain applied to the patch; 1 when `matchLight` is off. */
   lightGain: number;
-  /** The contact shadow ellipse's opacity; 0 when `shadow` is off. */
+  /** The per-channel gains actually applied, brightness and cast together; [1, 1, 1] when `matchLight` is off. */
+  channelGains: [number, number, number];
+  /** The contact shadow ellipse's opacity; 0 when `shadow` is off or the ellipse falls entirely off the output. */
   shadowOpacity: number;
 };
 
@@ -157,9 +159,17 @@ async function ringMean(
   return [source[0] / n, source[1] / n, source[2] / n];
 }
 
-/** Mean RGB of the patch's opaque pixels (alpha > 200); null when the patch is all transparent. */
-async function patchMean(patch: Uint8Array): Promise<[number, number, number] | null> {
-  const { data, info } = await sharp(patch).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+/**
+ * Mean RGB of the patch's opaque pixels (alpha > 200); null when the patch is
+ * all transparent. A greyscale or palette patch decodes to one or two bands, so
+ * the pipeline is normalized to sRGB with alpha before the raw pixels are read.
+ */
+async function patchMean(patch: sharp.Sharp): Promise<[number, number, number] | null> {
+  const { data, info } = await patch
+    .toColourspace("srgb")
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
   const sum = [0, 0, 0];
   let count = 0;
   for (let i = 0; i + 3 < data.length; i += info.channels) {
@@ -229,7 +239,7 @@ function capWidth(paste: PasteBox, to: PasteBox, cap: number, align: PasteAlign 
 
 /**
  * Composites an already-prepared patch (PNG, alpha allowed) into the output at
- * `region`, uniform-scaled to fit the region's pixel box and centred. Used by
+ * `region`, uniform-scaled to fit the region's pixel box. Used by
  * the product transplant: the patch is the matted source product and `region`
  * is where the model drew its own product.
  *
@@ -267,28 +277,42 @@ export async function pastePatch(input: {
     ? capWidth(fitted, to, input.maxWidth * outputSize.width, input.align)
     : fitted;
   const base = sharp(input.output).autoOrient();
-  const blend: PasteBlend = { lightGain: 1, shadowOpacity: 0 };
+  const blend: PasteBlend = { lightGain: 1, channelGains: [1, 1, 1], shadowOpacity: 0 };
   const ring =
     input.matchLight || input.shadow
       ? await ringMean(base, { width: outputSize.width, height: outputSize.height }, paste)
       : null;
 
-  let resized = await sharp(input.patch).resize(paste.width, paste.height, { fit: "fill" }).png().toBuffer();
+  // One resize pipeline, cloned for the plain paste and for the lit pass.
+  const scaled = sharp(input.patch).resize(paste.width, paste.height, { fit: "fill" });
+  let resized = await scaled.clone().png().toBuffer();
   if (input.matchLight && ring) {
-    const mean = await patchMean(resized);
+    // A greyscale or palette patch decodes to one or two bands and sharp cannot
+    // expand bands inside a `linear`, so the sRGB-with-alpha form is written out
+    // once and both the sampling and the gains read four bands from it.
+    const rgba = await scaled.clone().toColourspace("srgb").ensureAlpha().png().toBuffer();
+    const mean = await patchMean(sharp(rgba));
     // An all-transparent patch has no tone to match; leave it alone.
     if (mean) {
       const ringLuma = luma(ring);
       const gain = clamp(ringLuma / Math.max(1, luma(mean)), GAIN_MIN, GAIN_MAX);
       // Each channel moves a fraction of the way toward the ring's own balance,
-      // so a warm room warms the product without repainting it.
-      const gains = ring.map((channel) => gain * (1 + CAST_STRENGTH * (channel / Math.max(1, ringLuma) - 1)));
-      resized = await sharp(resized)
-        .ensureAlpha()
+      // so a warm room warms the product without repainting it. A saturated or
+      // black ring makes that ratio wild, so each channel stays inside the
+      // quarter-stop envelope widened by the cast's own share.
+      const gains = ring.map((channel) =>
+        clamp(
+          gain * (1 + CAST_STRENGTH * (channel / Math.max(1, ringLuma) - 1)),
+          GAIN_MIN * (1 - CAST_STRENGTH),
+          GAIN_MAX * (1 + CAST_STRENGTH),
+        ),
+      ) as [number, number, number];
+      resized = await sharp(rgba)
         .linear([gains[0], gains[1], gains[2], 1], [0, 0, 0, 0]) // four bands: RGB gains, alpha untouched
         .png()
         .toBuffer();
       blend.lightGain = gain;
+      blend.channelGains = gains;
     }
   }
 
