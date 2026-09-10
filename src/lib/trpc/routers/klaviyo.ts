@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { idempotencyKeys, runs, tasks } from "@trigger.dev/sdk";
-import { router, orgAdminProcedure } from "../init";
+import { router, orgAdminProcedure, orgProcedure } from "../init";
 import { uninstallKlaviyoConnection } from "@/lib/klaviyo/connection-lifecycle";
 import { prepareKlaviyoDiscoveryRun } from "@/lib/klaviyo/discovery";
 import { reviewJoinRule, reviewProbeReport } from "@/lib/klaviyo/join-rules";
@@ -33,6 +33,7 @@ import {
   startOrResumeReportSync,
 } from "@/lib/klaviyo/report-repository";
 import { startOrResumeOrderCoreSync } from "@/lib/klaviyo/source-runner";
+import { deriveDayInTimezone } from "@/lib/shopify-ingest";
 import { klaviyoMatchRuns } from "@/schema/klaviyo-match";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -65,6 +66,23 @@ async function requirePilotConnection(
     });
   }
   return connection;
+}
+
+/**
+ * `orgProcedure` (`hasOrganization`) intentionally lets API-key and worker
+ * principals through for general org reads — that's how those principals
+ * consume the app's data today. The campaigns ledger is a browser page for
+ * human members, not a programmatic integration surface, so its reads add
+ * this session check on top, mirroring the same `principalType !== "session"`
+ * gate `orgAdminProcedure`/`orgOwnerProcedure` already use in `../init`.
+ */
+function requireLedgerSessionPrincipal(principalType: string) {
+  if (principalType !== "session") {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "The campaigns ledger is only available to signed-in members",
+    });
+  }
 }
 
 /** Report and ledger days use the bound Klaviyo ACCOUNT timezone (send-date semantics). */
@@ -461,8 +479,38 @@ export const klaviyoRouter = router({
       return response;
     }),
 
+  /**
+   * What the campaigns page needs from the connection, readable by every org
+   * role: no statuses, sync timestamps, or store details from the admin-only
+   * `health` payload. An org without the pilot gets `configured: false`
+   * rather than an error, so the page can render its empty state.
+   */
+  ledgerContext: orgProcedure.query(async ({ ctx }) => {
+    requireLedgerSessionPrincipal(ctx.principalType);
+    const health = await getKlaviyoHealthForOrganization(ctx.organizationId);
+    const connection = health.connection;
+    if (!health.configured || connection === null) {
+      return {
+        configured: false as const,
+        accountName: null,
+        accountTimezone: "UTC",
+        todayInAccountTz: deriveDayInTimezone(new Date(), "UTC"),
+        lastMatchPublishedAt: null,
+      };
+    }
+    const accountTimezone = connection.timezone ?? "UTC";
+    return {
+      configured: true as const,
+      accountName: connection.accountName,
+      accountTimezone,
+      todayInAccountTz:
+        connection.todayInAccountTz ?? deriveDayInTimezone(new Date(), accountTimezone),
+      lastMatchPublishedAt: connection.lastMatchPublishedAt,
+    };
+  }),
+
   ledger: router({
-    list: orgAdminProcedure
+    list: orgProcedure
       .input(
         z.object({
           dateFrom: storeDaySchema,
@@ -473,6 +521,7 @@ export const klaviyoRouter = router({
         }),
       )
       .query(async ({ input, ctx }) => {
+        requireLedgerSessionPrincipal(ctx.principalType);
         const connection = await requirePilotConnection(ctx.organizationId);
         return loadLedgerRows({
           scope: connection,
@@ -482,11 +531,12 @@ export const klaviyoRouter = router({
           search: input.search,
         });
       }),
-    messages: orgAdminProcedure
+    messages: orgProcedure
       .input(
         z.object({ dateFrom: storeDaySchema, dateTo: storeDaySchema, objectId: resourceIdSchema }),
       )
       .query(async ({ input, ctx }) => {
+        requireLedgerSessionPrincipal(ctx.principalType);
         const connection = await requirePilotConnection(ctx.organizationId);
         const messages = await loadLedgerMessages({
           scope: connection,
@@ -498,11 +548,12 @@ export const klaviyoRouter = router({
         }
         return messages;
       }),
-    detail: orgAdminProcedure
+    detail: orgProcedure
       .input(
         z.object({ dateFrom: storeDaySchema, dateTo: storeDaySchema, objectId: resourceIdSchema }),
       )
       .query(async ({ input, ctx }) => {
+        requireLedgerSessionPrincipal(ctx.principalType);
         const connection = await requirePilotConnection(ctx.organizationId);
         const detail = await loadLedgerDetail({
           scope: connection,
