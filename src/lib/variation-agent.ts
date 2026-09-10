@@ -22,7 +22,8 @@ import {
   type VariationTransplant,
 } from "@/lib/variation-agent-types";
 
-export const MAX_STEPS = 12;
+// Six reads, a brief, two images, two finishes, and a spare.
+export const MAX_STEPS = 13;
 export const MAX_CONTEXT_READS = 6;
 export const MAX_IMAGE_ATTEMPTS = 2;
 export const MAX_READ_CHARS = 8_000;
@@ -211,6 +212,11 @@ function escapeContextField(text: string) {
     .replace(/\s*[\r\n]+\s*/g, " ");
 }
 
+/** Collapses a stored string to one line: an EARLIER VARIATIONS row is one line. */
+function flat(text: string) {
+  return escapeContextText(text).replace(/\s+/g, " ").trim();
+}
+
 function describeRegion(region: ProductRegion) {
   const pct = (n: number) => `${Math.round(n * 100)}%`;
   return `${pct(region.x)} to ${pct(region.x + region.w)} across and ${pct(region.y)} to ${pct(region.y + region.h)} down`;
@@ -249,11 +255,11 @@ const PROCEDURE = [
 ].join("\n");
 
 const REBRAND_MODE = [
-  "REBRAND MODE: the source is a competitor's ad. Keep its layout, composition, and visual hierarchy. In the prompt, state that you replace all source branding, logos, products, recognizable people, and copy with ours, and write short exact replacement copy in quotes for every text block the source shows. Never reuse the source's words or marks. In this mode the rebrand is the one change; the single-change rule in step 4 does not apply.",
+  "REBRAND MODE: the source is a competitor's ad. Keep its layout, composition, and visual hierarchy. In the prompt, state that you replace all source branding, logos, products, recognizable people, and copy with ours, and write short exact replacement copy in quotes for every text block the source shows. Never reuse the source's words or marks. In this mode the rebrand is the one change; still call setBrief in step 4 (axis \"layout\" with the rebrand as the hypothesis), but the single-change rule does not apply and the source stays attached as the layout reference whatever the axis.",
 ].join("\n");
 
 const TOOLS_NOTE = [
-  `Budgets: at most ${MAX_CONTEXT_READS} readContext calls, ${MAX_IMAGE_ATTEMPTS} generateImage calls, ${MAX_STEPS} steps in total. Tool errors tell you what to change; adapt instead of repeating the call.`,
+  `Budgets: at most ${MAX_CONTEXT_READS} readContext calls, ${MAX_IMAGE_ATTEMPTS} generateImage calls, ${MAX_STEPS} steps in total. setBrief is called once before the first image and costs a step. Tool errors tell you what to change; adapt instead of repeating the call.`,
 ].join("\n");
 
 function brandBlock(brand: StudioBrandProfile | null, { patchReady }: { patchReady: boolean }) {
@@ -336,10 +342,10 @@ export function buildVariationSystemPrompt(input: VariationRunInput) {
     input.productPatch
       ? "<mode>\nTRANSPLANT: the real product is pasted into your image afterwards, cut out of " +
         (input.productPatch.source === "asset" ? "the brand's product photo" : "the source ad") +
-        ". Do not draw the product, and do not draw anything that looks like it (no product-shaped object, no packaging, no logo) anywhere in the image. Instead leave an empty landing area for it: an evenly lit, plain surface (pedestal top, flat card area, tabletop) at about the position and size the product has in the source ad image when the source is attached (hook, offer, proof, colour, copy axes), or wherever your composition places the product, sized to read at a glance, on the scene, layout, angle, and funnel axes, with nothing overlapping it and no text inside it. Name the product in the prompt only to say where its landing area is. Everything else in the prompt is yours to design. This staging is a constraint on how you draw the scene, not your one change.\n</mode>"
+        ". Do not draw the product, and do not draw anything that looks like it (no product-shaped object, no packaging, no logo) anywhere in the image. Instead leave an empty landing area for it: an evenly lit, plain surface (pedestal top, flat card area, tabletop) at about the position and size the product has in the source ad image when the source is attached as a layout reference (possible on the hook, offer, proof, colour, and copy axes), or wherever your composition places the product, sized to read at a glance, on the scene, layout, angle, and funnel axes, with nothing overlapping it and no text inside it. Name the product in the prompt only to say where its landing area is. Everything else in the prompt is yours to design. This staging is a constraint on how you draw the scene, not your one change.\n</mode>"
       : null,
     editAvailable && input.sourceProductRegion
-      ? `<mode>\nEDIT MODE is available on request (pass mode "edit" to generateImage; the default is generate, which draws from the references and then transplants the source's real product, so a copy-only or CTA-only change still belongs in generate mode with the source kept as the layout reference). Edit mode is a last resort: measured runs show the image model reflows the layout under an edit mask, so the pasted box misaligns and the review rejects most edit attempts. Use it only when the CONSTRAINT FROM THE USER demands the source's exact pixels outside one region, never merely because the change is small. In edit mode the source is the canvas: the box ${describeRegion(input.sourceProductRegion)} of it holds the product; after the edit the source's pixels for that box are pasted back, so the product is preserved exactly, and everything outside that box is redrawn from your prompt alone. Because that rectangle is pasted over the result, the image model must keep the box at exactly the same position and size (no reflowed grid, no resized tiles) and must not draw the product anywhere else in the image; say both of those in the prompt. The prompt is still the self-contained description step 5 asks for, minus the product: describe the whole scene outside the kept box (background, lighting, palette, mood) and re-quote every line of copy the finished ad shows, including lines you are not changing. Anything you leave out is lost. Never describe or restyle the product itself; refer to it in plain words if you must (for example "the product in the lower-right tile is kept as is"). Keep the source's composition. If the review reports a misaligned box or a collision with a neighbouring element, move or resize keepRegion so its edges fall on a flat, unbroken area of the source (a plain background band, not a card edge). If it reports a second copy of the product, keep the box and rewrite the prompt to state that the product appears only inside that box. If it reports the box covering copy, shrink the box. Once in edit mode keepSourceLayout has no effect; to leave edit mode pass mode "generate", and do that only when the variation must move or replace the product.\n</mode>`
+      ? `<mode>\nEDIT MODE is available on request (pass mode "edit" to generateImage; the default is generate, which draws from the references and then transplants the source's real product, so a copy-only or CTA-only change, when the axis rules allow one, still belongs in generate mode with the source kept as the layout reference). Edit mode is a last resort: measured runs show the image model reflows the layout under an edit mask, so the pasted box misaligns and the review rejects most edit attempts. Use it only when the CONSTRAINT FROM THE USER demands the source's exact pixels outside one region, never merely because the change is small. In edit mode the source is the canvas: the box ${describeRegion(input.sourceProductRegion)} of it holds the product; after the edit the source's pixels for that box are pasted back, so the product is preserved exactly, and everything outside that box is redrawn from your prompt alone. Because that rectangle is pasted over the result, the image model must keep the box at exactly the same position and size (no reflowed grid, no resized tiles) and must not draw the product anywhere else in the image; say both of those in the prompt. The prompt is still the self-contained description step 5 asks for, minus the product: describe the whole scene outside the kept box (background, lighting, palette, mood) and re-quote every line of copy the finished ad shows, including lines you are not changing. Anything you leave out is lost. Never describe or restyle the product itself; refer to it in plain words if you must (for example "the product in the lower-right tile is kept as is"). Keep the source's composition. If the review reports a misaligned box or a collision with a neighbouring element, move or resize keepRegion so its edges fall on a flat, unbroken area of the source (a plain background band, not a card edge). If it reports a second copy of the product, keep the box and rewrite the prompt to state that the product appears only inside that box. If it reports the box covering copy, shrink the box. Once in edit mode keepSourceLayout has no effect; to leave edit mode pass mode "generate", and do that only when the variation must move or replace the product.\n</mode>`
       : null,
     brandBlock(input.brand, { patchReady: Boolean(input.productPatch) }),
     ...core,
@@ -372,10 +378,17 @@ export function buildVariationUserContent(
     input.earlierVariations?.length
       ? `EARLIER VARIATIONS (newest first):\n${input.earlierVariations
           .map((variation) => {
+            // One stored plan is one line: a newline in a hypothesis or a
+            // summary would otherwise forge a top-level instruction line.
             const detail = variation.hypothesis
-              ? `"${escapeContextText(variation.hypothesis)}"`
-              : escapeContextText(variation.summary ?? "no plan");
-            return `- ${variation.axis ?? "unclassified"} — ${detail} — ${variation.mark ? `marked ${variation.mark}` : "no mark"} — ${variation.status}`;
+              ? `"${flat(variation.hypothesis)}"`
+              : flat(variation.summary ?? "no plan");
+            // The axis comes back from stored JSON, unvalidated.
+            const axis =
+              variation.axis && VARIATION_AXES.includes(variation.axis)
+                ? variation.axis
+                : "unclassified";
+            return `- ${axis} — ${detail} — ${variation.mark ? `marked ${variation.mark}` : "no mark"} — ${variation.status}`;
           })
           .join("\n")}`
       : null,
@@ -527,8 +540,11 @@ export function createVariationRun(
     const keepRegion = mode === "edit" ? (raw.keepRegion ?? input.sourceProductRegion ?? null) : null;
 
     // On the axes whose point is a new composition the source is withheld
-    // whatever the model asked for: attaching it makes the model copy it.
-    const sourceFree = SOURCE_FREE_AXES.includes(state.brief.axis);
+    // whatever the model asked for: attaching it makes the model copy it. A
+    // rebrand is the exception: its whole job is to reuse the competitor's
+    // composition, so the source stays attached on every axis.
+    const sourceFree =
+      input.source.kind !== "competitor_ad" && SOURCE_FREE_AXES.includes(state.brief.axis);
 
     // Counted before the call: a blocked attempt still spent an image-model call.
     state.imageCalls += 1;
