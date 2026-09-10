@@ -5,23 +5,26 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { useTRPC } from "@/lib/trpc/client";
 import { ledger as copy } from "../copy";
 import { LabPanelState } from "../panel-state";
-import type { useKlaviyoLabState } from "../use-klaviyo-lab-state";
 import { LedgerDetailContent } from "./ledger-detail-content";
 import { LEDGER_STALE_TIME_MS } from "./ledger-types";
 
 /**
- * URL-addressable (`source=<objectId>`) one-third-width sheet. Only the
- * ledger view opens it; on the orders view the same param is a filter.
+ * The detail sheet for one campaign or flow. Callers own the `source` URL
+ * param and pass the selected id; `onViewOrders` is optional because only
+ * privileged viewers can reach the orders view it links to.
  */
 export function LedgerDetailSheet({
-  lab,
+  objectId,
   range,
+  onClose,
+  onViewOrders,
 }: {
-  lab: ReturnType<typeof useKlaviyoLabState>;
+  objectId: string | null;
   range: { dateFrom: string; dateTo: string } | null;
+  onClose: () => void;
+  onViewOrders?: (objectId: string, sentDay: string | null) => void;
 }) {
   const trpc = useTRPC();
-  const objectId = lab.state.view === "ledger" ? lab.state.source : null;
   const detail = useQuery({
     ...trpc.klaviyo.ledger.detail.queryOptions(
       { dateFrom: range?.dateFrom ?? "", dateTo: range?.dateTo ?? "", objectId: objectId ?? "" },
@@ -32,7 +35,7 @@ export function LedgerDetailSheet({
   });
   if (objectId === null) return null;
   return (
-    <Sheet open onOpenChange={(open) => { if (!open) lab.closeSource(); }}>
+    <Sheet open onOpenChange={(open) => { if (!open) onClose(); }}>
       {/* The Sheet primitive caps a right sheet with
           `data-[side=right]:sm:max-w-sm`; a plain `sm:max-w-none` loses to
           that attribute selector, so the override carries the same variant. */}
@@ -52,15 +55,18 @@ export function LedgerDetailSheet({
           ) : (
             <LedgerDetailContent
               detail={detail.data}
-              onViewOrders={() =>
-                lab.viewOrdersForSource(
-                  detail.data.object.objectId,
-                  // A campaign's orders run past the ledger window; the send
-                  // day is only a range START, so the UTC day is enough.
-                  detail.data.object.objectType === "campaign" && detail.data.object.sentAt
-                    ? new Date(detail.data.object.sentAt).toISOString().slice(0, 10)
-                    : null,
-                )
+              onViewOrders={
+                onViewOrders
+                  ? () =>
+                      onViewOrders(
+                        detail.data.object.objectId,
+                        // A campaign's orders run past the ledger window; the send
+                        // day is only a range START, so the UTC day is enough.
+                        detail.data.object.objectType === "campaign" && detail.data.object.sentAt
+                          ? new Date(detail.data.object.sentAt).toISOString().slice(0, 10)
+                          : null,
+                      )
+                  : undefined
               }
             />
           )}

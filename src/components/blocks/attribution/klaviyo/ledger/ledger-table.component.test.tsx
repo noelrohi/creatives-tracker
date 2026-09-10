@@ -131,4 +131,14 @@ describe("LedgerTable", () => {
     expect(screen.getByText("Couldn’t load campaigns.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
   });
+
+  it("shows a hint instead of the Refresh button when the viewer cannot refresh", () => {
+    renderTable({
+      data: { rows: [row({ klaviyo: null })], report: { asOf: null, hasCampaignGeneration: false, hasFlowGeneration: false } },
+      onRefresh: undefined,
+      refreshHint: "Ask an admin to refresh the report.",
+    });
+    expect(screen.queryByRole("button", { name: "Refresh report" })).toBeNull();
+    expect(screen.getByText("Ask an admin to refresh the report.")).toBeVisible();
+  });
 });

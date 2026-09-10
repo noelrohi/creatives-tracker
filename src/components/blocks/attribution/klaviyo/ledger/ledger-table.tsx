@@ -60,7 +60,8 @@ export function LedgerTable(props: {
   onToggleExpand: (objectId: string) => void;
   renderMessageRows: (row: LedgerRowData) => ReactNode;
   onOpenSource: (objectId: string) => void;
-  onRefresh: () => void;
+  onRefresh?: () => void;
+  refreshHint?: string;
   onRetry: () => void;
   onClearFilters: () => void;
 }) {
@@ -86,14 +87,18 @@ export function LedgerTable(props: {
           )}
           {asOf ? ` · ${copy.asOf(asOf)}` : ""}
         </p>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={props.busy}
-          onClick={props.onRefresh}
-        >
-          {copy.refresh}
-        </Button>
+        {props.onRefresh ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={props.busy}
+            onClick={props.onRefresh}
+          >
+            {copy.refresh}
+          </Button>
+        ) : props.refreshHint && noReport ? (
+          <span className="text-xs text-muted-foreground">{props.refreshHint}</span>
+        ) : null}
       </div>
       {noReport ? (
         <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
