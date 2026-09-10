@@ -26,7 +26,7 @@ Next.js 16 app using the App Router with React 19, React Compiler enabled, and T
 Main routes live under `src/app/(protected)/`:
 - The `(dashboard)` route group holds the dashboard home (`page.tsx`)
 - Feature areas for `creatives`, `campaigns` (manager view: campaign → ad set → ad ledger), `import`, `mer`, `accounts`, `attribution` (including the Klaviyo Lab pilot UI), `teams`, and `settings` (API keys, members, org)
-- `studio` for Image Studio: a brief-driven composer that queues image generation via a Trigger.dev job and streams realtime status
+- `studio` for Image Studio: a brief-driven composer that queues image generation via a Trigger.dev job and streams realtime status. Static image creatives also get a Variations tab (Beta, behind the `creativeVariations` flag): `generate-variation` makes the agent classify the source and declare a funnel, an axis, and a hypothesis (its `setBrief` tool) before any image, transplants the real product into the result, and reviews whether the declared change is visible
 - Shared dashboard shell (sidebar, breadcrumbs, org guard) in `src/app/(protected)/layout.tsx`
 
 ### API

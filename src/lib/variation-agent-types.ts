@@ -21,6 +21,45 @@ export type VariationTransplant = {
   matted: boolean;
 };
 
+export const VARIATION_AXES = [
+  "hook",
+  "angle",
+  "funnel",
+  "offer",
+  "proof",
+  "scene",
+  "layout",
+  "colour",
+  "copy",
+] as const;
+export type VariationAxis = (typeof VARIATION_AXES)[number];
+
+export const VARIATION_FUNNELS = ["tof", "mof", "bof"] as const;
+export type VariationFunnel = (typeof VARIATION_FUNNELS)[number];
+
+/** The agent's classification of the source and the one test this variation runs. */
+export type VariationBrief = {
+  funnel: VariationFunnel;
+  /** Format lane: product-led routine, testimonial card, before/after, offer badge, mechanism explainer, comparison, lifestyle, ugc. */
+  lane: string;
+  /** One sentence: what creates stopping power, comprehension, and purchase intent in the source. */
+  mechanics: string;
+  /** Elements that must not change. */
+  locked: string[];
+  axis: VariationAxis;
+  /** "By changing X while keeping Y and Z, we expect A because B." */
+  hypothesis: string;
+};
+
+/** An earlier variation of the same creative, shown to the agent so it rotates axes. */
+export type EarlierVariation = {
+  axis: VariationAxis | null;
+  hypothesis: string | null;
+  summary: string | null;
+  mark: "good" | "bad" | null;
+  status: "ready" | "failed" | "generating";
+};
+
 export type VariationPlan = {
   summary: string;
   kept: string[];
@@ -35,6 +74,14 @@ export type VariationPlan = {
   keptProductRegion?: ProductRegion | null;
   /** Set by the core on finish: the product transplanted into the shipped generate, if any. */
   transplantedProduct?: VariationTransplant | null;
+  /** Copied from the brief at finish. */
+  funnel?: VariationFunnel | null;
+  /** Copied from the brief at finish. */
+  lane?: string | null;
+  /** Copied from the brief at finish. */
+  axis?: VariationAxis | null;
+  /** Copied from the brief at finish. */
+  hypothesis?: string | null;
 };
 
 export type VariationReview = {

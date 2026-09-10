@@ -55,6 +55,14 @@ function PlanDisclosure({ plan }: { plan: VariationPlan }) {
       </summary>
       <div className="space-y-2 border-t p-3">
         <p>{plan.summary}</p>
+        {plan.axis || plan.funnel ? (
+          <p>
+            <span className="font-medium">Testing:</span> {plan.axis ?? "unclassified"}
+            {plan.funnel ? ` · ${plan.funnel.toUpperCase()}` : ""}
+            {plan.lane ? ` · ${plan.lane}` : ""}
+            {plan.hypothesis ? ` — ${plan.hypothesis}` : ""}
+          </p>
+        ) : null}
         {plan.keptProductRegion ? (
           <p className="text-muted-foreground">Product kept from the source (masked edit).</p>
         ) : null}
