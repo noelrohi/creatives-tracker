@@ -1,7 +1,37 @@
 # Transplant blending: shadow, light match, scale cap, no default pedestal
 
-Date: 2026-09-10. Status: proposed. Extends
+Date: 2026-09-10. Status: implemented (plan
+`docs/superpowers/plans/2026-09-10-transplant-blending.md`). Extends
 `2026-09-07-variation-empty-scene-transplant-design.md`.
+
+## Implementation notes and live results (2026-09-10)
+
+Three runs on the local test creatives after the wiring landed:
+
+- **R1, "bright morning bathroom" (product photo patch).** Contact shadow
+  visible on the tray, warm light picked up, product width capped at exactly
+  the source's relative width × 1.25 (the landing box would have made it
+  1.7× larger). Against the earlier bathroom result the pasted-rectangle look
+  is gone. The model added a shallow tray the source lacks; the review noted
+  it without failing, as designed.
+- **R2, no note (colour axis).** Shadow measurable under the product, light
+  matched, sensible size. The model added a stone corner tray the source
+  lacks and the review did not note it: the note rule under-fires on large
+  architectural platforms.
+- **R3, "nightstand at night" (source patch).** Attempt 1 was rejected because
+  the model drew its own product in a canister; attempt 2 pasted into the
+  nightstand landing but was rejected for a pale crescent under the product
+  and a glowing tone. Two causes: the darkening floor of 0.75 could not take
+  a studio-lit product down to a lamp-lit scene (ring luminance about 51
+  against a patch near 200), and the matte carried a sliver of the source's
+  own white pedestal, invisible on the source's white tile and conspicuous
+  on walnut.
+
+Changes made from those results: the darkening floor is now 0.5 (brightening
+stays capped at 1.25), and the blend values are stored on the attempt's
+`transplant.blend` so a run can be diagnosed from the card data. Open
+follow-ups, not in this pass: trimming source-pedestal remnants from the
+matte's bottom edge, and a firmer review rule for added platforms.
 
 ## Problem
 
