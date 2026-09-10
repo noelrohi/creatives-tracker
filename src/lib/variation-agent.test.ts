@@ -172,6 +172,13 @@ describe("buildVariationSystemPrompt", () => {
     expect(system).toContain("No product photo is attached");
   });
 
+  it("asks for a landing surface that belongs to the scene and forbids an added pedestal", () => {
+    const system = buildVariationSystemPrompt(patchInput);
+    expect(system).toContain("a surface that already belongs to the scene");
+    expect(system).toContain("Do not add a stand, pedestal, or platform unless the source ad has one");
+    expect(system).not.toContain("(pedestal top, flat card area, tabletop)");
+  });
+
   it("requires a brief before any image and allows a 180-word prompt", () => {
     const system = buildVariationSystemPrompt(input);
     expect(system).toContain("setBrief");
