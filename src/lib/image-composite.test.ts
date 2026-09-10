@@ -129,9 +129,10 @@ describe("pastePatch", () => {
     // Just below the patch's bottom edge, inside the ellipse: darker with the shadow.
     const below = shaded.box.top + shaded.box.height + 1;
     const [r] = await pixel(shaded.bytes, 30, below);
-    expect(r).toBeLessThan(200);
     const [plainR] = await pixel(plain.bytes, 30, below);
     expect(plainR).toBe(240);
+    // Measured 199 with libvips' blur kernel; assert a clear darkening, not the exact value.
+    expect(r).toBeLessThan(plainR - 20);
     // Far from the patch: untouched.
     expect(await pixel(shaded.bytes, 2, 2)).toEqual([240, 240, 240]);
     expect(shaded.blend.shadowOpacity).toBeGreaterThan(0.4); // light surface => visible shadow
