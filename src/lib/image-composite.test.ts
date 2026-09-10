@@ -107,4 +107,58 @@ describe("pastePatch", () => {
     expect(await pixel(bytes, 11, 12)).toEqual([255, 0, 0]);
     expect(await pixel(bytes, 11, 7)).toEqual([0, 255, 0]); // empty band above the bottom-aligned patch
   });
+
+  it("caps the fitted width at maxWidth of the output", async () => {
+    const rgba = new Uint8Array(4 * 4 * 4);
+    for (let i = 0; i < 16; i += 1) rgba.set([255, 0, 0, 255], i * 4);
+    const patch = encodePng(4, 4, rgba);
+    const output = solid(40, 40, [0, 255, 0]);
+    // Box is 20x20 at (10,10); a 4x4 patch would fit to 20 wide; the cap 0.25 allows 10.
+    const { box } = await pastePatch({ output, patch, region: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 }, align: "bottom", maxWidth: 0.25 });
+    expect(box).toEqual({ left: 15, top: 20, width: 10, height: 10 });
+  });
+
+  it("draws a soft shadow under the patch when asked and leaves the output alone otherwise", async () => {
+    const rgba = new Uint8Array(4 * 4 * 4);
+    for (let i = 0; i < 16; i += 1) rgba.set([255, 0, 0, 255], i * 4);
+    const patch = encodePng(4, 4, rgba);
+    const output = solid(60, 60, [240, 240, 240]);
+    const region = { x: 0.25, y: 0.25, w: 0.5, h: 0.5 };
+    const plain = await pastePatch({ output, patch, region, align: "bottom" });
+    const shaded = await pastePatch({ output, patch, region, align: "bottom", shadow: true });
+    // Just below the patch's bottom edge, inside the ellipse: darker with the shadow.
+    const below = shaded.box.top + shaded.box.height + 1;
+    const [r] = await pixel(shaded.bytes, 30, below);
+    expect(r).toBeLessThan(200);
+    const [plainR] = await pixel(plain.bytes, 30, below);
+    expect(plainR).toBe(240);
+    // Far from the patch: untouched.
+    expect(await pixel(shaded.bytes, 2, 2)).toEqual([240, 240, 240]);
+    expect(shaded.blend.shadowOpacity).toBeGreaterThan(0.4); // light surface => visible shadow
+  });
+
+  it("brightens or darkens the patch toward the surrounding light within bounds", async () => {
+    const rgba = new Uint8Array(4 * 4 * 4);
+    for (let i = 0; i < 16; i += 1) rgba.set([200, 200, 200, 255], i * 4);
+    const patch = encodePng(4, 4, rgba);
+    const dark = await pastePatch({ output: solid(60, 60, [20, 20, 20]), patch, region: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 }, matchLight: true });
+    const [darkR] = await pixel(dark.bytes, 30, 30);
+    expect(darkR).toBeLessThan(200);
+    expect(darkR).toBeGreaterThanOrEqual(150); // 0.75 floor
+    expect(dark.blend.lightGain).toBeCloseTo(0.75, 2);
+    const bright = await pastePatch({ output: solid(60, 60, [255, 255, 255]), patch, region: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 }, matchLight: true });
+    const [brightR] = await pixel(bright.bytes, 30, 30);
+    expect(brightR).toBeGreaterThan(200);
+    expect(brightR).toBeLessThanOrEqual(250); // 1.25 ceiling
+  });
+
+  it("picks up a mild colour cast from the surroundings without changing the product's hue", async () => {
+    const rgba = new Uint8Array(4 * 4 * 4);
+    for (let i = 0; i < 16; i += 1) rgba.set([200, 200, 200, 255], i * 4);
+    const patch = encodePng(4, 4, rgba);
+    const warm = await pastePatch({ output: solid(60, 60, [200, 150, 100]), patch, region: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 }, matchLight: true });
+    const [r, , b] = await pixel(warm.bytes, 30, 30);
+    expect(r).toBeGreaterThan(b); // warmer
+    expect(r - b).toBeLessThan(40); // but only mildly (15% of the way)
+  });
 });

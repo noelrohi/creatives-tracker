@@ -82,11 +82,161 @@ export async function pasteSourceRegion(input: {
   return { bytes: new Uint8Array(bytes), box: paste };
 }
 
+export type PasteBlend = {
+  /** The brightness gain applied to the patch; 1 when `matchLight` is off. */
+  lightGain: number;
+  /** The contact shadow ellipse's opacity; 0 when `shadow` is off. */
+  shadowOpacity: number;
+};
+
+/** Rec. 709 luma: the perceived brightness of an sRGB triple. */
+const luma = ([r, g, b]: [number, number, number]) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
+/** How far past the box each side of the sampling ring reaches. */
+const RING_MARGIN = 0.25;
+/** The gain bounds: a quarter stop either way, so the product keeps its own tone. */
+const GAIN_MIN = 0.75;
+const GAIN_MAX = 1.25;
+/** How far the patch travels toward the room's colour balance: enough to feel lit by it, not enough to recolour it. */
+const CAST_STRENGTH = 0.15;
+/** Contact shadow geometry, all relative to the pasted width. */
+const SHADOW_WIDTH = 0.9; // a little narrower than the product, as a footprint is
+const SHADOW_HEIGHT = 0.16; // an ellipse seen from a normal camera height
+const SHADOW_BLUR = 0.05; // soft enough to read as contact, tight enough to anchor
+const SHADOW_RISE = 0.06; // the ellipse's centre sits just above the product's bottom edge
+/** Opacity floor and range: light surfaces cast visible shadows, dark ones almost none. */
+const SHADOW_OPACITY_BASE = 0.2;
+const SHADOW_OPACITY_RANGE = 0.35;
+
+/**
+ * Mean RGB of the output in a ring around `box` (25% wider on each side,
+ * clamped to the image, the box itself excluded). The ring is the light the
+ * product is about to sit in — the surface under it and the wall behind it —
+ * sampled without the model's own product, which the patch is about to cover.
+ * A box that fills the canvas leaves no ring; the whole sampled rectangle is
+ * used then rather than reporting no light at all.
+ */
+async function ringMean(
+  output: sharp.Sharp,
+  size: { width: number; height: number },
+  box: PasteBox,
+): Promise<[number, number, number]> {
+  const marginX = Math.round(box.width * RING_MARGIN);
+  const marginY = Math.round(box.height * RING_MARGIN);
+  const left = Math.max(0, box.left - marginX);
+  const top = Math.max(0, box.top - marginY);
+  const right = Math.min(size.width, box.left + box.width + marginX);
+  const bottom = Math.min(size.height, box.top + box.height + marginY);
+  const { data, info } = await output
+    .clone()
+    .extract({ left, top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) })
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const sum = [0, 0, 0];
+  const all = [0, 0, 0];
+  let count = 0;
+  for (let y = 0; y < info.height; y += 1) {
+    for (let x = 0; x < info.width; x += 1) {
+      const i = (y * info.width + x) * info.channels;
+      const rgb = [data[i], data[info.channels > 1 ? i + 1 : i], data[info.channels > 2 ? i + 2 : i]];
+      for (let c = 0; c < 3; c += 1) all[c] += rgb[c];
+      const inBox =
+        left + x >= box.left &&
+        left + x < box.left + box.width &&
+        top + y >= box.top &&
+        top + y < box.top + box.height;
+      if (inBox) continue;
+      for (let c = 0; c < 3; c += 1) sum[c] += rgb[c];
+      count += 1;
+    }
+  }
+  const total = info.width * info.height;
+  const [source, n] = count > 0 ? [sum, count] : [all, Math.max(1, total)];
+  return [source[0] / n, source[1] / n, source[2] / n];
+}
+
+/** Mean RGB of the patch's opaque pixels (alpha > 200); null when the patch is all transparent. */
+async function patchMean(patch: Uint8Array): Promise<[number, number, number] | null> {
+  const { data, info } = await sharp(patch).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const sum = [0, 0, 0];
+  let count = 0;
+  for (let i = 0; i + 3 < data.length; i += info.channels) {
+    if (data[i + 3] <= 200) continue;
+    sum[0] += data[i];
+    sum[1] += data[i + 1];
+    sum[2] += data[i + 2];
+    count += 1;
+  }
+  if (count === 0) return null;
+  return [sum[0] / count, sum[1] / count, sum[2] / count];
+}
+
+/**
+ * A blurred black ellipse sitting under the patch's bottom edge, ready to
+ * composite. It is drawn on a transparent canvas padded by three sigma so the
+ * blur is not clipped at the ellipse's own edge, then trimmed to whatever part
+ * of it falls on the output; null when none of it does.
+ */
+async function contactShadow(
+  paste: PasteBox,
+  opacity: number,
+  size: { width: number; height: number },
+): Promise<sharp.OverlayOptions | null> {
+  const width = SHADOW_WIDTH * paste.width;
+  const height = SHADOW_HEIGHT * paste.width;
+  const sigma = Math.max(0.3, SHADOW_BLUR * paste.width); // sharp's blur needs sigma >= 0.3
+  const pad = Math.ceil(3 * sigma);
+  const canvasWidth = Math.ceil(width) + 2 * pad;
+  const canvasHeight = Math.ceil(height) + 2 * pad;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${canvasWidth}" height="${canvasHeight}"><ellipse cx="${canvasWidth / 2}" cy="${canvasHeight / 2}" rx="${width / 2}" ry="${height / 2}" fill="#000000" fill-opacity="${opacity}"/></svg>`;
+  const blurred = await sharp(Buffer.from(svg)).blur(sigma).png().toBuffer();
+  const left = Math.round(paste.left + paste.width / 2 - canvasWidth / 2);
+  const top = Math.round(paste.top + paste.height - SHADOW_RISE * paste.width - canvasHeight / 2);
+  const cropLeft = Math.max(0, -left);
+  const cropTop = Math.max(0, -top);
+  const visibleWidth = Math.min(canvasWidth - cropLeft, size.width - Math.max(0, left));
+  const visibleHeight = Math.min(canvasHeight - cropTop, size.height - Math.max(0, top));
+  if (visibleWidth <= 0 || visibleHeight <= 0) return null;
+  const clipped =
+    cropLeft > 0 || cropTop > 0 || visibleWidth !== canvasWidth || visibleHeight !== canvasHeight
+      ? await sharp(blurred)
+          .extract({ left: cropLeft, top: cropTop, width: visibleWidth, height: visibleHeight })
+          .png()
+          .toBuffer()
+      : blurred;
+  return { input: clipped, left: Math.max(0, left), top: Math.max(0, top) };
+}
+
+/**
+ * Shrinks an already-fitted box so its width stays within `cap` pixels,
+ * uniformly and keeping the alignment: centred in the target box horizontally,
+ * resting on its bottom edge or centred vertically.
+ */
+function capWidth(paste: PasteBox, to: PasteBox, cap: number, align: PasteAlign = "center"): PasteBox {
+  if (!(cap > 0) || paste.width <= cap) return paste;
+  const scale = cap / paste.width;
+  const width = Math.max(1, Math.round(paste.width * scale));
+  const height = Math.max(1, Math.round(paste.height * scale));
+  return {
+    left: to.left + Math.round((to.width - width) / 2),
+    top: align === "bottom" ? to.top + to.height - height : to.top + Math.round((to.height - height) / 2),
+    width,
+    height,
+  };
+}
+
 /**
  * Composites an already-prepared patch (PNG, alpha allowed) into the output at
  * `region`, uniform-scaled to fit the region's pixel box and centred. Used by
  * the product transplant: the patch is the matted source product and `region`
  * is where the model drew its own product.
+ *
+ * With `shadow` and `matchLight` the patch is blended into the scene rather
+ * than stamped on it: a soft contact shadow under it, and the surrounding
+ * light's brightness and colour carried onto it within bounds. With both off
+ * the output is the plain paste, unchanged.
  */
 export async function pastePatch(input: {
   output: Uint8Array;
@@ -94,7 +244,13 @@ export async function pastePatch(input: {
   region: ProductRegion;
   /** Where the fitted patch sits inside the box: centred, or resting on the box's bottom edge for a product placed on a surface. */
   align?: PasteAlign;
-}): Promise<{ bytes: Uint8Array; box: PasteBox }> {
+  /** Cap on the fitted width so a generous target box cannot inflate the product; the source's relative width with headroom. */
+  maxWidth?: number;
+  /** Draw a soft contact shadow under the patch so it rests on the surface instead of floating. */
+  shadow?: boolean;
+  /** Carry the surrounding light's brightness and colour onto the patch, within a quarter stop. */
+  matchLight?: boolean;
+}): Promise<{ bytes: Uint8Array; box: PasteBox; blend: PasteBlend }> {
   const region = clampRegion(input.region);
   const [outputMeta, patchMeta] = await Promise.all([
     sharp(input.output).metadata(),
@@ -106,12 +262,47 @@ export async function pastePatch(input: {
   }
   const to = pixelBox(region, outputSize.width, outputSize.height);
   if (to.width <= 0 || to.height <= 0) throw new Error("pastePatch: the region is empty after clamping");
-  const paste = fitBox({ left: 0, top: 0, width: patchMeta.width, height: patchMeta.height }, to, input.align);
-  const resized = await sharp(input.patch).resize(paste.width, paste.height, { fit: "fill" }).png().toBuffer();
-  const bytes = await sharp(input.output)
-    .autoOrient()
-    .composite([{ input: resized, left: paste.left, top: paste.top }])
-    .png()
-    .toBuffer();
-  return { bytes: new Uint8Array(bytes), box: paste };
+  const fitted = fitBox({ left: 0, top: 0, width: patchMeta.width, height: patchMeta.height }, to, input.align);
+  const paste = input.maxWidth
+    ? capWidth(fitted, to, input.maxWidth * outputSize.width, input.align)
+    : fitted;
+  const base = sharp(input.output).autoOrient();
+  const blend: PasteBlend = { lightGain: 1, shadowOpacity: 0 };
+  const ring =
+    input.matchLight || input.shadow
+      ? await ringMean(base, { width: outputSize.width, height: outputSize.height }, paste)
+      : null;
+
+  let resized = await sharp(input.patch).resize(paste.width, paste.height, { fit: "fill" }).png().toBuffer();
+  if (input.matchLight && ring) {
+    const mean = await patchMean(resized);
+    // An all-transparent patch has no tone to match; leave it alone.
+    if (mean) {
+      const ringLuma = luma(ring);
+      const gain = clamp(ringLuma / Math.max(1, luma(mean)), GAIN_MIN, GAIN_MAX);
+      // Each channel moves a fraction of the way toward the ring's own balance,
+      // so a warm room warms the product without repainting it.
+      const gains = ring.map((channel) => gain * (1 + CAST_STRENGTH * (channel / Math.max(1, ringLuma) - 1)));
+      resized = await sharp(resized)
+        .ensureAlpha()
+        .linear([gains[0], gains[1], gains[2], 1], [0, 0, 0, 0]) // four bands: RGB gains, alpha untouched
+        .png()
+        .toBuffer();
+      blend.lightGain = gain;
+    }
+  }
+
+  const layers: sharp.OverlayOptions[] = [];
+  if (input.shadow && ring) {
+    const opacity = SHADOW_OPACITY_BASE + SHADOW_OPACITY_RANGE * (luma(ring) / 255);
+    const shadow = await contactShadow(paste, opacity, { width: outputSize.width, height: outputSize.height });
+    if (shadow) {
+      layers.push(shadow); // under the patch, so the product's own edge stays crisp
+      blend.shadowOpacity = opacity;
+    }
+  }
+  layers.push({ input: resized, left: paste.left, top: paste.top });
+
+  const bytes = await base.composite(layers).png().toBuffer();
+  return { bytes: new Uint8Array(bytes), box: paste, blend };
 }
