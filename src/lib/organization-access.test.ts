@@ -46,6 +46,7 @@ describe("canAccessMemberPath", () => {
       "/creatives",
       "/teams",
       "/meta",
+      "/klaviyo",
       "/mer",
       "/campaigns",
     ]) {
@@ -54,7 +55,13 @@ describe("canAccessMemberPath", () => {
   });
 
   it("keeps privileged surfaces off-limits for members", () => {
-    for (const path of ["/import", "/accounts", "/settings", "/settings/api-keys"]) {
+    for (const path of [
+      "/import",
+      "/accounts",
+      "/settings",
+      "/settings/api-keys",
+      "/attribution/klaviyo",
+    ]) {
       expect(canAccessMemberPath("member", path)).toBe(false);
     }
   });

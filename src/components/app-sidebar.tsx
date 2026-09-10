@@ -57,7 +57,8 @@ import { featureFlagDefs } from "@/lib/feature-flags";
 
 /**
  * The Dashboard entry's dropdown: one row per source with its own screen.
- * The labs are privileged navigation only — hiding them is UX, the
+ * Klaviyo campaigns is for every role — its data is org-readable. The labs
+ * are privileged navigation only, and hiding them is UX: the
  * `orgAdminProcedure` on their data remains the security boundary.
  */
 const dashboardChildren: Array<{
@@ -67,12 +68,7 @@ const dashboardChildren: Array<{
   privileged?: boolean;
 }> = [
   { label: "Meta", href: "/meta", icon: "solar:cursor-square-linear" },
-  {
-    label: "Klaviyo",
-    href: "/attribution/klaviyo",
-    icon: "solar:letter-linear",
-    privileged: true,
-  },
+  { label: "Klaviyo", href: "/klaviyo", icon: "solar:letter-linear" },
   {
     label: "Google",
     href: "/attribution/google-ads",
