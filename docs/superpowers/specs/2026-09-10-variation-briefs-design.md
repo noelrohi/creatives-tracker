@@ -1,10 +1,42 @@
 # Variation briefs: funnel, axis, hypothesis
 
-Date: 2026-09-10. Status: proposed, awaiting approval. Extends
+Date: 2026-09-10. Status: implemented (plan
+`docs/superpowers/plans/2026-09-10-variation-briefs.md`). Extends
 `2026-09-03-static-ad-variations-design.md` §2 (the agent) and applies the
 process parts of the Buzz agent's questionnaire answers
 (`rands/BUZZ_AGENT_STATIC_AD_WORKFLOW_QUESTIONNAIRE_2026_09_07.md` §2.1, §2.4,
 §3.1, §4.2, §6.1 G).
+
+## Implementation notes and live results (2026-09-10)
+
+Four runs on the local test creatives after the wiring landed (the first
+batch produced no images at all because OpenAI had started rejecting
+`response_format` for gpt-image-2; `@ai-sdk/openai` was bumped to 3.0.112):
+
+- **R3, no note → axis `proof`, funnel tof.** Source attached (proof keeps
+  it). Review passed on attempt 1. Visually a near-copy of the source with a
+  "30,000+ users" pill added: the axis is visible but only just. The weakest
+  result; a proof-axis change on an attached source stays small by design.
+- **R3 again, no note → axis `angle`.** Rotation avoided proof and the two
+  axes from the failed first batch. Source not attached; new headline, CTA
+  moved above the grid, every tile re-shot in a sunlit room. Attempt 1 was
+  rejected for an unprompted extra copy line; attempt 2 passed.
+- **R1, note "change the scene to a bright morning bathroom" → axis
+  `scene`.** The dark studio became a sunlit tiled bathroom with the copy
+  preserved; attempt 1 was rejected for an oversized floating transplant,
+  attempt 2 passed with the product shrunk. Product photo fallback used.
+- **R2, no note → axis `proof`.** The named testimonial became a stat bar
+  (visible change), but the model left a flat ivory card with no locatable
+  landing area, the transplant never ran, both reviews said "no product
+  visible", the agent re-sent an identical prompt on attempt 2, and shipped
+  the rejected attempt through the finish override.
+
+No review failed on "only the words changed"; no axis repeated; the source
+was attached exactly when the axis rules say. Follow-ups made from the R2
+run: `generateImage` now rejects a prompt identical to a rejected attempt's;
+the TRANSPLANT block asks for a landing surface with a visible edge or
+footprint, described explicitly; and the user content states the FORMAT
+(three runs had opened their prompt with "9:16" for a square source).
 
 ## Problem
 
