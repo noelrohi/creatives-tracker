@@ -875,10 +875,17 @@ export const generateVariationTask = task({
               mode === "edit" ||
               Boolean(transplant) ||
               (source.kind === "creative" && !payload.withoutSourceImage);
+            // The photo the drawn product is judged against, when nothing was
+            // pasted in. Attaching the source must not cost the review that
+            // comparison, so the photo moves to third instead of dropping out.
+            const productPhoto =
+              mode === "generate" && !transplant ? (brand?.productImageUrl ?? null) : null;
+            const productPhotoThird = sourceSecond && Boolean(productPhoto);
             if (sourceSecond) {
               content.push({ type: "image", image: sourceBytes });
-            } else if (brand?.productImageUrl) {
-              content.push({ type: "image", image: await fetchBytes(brand.productImageUrl) });
+            }
+            if (productPhoto) {
+              content.push({ type: "image", image: await fetchBytes(productPhoto) });
             }
             // A wrong-SKU match is the asset fallback's known failure mode, and
             // the review cannot see it without the photo the patch was cut
@@ -897,7 +904,9 @@ export const generateVariationTask = task({
                       ? `You are a strict creative reviewer for paid-social static ads. The first image is the generated ad, the second is the source ad it varies, and the third is the brand's product photo; the real product was cut out of that third image and ${transplant.target === "landing" ? "pasted into the empty area the model left for it" : "pasted over the product the model drew"}.`
                       : `You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the real product was cut out of the second image (the source) and ${transplant.target === "landing" ? "pasted into the empty area the model left for it" : "pasted over the product the model drew"}.`
                     : sourceSecond
-                      ? "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second is the source ad it varies."
+                      ? productPhotoThird
+                        ? "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second is the source ad it varies; the third is the advertiser's real product photo."
+                        : "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second is the source ad it varies."
                       : "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second, when present, is the advertiser's real product photo.",
                 "Checklist (all must hold for pass = true):",
                 brief
@@ -913,8 +922,8 @@ export const generateVariationTask = task({
                     : transplant
                       ? `- ${assetPhoto ? "The pasted product" : "The source's product"} now sits in the box ${pct(transplant.to)}. Check: it is a plausible size for the scene; its lighting and colour do not clash with the surroundings; no remnant of the model's own product shows around its edges; nothing important is covered; and no second copy of the product appears anywhere else in the image; and the product rests on the surface rather than floating above it or sinking into it. Name which failed.`
                       : transplantExpected
-                        ? "- The product is not pasted in on this attempt (the paste step did not run), so the product you see, if any, is the model's own rendering: do not fail it on markings or exact shape, and an empty landing area beside it is acceptable. But the ad must still show the product somewhere; if no product is visible at all, fail and say 'no product visible'."
-                        : "- The product matches the product photo in shape, openings, material, and markings; no invented logos or text on it.",
+                        ? "- The product is not pasted in on this attempt (the paste step did not run), so the product in the generated ad, if any, is the model's own rendering: do not fail it on markings or exact shape, and an empty landing area beside it is acceptable. But the ad must still show the product somewhere; if no product is visible at all, fail and say 'no product visible'."
+                        : `- The product matches the product photo${productPhotoThird ? " (the third image)" : ""} in shape, openings, material, and markings; no invented logos or text on it.`,
                 "- Every line of ad copy (headline, subhead, badges, CTA, tile labels) is legible and matches the quoted copy in the prompt, with no garbled or invented copy. Incidental labels on props and packaging inside the scene (a shampoo bottle, a book spine) are fine and are not ad copy.",
                 `- No logos or brand marks other than ${brand?.brandName ?? "the advertiser's"}; no platform UI, no watermarks.`,
                 "- The palette is consistent with a clean brand look: no clashing neon, no split panels unless the prompt asked for them.",
