@@ -7,7 +7,7 @@ import {
 } from "ai";
 import { logger, metadata, task, tags } from "@trigger.dev/sdk";
 import sharp from "sharp";
-import { and, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { openai } from "@/lib/ai";
@@ -49,11 +49,13 @@ import {
   MAX_STEPS,
   readContextInputSchema,
   resolveVariationOutcome,
+  setBriefInputSchema,
   type VariationFailureReason,
   type VariationRunInput,
   type VariationSource,
 } from "@/lib/variation-agent";
 import type {
+  EarlierVariation,
   VariationAttempt,
   VariationPlan,
   VariationTransplant,
@@ -666,6 +668,46 @@ export const generateVariationTask = task({
         }
       }
 
+      // What this creative already tested, newest first, so the agent rotates
+      // the axis instead of repeating one. Only creative sources carry a
+      // sourceCreativeId, so a competitor ad simply has no history here.
+      const earlierRows =
+        payload.source.kind === "creative"
+          ? await db
+              .select({
+                status: studioVariants.status,
+                mark: studioVariants.mark,
+                plan: studioVariants.plan,
+              })
+              .from(studioGenerations)
+              .innerJoin(
+                studioVariants,
+                eq(studioVariants.generationId, studioGenerations.id),
+              )
+              .where(
+                and(
+                  eq(studioGenerations.organizationId, payload.organizationId),
+                  eq(studioGenerations.kind, "variation"),
+                  eq(studioGenerations.sourceCreativeId, payload.source.id),
+                  ne(studioGenerations.id, payload.generationId),
+                ),
+              )
+              .orderBy(desc(studioGenerations.createdAt))
+              .limit(10)
+          : [];
+      const earlierVariations: EarlierVariation[] = earlierRows.map((row) => ({
+        axis: row.plan?.axis ?? null,
+        hypothesis: row.plan?.hypothesis ?? null,
+        summary: row.plan?.summary ?? null,
+        mark: row.mark === "good" || row.mark === "bad" ? row.mark : null,
+        status:
+          row.status === "ready"
+            ? "ready"
+            : row.status === "failed"
+              ? "failed"
+              : "generating",
+      }));
+
       const input: VariationRunInput = {
         source,
         sourceImage: sourceBytes,
@@ -676,6 +718,7 @@ export const generateVariationTask = task({
         format,
         useSourceLayout: !payload.withoutSourceImage,
         productPatch: productPatch ? { source: productPatch.source } : null,
+        earlierVariations,
       };
 
       const run = createVariationRun(input, {
@@ -800,7 +843,7 @@ export const generateVariationTask = task({
           if (pasted) pastedUrls.add(stored.url);
           return { imageUrl: stored.url, transplant };
         },
-        reviewImage: async ({ imageUrl, prompt, mode, keepRegion, transplant }) => {
+        reviewImage: async ({ imageUrl, prompt, mode, keepRegion, transplant, brief }) => {
           // The same gate the transplant block runs under. When it holds and
           // `transplant` is still null (the output locator found neither a
           // product nor a landing area, or the paste threw), the image is
@@ -823,7 +866,16 @@ export const generateVariationTask = task({
               },
               { type: "image", image: await fetchBytes(imageUrl) },
             ];
-            if (mode === "edit" || transplant) {
+            // The strategic checklist compares the variation with the ad it
+            // varies, so the source is the second image on every attempt that
+            // has one — not only the edit and transplant attempts. A competitor
+            // source or a "retry without image" run keeps the product photo
+            // there instead.
+            const sourceSecond =
+              mode === "edit" ||
+              Boolean(transplant) ||
+              (source.kind === "creative" && !payload.withoutSourceImage);
+            if (sourceSecond) {
               content.push({ type: "image", image: sourceBytes });
             } else if (brand?.productImageUrl) {
               content.push({ type: "image", image: await fetchBytes(brand.productImageUrl) });
@@ -844,8 +896,13 @@ export const generateVariationTask = task({
                     ? assetPhoto
                       ? `You are a strict creative reviewer for paid-social static ads. The first image is the generated ad, the second is the source ad it varies, and the third is the brand's product photo; the real product was cut out of that third image and ${transplant.target === "landing" ? "pasted into the empty area the model left for it" : "pasted over the product the model drew"}.`
                       : `You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the real product was cut out of the second image (the source) and ${transplant.target === "landing" ? "pasted into the empty area the model left for it" : "pasted over the product the model drew"}.`
-                    : "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second, when present, is the advertiser's real product photo.",
+                    : sourceSecond
+                      ? "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second is the source ad it varies."
+                      : "You are a strict creative reviewer for paid-social static ads. The first image is the generated ad; the second, when present, is the advertiser's real product photo.",
                 "Checklist (all must hold for pass = true):",
+                brief
+                  ? `- The variation declares axis "${brief.axis}": ${brief.hypothesis.replace(/\n/g, " ")} Compare with the source: the change on that axis must be visible in the image, not only in the words. For scene, layout, angle, or funnel, the composition or setting must differ from the source; if only the copy changed, fail and say "only the words changed". For hook, offer, proof, colour, or copy, the named element must differ while the rest stays recognisably the same ad.`
+                  : null,
                 assetPhoto
                   ? "- The third image is the product photo the pasted product was cut from. The pasted product must be the same model as the product in the source (second image): same silhouette, openings, thickness, and colour. If it is a different model, fail and say so."
                   : null,
@@ -902,6 +959,12 @@ export const generateVariationTask = task({
                   "List a reference document's sections (omit sectionId) or read one section's content.",
                 inputSchema: readContextInputSchema,
                 execute: (raw) => run.readContext(raw),
+              }),
+              setBrief: tool({
+                description:
+                  "Record the source classification (funnel, lane, mechanics, locked elements), the one axis this variation tests, and the hypothesis. Required before generateImage; may be replaced until the first image.",
+                inputSchema: setBriefInputSchema,
+                execute: (raw) => run.setBrief(raw),
               }),
               generateImage: tool({
                 description:
