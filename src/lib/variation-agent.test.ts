@@ -195,6 +195,7 @@ describe("buildVariationUserContent", () => {
     expect(text).toContain("SOURCE: One nightly habit");
     expect(text).toContain("ROAS 6.00");
     expect(text).toContain("CONSTRAINT FROM THE USER: keep the blue background");
+    expect(text).toContain("FORMAT: portrait (");
     expect(content[1]).toEqual({ type: "image", image: new URL("https://cdn.test/source.png") });
   });
 
@@ -531,6 +532,26 @@ describe("createVariationRun.generateImage", () => {
     expect(d.produceImage).toHaveBeenCalledWith(
       expect.objectContaining({ referenceImageUrls: ["https://blob.test/product.png", "https://cdn.test/source.png"] }),
     );
+  });
+});
+
+describe("createVariationRun retry discipline", () => {
+  it("rejects an unchanged prompt after a rejected review and accepts a rewritten one", async () => {
+    const run = createVariationRun(input, deps({ reviewImage: vi.fn(async () => ({ pass: false, notes: ["no product visible"] })) }));
+    await run.setBrief(copyBrief);
+    await run.generateImage({ prompt: "same prompt", referenceImageIds: [], keepSourceLayout: true });
+    const repeat = await run.generateImage({ prompt: " same prompt ", referenceImageIds: [], keepSourceLayout: true });
+    expect(repeat).toMatchObject({ error: expect.stringContaining("identical to attempt 1") });
+    expect(run.state.imageCalls).toBe(1);
+    const rewritten = await run.generateImage({ prompt: "a rewritten prompt", referenceImageIds: [], keepSourceLayout: true });
+    expect(rewritten).toMatchObject({ attempt: 2 });
+  });
+
+  it("allows the same prompt again when the previous review passed", async () => {
+    const run = createVariationRun(input, deps());
+    await run.setBrief(copyBrief);
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    await expect(run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true })).resolves.toMatchObject({ attempt: 2 });
   });
 });
 

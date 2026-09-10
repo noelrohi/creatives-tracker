@@ -342,7 +342,7 @@ export function buildVariationSystemPrompt(input: VariationRunInput) {
     input.productPatch
       ? "<mode>\nTRANSPLANT: the real product is pasted into your image afterwards, cut out of " +
         (input.productPatch.source === "asset" ? "the brand's product photo" : "the source ad") +
-        ". Do not draw the product, and do not draw anything that looks like it (no product-shaped object, no packaging, no logo) anywhere in the image. Instead leave an empty landing area for it: an evenly lit, plain surface (pedestal top, flat card area, tabletop) at about the position and size the product has in the source ad image when the source is attached as a layout reference (possible on the hook, offer, proof, colour, and copy axes), or wherever your composition places the product, sized to read at a glance, on the scene, layout, angle, and funnel axes, with nothing overlapping it and no text inside it. Name the product in the prompt only to say where its landing area is. Everything else in the prompt is yours to design. This staging is a constraint on how you draw the scene, not your one change.\n</mode>"
+        ". Do not draw the product, and do not draw anything that looks like it (no product-shaped object, no packaging, no logo) anywhere in the image. Instead leave an empty landing area for it: an evenly lit, plain surface with a visible edge or footprint (a pedestal top, a shelf, a tabletop, a framed card area), described explicitly in the prompt so it can be located afterwards; a bare empty region of background is not enough. Place it at about the position and size the product has in the source ad image when the source is attached as a layout reference (possible on the hook, offer, proof, colour, and copy axes), or wherever your composition places the product, sized to read at a glance, on the scene, layout, angle, and funnel axes, with nothing overlapping it and no text inside it. Name the product in the prompt only to say where its landing area is. Everything else in the prompt is yours to design. This staging is a constraint on how you draw the scene, not your one change.\n</mode>"
       : null,
     editAvailable && input.sourceProductRegion
       ? `<mode>\nEDIT MODE is available on request (pass mode "edit" to generateImage; the default is generate, which draws from the references and then transplants the source's real product, so a copy-only or CTA-only change, when the axis rules allow one, still belongs in generate mode with the source kept as the layout reference). Edit mode is a last resort: measured runs show the image model reflows the layout under an edit mask, so the pasted box misaligns and the review rejects most edit attempts. Use it only when the CONSTRAINT FROM THE USER demands the source's exact pixels outside one region, never merely because the change is small. In edit mode the source is the canvas: the box ${describeRegion(input.sourceProductRegion)} of it holds the product; after the edit the source's pixels for that box are pasted back, so the product is preserved exactly, and everything outside that box is redrawn from your prompt alone. Because that rectangle is pasted over the result, the image model must keep the box at exactly the same position and size (no reflowed grid, no resized tiles) and must not draw the product anywhere else in the image; say both of those in the prompt. The prompt is still the self-contained description step 5 asks for, minus the product: describe the whole scene outside the kept box (background, lighting, palette, mood) and re-quote every line of copy the finished ad shows, including lines you are not changing. Anything you leave out is lost. Never describe or restyle the product itself; refer to it in plain words if you must (for example "the product in the lower-right tile is kept as is"). Keep the source's composition. If the review reports a misaligned box or a collision with a neighbouring element, move or resize keepRegion so its edges fall on a flat, unbroken area of the source (a plain background band, not a card edge). If it reports a second copy of the product, keep the box and rewrite the prompt to state that the product appears only inside that box. If it reports the box covering copy, shrink the box. Once in edit mode keepSourceLayout has no effect; to leave edit mode pass mode "generate", and do that only when the variation must move or replace the product.\n</mode>`
@@ -372,6 +372,7 @@ export function buildVariationUserContent(
     performance
       ? `PERFORMANCE (last 30 days): spend ${performance.spend.toFixed(0)}, ROAS ${performance.roas == null ? "n/a" : performance.roas.toFixed(2)}, CTR ${performance.ctr == null ? "n/a" : `${performance.ctr.toFixed(2)}%`}, purchases ${performance.purchases}`
       : null,
+    `FORMAT: ${input.format} (${studioSizeFor(input.format)}). Describe the deliverable in this format; do not assume another aspect ratio.`,
     input.note?.trim()
       ? `CONSTRAINT FROM THE USER: ${escapeContextText(input.note.trim())}`
       : null,
@@ -523,6 +524,15 @@ export function createVariationRun(
     }
     // A clean prompt breaks the streak: only consecutive flags end the run.
     state.claimsFlags = 0;
+
+    // A retry has to change something: the same prompt after a rejected
+    // review produced the same problems on the live batch.
+    const previous = state.attempts[state.attempts.length - 1];
+    if (previous && !previous.review.pass && previous.prompt.trim() === raw.prompt.trim()) {
+      return {
+        error: `This prompt is identical to attempt ${previous.attempt}, which the review rejected (${previous.review.notes.join("; ") || "no notes"}). Rewrite the prompt to fix those notes before generating again.`,
+      };
+    }
 
     const editAvailable = editModeAvailable(input);
     // Generate is the default and only an explicit mode "edit" leaves it:
