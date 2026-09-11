@@ -155,6 +155,8 @@ export const ledger = {
   caption: (timezone: string, from: string, to: string) =>
     `Send dates use ${timezone} account days · ${from} → ${to}`,
   asOf: (iso: string) => `as of ${iso}`,
+  reportWindow: (from: string, to: string) =>
+    `Klaviyo report covers ${from} → ${to}`,
   refresh: "Refresh report",
   noReport: "No report for this range yet",
   noRows: "No campaigns or flows in this range",

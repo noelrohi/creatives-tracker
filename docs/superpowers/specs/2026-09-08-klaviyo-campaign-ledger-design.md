@@ -133,8 +133,14 @@ always.
 
 One new module, `src/lib/klaviyo/campaign-ledger.ts`, with three loaders. Each
 takes the connection scope and an account-timezone day range, converted to the
-same half-open UTC window the report request uses, so "the current generation
-for this window" is an exact key match, as in the lab's Reports view today.
+same half-open UTC window the report request uses. Klaviyo's side of a row,
+however, is NOT keyed to that window: the loaders read the newest `current`
+report generation per kind for the connection regardless of what window it
+covers, because the nightly sync only ever produces last-30 windows and an
+exact-key match would show "no report" on most days even though a current
+report exists. This stays honest per row — facts join to a campaign or flow
+by object id, so a row outside the report's actual coverage still has no fact
+and dashes — and the UI names the report's real coverage in its caption.
 
 ### 4.1 `loadLedgerRows` — the top level
 

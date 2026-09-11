@@ -12,6 +12,8 @@ const defaultListFn = (): Promise<unknown> =>
       asOf: null,
       hasCampaignGeneration: false,
       hasFlowGeneration: false,
+      reportFrom: null,
+      reportTo: null,
     },
   });
 
@@ -24,6 +26,8 @@ const queryState = vi.hoisted(() => ({
         asOf: null,
         hasCampaignGeneration: false,
         hasFlowGeneration: false,
+        reportFrom: null,
+        reportTo: null,
       },
     }),
   detailFn: (): Promise<unknown> => Promise.resolve(null),
@@ -236,6 +240,8 @@ describe("KlaviyoCampaignsPage", () => {
           asOf: "2026-08-02T00:00:00.000Z",
           hasCampaignGeneration: true,
           hasFlowGeneration: true,
+          reportFrom: null,
+          reportTo: null,
         },
       });
     renderPage();
