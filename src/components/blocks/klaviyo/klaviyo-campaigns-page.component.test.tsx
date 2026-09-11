@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KlaviyoCampaignsPage } from "./klaviyo-campaigns-page";
@@ -16,8 +17,11 @@ const queryState = vi.hoisted(() => ({
       },
     }),
   detailFn: (): Promise<unknown> => Promise.resolve(null),
-  role: "member" as "member" | "admin" | "owner",
+  role: "member" as "member" | "admin" | "owner" | null,
+  rolePending: false,
 }));
+
+const nav = vi.hoisted(() => ({ push: vi.fn() }));
 
 vi.mock("@/lib/trpc/client", () => ({
   useTRPC: () => ({
@@ -62,9 +66,12 @@ vi.mock("@/lib/trpc/client", () => ({
   }),
 }));
 vi.mock("@/hooks/use-active-organization-role", () => ({
-  useActiveOrganizationRole: () => ({ role: queryState.role, isPending: false }),
+  useActiveOrganizationRole: () => ({
+    role: queryState.role,
+    isPending: queryState.rolePending,
+  }),
 }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => nav }));
 
 const configured = {
   configured: true,
@@ -73,6 +80,31 @@ const configured = {
   todayInAccountTz: "2026-09-10",
   lastMatchPublishedAt: "2026-09-10T01:00:00.000Z",
 };
+
+/** One sent campaign or flow, shaped like `klaviyo.ledger.detail` returns it. */
+function detailFixture(
+  object: {
+    objectId: string;
+    objectType: "campaign" | "flow";
+    name: string;
+    sentAt: string | null;
+  },
+) {
+  return {
+    object: { ...object, channel: "email", status: "sent", subject: null, messageCount: 1 },
+    klaviyo: null,
+    rates: { delivered: null, open: null, click: null, unsubscribe: null },
+    ours: { orderCount: 2, revenue: "97.50" },
+    reconciliation: {
+      unconfirmedOrders: null,
+      revenuePerRecipient: null,
+      averageOrderValue: "48.75",
+    },
+    ordersByDay: { mode: "offset", points: [] },
+    topProducts: [],
+    messages: [],
+  };
+}
 
 function renderPage(search = "") {
   const client = new QueryClient({
@@ -89,7 +121,9 @@ function renderPage(search = "") {
 
 beforeEach(() => {
   queryState.role = "member";
+  queryState.rolePending = false;
   queryState.contextFn = () => Promise.resolve(configured);
+  nav.push.mockClear();
 });
 
 describe("KlaviyoCampaignsPage", () => {
@@ -127,29 +161,14 @@ describe("KlaviyoCampaignsPage", () => {
 
   it("gives members a read-only page with the refresh hint and still opens the sheet", async () => {
     queryState.detailFn = () =>
-      Promise.resolve({
-        object: {
+      Promise.resolve(
+        detailFixture({
           objectId: "camp-1",
           objectType: "campaign",
           name: "July Sale",
-          channel: "email",
-          status: "sent",
           sentAt: "2026-07-10T09:00:00.000Z",
-          subject: null,
-          messageCount: 1,
-        },
-        klaviyo: null,
-        rates: { delivered: null, open: null, click: null, unsubscribe: null },
-        ours: { orderCount: 2, revenue: "97.50" },
-        reconciliation: {
-          unconfirmedOrders: null,
-          revenuePerRecipient: null,
-          averageOrderValue: "48.75",
-        },
-        ordersByDay: { mode: "offset", points: [] },
-        topProducts: [],
-        messages: [],
-      });
+        }),
+      );
     renderPage("?source=camp-1");
     // The open sheet is a Radix modal, so it marks the rest of the page
     // `aria-hidden`; `hidden: true` keeps these queries looking at the page
@@ -177,5 +196,64 @@ describe("KlaviyoCampaignsPage", () => {
     expect(
       screen.queryByRole("button", { name: "View orders in Orders →" }),
     ).toBeNull();
+  });
+
+  it("sends an admin from a campaign to its orders starting at the send day", async () => {
+    queryState.role = "admin";
+    queryState.detailFn = () =>
+      Promise.resolve(
+        detailFixture({
+          objectId: "camp-1",
+          objectType: "campaign",
+          name: "July Sale",
+          sentAt: "2026-07-10T09:00:00.000Z",
+        }),
+      );
+    renderPage("?source=camp-1");
+    await userEvent.click(
+      await screen.findByRole("button", { name: "View orders in Orders →" }),
+    );
+    // A campaign's orders outlive the ledger window, so the send day is a
+    // range START with no end.
+    expect(nav.push).toHaveBeenCalledExactlyOnceWith(
+      "/attribution/klaviyo?view=orders&source=camp-1&range=custom&from=2026-07-10",
+    );
+  });
+
+  it("sends an admin from a flow to its orders across the shown range", async () => {
+    queryState.role = "admin";
+    queryState.detailFn = () =>
+      Promise.resolve(
+        detailFixture({
+          objectId: "flow-1",
+          objectType: "flow",
+          name: "Welcome series",
+          sentAt: null,
+        }),
+      );
+    renderPage("?source=flow-1");
+    await userEvent.click(
+      await screen.findByRole("button", { name: "View orders in Orders →" }),
+    );
+    // A flow never "sent" on a day, so the orders view keeps the range the
+    // ledger is showing — the default last30 ending on the account's today.
+    expect(nav.push).toHaveBeenCalledExactlyOnceWith(
+      "/attribution/klaviyo?view=orders&source=flow-1&range=custom&from=2026-08-12&to=2026-09-10",
+    );
+  });
+
+  it("shows neither the admin controls nor the member hint while the role is pending", async () => {
+    queryState.role = null;
+    queryState.rolePending = true;
+    renderPage();
+    expect(
+      await screen.findByRole("heading", { name: "Klaviyo campaigns" }),
+    ).toBeVisible();
+    expect(await screen.findByText("No report for this range yet")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Refresh report" }),
+    ).toBeNull();
+    expect(screen.queryByText("Ask an admin to refresh the report.")).toBeNull();
+    expect(screen.queryByRole("link", { name: "Open lab" })).toBeNull();
   });
 });

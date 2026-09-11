@@ -37,8 +37,13 @@ export function KlaviyoCampaignsPage() {
   const queryClient = useQueryClient();
   const router = useRouter();
   const page = useLedgerPageState();
-  const { role } = useActiveOrganizationRole();
-  const privileged = isPrivilegedOrgRole(role);
+  const { role, isPending: rolePending } = useActiveOrganizationRole();
+  // The role arrives a tick after the page mounts. Treating "not yet known"
+  // as "member" would flash the member header — hint, no Refresh, no lab
+  // link — at an admin, so an unresolved role renders neither affordance
+  // nor its member-facing substitute.
+  const canAct = !rolePending && isPrivilegedOrgRole(role);
+  const readOnly = !rolePending && !isPrivilegedOrgRole(role);
 
   const context = useQuery({
     ...trpc.klaviyo.ledgerContext.queryOptions(),
@@ -137,7 +142,7 @@ export function KlaviyoCampaignsPage() {
               : ""}
           </p>
         </div>
-        {privileged ? (
+        {canAct ? (
           <div className="flex items-center gap-2">
             <Button size="sm" variant="ghost" asChild>
               <Link href={LAB_HREF}>{copy.openLab}</Link>
@@ -164,7 +169,7 @@ export function KlaviyoCampaignsPage() {
         onClearFilters={page.clearLedgerFilters}
         busy={refresh.isPending}
         onRefresh={
-          privileged
+          canAct
             ? () =>
                 refresh.mutate({
                   dateFrom: range.dateFrom,
@@ -173,13 +178,13 @@ export function KlaviyoCampaignsPage() {
                 })
             : undefined
         }
-        refreshHint={privileged ? undefined : copy.refreshHint}
+        refreshHint={readOnly ? copy.refreshHint : undefined}
       />
       <LedgerDetailSheet
         objectId={page.state.source}
         range={range}
         onClose={page.closeSource}
-        onViewOrders={privileged ? viewOrders : undefined}
+        onViewOrders={canAct ? viewOrders : undefined}
       />
     </div>
   );
