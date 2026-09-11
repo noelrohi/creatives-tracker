@@ -35,27 +35,32 @@ export const LOGO_MIN_WIDTH = 0.04;
 /** WCAG-style ratio the mark must reach against the background behind it. */
 export const LOGO_CONTRAST_FLOOR = 3;
 
+// Guards against float noise (e.g. 0.1 + 0.2 !== 0.3, or 1 - 0.12 - 0.06 then
+// + 0.06 !== 1 - 0.12) turning a legitimate boundary position into a false
+// rejection or a false overlap. `corners()` builds right/bottom candidates as
+// `1 - safe.X - size`, and re-adding `size` does not round-trip exactly for
+// every size, so `insideSafeArea` needs the same tolerance on its upper
+// bounds as `overlaps` needs on its edge-contact check. Normalized regions
+// never differ by less than this on purpose, so it never masks a real
+// rejection or intersection.
+const EDGE_EPSILON = 1e-9;
+
 export function insideSafeArea(box: ProductRegion, format: StudioFormat): boolean {
   const safe = safeAreaFor(format);
   return (
     box.x >= safe.left &&
     box.y >= safe.top &&
-    box.x + box.w <= 1 - safe.right &&
-    box.y + box.h <= 1 - safe.bottom
+    box.x + box.w <= 1 - safe.right + EDGE_EPSILON &&
+    box.y + box.h <= 1 - safe.bottom + EDGE_EPSILON
   );
 }
 
-// Guards against float noise (e.g. 0.1 + 0.2 !== 0.3) turning true edge
-// contact into a false overlap; normalized regions never differ by less than
-// this on purpose, so it never masks a real intersection.
-const OVERLAP_EPSILON = 1e-9;
-
 export function overlaps(a: ProductRegion, b: ProductRegion): boolean {
   return (
-    a.x < b.x + b.w - OVERLAP_EPSILON &&
-    b.x < a.x + a.w - OVERLAP_EPSILON &&
-    a.y < b.y + b.h - OVERLAP_EPSILON &&
-    b.y < a.y + a.h - OVERLAP_EPSILON
+    a.x < b.x + b.w - EDGE_EPSILON &&
+    b.x < a.x + a.w - EDGE_EPSILON &&
+    a.y < b.y + b.h - EDGE_EPSILON &&
+    b.y < a.y + a.h - EDGE_EPSILON
   );
 }
 

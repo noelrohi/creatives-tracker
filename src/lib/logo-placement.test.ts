@@ -48,6 +48,21 @@ describe("contrastRatio", () => {
   });
 });
 
+describe("insideSafeArea edge tolerance", () => {
+  it("treats the boundary position corners() computes for a bottom-edge mark as inside", () => {
+    // corners() places a bottom-edge box at y = 1 - safe.bottom - h, then
+    // insideSafeArea re-adds h and compares to 1 - safe.bottom. That
+    // subtract-then-add does not round-trip for every h in IEEE-754 — h =
+    // 0.06 against portrait's 0.12 band is a concrete repro (found by
+    // brute-forcing corners() outputs against insideSafeArea: ~2.8% of
+    // mark sizes on the 0.12 band land exactly on this boundary).
+    const safe = safeAreaFor("portrait");
+    const h = 0.06;
+    const bottomEdgeBox = box(safe.left, 1 - safe.bottom - h, 0.2, h);
+    expect(insideSafeArea(bottomEdgeBox, "portrait")).toBe(true);
+  });
+});
+
 describe("chooseLogoPlacement", () => {
   const sourceBox = box(0.06, 0.06, 0.2, 0.08);
 
@@ -95,5 +110,29 @@ describe("chooseLogoPlacement", () => {
     expect(
       chooseLogoPlacement({ drawn: null, sourceBox, copyRegions: [box(0, 0, 1, 1)], format: "square" }),
     ).toBeNull();
+  });
+
+  it("picks the safe-area corner nearest the source box, not just any legal one", () => {
+    // The source sits near the bottom-right; a full-width band blocks only its
+    // own y-range, leaving all four corners individually legal. An inverted
+    // (or otherwise wrong) distance comparator would still find *a* clear
+    // corner and pass a placement==="anchor" assertion, so pin the identity
+    // of the corner chosen instead of just its legality.
+    const nearBottomRight = box(0.7, 0.7, 0.2, 0.08);
+    const blocksOnlySourceRow = box(0, 0.68, 1, 0.12);
+    const result = chooseLogoPlacement({
+      drawn: null,
+      sourceBox: nearBottomRight,
+      copyRegions: [blocksOnlySourceRow],
+      format: "square",
+    });
+    const safe = safeAreaFor("square");
+    const expectedBox = {
+      x: 1 - safe.right - nearBottomRight.w,
+      y: 1 - safe.bottom - nearBottomRight.h,
+      w: nearBottomRight.w,
+      h: nearBottomRight.h,
+    };
+    expect(result).toEqual({ box: expectedBox, placement: "anchor" });
   });
 });
