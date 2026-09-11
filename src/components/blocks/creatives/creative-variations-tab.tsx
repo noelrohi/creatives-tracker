@@ -42,6 +42,7 @@ function failureCopy(reason: string | null, attempts: VariationAttempt[] | null)
   if (reason === "logo") return "Blocked: protected branding in the source";
   if (reason === "moderation") return "Blocked: the image model refused this request";
   if (reason === "claims") return "Stopped: the agent could not write a claims-safe prompt";
+  if (reason === "logo_unavailable") return "Stopped: no usable logo for this ad — add a logo to Studio context";
   const lastReview = attempts?.at(-1)?.review;
   if (lastReview && !lastReview.pass) return `Review rejected the image: ${lastReview.notes.join("; ") || "no notes"}`;
   return "Variation failed";
@@ -71,6 +72,13 @@ function PlanDisclosure({ plan }: { plan: VariationPlan }) {
             {plan.transplantedProduct.patchSource === "asset"
               ? "Product transplanted from the product photo."
               : "Product transplanted from the source."}
+          </p>
+        ) : null}
+        {plan.keptMarks?.[0] ? (
+          <p className="text-muted-foreground">
+            {plan.keptMarks[0].patchSource === "asset"
+              ? "Logo kept from the brand asset."
+              : "Logo kept from the source ad."}
           </p>
         ) : null}
         {plan.synthesized ? <p className="text-muted-foreground">The agent did not write a full plan for this image.</p> : null}

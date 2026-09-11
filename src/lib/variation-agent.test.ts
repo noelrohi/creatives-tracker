@@ -13,6 +13,7 @@ import {
   type VariationRunDeps,
   type VariationRunInput,
 } from "./variation-agent";
+import type { VariationKeep } from "./variation-agent-types";
 
 const library = {
   core: [
@@ -370,7 +371,7 @@ describe("createVariationRun.generateImage", () => {
       format: "portrait",
       attempt: 1,
     });
-    expect(d.reviewImage).toHaveBeenCalledWith({ imageUrl: "https://blob.test/out-1.png", prompt: "Product on a blue background", mode: "generate", keepRegion: null, transplant: null, brief: copyBrief });
+    expect(d.reviewImage).toHaveBeenCalledWith({ imageUrl: "https://blob.test/out-1.png", prompt: "Product on a blue background", mode: "generate", keepRegion: null, transplant: null, keeps: [], brief: copyBrief });
     expect(result).toEqual({ attempt: 1, imageUrl: "https://blob.test/out-1.png", mode: "generate", keepRegion: null, transplant: null, review: { pass: true, notes: [] }, attemptsRemaining: 1, ignoredReferenceIds: ["unknown"], ignoredReferenceReason: "Not in the image index; check the id." });
     expect(run.state.attempts).toHaveLength(1);
     expect(d.onStep).toHaveBeenCalledWith("generating image (attempt 1)");
@@ -457,7 +458,7 @@ describe("createVariationRun.generateImage", () => {
       format: "portrait",
       attempt: 1,
     });
-    expect(d.reviewImage).toHaveBeenCalledWith({ imageUrl: "https://blob.test/out-1.png", prompt: "p", mode: "edit", keepRegion: region, transplant: null, brief: copyBrief });
+    expect(d.reviewImage).toHaveBeenCalledWith({ imageUrl: "https://blob.test/out-1.png", prompt: "p", mode: "edit", keepRegion: region, transplant: null, keeps: [], brief: copyBrief });
     expect(result).toMatchObject({ mode: "edit", keepRegion: region });
     expect(result).toMatchObject({ ignoredReferenceIds: ["img_r3"] });
     expect((result as { ignoredReferenceReason: string }).ignoredReferenceReason).toContain("Edit mode");
@@ -761,5 +762,48 @@ describe("variationPlanSchema", () => {
     expect(variationPlanSchema.safeParse({ summary: "s", kept: [], changed: ["x"], rationale: "r", evidence: [{ documentId: "doc_log", title: "Resolution log" }], inImageCopy: [], finalAttempt: 1 }).success).toBe(true);
     expect(variationPlanSchema.safeParse({ summary: "s", kept: [], changed: ["x"], rationale: "r", evidence: [], inImageCopy: [], finalAttempt: 1 }).success).toBe(false);
     expect(variationPlanSchema.safeParse({ summary: "s" }).success).toBe(false);
+  });
+});
+
+describe("logo keep", () => {
+  const keep = (): VariationKeep => ({
+    kind: "logo",
+    patchSource: "asset",
+    assetImageId: "img_logo",
+    from: { x: 0.04, y: 0.04, w: 0.22, h: 0.1 },
+    to: { x: 0.06, y: 0.05, w: 0.2, h: 0.09 },
+    placement: "anchor",
+    contrast: { ratio: 7.4, variant: "dark" },
+  });
+  const keepInput: VariationRunInput = { ...input, logoKeep: { patchSource: "asset" } };
+
+  it("forbids the model drawing a mark when a real one will be pasted", () => {
+    const prompt = buildVariationSystemPrompt(keepInput);
+    expect(prompt).toContain("Do not draw a logo");
+    expect(prompt).toContain("leave clear space");
+  });
+
+  it("says nothing about marks when the source had none", () => {
+    expect(buildVariationSystemPrompt({ ...input, logoKeep: null })).not.toContain("Do not draw a logo");
+  });
+
+  it("tells the review which marks were pasted", async () => {
+    const d = deps({ produceImage: vi.fn(async () => ({ imageUrl: "https://blob.test/out-1.png", keeps: [keep()] })) });
+    const run = createVariationRun(keepInput, d);
+    await run.setBrief(copyBrief);
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    expect(d.reviewImage).toHaveBeenCalledWith(expect.objectContaining({ keeps: [keep()] }));
+    expect(run.state.attempts[0]).toMatchObject({ keeps: [keep()] });
+  });
+
+  it("records the shipped attempt's marks on the plan", async () => {
+    const run = createVariationRun(
+      keepInput,
+      deps({ produceImage: vi.fn(async () => ({ imageUrl: "https://blob.test/out-1.png", keeps: [keep()] })) }),
+    );
+    await run.setBrief(copyBrief);
+    await run.generateImage({ prompt: "p", referenceImageIds: [], keepSourceLayout: true });
+    await run.finish({ plan });
+    expect(run.state.plan?.keptMarks).toEqual([keep()]);
   });
 });

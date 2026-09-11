@@ -1080,7 +1080,10 @@ export const generateVariationTask = task({
         await markVariant({
           status: "failed",
           attempts: [],
-          moderationReason: null,
+          // The column is the row's failure reason, and it is the only one the
+          // card reads: without it the variation would show the generic
+          // "Variation failed" and hide why nothing was drawn.
+          moderationReason: "logo_unavailable",
           plan: {
             summary: "Failed: logo_unavailable",
             kept: [],
@@ -1390,7 +1393,7 @@ export const generateVariationTask = task({
           if (pasted) pastedUrls.add(stored.url);
           return { imageUrl: stored.url, transplant, keeps };
         },
-        reviewImage: async ({ imageUrl, prompt, mode, keepRegion, transplant, brief }) => {
+        reviewImage: async ({ imageUrl, prompt, mode, keepRegion, transplant, keeps, brief }) => {
           // The same gate the transplant block runs under. When it holds and
           // `transplant` is still null (the output locator found neither a
           // product nor a landing area, or the paste threw), the image is
@@ -1398,6 +1401,12 @@ export const generateVariationTask = task({
           // so judging it against the product photo would fail it for obeying
           // us.
           const transplantExpected = mode === "generate" && Boolean(productPatch);
+          // The same shape for the mark: an empty `keeps` says nothing on its
+          // own — an edit attempt, a run with no mark to keep, a placement the
+          // chooser refused, and a paste that threw all produce one — so the
+          // review only misses a mark on an attempt that was supposed to carry
+          // one.
+          const logoKeepExpected = mode === "generate" && Boolean(logoPatch);
           // The photo the patch was cut from, when there is one. The third
           // image, the premise, and the same-model check all key off this one
           // value so they cannot describe a different set of images.
@@ -1481,6 +1490,15 @@ export const generateVariationTask = task({
                 transplant
                   ? "- If the scene shows a stand, pedestal, or platform under the product that the source ad does not have, say so in the notes; it is not a failure on its own."
                   : null,
+                // The paste covers its box but never clears the region, and the
+                // scale cap can leave the pasted mark narrower than the one the
+                // model drew underneath it: the review has to look for a second
+                // visible mark rather than assume the paste hid the first.
+                keeps.length > 0
+                  ? "- The advertiser's logo was pasted into this image as real artwork, not drawn by the model. Fail when: the mark is distorted, stretched, cropped, or recoloured; a second logo the model drew is still visible anywhere, including an uncovered edge or sliver showing around the pasted mark; the mark overlaps the headline, CTA, or disclaimer; or the mark is too small or too low in contrast to read at feed size."
+                  : logoKeepExpected
+                    ? "- The advertiser's logo was not pasted into this attempt (the paste step did not run: the composition left nowhere legal to put the mark), so the ad carries no real branding and any logo-like shape you can see is the model's own. Fail and say 'no place for the logo', so the next attempt leaves clear space for it."
+                    : null,
                 "- Every line of ad copy (headline, subhead, badges, CTA, tile labels) is legible and matches the quoted copy in the prompt, with no garbled or invented copy. Incidental labels on props and packaging inside the scene (a shampoo bottle, a book spine) are fine and are not ad copy.",
                 `- No logos or brand marks other than ${brand?.brandName ?? "the advertiser's"}; no platform UI, no watermarks.`,
                 "- The palette is consistent with a clean brand look: no clashing neon, no split panels unless the prompt asked for them.",

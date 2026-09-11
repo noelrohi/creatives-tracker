@@ -109,6 +109,8 @@ export type VariationRunDeps = {
     keepRegion: ProductRegion | null;
     /** The product transplanted into a generate result, if any. */
     transplant: VariationTransplant | null;
+    /** The brand marks pasted into the attempt; empty when none was. */
+    keeps: VariationKeep[];
     /** The brief this variation declared, so the review can check the axis. */
     brief: VariationBrief | null;
   }) => Promise<VariationReview>;
@@ -358,6 +360,9 @@ export function buildVariationSystemPrompt(input: VariationRunInput) {
       ? "<mode>\nTRANSPLANT: the real product is pasted into your image afterwards, cut out of " +
         (input.productPatch.source === "asset" ? "the brand's product photo" : "the source ad") +
         ". Do not draw the product, and do not draw anything that looks like it (no product-shaped object, no packaging, no logo) anywhere in the image. Instead leave an empty landing area for it on a surface that already belongs to the scene (a nightstand, a tray, a counter, a shelf, the surface the source ad uses), with a visible edge or footprint, described explicitly in the prompt so it can be located afterwards; a bare empty region of background is not enough. Do not add a stand, pedestal, or platform unless the source ad has one. Place it at about the position and size the product has in the source ad image when the source is attached as a layout reference (possible on the hook, offer, proof, colour, and copy axes), or wherever your composition places the product, sized to read at a glance, on the scene, layout, angle, and funnel axes, with nothing overlapping it and no text inside it. Name the product in the prompt only to say where its landing area is. Everything else in the prompt is yours to design. This staging is a constraint on how you draw the scene, not your one change.\n</mode>"
+      : null,
+    input.logoKeep
+      ? "<mode>\nLOGO KEEP: the advertiser's real logo is pasted into the image after it is generated. Do not draw a logo, wordmark, or brand badge anywhere in the scene, and do not describe one in the prompt; leave clear space where a mark belongs — a plain area of background, inside the safe margins, away from the headline, CTA, and any disclaimer. A mark you draw will be covered.\n</mode>"
       : null,
     editAvailable && input.sourceProductRegion
       ? `<mode>\nEDIT MODE is available on request (pass mode "edit" to generateImage; the default is generate, which draws from the references and then transplants the source's real product, so a copy-only or CTA-only change, when the axis rules allow one, still belongs in generate mode with the source kept as the layout reference). Edit mode is a last resort: measured runs show the image model reflows the layout under an edit mask, so the pasted box misaligns and the review rejects most edit attempts. Use it only when the CONSTRAINT FROM THE USER demands the source's exact pixels outside one region, never merely because the change is small. In edit mode the source is the canvas: the box ${describeRegion(input.sourceProductRegion)} of it holds the product; after the edit the source's pixels for that box are pasted back, so the product is preserved exactly, and everything outside that box is redrawn from your prompt alone. Because that rectangle is pasted over the result, the image model must keep the box at exactly the same position and size (no reflowed grid, no resized tiles) and must not draw the product anywhere else in the image; say both of those in the prompt. The prompt is still the self-contained description step 5 asks for, minus the product: describe the whole scene outside the kept box (background, lighting, palette, mood) and re-quote every line of copy the finished ad shows, including lines you are not changing. Anything you leave out is lost. Never describe or restyle the product itself; refer to it in plain words if you must (for example "the product in the lower-right tile is kept as is"). Keep the source's composition. If the review reports a misaligned box or a collision with a neighbouring element, move or resize keepRegion so its edges fall on a flat, unbroken area of the source (a plain background band, not a card edge). If it reports a second copy of the product, keep the box and rewrite the prompt to state that the product appears only inside that box. If it reports the box covering copy, shrink the box. Once in edit mode keepSourceLayout has no effect; to leave edit mode pass mode "generate", and do that only when the variation must move or replace the product.\n</mode>`
@@ -625,7 +630,7 @@ export function createVariationRun(
     const keeps = produced.keeps ?? null;
 
     deps.onStep(`reviewing attempt ${attempt}`);
-    const review = await deps.reviewImage({ imageUrl, prompt: raw.prompt, mode, keepRegion, transplant, brief: state.brief });
+    const review = await deps.reviewImage({ imageUrl, prompt: raw.prompt, mode, keepRegion, transplant, keeps: keeps ?? [], brief: state.brief });
     state.attempts.push({ attempt, imageUrl, prompt: raw.prompt, mode, keepRegion, transplant, keeps, review });
     return {
       attempt,
@@ -679,6 +684,7 @@ export function createVariationRun(
       ...raw.plan,
       keptProductRegion: final.mode === "edit" ? (final.keepRegion ?? null) : null,
       transplantedProduct: final.mode === "generate" ? (final.transplant ?? null) : null,
+      keptMarks: final.keeps ?? null,
       funnel: state.brief?.funnel ?? null,
       lane: state.brief?.lane ?? null,
       axis: state.brief?.axis ?? null,
@@ -722,6 +728,7 @@ export function resolveVariationOutcome(state: VariationRunState): VariationOutc
         synthesized: true,
         keptProductRegion: passing.mode === "edit" ? (passing.keepRegion ?? null) : null,
         transplantedProduct: passing.mode === "generate" ? (passing.transplant ?? null) : null,
+        keptMarks: passing.keeps ?? null,
         funnel: state.brief?.funnel ?? null,
         lane: state.brief?.lane ?? null,
         axis: state.brief?.axis ?? null,
