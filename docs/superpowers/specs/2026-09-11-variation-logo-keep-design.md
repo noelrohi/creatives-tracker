@@ -63,16 +63,18 @@ type VariationKeep = {
   /** Where the pixels came from. */
   patchSource: "asset" | "source";
   assetImageId: string | null;
-  /** The mark's box in whatever image it was cut from, normalized. */
-  from: NormalizedBox;
-  /** Where it landed in the output, normalized. */
-  to: NormalizedBox;
-  /** Which placement rule chose `to`. */
+  /** The mark's box in whatever image it was cut from. */
+  from: ProductRegion;
+  /** Where it landed in the output. */
+  to: ProductRegion;
+  /** Which rule chose `to`; the box itself is `to`, so no separate anchor is stored. */
   placement: "drawn" | "source_position" | "anchor";
-  anchor: KeepAnchor | null;
   contrast: { ratio: number; variant: "light" | "dark" | "only" };
 };
 ```
+
+`ProductRegion` is the existing normalized `{ x, y, w, h }` box from
+`src/lib/image-mask.ts`, reused rather than renamed.
 
 The run resolves keeps before the agent starts, the same way the product
 patch is resolved today, and carries them through the agent input. Nothing
@@ -127,9 +129,7 @@ At paste time the target is chosen in this order:
 layouts reflow between variations, and a mark replayed blindly lands
 underscaled or inside a platform safe zone.
 
-**Safe area** is a normalized inset per format, `0.06` on every edge for
-square, and `0.06` sides with `0.12` top and bottom for portrait, reserving
-the platform's own UI. **Collision** is checked against the copy regions the
+**Safe area** is a normalized inset of `0.06` on every edge, except a format taller than 1:1, which reserves `0.12` top and bottom for the platform's own chrome. It is resolved by aspect, not by format name. **Collision** is checked against the copy regions the
 output locator returns; the mark must not overlap them.
 
 **Scale** is capped as the product's is: the pasted mark may not exceed
