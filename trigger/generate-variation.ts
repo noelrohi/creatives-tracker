@@ -1296,14 +1296,18 @@ export const generateVariationTask = task({
           }
           // The prompt told the model to leave the brand mark out, so the
           // advertiser's own pixels are pasted in after the product: a mark it
-          // drew anyway has to be covered, or the ad ships two logos. Every
-          // failure here is recoverable the way the transplant's is — the
+          // drew anyway has to be covered, or the ad ships two logos. This runs
+          // in both modes because the LOGO KEEP block is written per run, not
+          // per attempt — an edit attempt is told not to draw a mark too, and
+          // the model regenerates the whole canvas outside the kept box, so
+          // skipping the paste here would ship an ad with no branding at all.
+          // Every failure here is recoverable the way the transplant's is — the
           // unpasted bytes stay and no keep is recorded — except a chooser
           // with nowhere legal to put the mark, which leaves `keeps` empty on
           // purpose so the review can fail the attempt instead of shipping a
           // variation with no branding.
           const keeps: VariationKeep[] = [];
-          if (mode === "generate" && logoPatch && sourceMark) {
+          if (logoPatch && sourceMark) {
             try {
               onStep(`locating the brand mark in attempt ${attempt}`);
               // The output's own pixel size: `pasteLogo` reports the box it
@@ -1314,10 +1318,19 @@ export const generateVariationTask = task({
                 throw new Error("Could not read the attempt's dimensions");
               }
               const located = await locateMarks(produced, brand?.brandName ?? null, "output");
+              // The product that was just pasted in is as protected as the set
+              // copy: a mark landing on it covers the one thing the transplant
+              // exists to preserve. The drawn rung returns before any collision
+              // check, so this reaches the source-position and anchor rungs
+              // only — deliberately, because an uncovered drawn mark is worse
+              // than an overlapping one.
+              const protectedRegions: ProductRegion[] = [];
+              if (mode === "edit" && pasted && keepRegion) protectedRegions.push(expandRegion(keepRegion));
+              if (transplant) protectedRegions.push(transplant.to);
               const placements = logoPlacementCandidates({
                 drawn: located?.logo ?? null,
                 sourceBox: sourceMark,
-                copyRegions: located?.copy ?? [],
+                copyRegions: [...(located?.copy ?? []), ...protectedRegions],
                 format,
               });
               // The paste caps the mark at 1.25x the width it had in the
@@ -1330,6 +1343,7 @@ export const generateVariationTask = task({
                   attempt,
                   sourceMark,
                   copy: located?.copy.length ?? 0,
+                  protected: protectedRegions.length,
                 });
               } else if (!reachable) {
                 logger.warn("The mark cannot reach the width floor at any placement; leaving the attempt unpasted", {
@@ -1465,12 +1479,12 @@ export const generateVariationTask = task({
           // so judging it against the product photo would fail it for obeying
           // us.
           const transplantExpected = mode === "generate" && Boolean(productPatch);
-          // The same shape for the mark: an empty `keeps` says nothing on its
-          // own — an edit attempt, a run with no mark to keep, a placement the
-          // chooser refused, and a paste that threw all produce one — so the
-          // review only misses a mark on an attempt that was supposed to carry
-          // one.
-          const logoKeepExpected = mode === "generate" && Boolean(logoPatch);
+          // The same shape for the mark, in both modes: an empty `keeps` says
+          // nothing on its own — a run with no mark to keep, a placement the
+          // chooser refused, a placement no candidate made legible, and a paste
+          // that threw all produce one — so the review only misses a mark on an
+          // attempt that was supposed to carry one.
+          const logoKeepExpected = Boolean(logoPatch);
           // The photo the patch was cut from, when there is one. The third
           // image, the premise, and the same-model check all key off this one
           // value so they cannot describe a different set of images.
