@@ -44,7 +44,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AwarenessLevel } from "@/lib/awareness";
 import { isVideoFile } from "@/lib/studio-assets";
-import { isImageBlockedReason } from "@/lib/studio-failure";
+import { isImageBlockedReason, LOGO_UNAVAILABLE_MESSAGE } from "@/lib/studio-failure";
 import { ELEMENT_LABELS } from "@/lib/studio-suggestions";
 import { useTRPC, type RouterOutputs } from "@/lib/trpc/client";
 import { cn } from "@/lib/utils";
@@ -112,6 +112,7 @@ function moderationMessage(reason: string | null) {
   if (reason === "logo") {
     return "Blocked: the reference contains protected branding";
   }
+  if (reason === "logo_unavailable") return LOGO_UNAVAILABLE_MESSAGE;
   if (isImageBlockedReason(reason)) return "Blocked by image moderation";
   return "Generation failed";
 }

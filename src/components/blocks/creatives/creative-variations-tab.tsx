@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { isImageBlockedReason } from "@/lib/studio-failure";
+import { isImageBlockedReason, LOGO_UNAVAILABLE_MESSAGE } from "@/lib/studio-failure";
 import { studioAspectRatio, type StudioFormat } from "@/lib/studio-prompt";
 import { useTRPC, type RouterOutputs } from "@/lib/trpc/client";
 import type { VariationAttempt, VariationPlan } from "@/lib/variation-agent-types";
@@ -39,7 +39,7 @@ function failureCopy(reason: string | null, attempts: VariationAttempt[] | null)
   if (reason === "logo") return "Blocked: protected branding in the source";
   if (reason === "moderation") return "Blocked: the image model refused this request";
   if (reason === "claims") return "Stopped: the agent could not write a claims-safe prompt";
-  if (reason === "logo_unavailable") return "Stopped: no usable logo for this ad — add a logo to Studio context";
+  if (reason === "logo_unavailable") return LOGO_UNAVAILABLE_MESSAGE;
   const lastReview = attempts?.at(-1)?.review;
   if (lastReview && !lastReview.pass) return `Review rejected the image: ${lastReview.notes.join("; ") || "no notes"}`;
   return "Variation failed";
