@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { isVideoFile } from "@/lib/studio-assets";
+import { isImageBlockedReason } from "@/lib/studio-failure";
 import { studioAspectRatio, type StudioFormat } from "@/lib/studio-prompt";
 import { useTRPC, type RouterOutputs } from "@/lib/trpc/client";
 import { cn } from "@/lib/utils";
@@ -380,7 +381,7 @@ function LiveCreativeLink({ variant, onChanged }: { variant: Variant; onChanged:
 
 function VariantView({ variant, aspectRatio, pending, onMark, onPublish, onRetry, onLinkChanged }: { variant: Variant; aspectRatio: string; pending: boolean; onMark: (mark: "good" | "bad" | null) => void; onPublish: () => void; onRetry: (withoutImage: boolean) => void; onLinkChanged: () => unknown }) {
   if (variant.status === "failed") {
-    return <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-muted/30 p-4 text-center" style={{ aspectRatio }}><ImageOff /><p className={cn("text-xs", variant.moderationReason && "text-destructive")}>{variant.moderationReason === "likeness" ? "Blocked: the reference shows a real person's likeness" : variant.moderationReason === "logo" ? "Blocked: protected branding in the reference" : "Generation failed"}</p><Button size="sm" variant="outline" disabled={pending} onClick={() => onRetry(Boolean(variant.moderationReason))}><RefreshCw /> {variant.moderationReason ? "Retry without image" : "Retry"}</Button></div>;
+    return <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-muted/30 p-4 text-center" style={{ aspectRatio }}><ImageOff /><p className={cn("text-xs", variant.moderationReason && "text-destructive")}>{variant.moderationReason === "likeness" ? "Blocked: the reference shows a real person's likeness" : variant.moderationReason === "logo" ? "Blocked: protected branding in the reference" : "Generation failed"}</p><Button size="sm" variant="outline" disabled={pending} onClick={() => onRetry(isImageBlockedReason(variant.moderationReason))}><RefreshCw /> {isImageBlockedReason(variant.moderationReason) ? "Retry without image" : "Retry"}</Button></div>;
   }
   if (variant.status !== "ready" || !variant.imageUrl) {
     return <div className="flex items-center justify-center rounded-xl border bg-muted" style={{ aspectRatio }}><Loader2 className="animate-spin text-muted-foreground" /></div>;

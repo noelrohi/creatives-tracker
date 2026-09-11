@@ -44,6 +44,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AwarenessLevel } from "@/lib/awareness";
 import { isVideoFile } from "@/lib/studio-assets";
+import { isImageBlockedReason } from "@/lib/studio-failure";
 import { ELEMENT_LABELS } from "@/lib/studio-suggestions";
 import { useTRPC, type RouterOutputs } from "@/lib/trpc/client";
 import { cn } from "@/lib/utils";
@@ -111,7 +112,7 @@ function moderationMessage(reason: string | null) {
   if (reason === "logo") {
     return "Blocked: the reference contains protected branding";
   }
-  if (reason) return "Blocked by image moderation";
+  if (isImageBlockedReason(reason)) return "Blocked by image moderation";
   return "Generation failed";
 }
 
@@ -413,7 +414,7 @@ function LibraryPanel({
                   <p className="text-xs font-medium text-destructive">
                     {moderationMessage(item.moderationReason)}
                   </p>
-                  {item.moderationReason ? (
+                  {isImageBlockedReason(item.moderationReason) ? (
                     <Button size="sm" variant="outline" className="h-7 text-xs" disabled={pendingId === item.id} onClick={() => onRetry(item.id)}>
                       <RefreshCw /> Retry without image
                     </Button>

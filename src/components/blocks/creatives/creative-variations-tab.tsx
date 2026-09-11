@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { isImageBlockedReason } from "@/lib/studio-failure";
 import { studioAspectRatio, type StudioFormat } from "@/lib/studio-prompt";
 import { useTRPC, type RouterOutputs } from "@/lib/trpc/client";
 import type { VariationAttempt, VariationPlan } from "@/lib/variation-agent-types";
@@ -32,10 +33,6 @@ function RunSteps({ runId, accessToken, onUpdate, onSteps }: { runId: string; ac
   }, [run?.status, onUpdate]);
   return null;
 }
-
-// "claims" is a moderation reason on the variant row but is a prompt-safety
-// stop, not an image block: retrying without the source would not help.
-const IMAGE_BLOCKED_REASONS = new Set(["likeness", "logo", "moderation"]);
 
 function failureCopy(reason: string | null, attempts: VariationAttempt[] | null) {
   if (reason === "likeness") return "Blocked: the source shows a real person's likeness";
@@ -115,8 +112,8 @@ function VariationCard({ item, steps, pending, readOnly, onMark, onRetry, onUpda
         <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-muted/30 p-4 text-center" style={{ aspectRatio }}>
           <ImageOff />
           <p className={cn("line-clamp-4 text-xs", variant.moderationReason && "text-destructive")}>{failureCopy(variant.moderationReason, attempts)}</p>
-          <Button size="sm" variant="outline" disabled={pending || readOnly} onClick={() => onRetry(IMAGE_BLOCKED_REASONS.has(variant.moderationReason ?? ""))}>
-            <RefreshCw /> {IMAGE_BLOCKED_REASONS.has(variant.moderationReason ?? "") ? "Retry without image" : "Retry"}
+          <Button size="sm" variant="outline" disabled={pending || readOnly} onClick={() => onRetry(isImageBlockedReason(variant.moderationReason))}>
+            <RefreshCw /> {isImageBlockedReason(variant.moderationReason) ? "Retry without image" : "Retry"}
           </Button>
         </div>
       ) : variant.status !== "ready" || !variant.imageUrl ? (

@@ -254,7 +254,7 @@ const PROCEDURE = [
   "2. Classify it: the format lane (product-led routine, testimonial card, before/after, offer badge, mechanism explainer, comparison, lifestyle, ugc); the funnel stage (tof: problem recognition or curiosity; mof: mechanism, education, comparison, objection handling; bof: price, offer, urgency, guarantee, strong proof); the message sequence (hook, explanation or proof, product, CTA); and its mechanics: what creates stopping power, what creates comprehension, what creates purchase intent. Separate the locked elements (product, verified offer, disclaimer, logo, any user constraint) from what may change. Flag factual risk: claims, prices, testimonials.",
   "3. Check the core context, especially the resolution log and playbook, for what worked and did not work in that lane. Read reference sections only when they add something specific (a testimonial to quote, a customer phrase to reuse).",
   "4. Choose ONE axis and write the hypothesis, then call setBrief. Axes: hook (the opening line or visual hook), angle (the argument: problem, mechanism, benefit, identity), funnel (move the ad to another stage), offer (how the offer is framed), proof (testimonial, numbers, comparison), scene (setting, props, lighting, the world the product sits in), layout (grid, hierarchy, where things sit), colour (palette and mood), copy (wording only). The hypothesis reads: By changing X while keeping Y and Z, we expect A because B.",
-  "5. Write a finished image prompt and call generateImage. The prompt is self-contained and under 180 words, in this order: the deliverable and format; the funnel objective in one line; hierarchy and composition (what reads first, second, third, and where); the product rule from the mode block; palette, lighting, and mood; every word that appears in the image quoted exactly in double quotes, kept short; the logo, CTA, and any disclaimer; exclusions. End with: No other text. No watermarks, platform UI, or third-party logos. On the scene, layout, angle, and funnel axes the source is not sent to the image model, so describe the whole composition yourself.",
+  "5. Write a finished image prompt and call generateImage. The prompt is self-contained and under 180 words, in this order: the deliverable and format; the funnel objective in one line; hierarchy and composition (what reads first, second, third, and where); the product rule from the mode block; palette, lighting, and mood; every word that appears in the image quoted exactly in double quotes, kept short; the logo rule from the mode block, the CTA, and any disclaimer; exclusions. End with: No other text. No watermarks, platform UI, or third-party logos. On the scene, layout, angle, and funnel axes the source is not sent to the image model, so describe the whole composition yourself.",
   "6. Read the review. If it failed, fix the specific problems and try once more: for 'only the words changed', redesign the scene or layout in the prompt rather than rewording. Then call finish with the attempt you are shipping. Finishing on an attempt the review rejected is allowed but bounces once; call finish again to confirm.",
   "",
   "Choosing the axis, in priority order:",
@@ -274,6 +274,14 @@ const PROCEDURE = [
 const REBRAND_MODE = [
   "REBRAND MODE: the source is a competitor's ad. Keep its layout, composition, and visual hierarchy. In the prompt, state that you replace all source branding, logos, products, recognizable people, and copy with ours, and write short exact replacement copy in quotes for every text block the source shows. Never reuse the source's words or marks. In this mode the rebrand is the one change; still call setBrief in step 4 (axis \"layout\" with the rebrand as the hypothesis), but the single-change rule does not apply and the source stays attached as the layout reference whatever the axis.",
 ].join("\n");
+
+/**
+ * Appended to REBRAND MODE when a mark will be pasted in: "replace their
+ * branding with ours" and "draw no mark at all" are otherwise read as
+ * contradicting each other, and the model resolves the tie by drawing one.
+ */
+const REBRAND_LOGO_KEEP =
+  "When LOGO KEEP is active our own mark is pasted in afterwards, so it is the one replacement you do not write: strip the source's branding and leave its place clear, and do not describe, name, or position our logo in the prompt.";
 
 const TOOLS_NOTE = [
   `Budgets: at most ${MAX_CONTEXT_READS} readContext calls, ${MAX_IMAGE_ATTEMPTS} generateImage calls, ${MAX_STEPS} steps in total. setBrief is called once before the first image and costs a step. Tool errors tell you what to change; adapt instead of repeating the call.`,
@@ -352,7 +360,9 @@ export function buildVariationSystemPrompt(input: VariationRunInput) {
 
   return [
     `<role>\n${PROCEDURE}\n</role>`,
-    input.source.kind === "competitor_ad" ? `<mode>\n${REBRAND_MODE}\n</mode>` : null,
+    input.source.kind === "competitor_ad"
+      ? `<mode>\n${REBRAND_MODE}${input.logoKeep ? `\n${REBRAND_LOGO_KEEP}` : ""}\n</mode>`
+      : null,
     input.useSourceLayout
       ? null
       : "<mode>\nThe source image is NOT sent to the image model on this run (the user retried without it), and keepSourceLayout has no effect. Describe the layout, composition, and every element the image needs in the prompt itself.\n</mode>",

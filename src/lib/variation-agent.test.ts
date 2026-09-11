@@ -787,6 +787,21 @@ describe("logo keep", () => {
     expect(buildVariationSystemPrompt({ ...input, logoKeep: null })).not.toContain("Do not draw a logo");
   });
 
+  it("does not ask the model to write the logo into the prompt when a real one is pasted", () => {
+    const prompt = buildVariationSystemPrompt(keepInput);
+    expect(prompt).not.toContain("the logo, CTA, and any disclaimer");
+    expect(prompt).toContain("the logo rule from the mode block");
+  });
+
+  it("tells a rebrand that our own mark is pasted in rather than drawn", () => {
+    const source = { kind: "competitor_ad" as const, name: "Rival ad", imageUrl: "https://cdn.test/rival.png", text: "Buy now", performance: null };
+    const prompt = buildVariationSystemPrompt({ ...keepInput, source });
+    expect(prompt).toContain("REBRAND MODE");
+    expect(prompt).toContain("Do not draw a logo");
+    expect(prompt).toContain("our own mark is pasted in afterwards");
+    expect(buildVariationSystemPrompt({ ...input, source })).not.toContain("our own mark is pasted in afterwards");
+  });
+
   it("tells the review which marks were pasted", async () => {
     const d = deps({ produceImage: vi.fn(async () => ({ imageUrl: "https://blob.test/out-1.png", keeps: [keep()] })) });
     const run = createVariationRun(keepInput, d);

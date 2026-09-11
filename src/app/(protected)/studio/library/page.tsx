@@ -37,6 +37,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { buildAdName } from "@/lib/studio-ad-name";
+import { isImageBlockedReason } from "@/lib/studio-failure";
 import { useTRPC, type RouterOutputs } from "@/lib/trpc/client";
 import { cn } from "@/lib/utils";
 
@@ -321,10 +322,10 @@ function VariantCard({
                 ? "Blocked: copy conflicts with the brand's claims rules"
                 : "Generation failed"}
         </p>
-        <Button size="sm" variant="outline" className="h-7 text-xs" disabled={pending} onClick={() => onRetry(Boolean(variant.moderationReason))}>
-          <RefreshCw /> {variant.moderationReason ? "Retry without image" : "Retry"}
+        <Button size="sm" variant="outline" className="h-7 text-xs" disabled={pending} onClick={() => onRetry(isImageBlockedReason(variant.moderationReason))}>
+          <RefreshCw /> {isImageBlockedReason(variant.moderationReason) ? "Retry without image" : "Retry"}
         </Button>
-        {variant.moderationReason ? <p className="text-[10px] text-muted-foreground">Uses the written spec only</p> : null}
+        {isImageBlockedReason(variant.moderationReason) ? <p className="text-[10px] text-muted-foreground">Uses the written spec only</p> : null}
       </div>
     );
   }
