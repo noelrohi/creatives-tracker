@@ -697,6 +697,21 @@ export async function resolveLogoPatch(input: {
   // change, on a different axis.
   if (!sourceMark) return { kind: "none" };
 
+  // `pasteLogo` caps the pasted mark at `LOGO_SCALE_CAP` times the width it had
+  // in the source, so a mark this narrow can never clear §7's legibility floor
+  // at any placement. Every attempt would paste, measure, reject, and fail the
+  // review identically, at full image-model cost. The terminal state is the
+  // same failed run either way, so reach it here, before anything is drawn or
+  // even fetched.
+  if (LOGO_SCALE_CAP * sourceMark.w < LOGO_MIN_WIDTH) {
+    logger.warn("The source's mark is too narrow to paste back legibly; failing the variation", {
+      sourceWidth: sourceMark.w,
+      cappedWidth: LOGO_SCALE_CAP * sourceMark.w,
+      minWidth: LOGO_MIN_WIDTH,
+    });
+    return { kind: "unavailable" };
+  }
+
   const assets = input.library.images
     .filter((image) => image.kind === "logo")
     // Newest first: the library lists every image by title, and the mark the

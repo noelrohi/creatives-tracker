@@ -104,6 +104,27 @@ describe("resolveLogoPatch", () => {
     expect(generateObject).not.toHaveBeenCalled();
   });
 
+  it("fails immediately when the cap makes the mark too narrow to be legible", async () => {
+    // `pasteLogo` caps the paste at 1.25x the source width, so a mark under
+    // 0.032 of the canvas can never reach the 0.04 floor at any placement.
+    // Every attempt would fail identically at full image-model cost, so the
+    // run ends here instead — before the asset is even fetched.
+    await expect(
+      resolve({ sourceMark: { x: 0.1, y: 0.1, w: 0.03, h: 0.02 } }),
+    ).resolves.toEqual({ kind: "unavailable" });
+    expect(fetchBytes).not.toHaveBeenCalled();
+    expect(generateObject).not.toHaveBeenCalled();
+  });
+
+  it("still resolves a mark just wide enough to clear the floor once capped", async () => {
+    // 0.033 * 1.25 = 0.041, over the floor: the boundary must not take the
+    // early exit, or the check would fail runs it was never meant to touch.
+    matched();
+    await expect(
+      resolve({ sourceMark: { x: 0.1, y: 0.1, w: 0.033, h: 0.02 } }),
+    ).resolves.toMatchObject({ kind: "patch", patchSource: "asset" });
+  });
+
   it("prefers the brand's asset over a cut of the source when the lockup agrees", async () => {
     matched();
     const result = await resolve();
