@@ -330,28 +330,39 @@ async function locateProduct(
 }
 
 /**
- * Finds the advertiser's own brand mark in an image, plus the blocks of set
- * text a pasted mark must keep clear of. On the source, `logo` is the mark the
- * run has to preserve — none means the ad simply had no logo and the run
+ * Finds the mark the ad's own advertiser branded it with, plus the blocks of
+ * set text a pasted mark must keep clear of. On the source, `logo` is the mark
+ * the run has to preserve — none means the ad simply had no logo and the run
  * proceeds without a keep. On an output it is a mark the model drew after
  * being told not to, which the paste then has to cover. Returns null when the
  * call itself fails, which reads the same way as an ad with no mark and no
  * copy: nothing located.
+ *
+ * `competitorSource` switches whose mark is asked for. A rebrand's source is
+ * somebody else's ad: asking for ours there names a mark that is not in the
+ * image, and every mark that is counts as third-party, so the honest answer is
+ * null and §9's inversion never gets a box to place the asset in. The output is
+ * ours by then, so the output call always asks for our own.
  */
 async function locateMarks(
   bytes: Uint8Array,
   brandName: string | null,
   label: "source" | "output",
+  competitorSource = false,
 ): Promise<{ logo: ProductRegion | null; copy: ProductRegion[] } | null> {
   try {
     const result = await generateObject({
       model: openai(LOCATOR_MODEL),
       schema: markLocationSchema,
       system: [
-        `Locate the advertiser's own brand mark${brandName ? ` (${brandName})` : ""} in this static ad.`,
+        competitorSource
+          ? "Locate the brand mark of whoever advertises in this static ad — the brand whose product or service it sells, whichever brand that is."
+          : `Locate the advertiser's own brand mark${brandName ? ` (${brandName})` : ""} in this static ad.`,
         "logo: one normalized bounding box (x, y, w, h in 0-1 from the top-left) covering the logo, wordmark, or brand badge as tightly as you can. Exclude taglines, CTAs, and any product packaging that merely carries the mark. Null when no brand mark is visible.",
         "copy: normalized boxes for every block of set text — headline, subhead, CTA, offer, price, legal disclaimer — so a pasted mark can avoid them. Empty when the ad has no text.",
-        "Ignore third-party marks, retailer logos, and platform badges: only the advertiser's own mark counts.",
+        competitorSource
+          ? "Ignore retailer logos, platform badges, and any mark belonging to someone other than the brand running the ad: only that brand's own mark counts."
+          : "Ignore third-party marks, retailer logos, and platform badges: only the advertiser's own mark counts.",
       ].join("\n"),
       messages: [{ role: "user", content: [{ type: "image", image: bytes }] }],
     });
@@ -370,6 +381,7 @@ async function locateMarks(
       .filter((box) => box.w > 0 && box.h > 0);
     logger.info("Mark locator", {
       label,
+      asked: competitorSource ? "the ad's own advertiser" : "ours",
       found: Boolean(logo),
       copy: copyRegions.length,
       confidence,
@@ -1082,7 +1094,7 @@ export const generateVariationTask = task({
       let marks: { logo: ProductRegion | null; copy: ProductRegion[] } | null = null;
       if (sourceDimensions) {
         onStep("locating the brand mark in the source");
-        marks = await locateMarks(sourceBytes, brand?.brandName ?? null, "source");
+        marks = await locateMarks(sourceBytes, brand?.brandName ?? null, "source", rebrand);
       }
       const sourceMark = marks?.logo ?? null;
       if (sourceMark) onStep("resolving the brand mark");
