@@ -31,6 +31,15 @@ describe("assetIsSameLockup", () => {
   it("accepts a lockup when neither shows the element", () => {
     expect(assetIsSameLockup(verdict({ icon: "absent_in_both", wordmark: "same" }))).toBe(true);
   });
+
+  it("rejects a verdict that recognises neither the wordmark nor the icon", () => {
+    // "absent in both" on every feature is what an unreadable crop answers.
+    // Nothing was recognised, so nothing was verified, and an unverified
+    // asset must not be stamped over the ad.
+    expect(
+      assetIsSameLockup(verdict({ wordmark: "absent_in_both", icon: "absent_in_both" })),
+    ).toBe(false);
+  });
 });
 
 describe("buildLogoMatchPrompt", () => {

@@ -32,7 +32,7 @@ const library = {
     },
   ],
   images: [
-    { id: "img_r3", title: "R3 mouthguard", description: "Hero render", kind: "product" as const, imageUrl: "https://blob.test/r3.png" },
+    { id: "img_r3", title: "R3 mouthguard", description: "Hero render", kind: "product" as const, imageUrl: "https://blob.test/r3.png", createdAt: new Date("2026-01-01") },
   ],
 };
 
@@ -429,7 +429,7 @@ describe("createVariationRun.generateImage", () => {
     const d = deps();
     const run = createVariationRun({
       ...input,
-      library: { ...library, images: [{ id: "img_p", title: "Product", description: "d", kind: "product" as const, imageUrl: brand.productImageUrl }] },
+      library: { ...library, images: [{ id: "img_p", title: "Product", description: "d", kind: "product" as const, imageUrl: brand.productImageUrl, createdAt: new Date("2026-01-01") }] },
     }, d);
     await run.setBrief(copyBrief);
     await run.generateImage({ prompt: "p", referenceImageIds: ["img_p"], keepSourceLayout: false });

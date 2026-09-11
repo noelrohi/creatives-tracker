@@ -30,10 +30,16 @@ export function buildLogoMatchPrompt(brandName: string | null) {
 
 /**
  * The asset stands in for the source's mark when the wordmark and the icon
- * agree. Orientation and colourway may differ: those are the variants the
- * contrast step chooses between, and disqualifying them would reject a brand's
- * own reversed logo.
+ * agree, and at least one of them was actually recognised: a crop the model
+ * cannot read answers "absent in both" to everything, which verifies nothing
+ * and must not license a paste. Orientation and colourway may differ: those
+ * are the variants the contrast step chooses between, and disqualifying them
+ * would reject a brand's own reversed logo.
  */
 export function assetIsSameLockup(result: LogoMatch): boolean {
-  return result.wordmark !== "different" && result.icon !== "different";
+  return (
+    (result.wordmark === "same" || result.icon === "same") &&
+    result.wordmark !== "different" &&
+    result.icon !== "different"
+  );
 }

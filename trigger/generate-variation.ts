@@ -33,6 +33,7 @@ import { putStudioObject, readStudioImage } from "@/lib/studio-storage";
 import {
   loadStudioContextLibrary,
   readStudioContextSection,
+  type StudioContextImage,
   type StudioContextLibrary,
 } from "@/lib/studio-context";
 import {
@@ -516,22 +517,56 @@ async function matteFromProductPhoto(args: {
   }
 }
 
+/** A mark's pasteable pixels and the box they came from, normalized to their own image. */
+type LogoPatchBytes = { bytes: Uint8Array; from: ProductRegion };
 /**
- * A logo asset ready to paste. A transparent PNG is already a cut-out and is
- * used whole; anything else is a mark on a flat panel, which goes through the
- * same flood-fill matte the product uses. Null when neither holds: a plain
- * rectangle of the asset's own background is not a mark.
+ * One prepared logo asset, carrying the provenance the keep records: the
+ * contrast step may paste any of them, so each keeps its own id and box
+ * rather than borrowing the candidate's.
  */
-async function prepareLogoAsset(
-  bytes: Uint8Array,
-): Promise<{ bytes: Uint8Array; from: ProductRegion } | null> {
+type LogoVariant = { imageId: string } & LogoPatchBytes;
+
+/**
+ * A logo asset ready to paste. A transparent PNG is already a cut-out and only
+ * needs its padding trimmed off; anything else is a mark on a flat panel,
+ * which goes through the same flood-fill matte the product uses. Null when
+ * neither holds: a plain rectangle of the asset's own background is not a mark.
+ */
+async function prepareLogoAsset(bytes: Uint8Array): Promise<LogoPatchBytes | null> {
   const meta = await sharp(bytes, { failOn: "none" }).metadata();
-  if (meta.hasAlpha) {
+  const size = meta.autoOrient;
+  if (meta.hasAlpha && size?.width && size?.height) {
     // `hasAlpha` only says the channel exists. A fully opaque one is a flat
     // background wearing an alpha channel, and pasting it stamps that
-    // background over the scene, so it still goes through the matte.
+    // background over the scene, so it still goes through the matte. A fully
+    // transparent one has no mark in it at all.
     const stats = await sharp(bytes, { failOn: "none" }).stats();
-    if (!stats.isOpaque) return { bytes, from: { x: 0, y: 0, w: 1, h: 1 } };
+    const alpha = stats.channels.at(-1);
+    if (!stats.isOpaque && alpha && alpha.max > 0) {
+      // Logo exports carry generous transparent padding, and the paste fits
+      // the patch's own canvas into the target box: pasting the padding whole
+      // would render the mark at a fraction of the size it had in the source
+      // and shove it off the anchor wherever the padding is uneven. Trim to
+      // the alpha bounding box first, and report that box as `from`.
+      const trimmed = await sharp(bytes, { failOn: "none" })
+        .autoOrient()
+        .trim({ background: "#00000000", threshold: 0 })
+        .png()
+        .toBuffer({ resolveWithObject: true });
+      // sharp reports the trim as the offset that would put the content back,
+      // so it is negative or zero.
+      const left = Math.abs(trimmed.info.trimOffsetLeft ?? 0);
+      const top = Math.abs(trimmed.info.trimOffsetTop ?? 0);
+      return {
+        bytes: new Uint8Array(trimmed.data),
+        from: clampRegion({
+          x: left / size.width,
+          y: top / size.height,
+          w: trimmed.info.width / size.width,
+          h: trimmed.info.height / size.height,
+        }),
+      };
+    }
   }
   const cut = await matteWithMargins(bytes, { x: 0, y: 0, w: 1, h: 1 }, "logo_asset");
   return cut.matted ? { bytes: cut.patch, from: cut.region } : null;
@@ -596,8 +631,8 @@ type LogoPatchResult =
       from: ProductRegion;
       patchSource: "asset" | "source";
       assetImageId: string | null;
-      /** Every usable logo asset, for the contrast step to pick a variant from. */
-      variants: Array<{ imageId: string; bytes: Uint8Array }>;
+      /** Every usable logo asset, each with the provenance the keep records. */
+      variants: LogoVariant[];
     };
 
 /**
@@ -622,26 +657,37 @@ async function resolveLogoPatch(input: {
   // change, on a different axis.
   if (!sourceMark) return { kind: "none" };
 
-  const assets = input.library.images.filter((image) => image.kind === "logo");
-  // Prepared up front: the contrast step chooses between every usable asset,
-  // and one that will not cut out cleanly is a candidate for neither job. One
-  // unreachable or unmattable asset must not lose the others.
-  const prepared: Array<{ imageId: string; bytes: Uint8Array; from: ProductRegion }> = [];
-  for (const asset of assets) {
+  const assets = input.library.images
+    .filter((image) => image.kind === "logo")
+    // Newest first: the library lists every image by title, and the mark the
+    // brand uploaded most recently is its current one.
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  // One unreachable or unmattable asset must not lose the others, so a
+  // failure here is logged and skipped rather than thrown.
+  const prepare = async (asset: StudioContextImage): Promise<LogoVariant | null> => {
     try {
-      const ready = await prepareLogoAsset(await input.fetchBytes(asset.imageUrl));
-      if (ready) prepared.push({ imageId: asset.id, ...ready });
-      else logger.warn("Logo asset would not cut out cleanly; skipping it", { imageId: asset.id });
+      const patch = await prepareLogoAsset(await input.fetchBytes(asset.imageUrl));
+      if (patch) return { imageId: asset.id, ...patch };
+      logger.warn("Logo asset would not cut out cleanly; skipping it", { imageId: asset.id });
     } catch (error) {
       logger.warn("Logo asset could not be read; skipping it", {
         imageId: asset.id,
         error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
       });
     }
+    return null;
+  };
+  // Only the candidate is prepared up front: a run whose lockup check fails
+  // pays for one fetch and one matte instead of the whole library's.
+  let candidate: LogoVariant | null = null;
+  let candidateIndex = -1;
+  for (const [index, asset] of assets.entries()) {
+    candidate = await prepare(asset);
+    if (candidate) {
+      candidateIndex = index;
+      break;
+    }
   }
-  // The library lists its images by title, so the last entry stands in for the
-  // newest asset until the library carries a timestamp of its own.
-  const candidate = prepared.at(-1) ?? null;
   if (candidate) {
     // A rebrand replaces the competitor's mark with the advertiser's, so the
     // two are meant to differ and the lockup check would reject the right
@@ -657,11 +703,19 @@ async function resolveLogoPatch(input: {
         brandName: input.brandName,
       }));
     if (useAsset) {
+      // Now that the mark is going to be pasted, the rest are worth preparing:
+      // the contrast step chooses between them, and each carries its own
+      // provenance so the keep records the variant that actually landed.
+      const variants: LogoVariant[] = [candidate];
+      for (const asset of assets.slice(candidateIndex + 1)) {
+        const ready = await prepare(asset);
+        if (ready) variants.push(ready);
+      }
       logger.info("Brand mark resolved", {
         patchSource: "asset",
         assetImageId: candidate.imageId,
         rebrand: input.rebrand,
-        variants: prepared.length,
+        variants: variants.length,
       });
       return {
         kind: "patch",
@@ -669,7 +723,7 @@ async function resolveLogoPatch(input: {
         from: candidate.from,
         patchSource: "asset",
         assetImageId: candidate.imageId,
-        variants: prepared.map(({ imageId, bytes }) => ({ imageId, bytes })),
+        variants,
       };
     }
   }
@@ -681,7 +735,9 @@ async function resolveLogoPatch(input: {
       rebrand: input.rebrand,
       sourceKind: input.sourceKind,
       assets: assets.length,
-      prepared: prepared.length,
+      // With a candidate in hand the only way here is a lockup mismatch: a
+      // rebrand takes its asset unconditionally.
+      reason: candidate ? "lockup_mismatch" : "no_usable_asset",
     });
     return { kind: "unavailable" };
   }
@@ -971,8 +1027,15 @@ export const generateVariationTask = task({
       // the mark out when a real one is waiting to be pasted back, and a
       // source whose mark cannot be honoured has to fail before an image call
       // is spent on it.
-      onStep("locating the brand mark in the source");
-      const marks = await locateMarks(sourceBytes, brand?.brandName ?? null, "source");
+      // Gated on the dimensions for the same reason the product locator is: a
+      // source sharp cannot read a header for is one nothing downstream can
+      // crop, matte, or paste, and a run that used to produce an ad must not
+      // start failing on a mark it could never have honoured anyway.
+      let marks: { logo: ProductRegion | null; copy: ProductRegion[] } | null = null;
+      if (sourceDimensions) {
+        onStep("locating the brand mark in the source");
+        marks = await locateMarks(sourceBytes, brand?.brandName ?? null, "source");
+      }
       const sourceMark = marks?.logo ?? null;
       if (sourceMark) onStep("resolving the brand mark");
       const logoResult = await resolveLogoPatch({
