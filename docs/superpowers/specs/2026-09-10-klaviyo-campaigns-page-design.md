@@ -45,7 +45,8 @@ URL, and the pilot's single-tenant binding is unchanged.
 
 Header: title "Klaviyo campaigns"; the account name; "matches published … ago"
 freshness from `lastMatchPublishedAt` like the attribution panel; for
-privileged roles, the Refresh report button and the Open lab link.
+privileged roles, the Open lab link; the Refresh report button sits in the
+ledger's caption row exactly as in the lab (§7).
 
 Body: the ledger's filter row (date range with the calendar picker for
 Custom, kind, channel, search), the ledger table with lazily mounted message

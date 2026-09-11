@@ -55,6 +55,9 @@ export const LEDGER_CHANNEL_FILTERS = ["all", "email", "sms"] as const;
 export type LedgerKindFilter = (typeof LEDGER_KIND_FILTERS)[number];
 export type LedgerChannelFilter = (typeof LEDGER_CHANNEL_FILTERS)[number];
 
+export const ledgerTimezoneLabel = (timezone: string) =>
+  `Send dates use ${timezone} account days`;
+
 /** Mirrors KLAVIYO_REPORT_KINDS for the browser (reports.ts is server-side). */
 export const LEDGER_REFRESH_KINDS = [
   "campaign",

@@ -16,6 +16,7 @@ import {
   ORDER_STATUS_LABELS,
   PRODUCT_STATUS_FILTERS,
   ledger as ledgerCopy,
+  ledgerTimezoneLabel,
   type LabView,
 } from "./copy";
 import { LabRangeControls, LedgerFilters } from "./ledger/ledger-filters";
@@ -39,7 +40,7 @@ export function LabFilterBar(props: {
   const { state, setState } = props.lab;
   const timezoneLabel =
     props.view === "ledger"
-      ? `Send dates use ${props.accountTimezone} account days`
+      ? ledgerTimezoneLabel(props.accountTimezone)
       : `Order dates use ${props.storeTimezone} store days`;
 
   return (

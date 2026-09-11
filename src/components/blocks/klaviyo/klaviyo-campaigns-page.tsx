@@ -5,7 +5,10 @@ import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { LEDGER_REFRESH_KINDS } from "@/components/blocks/attribution/klaviyo/copy";
+import {
+  LEDGER_REFRESH_KINDS,
+  ledgerTimezoneLabel,
+} from "@/components/blocks/attribution/klaviyo/copy";
 import { LedgerDetailSheet } from "@/components/blocks/attribution/klaviyo/ledger/ledger-detail-sheet";
 import {
   LabRangeControls,
@@ -64,7 +67,7 @@ export function KlaviyoCampaignsPage() {
 
   if (context.isError) {
     return (
-      <div className="p-6">
+      <div>
         <LabPanelState
           kind="error"
           title={copy.error}
@@ -76,7 +79,7 @@ export function KlaviyoCampaignsPage() {
   }
   if (!context.data) {
     return (
-      <div className="space-y-4 p-6">
+      <div className="space-y-4">
         <Skeleton className="h-7 w-56" />
         <Skeleton className="h-8 w-full" />
         <Skeleton className="h-64 w-full" />
@@ -85,7 +88,7 @@ export function KlaviyoCampaignsPage() {
   }
   if (!context.data.configured) {
     return (
-      <div className="p-6">
+      <div>
         <h1 className="text-xl font-semibold">{copy.title}</h1>
         <div className="mt-6 flex flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-border py-20">
           <div className="flex size-12 items-center justify-center rounded-full bg-muted/50">
@@ -115,11 +118,10 @@ export function KlaviyoCampaignsPage() {
 
   const viewOrders = (objectId: string, sentDay: string | null) => {
     const params = new URLSearchParams({ view: "orders", source: objectId });
+    params.set("range", "custom");
     if (sentDay) {
-      params.set("range", "custom");
       params.set("from", sentDay);
     } else {
-      params.set("range", "custom");
       params.set("from", range.dateFrom);
       params.set("to", range.dateTo);
     }
@@ -127,7 +129,7 @@ export function KlaviyoCampaignsPage() {
   };
 
   return (
-    <div className="space-y-4 p-6">
+    <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{copy.title}</h1>
@@ -156,7 +158,7 @@ export function KlaviyoCampaignsPage() {
           setState={page.setState}
           range={range}
           today={today}
-          timezoneLabel={copy.timezoneLabel(accountTimezone)}
+          timezoneLabel={ledgerTimezoneLabel(accountTimezone)}
         />
         <LedgerFilters state={page.state} setState={page.setState} />
       </div>
