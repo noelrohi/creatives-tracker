@@ -65,6 +65,13 @@ export type VariationRunInput = {
    * product itself from the product photo.
    */
   productPatch?: { source: "source" | "asset" } | null;
+  /**
+   * Set when the trigger holds real pixels for the advertiser's brand mark
+   * and will paste them into every generated attempt. Null when the source
+   * carried no mark: nothing is preserved and the prompt says nothing about
+   * logos.
+   */
+  logoKeep?: { patchSource: "asset" | "source" } | null;
   note: string | null;
   brand: StudioBrandProfile | null;
   library: StudioContextLibrary;
@@ -124,7 +131,9 @@ export type VariationFailureReason =
   | "review"
   | "likeness"
   | "logo"
-  | "moderation";
+  | "moderation"
+  /** The source carries a mark and no real one could be obtained to stand in for it. */
+  | "logo_unavailable";
 
 export type VariationOutcome =
   | {
