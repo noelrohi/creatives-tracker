@@ -125,7 +125,7 @@ describe("LedgerTable", () => {
 
   it("keeps the no-report, empty, filtered, and error states distinct", () => {
     const { rerender } = renderTable({ data: { rows: [row({ klaviyo: null })], report: { asOf: null, hasCampaignGeneration: false, hasFlowGeneration: false, reportFrom: null, reportTo: null } } });
-    expect(screen.getByText("No report for this range yet")).toBeVisible();
+    expect(screen.getByText("No Klaviyo report yet")).toBeVisible();
     expect(screen.getByRole("button", { name: "Refresh report" })).toBeVisible();
     // Our numbers still render for the row.
     expect(screen.getByText("$97.50")).toBeVisible();

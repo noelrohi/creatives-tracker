@@ -158,7 +158,7 @@ export const ledger = {
   reportWindow: (from: string, to: string) =>
     `Klaviyo report covers ${from} → ${to}`,
   refresh: "Refresh report",
-  noReport: "No report for this range yet",
+  noReport: "No Klaviyo report yet",
   noRows: "No campaigns or flows in this range",
   noResults: "No results match your filters",
   clearFilters: "Clear filters",

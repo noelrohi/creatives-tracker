@@ -303,7 +303,7 @@ describe("KlaviyoCampaignsPage", () => {
     expect(
       await screen.findByRole("heading", { name: "Klaviyo campaigns" }),
     ).toBeVisible();
-    expect(await screen.findByText("No report for this range yet")).toBeVisible();
+    expect(await screen.findByText("No Klaviyo report yet")).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "Refresh report" }),
     ).toBeNull();

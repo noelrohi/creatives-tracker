@@ -110,7 +110,7 @@ instead of the lab hook, so both callers can drive it.
 - Context loading: header and table skeletons.
 - `configured: false`: the empty state of §4; no ledger query is issued.
 - Ledger query error: the table's existing error row with Retry.
-- No report for the range: the existing "No report for this range yet" line;
+- No current Klaviyo report at all: the "No Klaviyo report yet" line;
   the Refresh button beside it renders only for privileged roles, members
   simply see the line with no button.
 - Sheet, message rows, and search keep their existing states.
