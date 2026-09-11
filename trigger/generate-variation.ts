@@ -7,7 +7,7 @@ import {
 } from "ai";
 import { logger, metadata, task, tags } from "@trigger.dev/sdk";
 import sharp from "sharp";
-import { and, desc, eq, gte, isNotNull, ne, sql } from "drizzle-orm";
+import { and, desc, eq, exists, gte, isNotNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { openai } from "@/lib/ai";
@@ -669,6 +669,8 @@ async function resolveLogoPatch(input: {
   sourceBytes: Uint8Array;
   sourceMark: ProductRegion | null;
   sourceKind: VariationSource["kind"];
+  /** Spec §4's gate: only the advertiser's own creative may be cut. */
+  sourceIsOwnCreative: boolean;
   rebrand: boolean;
   brandName: string | null;
   library: StudioContextLibrary;
@@ -753,10 +755,11 @@ async function resolveLogoPatch(input: {
   // A rebrand must never carry the competitor's mark forward, and a source
   // that is not the advertiser's own creative may itself carry a pseudo-logo:
   // with no usable asset there is nothing legitimate left to paste.
-  if (input.rebrand || input.sourceKind !== "creative") {
+  if (input.rebrand || !input.sourceIsOwnCreative) {
     logger.info("No usable logo asset, and cutting this source is not allowed", {
       rebrand: input.rebrand,
       sourceKind: input.sourceKind,
+      sourceIsOwnCreative: input.sourceIsOwnCreative,
       assets: assets.length,
       // With a candidate in hand the only way here is a lockup mismatch: a
       // rebrand takes its asset unconditionally.
@@ -794,9 +797,19 @@ async function resolveLogoPatch(input: {
   return { kind: "unavailable" };
 }
 
+/**
+ * `ownCreative` is spec §4's "the advertiser's own creative", the only source
+ * the logo ladder may cut a mark out of. It is false for a creative the org
+ * marked as somebody else's, and for one a Studio variation was published to:
+ * a launched Studio ad comes back through the Meta sync as an `adCreatives`
+ * row whose mark the image model drew, and cutting that propagates a fake one.
+ * A null `ownership` stays true — it is the unset default on every row today,
+ * so reading it as "unknown, therefore refuse" would disable the rung for
+ * every org rather than tighten it.
+ */
 async function loadSource(
   payload: GenerateVariationPayload,
-): Promise<VariationSource> {
+): Promise<VariationSource & { ownCreative: boolean }> {
   if (payload.source.kind === "creative") {
     const [row] = await db
       .select({
@@ -804,6 +817,16 @@ async function loadSource(
         name: adCreatives.name,
         assetUrl: adCreatives.assetUrl,
         notes: adCreatives.notes,
+        ownership: adCreatives.ownership,
+        // A qualified subquery, not a raw one: `sql` renders a bare column
+        // name, and `studio_variant` has an `id` of its own for the comparison
+        // to bind to silently.
+        publishedFromStudio: exists(
+          db
+            .select({ one: sql`1` })
+            .from(studioVariants)
+            .where(eq(studioVariants.linkedCreativeId, adCreatives.id)),
+        ).mapWith(Boolean),
       })
       .from(adCreatives)
       .where(
@@ -846,6 +869,7 @@ async function loadSource(
     const linkClicks = toNumber(engagement?.linkClicks);
     return {
       kind: "creative",
+      ownCreative: row.ownership !== "theirs" && !row.publishedFromStudio,
       name: row.name,
       imageUrl: row.assetUrl,
       text: row.notes,
@@ -881,6 +905,7 @@ async function loadSource(
   }
   return {
     kind: "competitor_ad",
+    ownCreative: false,
     name: ad.title ?? "Competitor ad",
     imageUrl: ad.imageUrl,
     text: [ad.title, ad.bodyText, ad.ctaText].filter(Boolean).join("\n"),
@@ -1065,6 +1090,7 @@ export const generateVariationTask = task({
         sourceBytes,
         sourceMark,
         sourceKind: source.kind,
+        sourceIsOwnCreative: source.ownCreative,
         rebrand,
         brandName: brand?.brandName ?? null,
         library,
@@ -1078,6 +1104,7 @@ export const generateVariationTask = task({
           generationId: payload.generationId,
           variantId: payload.variantId,
           sourceKind: source.kind,
+          ownCreative: source.ownCreative,
           rebrand,
           logoAssets: library.images.filter((image) => image.kind === "logo").length,
         });
