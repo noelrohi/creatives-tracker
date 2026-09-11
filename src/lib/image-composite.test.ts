@@ -297,4 +297,54 @@ describe("pasteLogo", () => {
       expect(ring[2]).toBeGreaterThanOrEqual(0);
     }
   });
+
+  it("leaves a transparent asset's own edge alone when told not to feather", async () => {
+    // Spec §6: an asset that brings its own alpha "needs none added". Blurring
+    // it a second time softens the designer's anti-aliased edge, so the mark
+    // bleeds into the background one pixel further than it should.
+    const output = solid(400, 400, [255, 255, 255]);
+    const patch = solid(100, 100, [255, 0, 0]);
+    const region = { x: 0.1, y: 0.1, w: 0.8, h: 0.8 };
+    const softened = await pasteLogo({ output, patch, region, sourceWidth: 0.8 });
+    const crisp = await pasteLogo({ output, patch, region, sourceWidth: 0.8, feather: false });
+    const midY = crisp.box.top + Math.floor(crisp.box.height / 2);
+    // One pixel outside the mark: feathered, the mark has bled red into the
+    // white; unfeathered, the background is untouched.
+    expect(await pixel(crisp.bytes, crisp.box.left - 1, midY)).toEqual([255, 255, 255]);
+    expect((await pixel(softened.bytes, softened.box.left - 1, midY))[1]).toBeLessThan(255);
+    // The mark itself is identical either way: not feathering must not move,
+    // resize, or recolour it.
+    expect(crisp.box).toEqual(softened.box);
+    expect(await pixel(crisp.bytes, crisp.box.left + 10, midY)).toEqual([255, 0, 0]);
+  });
+
+  it("caps the feather at two pixels however wide the mark is pasted", async () => {
+    // The sigma is relative to the pasted width (0.004x), so without a ceiling
+    // a 2000px mark would feather by 8px — far outside §6's
+    // "subpixel-to-two-pixel" range. Past the cap the softened band must stop
+    // growing with the mark.
+    const band = async (size: number) => {
+      const output = solid(size, size, [255, 255, 255]);
+      const patch = solid(100, 100, [255, 0, 0]);
+      const { bytes, box } = await pasteLogo({
+        output,
+        patch,
+        region: { x: 0.1, y: 0.1, w: 0.8, h: 0.8 },
+        sourceWidth: 0.8,
+      });
+      const midY = box.top + Math.floor(box.height / 2);
+      let width = 0;
+      // Walk outward until the background is pure white again.
+      for (let dx = 1; dx < 40; dx += 1) {
+        const [, g] = await pixel(bytes, box.left - dx, midY);
+        if (g >= 255) break;
+        width += 1;
+      }
+      return width;
+    };
+    const small = await band(500);
+    const large = await band(2000);
+    expect(large).toBeLessThanOrEqual(6); // three sigma at the 2px cap
+    expect(large).toBeLessThanOrEqual(small + 1);
+  });
 });

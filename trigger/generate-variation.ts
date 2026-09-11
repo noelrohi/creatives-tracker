@@ -553,7 +553,18 @@ async function matteFromProductPhoto(args: {
 }
 
 /** A mark's pasteable pixels and the box they came from, normalized to their own image. */
-type LogoPatchBytes = { bytes: Uint8Array; from: ProductRegion };
+type LogoPatchBytes = {
+  bytes: Uint8Array;
+  from: ProductRegion;
+  /**
+   * True when the patch arrived as a transparent PNG and already carries the
+   * designer's own anti-aliased edge. False when a flood-fill matte cut it,
+   * which leaves the hard edge the paste's feather exists to soften. Spec §6:
+   * an asset that brings its own alpha "needs none added", and blurring it
+   * would soften the brand's own type.
+   */
+  ownAlpha: boolean;
+};
 /**
  * One prepared logo asset, carrying the provenance the keep records: the
  * contrast step may paste any of them, so each keeps its own id and box
@@ -600,11 +611,12 @@ async function prepareLogoAsset(bytes: Uint8Array): Promise<LogoPatchBytes | nul
           w: trimmed.info.width / size.width,
           h: trimmed.info.height / size.height,
         }),
+        ownAlpha: true,
       };
     }
   }
   const cut = await matteWithMargins(bytes, { x: 0, y: 0, w: 1, h: 1 }, "logo_asset");
-  return cut.matted ? { bytes: cut.patch, from: cut.region } : null;
+  return cut.matted ? { bytes: cut.patch, from: cut.region, ownAlpha: false } : null;
 }
 
 /**
@@ -664,6 +676,8 @@ export type LogoPatchResult =
       kind: "patch";
       bytes: Uint8Array;
       from: ProductRegion;
+      /** See `LogoPatchBytes.ownAlpha`: whether the pixels bring their own edge. */
+      ownAlpha: boolean;
       patchSource: "asset" | "source";
       assetImageId: string | null;
       /** Every usable logo asset, each with the provenance the keep records. */
@@ -776,6 +790,7 @@ export async function resolveLogoPatch(input: {
         kind: "patch",
         bytes: candidate.bytes,
         from: candidate.from,
+        ownAlpha: candidate.ownAlpha,
         patchSource: "asset",
         assetImageId: candidate.imageId,
         variants,
@@ -810,6 +825,9 @@ export async function resolveLogoPatch(input: {
         kind: "patch",
         bytes: cut.patch,
         from: cut.region,
+        // A flood-fill cut of the source ad leaves a hard alpha edge, so this
+        // one does want the feather.
+        ownAlpha: false,
         patchSource: "source",
         assetImageId: null,
         variants: [],
@@ -1113,6 +1131,23 @@ export const generateVariationTask = task({
       if (sourceDimensions) {
         onStep("locating the brand mark in the source");
         marks = await locateMarks(sourceBytes, brand?.brandName ?? null, "source", rebrand);
+        // `locateMarks` answers null only when the call itself failed; a call
+        // that ran and saw no mark answers `{ logo: null }`. Collapsing the two
+        // would turn a transient vision error into "this ad has no logo", and
+        // the run would then proceed with nothing to preserve and ship an ad
+        // whose mark the model redrew — the exact outcome this feature exists
+        // to prevent, arriving silently. One retry covers a flake; past that
+        // the error is real, and throwing hands it to the task's own retry
+        // policy instead of guessing.
+        if (!marks) {
+          logger.warn("Mark locator failed on the source; retrying once before failing the run");
+          marks = await locateMarks(sourceBytes, brand?.brandName ?? null, "source", rebrand);
+        }
+        if (!marks) {
+          throw new Error(
+            "Could not read the source for a brand mark, so there is no way to tell whether this variation must preserve one.",
+          );
+        }
       }
       const sourceMark = marks?.logo ?? null;
       if (sourceMark) onStep("resolving the brand mark");
@@ -1375,6 +1410,15 @@ export const generateVariationTask = task({
                 throw new Error("Could not read the attempt's dimensions");
               }
               const located = await locateMarks(produced, brand?.brandName ?? null, "output");
+              // Null is a failed call, not an empty canvas. Treating it as
+              // "no mark drawn and no copy anywhere" would leave a mark the
+              // model drew uncovered and let the real one land on the
+              // headline, because every collision check would pass against an
+              // empty list. Without that read there is no safe placement, so
+              // the attempt goes unpasted and the review fails it.
+              if (!located) {
+                throw new Error("Could not locate marks or copy in the attempt; placement would be unchecked");
+              }
               // The product that was just pasted in is as protected as the set
               // copy: a mark landing on it covers the one thing the transplant
               // exists to preserve. The drawn rung returns before any collision
@@ -1385,9 +1429,9 @@ export const generateVariationTask = task({
               if (mode === "edit" && pasted && keepRegion) protectedRegions.push(expandRegion(keepRegion));
               if (transplant) protectedRegions.push(transplant.to);
               const placements = logoPlacementCandidates({
-                drawn: located?.logo ?? null,
+                drawn: located.logo,
                 sourceBox: sourceMark,
-                copyRegions: [...(located?.copy ?? []), ...protectedRegions],
+                copyRegions: [...located.copy, ...protectedRegions],
                 format,
               });
               // The paste caps the mark at 1.25x the width it had in the
@@ -1399,7 +1443,7 @@ export const generateVariationTask = task({
                 logger.warn("No legal placement for the brand mark; leaving the attempt unpasted", {
                   attempt,
                   sourceMark,
-                  copy: located?.copy.length ?? 0,
+                  copy: located.copy.length,
                   protected: protectedRegions.length,
                 });
               } else if (!reachable) {
@@ -1413,10 +1457,10 @@ export const generateVariationTask = task({
                 // A source cut has no variants to choose between, so the patch
                 // itself is the only candidate; each asset variant carries its
                 // own provenance, which is what the keep records.
-                const candidates: Array<{ imageId: string | null; bytes: Uint8Array; from: ProductRegion }> =
+                const candidates: Array<{ imageId: string | null; bytes: Uint8Array; from: ProductRegion; ownAlpha: boolean }> =
                   logoPatch.variants.length > 0
                     ? logoPatch.variants
-                    : [{ imageId: logoPatch.assetImageId, bytes: logoPatch.bytes, from: logoPatch.from }];
+                    : [{ imageId: logoPatch.assetImageId, bytes: logoPatch.bytes, from: logoPatch.from, ownAlpha: logoPatch.ownAlpha }];
                 // Every candidate placement is measured against the same bytes
                 // — the attempt as it stood before any mark was pasted — so a
                 // rejected try leaves nothing behind for the next one to land
@@ -1462,6 +1506,10 @@ export const generateVariationTask = task({
                     // The mark's width in the source, never the variant's own:
                     // a variant's `from` is provenance, not a scale.
                     sourceWidth: sourceMark.w,
+                    // A transparent PNG already carries the designer's own
+                    // anti-aliased edge; feathering it again softens the
+                    // brand's own type for nothing.
+                    feather: !chosen.ownAlpha,
                   });
                   // Spec §7's two measured thresholds. A mark that fails either
                   // is illegible at feed size, so the next placement is tried

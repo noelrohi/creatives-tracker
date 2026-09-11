@@ -130,6 +130,14 @@ export type VariationRunState = {
   finished: boolean;
   /** Set by the first finish on a rejected attempt, which bounces; a second finish ships it. */
   overrodeReview: boolean;
+  /**
+   * True when the trigger holds real pixels for the advertiser's mark, so
+   * every attempt is supposed to carry one. Spec §8 forbids shipping a
+   * variation that should have a logo and does not, and the review prompt
+   * that asks for that is a model's judgement, not a guarantee — this makes
+   * it a rule `finish` and `resolveVariationOutcome` enforce.
+   */
+  logoKeepRequired: boolean;
   moderationReason: "likeness" | "logo" | "moderation" | null;
 };
 
@@ -445,6 +453,7 @@ export function createVariationRun(
     plan: null,
     finished: false,
     overrodeReview: false,
+    logoKeepRequired: Boolean(input.logoKeep),
     moderationReason: null,
   };
   const referenceById = new Map(input.library.reference.map((doc) => [doc.id, doc]));
@@ -680,6 +689,19 @@ export function createVariationRun(
       };
     }
 
+    // The one refusal the agent cannot talk its way past. A rejected review is
+    // overridable on a second call (below), and a missing mark would otherwise
+    // ride out on that override: the review's "no place for the logo" clause is
+    // an instruction to a model, so it is a request, not a guarantee. Spec §8
+    // says a variation that should carry the advertiser's mark and does not is
+    // a failed run, so an attempt with no keep can never be the shipped one,
+    // however many times finish is called.
+    if (state.logoKeepRequired && (final.keeps?.length ?? 0) === 0) {
+      return {
+        error: `Attempt ${final.attempt} carries no logo: the real mark could not be placed in it, so shipping it would publish an ad with no branding. Generate again and leave a clear, uncluttered area inside the safe margins for the mark — away from the headline, CTA, and the product.`,
+      };
+    }
+
     // Shipping a rejected attempt is allowed, but only as a second, deliberate
     // choice: the first finish bounces so the agent spends its remaining
     // attempt or restates the call.
@@ -722,7 +744,12 @@ export function resolveVariationOutcome(state: VariationRunState): VariationOutc
     }
   }
 
-  const passing = [...state.attempts].reverse().find((entry) => entry.review.pass);
+  // The same invariant on the path finish never reached: a passing review does
+  // not rescue an attempt that carries no mark when one was required, or the
+  // agent could ship by simply running out of steps.
+  const shippable = (entry: VariationAttempt) =>
+    entry.review.pass && (!state.logoKeepRequired || (entry.keeps?.length ?? 0) > 0);
+  const passing = [...state.attempts].reverse().find(shippable);
   if (passing) {
     return {
       kind: "ready",

@@ -367,6 +367,13 @@ export async function ringLuminance(output: Uint8Array, region: ProductRegion): 
 
 /** How far the mark's alpha edge is softened, relative to its pasted width. */
 const LOGO_FEATHER = 0.004;
+/**
+ * Spec §6 calls for "a subpixel-to-two-pixel edge feather". The relative sigma
+ * above reaches 2px at a 500px-wide mark and keeps growing, so a large
+ * placement would soften far past what the design asks for; this is the
+ * ceiling that keeps it inside the stated range.
+ */
+const LOGO_FEATHER_MAX_SIGMA = 2;
 
 /**
  * Stamps a brand mark into the output. Unlike the product transplant this
@@ -379,12 +386,46 @@ const LOGO_FEATHER = 0.004;
  * Returns the measured contrast between the mark and the ring of output
  * around it, which the caller compares against the legibility floor.
  */
+/**
+ * Softens an alpha edge in premultiplied space. Kept separate so the paste can
+ * skip it outright for an asset that brings its own edge.
+ */
+async function blurEdge(padded: Uint8Array | Buffer, sigma: number) {
+  const { data, info } = await sharp(padded).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const premultiplied = Buffer.alloc(data.length);
+  for (let i = 0; i + 3 < data.length; i += 4) {
+    const a = data[i + 3];
+    premultiplied[i] = Math.round((data[i] * a) / 255);
+    premultiplied[i + 1] = Math.round((data[i + 1] * a) / 255);
+    premultiplied[i + 2] = Math.round((data[i + 2] * a) / 255);
+    premultiplied[i + 3] = a;
+  }
+  const raw = { width: info.width, height: info.height, channels: 4 as const };
+  const blurred = await sharp(premultiplied, { raw }).blur(sigma).raw().toBuffer();
+  const unpremultiplied = Buffer.alloc(blurred.length);
+  for (let i = 0; i + 3 < blurred.length; i += 4) {
+    const a = blurred[i + 3];
+    for (let c = 0; c < 3; c += 1) {
+      unpremultiplied[i + c] = a === 0 ? 0 : Math.min(255, Math.round((blurred[i + c] * 255) / a));
+    }
+    unpremultiplied[i + 3] = a;
+  }
+  return sharp(unpremultiplied, { raw });
+}
+
 export async function pasteLogo(input: {
   output: Uint8Array;
   patch: Uint8Array;
   region: ProductRegion;
   /** The mark's width in the source, normalized; the paste is capped at 1.25x it. */
   sourceWidth: number;
+  /**
+   * False when the patch is a transparent PNG that already carries the
+   * designer's own anti-aliased edge. Spec §6: such an asset "needs none
+   * added", and blurring it a second time softens the brand's own type.
+   * Defaults to true, the flood-fill matte's hard-edged case.
+   */
+  feather?: boolean;
 }): Promise<{ bytes: Uint8Array; box: PasteBox; contrast: number }> {
   const region = clampRegion(input.region);
   const [outputMeta, patchMeta] = await Promise.all([
@@ -406,8 +447,12 @@ export async function pasteLogo(input: {
   // contactShadow does) so a fully-opaque source patch has a transparent
   // margin of its own to feather into, then blur the whole padded composite
   // in premultiplied space (see below).
-  const sigma = Math.max(0.3, LOGO_FEATHER * box.width); // sharp's blur needs sigma >= 0.3
-  const pad = Math.ceil(3 * sigma);
+  const feather = input.feather ?? true;
+  // sharp's blur needs sigma >= 0.3, and §6 caps the softening at two pixels.
+  const sigma = Math.min(LOGO_FEATHER_MAX_SIGMA, Math.max(0.3, LOGO_FEATHER * box.width));
+  // No feather means no margin to feather into, so the padded canvas collapses
+  // to the mark itself and every crop below still reads the same fields.
+  const pad = feather ? Math.ceil(3 * sigma) : 0;
   const canvasWidth = box.width + 2 * pad;
   const canvasHeight = box.height + 2 * pad;
   const resized = await sharp(input.patch)
@@ -427,29 +472,7 @@ export async function pasteLogo(input: {
   // pixel out at 400px width) instead of a soft edge. Premultiplied, a
   // transparent pixel carries no colour weight at all, so the blurred ring is
   // the mark's own colour at a falling alpha and the halo disappears.
-  const { data: paddedRaw, info: paddedInfo } = await sharp(padded)
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-  const premultiplied = Buffer.alloc(paddedRaw.length);
-  for (let i = 0; i + 3 < paddedRaw.length; i += 4) {
-    const a = paddedRaw[i + 3];
-    premultiplied[i] = Math.round((paddedRaw[i] * a) / 255);
-    premultiplied[i + 1] = Math.round((paddedRaw[i + 1] * a) / 255);
-    premultiplied[i + 2] = Math.round((paddedRaw[i + 2] * a) / 255);
-    premultiplied[i + 3] = a;
-  }
-  const raw = { width: paddedInfo.width, height: paddedInfo.height, channels: 4 as const };
-  const blurred = await sharp(premultiplied, { raw }).blur(sigma).raw().toBuffer();
-  const unpremultiplied = Buffer.alloc(blurred.length);
-  for (let i = 0; i + 3 < blurred.length; i += 4) {
-    const a = blurred[i + 3];
-    for (let c = 0; c < 3; c += 1) {
-      unpremultiplied[i + c] = a === 0 ? 0 : Math.min(255, Math.round((blurred[i + c] * 255) / a));
-    }
-    unpremultiplied[i + 3] = a;
-  }
-  const feathered = sharp(unpremultiplied, { raw });
+  const feathered = feather ? await blurEdge(padded, sigma) : sharp(padded);
 
   // Crop the padded, feathered canvas back down to whatever part of it falls
   // on the output, the same clipping contactShadow uses for a box that hangs
