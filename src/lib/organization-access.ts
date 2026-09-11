@@ -23,6 +23,7 @@ const MEMBER_PATH_PREFIXES = [
   "/creatives",
   "/teams",
   "/meta",
+  "/klaviyo",
   "/mer",
   "/campaigns",
   ...featureFlagDefs.flatMap((def) => (def.href ? [def.href] : [])),

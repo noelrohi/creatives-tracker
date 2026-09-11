@@ -55,6 +55,9 @@ export const LEDGER_CHANNEL_FILTERS = ["all", "email", "sms"] as const;
 export type LedgerKindFilter = (typeof LEDGER_KIND_FILTERS)[number];
 export type LedgerChannelFilter = (typeof LEDGER_CHANNEL_FILTERS)[number];
 
+export const ledgerTimezoneLabel = (timezone: string) =>
+  `Send dates use ${timezone} account days`;
+
 /** Mirrors KLAVIYO_REPORT_KINDS for the browser (reports.ts is server-side). */
 export const LEDGER_REFRESH_KINDS = [
   "campaign",
@@ -152,8 +155,10 @@ export const ledger = {
   caption: (timezone: string, from: string, to: string) =>
     `Send dates use ${timezone} account days · ${from} → ${to}`,
   asOf: (iso: string) => `as of ${iso}`,
+  reportWindow: (from: string, to: string) =>
+    `Klaviyo report covers ${from} → ${to}`,
   refresh: "Refresh report",
-  noReport: "No report for this range yet",
+  noReport: "No Klaviyo report yet",
   noRows: "No campaigns or flows in this range",
   noResults: "No results match your filters",
   clearFilters: "Clear filters",

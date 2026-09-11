@@ -27,7 +27,13 @@ function row(overrides: Partial<LedgerRowData> = {}): LedgerRowData {
   };
 }
 
-const report = { asOf: "2026-08-02T00:00:00.000Z" as unknown as Date, hasCampaignGeneration: true, hasFlowGeneration: true };
+const report = {
+  asOf: "2026-08-02T00:00:00.000Z" as unknown as Date,
+  hasCampaignGeneration: true,
+  hasFlowGeneration: true,
+  reportFrom: null,
+  reportTo: null,
+};
 const noop = () => undefined;
 
 function renderTable(props: Partial<Parameters<typeof LedgerTable>[0]> = {}) {
@@ -118,8 +124,8 @@ describe("LedgerTable", () => {
   });
 
   it("keeps the no-report, empty, filtered, and error states distinct", () => {
-    const { rerender } = renderTable({ data: { rows: [row({ klaviyo: null })], report: { asOf: null, hasCampaignGeneration: false, hasFlowGeneration: false } } });
-    expect(screen.getByText("No report for this range yet")).toBeVisible();
+    const { rerender } = renderTable({ data: { rows: [row({ klaviyo: null })], report: { asOf: null, hasCampaignGeneration: false, hasFlowGeneration: false, reportFrom: null, reportTo: null } } });
+    expect(screen.getByText("No Klaviyo report yet")).toBeVisible();
     expect(screen.getByRole("button", { name: "Refresh report" })).toBeVisible();
     // Our numbers still render for the row.
     expect(screen.getByText("$97.50")).toBeVisible();
@@ -130,5 +136,34 @@ describe("LedgerTable", () => {
     rerender(<LedgerTable data={null} error={true} filtered={false} busy={false} accountTimezone="UTC" range={{ dateFrom: "2026-07-01", dateTo: "2026-07-31" }} sort={DEFAULT_LEDGER_SORT} onToggleSort={noop} expanded={new Set()} onToggleExpand={noop} renderMessageRows={() => null} onOpenSource={noop} onRefresh={noop} onRetry={noop} onClearFilters={noop} />);
     expect(screen.getByText("Couldn’t load campaigns.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
+  });
+
+  it("hides the Refresh button when the viewer cannot refresh", () => {
+    renderTable({
+      data: { rows: [row({ klaviyo: null })], report: { asOf: null, hasCampaignGeneration: false, hasFlowGeneration: false, reportFrom: null, reportTo: null } },
+      onRefresh: undefined,
+    });
+    expect(screen.queryByRole("button", { name: "Refresh report" })).toBeNull();
+  });
+
+  it("names the report's own coverage in the caption when it differs from the range", () => {
+    renderTable({
+      data: {
+        rows: [row()],
+        report: {
+          ...report,
+          reportFrom: "2026-08-10T00:00:00.000Z" as unknown as Date,
+          reportTo: "2026-09-08T00:00:00.000Z" as unknown as Date,
+        },
+      },
+    });
+    expect(
+      screen.getByText(/Klaviyo report covers 2026-08-10 → 2026-09-08/),
+    ).toBeVisible();
+  });
+
+  it("omits the report-coverage caption when the report window is unknown", () => {
+    renderTable();
+    expect(screen.queryByText(/Klaviyo report covers/)).toBeNull();
   });
 });

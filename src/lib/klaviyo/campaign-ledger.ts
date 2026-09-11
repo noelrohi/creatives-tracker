@@ -8,9 +8,9 @@ import type { KlaviyoConnectionScope } from "@/lib/klaviyo/types";
 
 /**
  * Read-only loaders for the lab's campaign ledger. The window is the
- * Klaviyo ACCOUNT-timezone day range converted to half-open UTC — the same
- * key the report request uses, so "the current generation for this window"
- * is an exact match.
+ * Klaviyo ACCOUNT-timezone day range converted to half-open UTC. Klaviyo's
+ * numbers, though, come from the newest CURRENT report generation per kind
+ * regardless of what window it covers — see `currentGenerationsCte` for why.
  *
  * Row rule (spec §4): a campaign is selected by its send time and carries
  * every confirmed order whose primary claim names it, with no order-date
@@ -69,6 +69,8 @@ export type LedgerReportMeta = {
   asOf: Date | null;
   hasCampaignGeneration: boolean;
   hasFlowGeneration: boolean;
+  reportFrom: Date | null;
+  reportTo: Date | null;
 };
 
 export type LedgerListResult = { rows: LedgerRow[]; report: LedgerReportMeta };
@@ -275,6 +277,13 @@ async function loadOurSide(
  * and window published under a different fingerprint — can sit alongside the
  * live one and would otherwise double every sum. `distinct on (kind)` keeps
  * the newest published row per kind and drops the rest.
+ *
+ * This does NOT filter by the caller's requested window: the nightly sync
+ * only ever produces last-30 windows, so matching the page's arbitrary range
+ * exactly would show "no report" on most days even though a current report
+ * exists. Facts join to a campaign or flow by object id, so a row outside
+ * the report's actual coverage still gets no fact and dashes honestly —
+ * only the caption needs to say what the report covers.
  */
 function currentGenerationsCte(
   scope: KlaviyoConnectionScope,
@@ -283,7 +292,8 @@ function currentGenerationsCte(
 ) {
   return sql`
     current_generation as (
-      select distinct on (kind) id, kind, published_at
+      select distinct on (kind) id, kind, published_at,
+             requested_from, requested_to
         from klaviyo_report_generation
        where organization_id = ${scope.organizationId}
          and shopify_store_id = ${scope.storeId}
@@ -293,8 +303,6 @@ function currentGenerationsCte(
            kinds.map((kind) => sql`${kind}`),
            sql`, `,
          )})
-         and requested_from = ${utcTimestamp(window.from)}
-         and requested_to = ${utcTimestamp(window.to)}
        order by kind, published_at desc nulls last, id desc
     )`;
 }
@@ -345,21 +353,40 @@ async function loadReportMeta(
   scope: KlaviyoConnectionScope,
   window: HalfOpenUtcWindow,
 ): Promise<LedgerReportMeta> {
-  const rows = await db.execute<{ kind: string; published_at: string | null }>(sql`
+  const rows = await db.execute<{
+    kind: string;
+    published_at: string | null;
+    requested_from: string;
+    requested_to: string;
+  }>(sql`
     with ${currentGenerationsCte(scope, window, ["campaign", "flow"])}
-    select kind, published_at::text as published_at
+    select kind, published_at::text as published_at,
+           requested_from::text as requested_from,
+           requested_to::text as requested_to
       from current_generation`);
   let asOf: Date | null = null;
+  let reportFrom: Date | null = null;
+  let reportTo: Date | null = null;
   for (const row of rows.rows) {
     const publishedAt = utcDateOf(row.published_at);
     if (publishedAt !== null && (asOf === null || publishedAt > asOf)) {
       asOf = publishedAt;
+    }
+    const from = utcDateOf(row.requested_from);
+    const to = utcDateOf(row.requested_to);
+    if (from !== null && (reportFrom === null || from < reportFrom)) {
+      reportFrom = from;
+    }
+    if (to !== null && (reportTo === null || to > reportTo)) {
+      reportTo = to;
     }
   }
   return {
     asOf,
     hasCampaignGeneration: rows.rows.some((row) => row.kind === "campaign"),
     hasFlowGeneration: rows.rows.some((row) => row.kind === "flow"),
+    reportFrom,
+    reportTo,
   };
 }
 

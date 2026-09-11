@@ -9,35 +9,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { BUCKET_ORDER } from "@/components/blocks/attribution/buckets";
-import { DateRangePicker } from "@/components/blocks/dashboard/date-range-picker";
-import { formatDateOnly } from "@/lib/date";
-import { isDay } from "@/lib/day";
 import {
   CHANNEL_FILTERS,
   CLAIM_TYPE_FILTERS,
-  LAB_RANGES,
   ORDER_STATUS_FILTERS,
   ORDER_STATUS_LABELS,
   PRODUCT_STATUS_FILTERS,
   ledger as ledgerCopy,
+  ledgerTimezoneLabel,
   type LabView,
-  type LedgerChannelFilter,
-  type LedgerKindFilter,
 } from "./copy";
-import { LedgerSearch } from "./ledger/ledger-search";
+import { LabRangeControls, LedgerFilters } from "./ledger/ledger-filters";
 import type { useKlaviyoLabState } from "./use-klaviyo-lab-state";
-
-/**
- * The picker works in local-time Dates that stand for CALENDAR DAYS, never
- * instants: a lab day (already validated by the resolver) becomes local
- * midnight, and `formatDateOnly` reads it back as the same day whatever the
- * browser's zone. A malformed day falls back to the given day.
- */
-function dayToLocalDate(day: string, fallback: string): Date {
-  const safe = isDay(day) ? day : fallback;
-  const [year, month, date] = safe.split("-").map(Number);
-  return new Date(year, month - 1, date);
-}
 
 /**
  * View-scoped filters: orders show the full evidence filter set, unmatched
@@ -57,54 +40,18 @@ export function LabFilterBar(props: {
   const { state, setState } = props.lab;
   const timezoneLabel =
     props.view === "ledger"
-      ? `Send dates use ${props.accountTimezone} account days`
+      ? ledgerTimezoneLabel(props.accountTimezone)
       : `Order dates use ${props.storeTimezone} store days`;
 
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm">
-      <Select
-        value={state.range}
-        onValueChange={(value) => {
-          const range = value as (typeof LAB_RANGES)[number];
-          // Switching to Custom seeds the picker with the range currently
-          // shown, so nothing jumps until the user picks new dates.
-          void setState(
-            range === "custom"
-              ? { range, from: props.range.dateFrom, to: props.range.dateTo }
-              : { range },
-          );
-        }}
-      >
-        <SelectTrigger className="h-8 w-32" aria-label="Date range">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="last7">Last 7 days</SelectItem>
-          <SelectItem value="last30">Last 30 days</SelectItem>
-          <SelectItem value="last90">Last 90 days</SelectItem>
-          <SelectItem value="custom">Custom</SelectItem>
-        </SelectContent>
-      </Select>
-      {state.range === "custom" ? (
-        // Presets and the selectable ceiling follow the active timezone's
-        // today, not the browser's: a Melbourne store's current day must be
-        // pickable from Los Angeles, and "Yesterday" means the store's.
-        <DateRangePicker
-          from={dayToLocalDate(props.range.dateFrom, props.today)}
-          to={dayToLocalDate(props.range.dateTo, props.today)}
-          today={dayToLocalDate(props.today, props.today)}
-          onChange={(range) => {
-            if (!range) return;
-            void setState({
-              from: formatDateOnly(range.from),
-              to: formatDateOnly(range.to),
-            });
-          }}
-        />
-      ) : null}
-      <span className="text-xs text-muted-foreground">
-        {props.range.dateFrom} → {props.range.dateTo} · {timezoneLabel}
-      </span>
+      <LabRangeControls
+        state={state}
+        setState={setState}
+        range={props.range}
+        today={props.today}
+        timezoneLabel={timezoneLabel}
+      />
 
       {props.view === "orders" ? (
         <>
@@ -205,42 +152,7 @@ export function LabFilterBar(props: {
       ) : null}
 
       {props.view === "ledger" ? (
-        <>
-          <Select
-            value={state.ledgerKind}
-            onValueChange={(value) =>
-              void setState({ ledgerKind: value as LedgerKindFilter })
-            }
-          >
-            <SelectTrigger className="h-8 w-36" aria-label="Kind">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Campaigns &amp; flows</SelectItem>
-              <SelectItem value="campaign">Campaigns</SelectItem>
-              <SelectItem value="flow">Flows</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select
-            value={state.ledgerChannel}
-            onValueChange={(value) =>
-              void setState({ ledgerChannel: value as LedgerChannelFilter })
-            }
-          >
-            <SelectTrigger className="h-8 w-32" aria-label="Channel">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All channels</SelectItem>
-              <SelectItem value="email">Email</SelectItem>
-              <SelectItem value="sms">SMS</SelectItem>
-            </SelectContent>
-          </Select>
-          <LedgerSearch
-            value={state.q ?? ""}
-            onChange={(q) => void setState({ q: q === "" ? null : q })}
-          />
-        </>
+        <LedgerFilters state={state} setState={setState} />
       ) : null}
 
       {props.view === "orders" && state.source !== null ? (

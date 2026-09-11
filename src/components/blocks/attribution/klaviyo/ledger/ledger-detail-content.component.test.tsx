@@ -69,7 +69,6 @@ describe("LedgerDetailContent", () => {
           object: { ...detail().object, messageCount: 1 },
           messages: [],
         })}
-        onViewOrders={() => undefined}
       />,
     );
     expect(screen.getByTestId("funnel-opened")).toHaveTextContent("—");
@@ -77,6 +76,7 @@ describe("LedgerDetailContent", () => {
     expect(screen.queryByText(/we couldn’t confirm/)).toBeNull();
     expect(screen.getByTestId("list-unsubscribed")).toHaveTextContent("—");
     expect(screen.queryByText("Variants (A/B)")).toBeNull();
+    expect(screen.queryByRole("button", { name: "View orders in Orders →" })).toBeNull();
   });
 
   it("labels a flow as ongoing with calendar-day bars and an emails block", () => {

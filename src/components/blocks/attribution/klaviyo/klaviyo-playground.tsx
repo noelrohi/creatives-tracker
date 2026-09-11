@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  keepPreviousData,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -25,8 +24,7 @@ import { CoverageSummary } from "./coverage-summary";
 import { LabFilterBar } from "./filter-bar";
 import { LabHeader } from "./lab-header";
 import { LedgerDetailSheet } from "./ledger/ledger-detail-sheet";
-import { LedgerMessageRows } from "./ledger/ledger-message-rows";
-import { LedgerTable } from "./ledger/ledger-table";
+import { LedgerSection } from "./ledger/ledger-section";
 import { ListHealthTable } from "./list-health-table";
 import { OrderDetailSheet } from "./order-detail-sheet";
 import { OrdersTable } from "./orders-table";
@@ -551,7 +549,12 @@ export function KlaviyoPlayground() {
       ) : null}
 
       <OrderDetailSheet lab={lab} />
-      <LedgerDetailSheet lab={lab} range={range} />
+      <LedgerDetailSheet
+        objectId={lab.state.view === "ledger" ? lab.state.source : null}
+        range={range}
+        onClose={lab.closeSource}
+        onViewOrders={lab.viewOrdersForSource}
+      />
     </div>
   );
 }
@@ -691,54 +694,16 @@ function LedgerView(props: {
   busy: boolean;
   onRefresh: () => void;
 }) {
-  const trpc = useTRPC();
-  const { state } = props.lab;
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
-  const search = state.q?.trim() ?? "";
-  const list = useQuery({
-    ...trpc.klaviyo.ledger.list.queryOptions({
-      dateFrom: props.range.dateFrom,
-      dateTo: props.range.dateTo,
-      kind: state.ledgerKind === "all" ? undefined : state.ledgerKind,
-      channel: state.ledgerChannel === "all" ? undefined : state.ledgerChannel,
-      search: search === "" ? undefined : search,
-    }),
-    // Typing in the search box or flipping a filter re-keys the query; without
-    // this the table blanks to its empty state between keystrokes.
-    placeholderData: keepPreviousData,
-  });
-  const filtered =
-    state.ledgerKind !== "all" ||
-    state.ledgerChannel !== "all" ||
-    search !== "";
-  const sort = { column: state.sort, direction: state.dir };
   return (
-    <LedgerTable
-      data={list.data ?? null}
-      error={list.isError}
-      filtered={filtered}
-      busy={props.busy}
-      accountTimezone={props.accountTimezone}
+    <LedgerSection
       range={props.range}
-      sort={sort}
+      accountTimezone={props.accountTimezone}
+      state={props.lab.state}
       onToggleSort={props.lab.toggleSort}
-      expanded={expanded}
-      onToggleExpand={(objectId) =>
-        setExpanded((current) => {
-          const next = new Set(current);
-          if (!next.delete(objectId)) next.add(objectId);
-          return next;
-        })
-      }
-      renderMessageRows={(row) => (
-        <LedgerMessageRows parent={row} range={props.range} sort={sort} />
-      )}
       onOpenSource={props.lab.openSource}
-      onRefresh={props.onRefresh}
-      onRetry={() => void list.refetch()}
       onClearFilters={props.lab.clearFilters}
+      busy={props.busy}
+      onRefresh={props.onRefresh}
     />
   );
 }

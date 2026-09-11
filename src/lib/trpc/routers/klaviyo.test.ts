@@ -345,6 +345,13 @@ const PROCEDURE_CALLS: Array<[string, (caller: ReturnType<typeof sessionCaller>)
     "matchInvocationStatus",
     (caller) => caller.matchInvocationStatus({ triggerRunId: "run" }),
   ],
+];
+
+/** Reads every org role may make: the campaigns page is not admin-only. */
+const MEMBER_PROCEDURE_CALLS: Array<
+  [string, (caller: ReturnType<typeof sessionCaller>) => Promise<unknown>]
+> = [
+  ["ledgerContext", (caller) => caller.ledgerContext()],
   ["ledger.list", (caller) => caller.ledger.list({ dateFrom: "2026-07-01", dateTo: "2026-07-31" })],
   ["ledger.messages", (caller) => caller.ledger.messages({ dateFrom: "2026-07-01", dateTo: "2026-07-31", objectId: "obj" })],
   ["ledger.detail", (caller) => caller.ledger.detail({ dateFrom: "2026-07-01", dateTo: "2026-07-31", objectId: "obj" })],
@@ -370,6 +377,53 @@ describe("klaviyo router RBAC", () => {
       await expect(call(sessionCaller("admin"))).resolves.toBeDefined();
       await expect(call(sessionCaller("owner"))).resolves.toBeDefined();
     }
+  });
+
+  it("lets every org role read the campaigns ledger but still bars API-key and worker callers", async () => {
+    for (const [, call] of MEMBER_PROCEDURE_CALLS) {
+      await expect(call(sessionCaller("member"))).resolves.toBeDefined();
+      await expect(call(sessionCaller("admin"))).resolves.toBeDefined();
+      await expect(
+        call(apiKeyCaller() as unknown as ReturnType<typeof sessionCaller>),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        call(workerCaller() as unknown as ReturnType<typeof sessionCaller>),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+  });
+});
+
+describe("ledgerContext", () => {
+  it("projects the health payload down to what the campaigns page needs", async () => {
+    mocks.getKlaviyoHealthForOrganization.mockResolvedValue({
+      configured: true,
+      store: { id: "store-1", shopDomain: "reviv.example.myshopify.com", ianaTimezone: "Asia/Bangkok", currency: "USD", todayInStoreTz: "2026-09-10" },
+      connection: {
+        status: "ready", accountName: "Reviv", timezone: "Asia/Bangkok", currency: "USD",
+        todayInAccountTz: "2026-09-10", lastDiscoverySyncedAt: null, lastEventSyncedAt: null,
+        lastMatchPublishedAt: new Date("2026-09-10T01:00:00Z"),
+      },
+    });
+    await expect(sessionCaller("member").ledgerContext()).resolves.toEqual({
+      configured: true,
+      accountName: "Reviv",
+      accountTimezone: "Asia/Bangkok",
+      todayInAccountTz: "2026-09-10",
+      lastMatchPublishedAt: new Date("2026-09-10T01:00:00Z"),
+    });
+  });
+
+  it("reports not configured instead of throwing for an org without the pilot", async () => {
+    mocks.getKlaviyoHealthForOrganization.mockResolvedValue({ configured: true, store: null, connection: null });
+    await expect(sessionCaller("member").ledgerContext()).resolves.toEqual({
+      configured: false,
+      accountName: null,
+      accountTimezone: "UTC",
+      todayInAccountTz: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      lastMatchPublishedAt: null,
+    });
+    mocks.getKlaviyoHealthForOrganization.mockResolvedValue({ configured: false, store: null, connection: null });
+    await expect(sessionCaller("member").ledgerContext()).resolves.toMatchObject({ configured: false });
   });
 });
 

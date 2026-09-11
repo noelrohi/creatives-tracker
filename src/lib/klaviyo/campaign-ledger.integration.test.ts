@@ -110,12 +110,21 @@ async function seedObject(input: {
   );
 }
 
-/** One current generation per kind for the July window. */
+/**
+ * One current generation per kind, covering the July window by default. The
+ * nightly only ever produces last-30 windows, so a test can pass a different
+ * `reportWindow` to prove the loaders read the newest current generation
+ * regardless of what window it covers.
+ */
 async function seedGeneration(
   kind: string,
   id = `gen-${kind}`,
   publishedAt = "2026-08-02T00:00:00Z",
   syncRunId = "source-run-a",
+  reportWindow: { from: string; to: string } = {
+    from: "2026-07-01T00:00:00Z",
+    to: "2026-08-01T00:00:00Z",
+  },
 ): Promise<void> {
   await testPool!.query(
     `INSERT INTO klaviyo_report_generation
@@ -124,9 +133,9 @@ async function seedGeneration(
         publication_scope_fingerprint, refresh_fingerprint, status,
         fact_count, published_at)
      VALUES ($1, 'org-a', 'store-a', 'connection-a', $4, $2,
-       '2026-07-01T00:00:00Z', '2026-08-01T00:00:00Z', 'UTC',
+       $5, $6, 'UTC',
        $1 || '-scope', $1 || '-refresh', 'current', 0, $3)`,
-    [id, kind, publishedAt, syncRunId],
+    [id, kind, publishedAt, syncRunId, reportWindow.from, reportWindow.to],
   );
 }
 
@@ -461,6 +470,12 @@ describeIfDb("Klaviyo campaign ledger on PostgreSQL", () => {
       hasFlowGeneration: true,
     });
     expect(result.report.asOf?.toISOString()).toBe("2026-08-02T00:00:00.000Z");
+    expect(result.report.reportFrom?.toISOString()).toBe(
+      "2026-07-01T00:00:00.000Z",
+    );
+    expect(result.report.reportTo?.toISOString()).toBe(
+      "2026-08-01T00:00:00.000Z",
+    );
   });
 
   it("reads only the newest current generation per kind", async () => {
@@ -495,6 +510,12 @@ describeIfDb("Klaviyo campaign ledger on PostgreSQL", () => {
     ).toMatchObject({ recipients: 1000, delivered: 1000 });
     expect(result.report.asOf?.toISOString()).toBe("2026-08-02T00:00:00.000Z");
     expect(result.report.hasCampaignGeneration).toBe(true);
+    expect(result.report.reportFrom?.toISOString()).toBe(
+      "2026-07-01T00:00:00.000Z",
+    );
+    expect(result.report.reportTo?.toISOString()).toBe(
+      "2026-08-01T00:00:00.000Z",
+    );
   });
 
   it("filters by kind, channel, and name", async () => {
@@ -524,13 +545,34 @@ describeIfDb("Klaviyo campaign ledger on PostgreSQL", () => {
     expect((await loadLedgerRows({ scope, window, search: "%" })).rows).toEqual([]);
   });
 
-  it("reports empty metadata when no generation exists for the window", async () => {
+  it("reports the newest current generation even when its window differs from the range", async () => {
+    await seedLedgerWorld();
+    // The nightly only ever produces last-30 windows; a generation covering
+    // a month before the query window (07-01..08-01) is still the newest
+    // current one and must not be ignored just because its window differs.
+    await seedGeneration(
+      "campaign",
+      "gen-campaign",
+      "2026-07-02T00:00:00Z",
+      "source-run-a",
+      { from: "2026-06-01T00:00:00Z", to: "2026-07-01T00:00:00Z" },
+    );
+    const { report } = await loadLedgerRows({ scope, window });
+    expect(report.hasCampaignGeneration).toBe(true);
+    expect(report.hasFlowGeneration).toBe(false);
+    expect(report.reportFrom?.toISOString()).toBe("2026-06-01T00:00:00.000Z");
+    expect(report.reportTo?.toISOString()).toBe("2026-07-01T00:00:00.000Z");
+  });
+
+  it("reports all-null metadata when there is no current generation at all", async () => {
     await seedLedgerWorld();
     const { report } = await loadLedgerRows({ scope, window });
     expect(report).toEqual({
       asOf: null,
       hasCampaignGeneration: false,
       hasFlowGeneration: false,
+      reportFrom: null,
+      reportTo: null,
     });
   });
 

@@ -34,7 +34,7 @@ function rateNote(numerator: number | null, rate: number | null): string | null 
   return numerator == null ? null : formatPercent(rate);
 }
 
-export function LedgerDetailContent({ detail, onViewOrders }: { detail: LedgerDetailData; onViewOrders: () => void }) {
+export function LedgerDetailContent({ detail, onViewOrders }: { detail: LedgerDetailData; onViewOrders?: () => void }) {
   const { object, klaviyo, rates, ours, reconciliation } = detail;
   const sent = formatSentDay(object.sentAt);
   const isFlow = object.objectType === "flow";
@@ -85,9 +85,11 @@ export function LedgerDetailContent({ detail, onViewOrders }: { detail: LedgerDe
 
       <Block title={detail.ordersByDay.mode === "offset" ? copy.sheet.ordersByDayOffset : copy.sheet.ordersByDayCalendar}>
         <LedgerDayBars ordersByDay={detail.ordersByDay} />
-        <Button variant="link" size="sm" className="h-auto p-0 text-[11.5px]" onClick={onViewOrders}>
-          {copy.sheet.viewOrders}
-        </Button>
+        {onViewOrders ? (
+          <Button variant="link" size="sm" className="h-auto p-0 text-[11.5px]" onClick={onViewOrders}>
+            {copy.sheet.viewOrders}
+          </Button>
+        ) : null}
       </Block>
 
       {detail.topProducts.length > 0 ? (

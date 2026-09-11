@@ -47,6 +47,12 @@ function asOfLabel(value: string | Date | null): string | null {
   return typeof value === "string" ? value : value.toISOString();
 }
 
+/** The report window's UTC calendar day, `YYYY-MM-DD`. */
+function reportDay(value: string | Date | null): string | null {
+  const iso = asOfLabel(value);
+  return iso === null ? null : iso.slice(0, 10);
+}
+
 export function LedgerTable(props: {
   data: LedgerListData | null;
   error: boolean;
@@ -60,7 +66,7 @@ export function LedgerTable(props: {
   onToggleExpand: (objectId: string) => void;
   renderMessageRows: (row: LedgerRowData) => ReactNode;
   onOpenSource: (objectId: string) => void;
-  onRefresh: () => void;
+  onRefresh?: () => void;
   onRetry: () => void;
   onClearFilters: () => void;
 }) {
@@ -74,6 +80,8 @@ export function LedgerTable(props: {
     !report.hasCampaignGeneration &&
     !report.hasFlowGeneration;
   const asOf = asOfLabel(report?.asOf ?? null);
+  const reportFrom = reportDay(report?.reportFrom ?? null);
+  const reportTo = reportDay(report?.reportTo ?? null);
 
   return (
     <div className="space-y-2">
@@ -85,15 +93,20 @@ export function LedgerTable(props: {
             props.range.dateTo,
           )}
           {asOf ? ` · ${copy.asOf(asOf)}` : ""}
+          {reportFrom && reportTo
+            ? ` · ${copy.reportWindow(reportFrom, reportTo)}`
+            : ""}
         </p>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={props.busy}
-          onClick={props.onRefresh}
-        >
-          {copy.refresh}
-        </Button>
+        {props.onRefresh ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={props.busy}
+            onClick={props.onRefresh}
+          >
+            {copy.refresh}
+          </Button>
+        ) : null}
       </div>
       {noReport ? (
         <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
