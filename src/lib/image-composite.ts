@@ -392,11 +392,10 @@ export async function pasteLogo(input: {
   const fitted = fitBox({ left: 0, top: 0, width: patchMeta.width, height: patchMeta.height }, to);
   const box = capWidth(fitted, to, Math.round(input.sourceWidth * LOGO_SCALE_CAP * outputSize.width));
 
-  // sharp has no direct "blur the alpha channel only" call. Resize onto a
-  // padded transparent canvas (padding by three sigma, as contactShadow
-  // does) so a fully-opaque source patch has a transparent margin of its own
-  // to feather into, then split the padded composite into its alpha band and
-  // its colour, blur only the alpha, and rejoin.
+  // Resize onto a padded transparent canvas (padding by three sigma, as
+  // contactShadow does) so a fully-opaque source patch has a transparent
+  // margin of its own to feather into, then blur the whole padded composite
+  // in premultiplied space (see below).
   const sigma = Math.max(0.3, LOGO_FEATHER * box.width); // sharp's blur needs sigma >= 0.3
   const pad = Math.ceil(3 * sigma);
   const canvasWidth = box.width + 2 * pad;
@@ -412,9 +411,35 @@ export async function pasteLogo(input: {
     .composite([{ input: resized, left: pad, top: pad }])
     .png()
     .toBuffer();
-  const alpha = await sharp(padded).extractChannel("alpha").blur(sigma).png().toBuffer();
-  const rgb = await sharp(padded).removeAlpha().png().toBuffer();
-  const feathered = sharp(rgb).joinChannel(alpha);
+  // Blur in premultiplied space, then undo it. Blurring the alpha band alone
+  // leaves the padding's own RGB — black — under the ring the blur opens up,
+  // so a red mark on white used to sit inside a grey halo ((165,165,165) one
+  // pixel out at 400px width) instead of a soft edge. Premultiplied, a
+  // transparent pixel carries no colour weight at all, so the blurred ring is
+  // the mark's own colour at a falling alpha and the halo disappears.
+  const { data: paddedRaw, info: paddedInfo } = await sharp(padded)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const premultiplied = Buffer.alloc(paddedRaw.length);
+  for (let i = 0; i + 3 < paddedRaw.length; i += 4) {
+    const a = paddedRaw[i + 3];
+    premultiplied[i] = Math.round((paddedRaw[i] * a) / 255);
+    premultiplied[i + 1] = Math.round((paddedRaw[i + 1] * a) / 255);
+    premultiplied[i + 2] = Math.round((paddedRaw[i + 2] * a) / 255);
+    premultiplied[i + 3] = a;
+  }
+  const raw = { width: paddedInfo.width, height: paddedInfo.height, channels: 4 as const };
+  const blurred = await sharp(premultiplied, { raw }).blur(sigma).raw().toBuffer();
+  const unpremultiplied = Buffer.alloc(blurred.length);
+  for (let i = 0; i + 3 < blurred.length; i += 4) {
+    const a = blurred[i + 3];
+    for (let c = 0; c < 3; c += 1) {
+      unpremultiplied[i + c] = a === 0 ? 0 : Math.min(255, Math.round((blurred[i + c] * 255) / a));
+    }
+    unpremultiplied[i + 3] = a;
+  }
+  const feathered = sharp(unpremultiplied, { raw });
 
   // Crop the padded, feathered canvas back down to whatever part of it falls
   // on the output, the same clipping contactShadow uses for a box that hangs

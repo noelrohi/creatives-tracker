@@ -272,4 +272,29 @@ describe("pasteLogo", () => {
     expect(onDark.contrast).toBeGreaterThan(10);
     expect(onLight.contrast).toBeLessThan(1.5);
   });
+
+  it("feathers without a dark halo: the ring outside the mark is not darker than either side of the edge", async () => {
+    // The feather used to blur the alpha band alone over a black-padded
+    // canvas, which left a grey ring around every mark — (165,165,165) one
+    // pixel outside a red mark on white, at this size. A red mark on white
+    // shares a full red channel with its background, so any ring pixel whose
+    // red channel has fallen is carrying the padding's colour, not the edge.
+    const output = solid(400, 400, [255, 255, 255]);
+    const patch = solid(100, 100, [255, 0, 0]);
+    const { bytes, box } = await pasteLogo({
+      output,
+      patch,
+      region: { x: 0.1, y: 0.1, w: 0.8, h: 0.8 },
+      sourceWidth: 0.8,
+    });
+    const midY = box.top + Math.floor(box.height / 2);
+    for (const dx of [1, 2]) {
+      const ring = await pixel(bytes, box.left - dx, midY);
+      // Not darker than both the mark ([255,0,0]) and the background
+      // ([255,255,255]), channel by channel.
+      expect(ring[0]).toBeGreaterThanOrEqual(247);
+      expect(ring[1]).toBeGreaterThanOrEqual(0);
+      expect(ring[2]).toBeGreaterThanOrEqual(0);
+    }
+  });
 });
