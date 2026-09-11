@@ -26,7 +26,6 @@ export function LedgerSection(props: {
   onClearFilters: () => void;
   busy: boolean;
   onRefresh?: () => void;
-  refreshHint?: string;
 }) {
   const trpc = useTRPC();
   const { state } = props;
@@ -74,7 +73,6 @@ export function LedgerSection(props: {
       )}
       onOpenSource={props.onOpenSource}
       onRefresh={props.onRefresh}
-      refreshHint={props.refreshHint}
       onRetry={() => void list.refetch()}
       onClearFilters={props.onClearFilters}
     />

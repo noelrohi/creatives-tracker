@@ -170,7 +170,7 @@ describe("KlaviyoCampaignsPage", () => {
     expect(screen.getByText(/matches published/)).toBeVisible();
   });
 
-  it("gives members a read-only page with the refresh hint and still opens the sheet", async () => {
+  it("gives members a read-only page and still opens the sheet", async () => {
     queryState.detailFn = () =>
       Promise.resolve(
         detailFixture({
@@ -196,11 +196,6 @@ describe("KlaviyoCampaignsPage", () => {
     expect(
       screen.queryByRole("button", { name: "Refresh report", hidden: true }),
     ).toBeNull();
-    await waitFor(() =>
-      expect(
-        screen.getByText("Ask an admin to refresh the report."),
-      ).toBeVisible(),
-    );
     expect(
       await screen.findByRole("heading", { name: "July Sale" }),
     ).toBeVisible();
@@ -306,7 +301,6 @@ describe("KlaviyoCampaignsPage", () => {
     expect(
       screen.queryByRole("button", { name: "Refresh report" }),
     ).toBeNull();
-    expect(screen.queryByText("Ask an admin to refresh the report.")).toBeNull();
     expect(screen.queryByRole("link", { name: "Open lab" })).toBeNull();
   });
 

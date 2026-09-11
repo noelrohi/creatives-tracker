@@ -111,8 +111,8 @@ instead of the lab hook, so both callers can drive it.
 - `configured: false`: the empty state of §4; no ledger query is issued.
 - Ledger query error: the table's existing error row with Retry.
 - No report for the range: the existing "No report for this range yet" line;
-  the Refresh button beside it renders only for privileged roles, members see
-  "Ask an admin to refresh the report."
+  the Refresh button beside it renders only for privileged roles, members
+  simply see the line with no button.
 - Sheet, message rows, and search keep their existing states.
 
 ## 8. Testing

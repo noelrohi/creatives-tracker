@@ -42,11 +42,9 @@ export function KlaviyoCampaignsPage() {
   const page = useLedgerPageState();
   const { role, isPending: rolePending } = useActiveOrganizationRole();
   // The role arrives a tick after the page mounts. Treating "not yet known"
-  // as "member" would flash the member header — hint, no Refresh, no lab
-  // link — at an admin, so an unresolved role renders neither affordance
-  // nor its member-facing substitute.
+  // as "member" would flash the member header — no Refresh, no lab link — at
+  // an admin, so an unresolved role renders neither affordance.
   const canAct = !rolePending && isPrivilegedOrgRole(role);
-  const readOnly = !rolePending && !isPrivilegedOrgRole(role);
 
   const context = useQuery({
     ...trpc.klaviyo.ledgerContext.queryOptions(),
@@ -180,7 +178,6 @@ export function KlaviyoCampaignsPage() {
                 })
             : undefined
         }
-        refreshHint={readOnly ? copy.refreshHint : undefined}
       />
       <LedgerDetailSheet
         objectId={page.state.source}

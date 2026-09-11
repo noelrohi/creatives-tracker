@@ -61,7 +61,6 @@ export function LedgerTable(props: {
   renderMessageRows: (row: LedgerRowData) => ReactNode;
   onOpenSource: (objectId: string) => void;
   onRefresh?: () => void;
-  refreshHint?: string;
   onRetry: () => void;
   onClearFilters: () => void;
 }) {
@@ -96,8 +95,6 @@ export function LedgerTable(props: {
           >
             {copy.refresh}
           </Button>
-        ) : props.refreshHint && noReport ? (
-          <span className="text-xs text-muted-foreground">{props.refreshHint}</span>
         ) : null}
       </div>
       {noReport ? (
