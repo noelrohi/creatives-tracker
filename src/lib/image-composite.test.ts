@@ -1,7 +1,7 @@
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { encodePng } from "./image-mask";
-import { pastePatch, pasteSourceRegion } from "./image-composite";
+import { pasteLogo, pastePatch, pasteSourceRegion } from "./image-composite";
 
 function solid(
   width: number,
@@ -212,5 +212,64 @@ describe("pastePatch", () => {
     expect(await pixel(lit.bytes, 40, 30)).toEqual([20, 20, 20]); // transparent half: the room shows through
     const [r] = await pixel(lit.bytes, 20, 30);
     expect(r).toBeLessThan(200); // opaque half: darkened toward the room
+  });
+});
+
+describe("pasteLogo", () => {
+  it("keeps the mark's own colours: no cast toward the scene", async () => {
+    // A pure red mark pasted onto a deep blue canvas must stay red. The
+    // product path would drag it toward the blue; a brand mark may not move.
+    const output = solid(40, 40, [0, 0, 200]);
+    const patch = solid(10, 10, [255, 0, 0]);
+    const { bytes } = await pasteLogo({
+      output,
+      patch,
+      region: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 },
+      sourceWidth: 0.5,
+    });
+    const [r, g, b] = await pixel(bytes, 20, 20);
+    expect(r).toBeGreaterThan(240);
+    expect(g).toBeLessThan(15);
+    expect(b).toBeLessThan(15);
+  });
+
+  it("composites no contact shadow under the mark", async () => {
+    // The row just below the paste box stays the canvas colour; the product
+    // path would darken it with an ellipse.
+    const output = solid(40, 40, [255, 255, 255]);
+    const patch = solid(10, 10, [0, 0, 0]);
+    const { bytes, box } = await pasteLogo({
+      output,
+      patch,
+      region: { x: 0.25, y: 0.25, w: 0.25, h: 0.25 },
+      sourceWidth: 0.25,
+    });
+    const below = await pixel(bytes, box.left + Math.floor(box.width / 2), box.top + box.height + 2);
+    expect(below[0]).toBeGreaterThan(250);
+    expect(below[1]).toBeGreaterThan(250);
+    expect(below[2]).toBeGreaterThan(250);
+  });
+
+  it("caps the paste at 1.25x the mark's source width", async () => {
+    // A generous drawn box must not inflate the mark.
+    const output = solid(100, 100, [255, 255, 255]);
+    const patch = solid(10, 10, [0, 0, 0]);
+    const { box } = await pasteLogo({
+      output,
+      patch,
+      region: { x: 0.1, y: 0.1, w: 0.8, h: 0.8 },
+      sourceWidth: 0.2,
+    });
+    expect(box.width).toBeLessThanOrEqual(Math.round(0.2 * 1.25 * 100));
+  });
+
+  it("reports the contrast between the mark and the background it landed on", async () => {
+    const dark = solid(40, 40, [0, 0, 0]);
+    const light = solid(40, 40, [255, 255, 255]);
+    const white = solid(10, 10, [255, 255, 255]);
+    const onDark = await pasteLogo({ output: dark, patch: white, region: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 }, sourceWidth: 0.5 });
+    const onLight = await pasteLogo({ output: light, patch: white, region: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 }, sourceWidth: 0.5 });
+    expect(onDark.contrast).toBeGreaterThan(10);
+    expect(onLight.contrast).toBeLessThan(1.5);
   });
 });
