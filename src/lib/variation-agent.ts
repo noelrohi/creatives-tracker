@@ -17,6 +17,7 @@ import {
   type VariationAttempt,
   type VariationAxis,
   type VariationBrief,
+  type VariationKeep,
   type VariationPlan,
   type VariationReview,
   type VariationTransplant,
@@ -95,7 +96,12 @@ export type VariationRunDeps = {
     referenceImageUrls: string[];
     format: StudioFormat;
     attempt: number;
-  }) => Promise<{ imageUrl: string; transplant?: VariationTransplant | null }>;
+  }) => Promise<{
+    imageUrl: string;
+    transplant?: VariationTransplant | null;
+    /** The brand marks pasted into the attempt after it was produced. */
+    keeps?: VariationKeep[] | null;
+  }>;
   reviewImage: (input: {
     imageUrl: string;
     prompt: string;
@@ -594,7 +600,7 @@ export function createVariationRun(
     }
 
     deps.onStep(`${mode === "edit" ? "editing source" : "generating image"} (attempt ${attempt})`);
-    let produced: { imageUrl: string; transplant?: VariationTransplant | null };
+    let produced: Awaited<ReturnType<VariationRunDeps["produceImage"]>>;
     try {
       produced = await deps.produceImage({
         prompt: raw.prompt,
@@ -616,10 +622,11 @@ export function createVariationRun(
     }
     const imageUrl = produced.imageUrl;
     const transplant = produced.transplant ?? null;
+    const keeps = produced.keeps ?? null;
 
     deps.onStep(`reviewing attempt ${attempt}`);
     const review = await deps.reviewImage({ imageUrl, prompt: raw.prompt, mode, keepRegion, transplant, brief: state.brief });
-    state.attempts.push({ attempt, imageUrl, prompt: raw.prompt, mode, keepRegion, transplant, review });
+    state.attempts.push({ attempt, imageUrl, prompt: raw.prompt, mode, keepRegion, transplant, keeps, review });
     return {
       attempt,
       imageUrl,

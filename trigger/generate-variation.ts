@@ -11,7 +11,14 @@ import { and, desc, eq, gte, isNotNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { openai } from "@/lib/ai";
-import { pastePatch, pasteSourceRegion, pixelBox } from "@/lib/image-composite";
+import {
+  pasteLogo,
+  pastePatch,
+  pasteSourceRegion,
+  patchMean,
+  pixelBox,
+  ringLuminance,
+} from "@/lib/image-composite";
 import { readImageDimensions, studioFormatForDimensions } from "@/lib/image-dimensions";
 import { buildKeepMask, clampRegion, expandRegion, type ProductRegion } from "@/lib/image-mask";
 import { matteProduct, type MatteResult } from "@/lib/image-matte";
@@ -20,6 +27,11 @@ import {
   buildLogoMatchPrompt,
   logoMatchSchema,
 } from "@/lib/logo-match";
+import {
+  chooseLogoPlacement,
+  contrastRatio,
+  relativeLuminance,
+} from "@/lib/logo-placement";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 import {
   buildProductMatchPrompt,
@@ -63,6 +75,7 @@ import {
 import type {
   EarlierVariation,
   VariationAttempt,
+  VariationKeep,
   VariationPlan,
   VariationTransplant,
 } from "@/lib/variation-agent-types";
@@ -140,6 +153,12 @@ const productLocationSchema = z.object({
 const LOGO_MIN_AREA = 0.0005;
 /** A "mark" filling a quarter of the canvas is the ad's artwork, not a logo. */
 const LOGO_MAX_AREA = 0.25;
+/**
+ * Relative luminance above which a chosen mark is reported as the light
+ * variant. Only a label on the keep — the choice itself is made on measured
+ * contrast — so the midpoint of the WCAG scale is enough to name it.
+ */
+const LIGHT_MARK_LUMINANCE = 0.5;
 
 const markLocationSchema = z.object({
   logo: locatorBoxSchema
@@ -1268,6 +1287,100 @@ export const generateVariationTask = task({
               });
             }
           }
+          // The prompt told the model to leave the brand mark out, so the
+          // advertiser's own pixels are pasted in after the product: a mark it
+          // drew anyway has to be covered, or the ad ships two logos. Every
+          // failure here is recoverable the way the transplant's is — the
+          // unpasted bytes stay and no keep is recorded — except a chooser
+          // with nowhere legal to put the mark, which leaves `keeps` empty on
+          // purpose so the review can fail the attempt instead of shipping a
+          // variation with no branding.
+          const keeps: VariationKeep[] = [];
+          if (mode === "generate" && logoPatch && sourceMark) {
+            try {
+              onStep(`locating the brand mark in attempt ${attempt}`);
+              const located = await locateMarks(produced, brand?.brandName ?? null, "output");
+              const placement = chooseLogoPlacement({
+                drawn: located?.logo ?? null,
+                sourceBox: sourceMark,
+                copyRegions: located?.copy ?? [],
+                format,
+              });
+              if (!placement) {
+                logger.warn("No legal placement for the brand mark; leaving the attempt unpasted", {
+                  attempt,
+                  sourceMark,
+                  copy: located?.copy.length ?? 0,
+                });
+              } else {
+                // A source cut has no variants to choose between, so the patch
+                // itself is the only candidate; each asset variant carries its
+                // own provenance, which is what the keep records.
+                const candidates: Array<{ imageId: string | null; bytes: Uint8Array; from: ProductRegion }> =
+                  logoPatch.variants.length > 0
+                    ? logoPatch.variants
+                    : [{ imageId: logoPatch.assetImageId, bytes: logoPatch.bytes, from: logoPatch.from }];
+                let chosen = candidates[0];
+                let variant: "light" | "dark" | "only" = "only";
+                if (candidates.length > 1) {
+                  // The background behind the box is the same whichever mark
+                  // lands in it, so it is measured once; what differs is each
+                  // candidate's own colour, and the legible one is the one
+                  // furthest from that background.
+                  const background = await ringLuminance(produced, placement.box);
+                  let best = -Infinity;
+                  for (const candidate of candidates) {
+                    const mean = await patchMean(sharp(candidate.bytes, { failOn: "none" }));
+                    // An all-transparent candidate has no colour to compare;
+                    // it is skipped rather than allowed to win on a default.
+                    if (!mean) continue;
+                    const ratio = contrastRatio(mean, background);
+                    if (ratio > best) {
+                      best = ratio;
+                      chosen = candidate;
+                      variant =
+                        relativeLuminance(mean) >= LIGHT_MARK_LUMINANCE ? "light" : "dark";
+                    }
+                  }
+                  logger.info("Chose a brand mark variant", {
+                    attempt,
+                    imageId: chosen.imageId,
+                    variant,
+                    ratio: best,
+                    candidates: candidates.length,
+                  });
+                }
+                const pastedMark = await pasteLogo({
+                  output: produced,
+                  patch: chosen.bytes,
+                  region: placement.box,
+                  // The mark's width in the source, never the variant's own:
+                  // a variant's `from` is provenance, not a scale.
+                  sourceWidth: sourceMark.w,
+                });
+                produced = pastedMark.bytes;
+                keeps.push({
+                  kind: "logo",
+                  patchSource: logoPatch.patchSource,
+                  assetImageId: chosen.imageId,
+                  from: chosen.from,
+                  to: placement.box,
+                  placement: placement.placement,
+                  contrast: { ratio: pastedMark.contrast, variant },
+                });
+                logger.info("Pasted brand mark", {
+                  attempt,
+                  ...keeps[0],
+                  box: pastedMark.box,
+                });
+              }
+            } catch (error) {
+              logger.warn("Logo paste failed; keeping the unpasted output", {
+                attempt,
+                error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+              });
+            }
+          }
           const stored = await putStudioObject(
             `${env}/create/${ctx.run.id}-${ctx.attempt.number}-${attempt}.png`,
             produced,
@@ -1275,7 +1388,7 @@ export const generateVariationTask = task({
           );
           imageBytes.set(stored.url, produced);
           if (pasted) pastedUrls.add(stored.url);
-          return { imageUrl: stored.url, transplant };
+          return { imageUrl: stored.url, transplant, keeps };
         },
         reviewImage: async ({ imageUrl, prompt, mode, keepRegion, transplant, brief }) => {
           // The same gate the transplant block runs under. When it holds and

@@ -169,8 +169,10 @@ async function ringMean(
  * Mean RGB of the patch's opaque pixels (alpha > 200); null when the patch is
  * all transparent. A greyscale or palette patch decodes to one or two bands, so
  * the pipeline is normalized to sRGB with alpha before the raw pixels are read.
+ * Exported because the logo variant chooser weighs each candidate's own mean
+ * against the background it would sit on, before any of them is pasted.
  */
-async function patchMean(patch: sharp.Sharp): Promise<[number, number, number] | null> {
+export async function patchMean(patch: sharp.Sharp): Promise<[number, number, number] | null> {
   const { data, info } = await patch
     .toColourspace("srgb")
     .ensureAlpha()
