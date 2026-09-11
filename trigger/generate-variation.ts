@@ -12,6 +12,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { openai } from "@/lib/ai";
 import {
+  normalizeBox,
   pasteLogo,
   pastePatch,
   pasteSourceRegion,
@@ -1302,6 +1303,13 @@ export const generateVariationTask = task({
           if (mode === "generate" && logoPatch && sourceMark) {
             try {
               onStep(`locating the brand mark in attempt ${attempt}`);
+              // The output's own pixel size: `pasteLogo` reports the box it
+              // fitted the mark into in pixels, and the keep records normalized
+              // boxes. Read from the same oriented metadata the paste uses.
+              const outputSize = (await sharp(produced).metadata()).autoOrient;
+              if (!outputSize?.width || !outputSize?.height) {
+                throw new Error("Could not read the attempt's dimensions");
+              }
               const located = await locateMarks(produced, brand?.brandName ?? null, "output");
               const placement = chooseLogoPlacement({
                 drawn: located?.logo ?? null,
@@ -1367,7 +1375,11 @@ export const generateVariationTask = task({
                   patchSource: logoPatch.patchSource,
                   assetImageId: chosen.imageId,
                   from: chosen.from,
-                  to: placement.box,
+                  // The box the mark landed in, not the slot it was offered:
+                  // the paste preserves the patch's aspect, so a stacked mark
+                  // in a wide slot fills a fraction of it, and the card and any
+                  // later audit read this box as the mark's real footprint.
+                  to: normalizeBox(pastedMark.box, outputSize.width, outputSize.height),
                   placement: placement.placement,
                   contrast: { ratio: pastedMark.contrast, variant },
                 });

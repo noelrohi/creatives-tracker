@@ -17,6 +17,16 @@ export function pixelBox(region: ProductRegion, width: number, height: number): 
   return { left, top, width: right - left, height: bottom - top };
 }
 
+/**
+ * The inverse of `pixelBox`: the box a paste actually landed in, back in
+ * normalized coordinates. `fitBox` preserves aspect, so the box a caller asked
+ * for and the box it got differ whenever the patch and the slot differ in
+ * shape, and it is the latter that a record of where the mark landed means.
+ */
+export function normalizeBox(box: PasteBox, width: number, height: number): ProductRegion {
+  return { x: box.left / width, y: box.top / height, w: box.width / width, h: box.height / height };
+}
+
 export type PasteAlign = "center" | "bottom";
 
 /**
