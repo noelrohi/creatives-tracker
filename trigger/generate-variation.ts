@@ -29,8 +29,11 @@ import {
   logoMatchSchema,
 } from "@/lib/logo-match";
 import {
-  chooseLogoPlacement,
   contrastRatio,
+  LOGO_CONTRAST_FLOOR,
+  LOGO_MIN_WIDTH,
+  LOGO_SCALE_CAP,
+  logoPlacementCandidates,
   relativeLuminance,
 } from "@/lib/logo-placement";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
@@ -1311,17 +1314,29 @@ export const generateVariationTask = task({
                 throw new Error("Could not read the attempt's dimensions");
               }
               const located = await locateMarks(produced, brand?.brandName ?? null, "output");
-              const placement = chooseLogoPlacement({
+              const placements = logoPlacementCandidates({
                 drawn: located?.logo ?? null,
                 sourceBox: sourceMark,
                 copyRegions: located?.copy ?? [],
                 format,
               });
-              if (!placement) {
+              // The paste caps the mark at 1.25x the width it had in the
+              // source, so a mark that was tiny there can never reach the
+              // legibility floor however it is placed: walking the candidates
+              // would spend a paste each to learn the same thing.
+              const reachable = LOGO_SCALE_CAP * sourceMark.w >= LOGO_MIN_WIDTH;
+              if (placements.length === 0) {
                 logger.warn("No legal placement for the brand mark; leaving the attempt unpasted", {
                   attempt,
                   sourceMark,
                   copy: located?.copy.length ?? 0,
+                });
+              } else if (!reachable) {
+                logger.warn("The mark cannot reach the width floor at any placement; leaving the attempt unpasted", {
+                  attempt,
+                  sourceWidth: sourceMark.w,
+                  cappedWidth: LOGO_SCALE_CAP * sourceMark.w,
+                  minWidth: LOGO_MIN_WIDTH,
                 });
               } else {
                 // A source cut has no variants to choose between, so the patch
@@ -1331,63 +1346,100 @@ export const generateVariationTask = task({
                   logoPatch.variants.length > 0
                     ? logoPatch.variants
                     : [{ imageId: logoPatch.assetImageId, bytes: logoPatch.bytes, from: logoPatch.from }];
-                let chosen = candidates[0];
-                let variant: "light" | "dark" | "only" = "only";
-                if (candidates.length > 1) {
-                  // The background behind the box is the same whichever mark
-                  // lands in it, so it is measured once; what differs is each
-                  // candidate's own colour, and the legible one is the one
-                  // furthest from that background.
-                  const background = await ringLuminance(produced, placement.box);
-                  let best = -Infinity;
-                  for (const candidate of candidates) {
-                    const mean = await patchMean(sharp(candidate.bytes, { failOn: "none" }));
-                    // An all-transparent candidate has no colour to compare;
-                    // it is skipped rather than allowed to win on a default.
-                    if (!mean) continue;
-                    const ratio = contrastRatio(mean, background);
-                    if (ratio > best) {
-                      best = ratio;
-                      chosen = candidate;
-                      variant =
-                        relativeLuminance(mean) >= LIGHT_MARK_LUMINANCE ? "light" : "dark";
+                // Every candidate placement is measured against the same bytes
+                // — the attempt as it stood before any mark was pasted — so a
+                // rejected try leaves nothing behind for the next one to land
+                // on top of.
+                const beforeLogo = produced;
+                const rejected: Array<Record<string, unknown>> = [];
+                for (const placement of placements) {
+                  let chosen = candidates[0];
+                  let variant: "light" | "dark" | "only" = "only";
+                  if (candidates.length > 1) {
+                    // The background behind the box is the same whichever mark
+                    // lands in it, so it is measured once per placement; what
+                    // differs is each candidate's own colour, and the legible
+                    // one is the one furthest from that background.
+                    const background = await ringLuminance(beforeLogo, placement.box);
+                    let best = -Infinity;
+                    for (const candidate of candidates) {
+                      const mean = await patchMean(sharp(candidate.bytes, { failOn: "none" }));
+                      // An all-transparent candidate has no colour to compare;
+                      // it is skipped rather than allowed to win on a default.
+                      if (!mean) continue;
+                      const ratio = contrastRatio(mean, background);
+                      if (ratio > best) {
+                        best = ratio;
+                        chosen = candidate;
+                        variant =
+                          relativeLuminance(mean) >= LIGHT_MARK_LUMINANCE ? "light" : "dark";
+                      }
                     }
+                    logger.info("Chose a brand mark variant", {
+                      attempt,
+                      placement: placement.placement,
+                      imageId: chosen.imageId,
+                      variant,
+                      ratio: best,
+                      candidates: candidates.length,
+                    });
                   }
-                  logger.info("Chose a brand mark variant", {
+                  const pastedMark = await pasteLogo({
+                    output: beforeLogo,
+                    patch: chosen.bytes,
+                    region: placement.box,
+                    // The mark's width in the source, never the variant's own:
+                    // a variant's `from` is provenance, not a scale.
+                    sourceWidth: sourceMark.w,
+                  });
+                  // Spec §7's two measured thresholds. A mark that fails either
+                  // is illegible at feed size, so the next placement is tried
+                  // rather than shipped; if none clears, `keeps` stays empty and
+                  // the review's forced-fail clause fails the attempt.
+                  const width = pastedMark.box.width / outputSize.width;
+                  if (pastedMark.contrast < LOGO_CONTRAST_FLOOR || width < LOGO_MIN_WIDTH) {
+                    rejected.push({
+                      placement: placement.placement,
+                      box: placement.box,
+                      contrast: pastedMark.contrast,
+                      width,
+                      failed: [
+                        pastedMark.contrast < LOGO_CONTRAST_FLOOR ? "contrast" : null,
+                        width < LOGO_MIN_WIDTH ? "width" : null,
+                      ].filter(Boolean),
+                    });
+                    continue;
+                  }
+                  produced = pastedMark.bytes;
+                  keeps.push({
+                    kind: "logo",
+                    patchSource: logoPatch.patchSource,
+                    assetImageId: chosen.imageId,
+                    from: chosen.from,
+                    // The box the mark landed in, not the slot it was offered:
+                    // the paste preserves the patch's aspect, so a stacked mark
+                    // in a wide slot fills a fraction of it, and the card and any
+                    // later audit read this box as the mark's real footprint.
+                    to: normalizeBox(pastedMark.box, outputSize.width, outputSize.height),
+                    placement: placement.placement,
+                    contrast: { ratio: pastedMark.contrast, variant },
+                  });
+                  logger.info("Pasted brand mark", {
                     attempt,
-                    imageId: chosen.imageId,
-                    variant,
-                    ratio: best,
-                    candidates: candidates.length,
+                    ...keeps[0],
+                    box: pastedMark.box,
+                    rejected: rejected.length,
+                  });
+                  break;
+                }
+                if (keeps.length === 0) {
+                  logger.warn("No placement met the contrast and width floors; leaving the attempt unpasted", {
+                    attempt,
+                    minWidth: LOGO_MIN_WIDTH,
+                    contrastFloor: LOGO_CONTRAST_FLOOR,
+                    rejected,
                   });
                 }
-                const pastedMark = await pasteLogo({
-                  output: produced,
-                  patch: chosen.bytes,
-                  region: placement.box,
-                  // The mark's width in the source, never the variant's own:
-                  // a variant's `from` is provenance, not a scale.
-                  sourceWidth: sourceMark.w,
-                });
-                produced = pastedMark.bytes;
-                keeps.push({
-                  kind: "logo",
-                  patchSource: logoPatch.patchSource,
-                  assetImageId: chosen.imageId,
-                  from: chosen.from,
-                  // The box the mark landed in, not the slot it was offered:
-                  // the paste preserves the patch's aspect, so a stacked mark
-                  // in a wide slot fills a fraction of it, and the card and any
-                  // later audit read this box as the mark's real footprint.
-                  to: normalizeBox(pastedMark.box, outputSize.width, outputSize.height),
-                  placement: placement.placement,
-                  contrast: { ratio: pastedMark.contrast, variant },
-                });
-                logger.info("Pasted brand mark", {
-                  attempt,
-                  ...keeps[0],
-                  box: pastedMark.box,
-                });
               }
             } catch (error) {
               logger.warn("Logo paste failed; keeping the unpasted output", {
@@ -1509,7 +1561,7 @@ export const generateVariationTask = task({
                 keeps.length > 0
                   ? "- The advertiser's logo was pasted into this image as real artwork, not drawn by the model. Fail when: the mark is distorted, stretched, cropped, or recoloured; a second logo the model drew is still visible anywhere, including an uncovered edge or sliver showing around the pasted mark; the mark overlaps the headline, CTA, or disclaimer; or the mark is too small or too low in contrast to read at feed size."
                   : logoKeepExpected
-                    ? "- The advertiser's logo was not pasted into this attempt (the paste step did not run: the composition left nowhere legal to put the mark), so the ad carries no real branding and any logo-like shape you can see is the model's own. Fail and say 'no place for the logo', so the next attempt leaves clear space for it."
+                    ? "- The advertiser's logo was not pasted into this attempt (the paste step did not run: the composition left nowhere legal and legible to put the mark), so the ad carries no real branding and any logo-like shape you can see is the model's own. Fail and say 'no place for the logo', so the next attempt leaves clear space for it."
                     : null,
                 "- Every line of ad copy (headline, subhead, badges, CTA, tile labels) is legible and matches the quoted copy in the prompt, with no garbled or invented copy. Incidental labels on props and packaging inside the scene (a shampoo bottle, a book spine) are fine and are not ad copy.",
                 `- No logos or brand marks other than ${brand?.brandName ?? "the advertiser's"}; no platform UI, no watermarks.`,

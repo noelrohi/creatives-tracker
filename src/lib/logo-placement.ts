@@ -95,27 +95,47 @@ function corners(size: { w: number; h: number }, format: StudioFormat, from: Pro
   return candidates.sort((a, b) => distance(a) - distance(b));
 }
 
+export type LogoPlacement = { box: ProductRegion; placement: KeepPlacement };
+
 /**
- * Picks where the real mark goes, in this order: over a mark the model drew
- * anyway (it must be covered, or the ad ships two logos); the source's own
+ * Every box the real mark may legally go in, best first: over a mark the model
+ * drew anyway (it must be covered, or the ad ships two logos); the source's own
  * position when the new layout still admits it, so the variation reads as a
- * sibling of its source; otherwise the nearest safe-area corner that clears
- * the copy. Null when nothing legal is left, which the caller treats as a
- * failed run rather than a bad paste.
+ * sibling of its source; then every safe-area corner that clears the copy,
+ * nearest the source's position first. Empty when nothing legal is left, which
+ * the caller treats as a failed run rather than a bad paste.
+ *
+ * A drawn mark is the only candidate when there is one: covering it is not a
+ * preference the measured thresholds may overrule, because leaving it uncovered
+ * ships two logos. The caller walks the rest until one clears §7's contrast and
+ * width floors.
  */
+export function logoPlacementCandidates(input: {
+  drawn: ProductRegion | null;
+  sourceBox: ProductRegion;
+  copyRegions: ProductRegion[];
+  format: StudioFormat;
+}): LogoPlacement[] {
+  if (input.drawn) return [{ box: clampRegion(input.drawn), placement: "drawn" }];
+  const size = { w: input.sourceBox.w, h: input.sourceBox.h };
+  const clear = (box: ProductRegion) =>
+    insideSafeArea(box, input.format) && !input.copyRegions.some((copy) => overlaps(box, copy));
+  const candidates: LogoPlacement[] = [];
+  if (clear(input.sourceBox)) {
+    candidates.push({ box: clampRegion(input.sourceBox), placement: "source_position" });
+  }
+  for (const anchor of corners(size, input.format, input.sourceBox)) {
+    if (clear(anchor)) candidates.push({ box: clampRegion(anchor), placement: "anchor" });
+  }
+  return candidates;
+}
+
+/** The single best placement, for callers that do not measure what lands. */
 export function chooseLogoPlacement(input: {
   drawn: ProductRegion | null;
   sourceBox: ProductRegion;
   copyRegions: ProductRegion[];
   format: StudioFormat;
-}): { box: ProductRegion; placement: KeepPlacement } | null {
-  if (input.drawn) return { box: clampRegion(input.drawn), placement: "drawn" };
-  const size = { w: input.sourceBox.w, h: input.sourceBox.h };
-  const clear = (box: ProductRegion) =>
-    insideSafeArea(box, input.format) && !input.copyRegions.some((copy) => overlaps(box, copy));
-  if (clear(input.sourceBox)) {
-    return { box: clampRegion(input.sourceBox), placement: "source_position" };
-  }
-  const anchor = corners(size, input.format, input.sourceBox).find(clear);
-  return anchor ? { box: clampRegion(anchor), placement: "anchor" } : null;
+}): LogoPlacement | null {
+  return logoPlacementCandidates(input)[0] ?? null;
 }

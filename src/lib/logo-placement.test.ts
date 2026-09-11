@@ -3,6 +3,9 @@ import {
   chooseLogoPlacement,
   contrastRatio,
   insideSafeArea,
+  LOGO_MIN_WIDTH,
+  LOGO_SCALE_CAP,
+  logoPlacementCandidates,
   overlaps,
   relativeLuminance,
   safeAreaFor,
@@ -134,5 +137,78 @@ describe("chooseLogoPlacement", () => {
       h: nearBottomRight.h,
     };
     expect(result).toEqual({ box: expectedBox, placement: "anchor" });
+  });
+});
+
+describe("logoPlacementCandidates", () => {
+  const sourceBox = box(0.06, 0.06, 0.2, 0.08);
+
+  it("offers the drawn mark alone: covering it is not negotiable against a threshold", () => {
+    // A mark the model drew must be covered or the ad ships two logos, so
+    // there is no second candidate to fall to when the measured floors reject
+    // it — the attempt fails instead.
+    const drawn = box(0.7, 0.8, 0.22, 0.09);
+    expect(logoPlacementCandidates({ drawn, sourceBox, copyRegions: [], format: "square" })).toEqual([
+      { box: drawn, placement: "drawn" },
+    ]);
+  });
+
+  it("orders the source position first, then every clearing corner nearest-first", () => {
+    const candidates = logoPlacementCandidates({
+      drawn: null,
+      sourceBox,
+      copyRegions: [box(0.1, 0.5, 0.8, 0.2)],
+      format: "square",
+    });
+    expect(candidates[0]).toEqual({ box: sourceBox, placement: "source_position" });
+    expect(candidates.slice(1).every((c) => c.placement === "anchor")).toBe(true);
+    // The band across the middle blocks no corner, so all four survive.
+    expect(candidates).toHaveLength(5);
+    const safe = safeAreaFor("square");
+    // Nearest first: the source sits top-left, so the top-left corner leads.
+    expect(candidates[1].box.x).toBeCloseTo(safe.left, 5);
+    expect(candidates[1].box.y).toBeCloseTo(safe.top, 5);
+    // The furthest corner is last.
+    expect(candidates.at(-1)!.box.x).toBeCloseTo(1 - safe.right - sourceBox.w, 5);
+    expect(candidates.at(-1)!.box.y).toBeCloseTo(1 - safe.bottom - sourceBox.h, 5);
+  });
+
+  it("drops the source position but keeps the corners when copy lands on it", () => {
+    const copy = box(0.04, 0.04, 0.5, 0.2);
+    const candidates = logoPlacementCandidates({ drawn: null, sourceBox, copyRegions: [copy], format: "square" });
+    expect(candidates.every((c) => c.placement === "anchor")).toBe(true);
+    expect(candidates.length).toBeGreaterThan(1);
+    // Every candidate is a real fallback: the walk that rejects one on
+    // contrast has somewhere legal left to try.
+    for (const candidate of candidates) {
+      expect(overlaps(candidate.box, copy)).toBe(false);
+      expect(insideSafeArea(candidate.box, "square")).toBe(true);
+    }
+  });
+
+  it("is empty when copy covers the whole safe area, and agrees with chooseLogoPlacement", () => {
+    const input = { drawn: null, sourceBox, copyRegions: [box(0, 0, 1, 1)], format: "square" as const };
+    expect(logoPlacementCandidates(input)).toEqual([]);
+    expect(chooseLogoPlacement(input)).toBeNull();
+  });
+
+  it("chooseLogoPlacement is the first candidate", () => {
+    const input = { drawn: null, sourceBox, copyRegions: [box(0.04, 0.04, 0.5, 0.2)], format: "square" as const };
+    expect(chooseLogoPlacement(input)).toEqual(logoPlacementCandidates(input)[0]);
+  });
+
+  it("a mark the scale cap holds under the width floor is unreachable at every candidate", () => {
+    // The short circuit the paste walk runs before trying anything: the paste
+    // never exceeds 1.25x the mark's source width, so a mark this narrow fails
+    // the width floor wherever it is put, and walking the list would spend a
+    // paste per candidate to learn it.
+    const narrow = box(0.06, 0.06, 0.03, 0.02);
+    expect(LOGO_SCALE_CAP * narrow.w).toBeLessThan(LOGO_MIN_WIDTH);
+    // It is not a placement problem: the list is full of legal boxes.
+    expect(
+      logoPlacementCandidates({ drawn: null, sourceBox: narrow, copyRegions: [], format: "square" }).length,
+    ).toBeGreaterThan(0);
+    // A mark at the floor's own width clears the cap check.
+    expect(LOGO_SCALE_CAP * LOGO_MIN_WIDTH).toBeGreaterThanOrEqual(LOGO_MIN_WIDTH);
   });
 });
