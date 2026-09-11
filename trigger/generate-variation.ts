@@ -657,7 +657,7 @@ async function assetMatchesSourceMark(input: {
 }
 
 /** What will stand in for the advertiser's mark, or why nothing can. */
-type LogoPatchResult =
+export type LogoPatchResult =
   | { kind: "none" }
   | { kind: "unavailable" }
   | {
@@ -676,8 +676,11 @@ type LogoPatchResult =
  * mark, else a cut of the source ad, and only when that source is the
  * advertiser's own creative — cutting a competitor's ad copies their mark, and
  * cutting an AI-generated one copies a pseudo-logo.
+ *
+ * Exported for `src/lib/logo-patch.test.ts`: spec §12 calls these four rules
+ * hard, and every input the ladder reads is already a parameter.
  */
-async function resolveLogoPatch(input: {
+export async function resolveLogoPatch(input: {
   sourceBytes: Uint8Array;
   sourceMark: ProductRegion | null;
   sourceKind: VariationSource["kind"];
