@@ -133,12 +133,35 @@ describe("LedgerTable", () => {
   });
 
   it("shows a hint instead of the Refresh button when the viewer cannot refresh", () => {
-    renderTable({
+    const { rerender } = renderTable({
       data: { rows: [row({ klaviyo: null })], report: { asOf: null, hasCampaignGeneration: false, hasFlowGeneration: false } },
       onRefresh: undefined,
       refreshHint: "Ask an admin to refresh the report.",
     });
     expect(screen.queryByRole("button", { name: "Refresh report" })).toBeNull();
     expect(screen.getByText("Ask an admin to refresh the report.")).toBeVisible();
+
+    rerender(
+      <LedgerTable
+        data={{ rows: [row({ klaviyo: null })], report: { asOf: null, hasCampaignGeneration: true, hasFlowGeneration: false } }}
+        error={false}
+        filtered={false}
+        busy={false}
+        accountTimezone="America/Los_Angeles"
+        range={{ dateFrom: "2026-07-01", dateTo: "2026-07-31" }}
+        sort={DEFAULT_LEDGER_SORT}
+        onToggleSort={noop}
+        expanded={new Set()}
+        onToggleExpand={noop}
+        renderMessageRows={() => null}
+        onOpenSource={noop}
+        onRefresh={undefined}
+        refreshHint="Ask an admin to refresh the report."
+        onRetry={noop}
+        onClearFilters={noop}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Refresh report" })).toBeNull();
+    expect(screen.queryByText("Ask an admin to refresh the report.")).toBeNull();
   });
 });

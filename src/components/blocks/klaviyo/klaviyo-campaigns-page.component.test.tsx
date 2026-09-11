@@ -5,6 +5,16 @@ import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KlaviyoCampaignsPage } from "./klaviyo-campaigns-page";
 
+const defaultListFn = (): Promise<unknown> =>
+  Promise.resolve({
+    rows: [],
+    report: {
+      asOf: null,
+      hasCampaignGeneration: false,
+      hasFlowGeneration: false,
+    },
+  });
+
 const queryState = vi.hoisted(() => ({
   contextFn: (): Promise<unknown> => Promise.resolve(null),
   listFn: (): Promise<unknown> =>
@@ -123,6 +133,7 @@ beforeEach(() => {
   queryState.role = "member";
   queryState.rolePending = false;
   queryState.contextFn = () => Promise.resolve(configured);
+  queryState.listFn = defaultListFn;
   nav.push.mockClear();
 });
 
@@ -198,6 +209,48 @@ describe("KlaviyoCampaignsPage", () => {
     ).toBeNull();
   });
 
+  it("shows members the ledger rows without a Refresh button", async () => {
+    queryState.listFn = () =>
+      Promise.resolve({
+        rows: [
+          {
+            objectId: "camp-1",
+            objectType: "campaign",
+            name: "July Sale",
+            channel: "email",
+            status: "sent",
+            sentAt: "2026-07-10T09:00:00.000Z",
+            messageCount: 1,
+            klaviyo: {
+              recipients: 1000,
+              delivered: 990,
+              uniqueOpens: 400,
+              uniqueClicks: 40,
+              bounced: 10,
+              unsubscribes: 2,
+              spamComplaints: 0,
+              conversions: 5,
+              conversionValue: "150.00",
+            },
+            rates: { delivered: 0.99, open: 0.4, click: 0.04, unsubscribe: 0.002 },
+            orderCount: 3,
+            revenue: "97.50",
+          },
+        ],
+        report: {
+          asOf: "2026-08-02T00:00:00.000Z",
+          hasCampaignGeneration: true,
+          hasFlowGeneration: true,
+        },
+      });
+    renderPage();
+    expect(await screen.findByText("July Sale")).toBeVisible();
+    expect(screen.getByText("$97.50")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Refresh report" }),
+    ).toBeNull();
+  });
+
   it("sends an admin from a campaign to its orders starting at the send day", async () => {
     queryState.role = "admin";
     queryState.detailFn = () =>
@@ -255,5 +308,12 @@ describe("KlaviyoCampaignsPage", () => {
     ).toBeNull();
     expect(screen.queryByText("Ask an admin to refresh the report.")).toBeNull();
     expect(screen.queryByRole("link", { name: "Open lab" })).toBeNull();
+  });
+
+  it("shows the error state with a Retry button when the context query fails", async () => {
+    queryState.contextFn = () => Promise.reject(new Error("boom"));
+    renderPage();
+    expect(await screen.findByText("Couldn’t load Klaviyo.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
   });
 });
