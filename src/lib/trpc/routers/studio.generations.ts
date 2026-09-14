@@ -15,6 +15,7 @@ import {
 } from "@/schema/studio";
 import { studioAdNameId, studioAdNameSlug } from "@/lib/studio-ad-name";
 import { getStudioBrandProfile } from "@/lib/studio-brand";
+import { isImageBlockedReason } from "@/lib/studio-failure";
 import { fetchStudioMarketTopVariants } from "@/lib/studio-market";
 import {
   fetchCreativePerformanceRows,
@@ -843,7 +844,7 @@ export const studioGenerationProcedures = {
         if (variant.status !== "failed") {
           throw new TRPCError({ code: "CONFLICT", message: "Only failed images can be retried" });
         }
-        if (input.withoutReferenceImage && !variant.moderationReason) {
+        if (input.withoutReferenceImage && !isImageBlockedReason(variant.moderationReason)) {
           throw new TRPCError({ code: "CONFLICT", message: "This image was not blocked by moderation" });
         }
         await tx

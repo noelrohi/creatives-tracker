@@ -44,6 +44,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AwarenessLevel } from "@/lib/awareness";
 import { isVideoFile } from "@/lib/studio-assets";
+import { isImageBlockedReason, LOGO_UNAVAILABLE_MESSAGE } from "@/lib/studio-failure";
 import { ELEMENT_LABELS } from "@/lib/studio-suggestions";
 import { useTRPC, type RouterOutputs } from "@/lib/trpc/client";
 import { cn } from "@/lib/utils";
@@ -111,7 +112,8 @@ function moderationMessage(reason: string | null) {
   if (reason === "logo") {
     return "Blocked: the reference contains protected branding";
   }
-  if (reason) return "Blocked by image moderation";
+  if (reason === "logo_unavailable") return LOGO_UNAVAILABLE_MESSAGE;
+  if (isImageBlockedReason(reason)) return "Blocked by image moderation";
   return "Generation failed";
 }
 
@@ -381,7 +383,7 @@ function LibraryPanel({
   pendingId?: string;
   onMark: (id: string, mark: "good" | "bad" | null) => void;
   onPublish: (id: string) => void;
-  onRetry: (id: string) => void;
+  onRetry: (id: string, withoutImage: boolean) => void;
 }) {
   return (
     <aside className="space-y-3">
@@ -413,11 +415,9 @@ function LibraryPanel({
                   <p className="text-xs font-medium text-destructive">
                     {moderationMessage(item.moderationReason)}
                   </p>
-                  {item.moderationReason ? (
-                    <Button size="sm" variant="outline" className="h-7 text-xs" disabled={pendingId === item.id} onClick={() => onRetry(item.id)}>
-                      <RefreshCw /> Retry without image
-                    </Button>
-                  ) : null}
+                  <Button size="sm" variant="outline" className="h-7 text-xs" disabled={pendingId === item.id} onClick={() => onRetry(item.id, isImageBlockedReason(item.moderationReason))}>
+                    <RefreshCw /> {isImageBlockedReason(item.moderationReason) ? "Retry without image" : "Retry"}
+                  </Button>
                 </div>
               );
             }
@@ -788,7 +788,7 @@ function StudioHomeContent() {
           }
           onMark={(variantId, nextMark) => mark.mutate({ variantId, mark: nextMark })}
           onPublish={(variantId) => publish.mutate({ variantId, published: true })}
-          onRetry={(variantId) => retry.mutate({ variantId, withoutReferenceImage: true })}
+          onRetry={(variantId, withoutReferenceImage) => retry.mutate({ variantId, withoutReferenceImage })}
         />
       </div>
 

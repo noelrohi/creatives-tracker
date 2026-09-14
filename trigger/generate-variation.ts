@@ -7,14 +7,35 @@ import {
 } from "ai";
 import { logger, metadata, task, tags } from "@trigger.dev/sdk";
 import sharp from "sharp";
-import { and, desc, eq, gte, isNotNull, ne, sql } from "drizzle-orm";
+import { and, desc, eq, exists, gte, isNotNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { openai } from "@/lib/ai";
-import { pastePatch, pasteSourceRegion, pixelBox } from "@/lib/image-composite";
+import {
+  normalizeBox,
+  pasteLogo,
+  pastePatch,
+  pasteSourceRegion,
+  patchMean,
+  pixelBox,
+  ringLuminance,
+} from "@/lib/image-composite";
 import { readImageDimensions, studioFormatForDimensions } from "@/lib/image-dimensions";
 import { buildKeepMask, clampRegion, expandRegion, type ProductRegion } from "@/lib/image-mask";
 import { matteProduct, type MatteResult } from "@/lib/image-matte";
+import {
+  assetIsSameLockup,
+  buildLogoMatchPrompt,
+  logoMatchSchema,
+} from "@/lib/logo-match";
+import {
+  contrastRatio,
+  LOGO_CONTRAST_FLOOR,
+  LOGO_MIN_WIDTH,
+  LOGO_SCALE_CAP,
+  logoPlacementCandidates,
+  relativeLuminance,
+} from "@/lib/logo-placement";
 import { basePerformanceLogFilter } from "@/lib/performance-log-sql";
 import {
   buildProductMatchPrompt,
@@ -28,6 +49,7 @@ import { putStudioObject, readStudioImage } from "@/lib/studio-storage";
 import {
   loadStudioContextLibrary,
   readStudioContextSection,
+  type StudioContextImage,
   type StudioContextLibrary,
 } from "@/lib/studio-context";
 import {
@@ -57,6 +79,7 @@ import {
 import type {
   EarlierVariation,
   VariationAttempt,
+  VariationKeep,
   VariationPlan,
   VariationTransplant,
 } from "@/lib/variation-agent-types";
@@ -126,6 +149,30 @@ const productLocationSchema = z.object({
     .describe(
       "On a generated scene with no product drawn: the empty area reserved for it, boxed as the product's footprint so its bottom edge rests on the surface; else null.",
     ),
+  confidence: z.number().min(0).max(1),
+  note: z.string(),
+});
+
+/** A mark smaller than this share of the canvas is locator noise, not a logo. */
+const LOGO_MIN_AREA = 0.0005;
+/** A "mark" filling a quarter of the canvas is the ad's artwork, not a logo. */
+const LOGO_MAX_AREA = 0.25;
+/**
+ * Relative luminance above which a chosen mark is reported as the light
+ * variant. Only a label on the keep — the choice itself is made on measured
+ * contrast — so the midpoint of the WCAG scale is enough to name it.
+ */
+const LIGHT_MARK_LUMINANCE = 0.5;
+
+const markLocationSchema = z.object({
+  logo: locatorBoxSchema
+    .nullable()
+    .describe("Tight box around the advertiser's own brand mark, or null when none is visible."),
+  // An array rather than a nullable box: an ad with no set text answers with
+  // an empty list, which strict structured outputs return happily.
+  copy: z
+    .array(locatorBoxSchema)
+    .describe("One box per block of set text, so a pasted mark can avoid them."),
   confidence: z.number().min(0).max(1),
   note: z.string(),
 });
@@ -283,6 +330,90 @@ async function locateProduct(
 }
 
 /**
+ * Finds the mark the ad's own advertiser branded it with, plus the blocks of
+ * set text a pasted mark must keep clear of. On the source, `logo` is the mark
+ * the run has to preserve — none means the ad simply had no logo and the run
+ * proceeds without a keep. On an output it is a mark the model drew after
+ * being told not to, which the paste then has to cover. Returns null when the
+ * call itself fails, which reads the same way as an ad with no mark and no
+ * copy: nothing located.
+ *
+ * `competitorSource` switches whose mark is asked for. A rebrand's source is
+ * somebody else's ad: asking for ours there names a mark that is not in the
+ * image, and every mark that is counts as third-party, so the honest answer is
+ * null and §9's inversion never gets a box to place the asset in. The output is
+ * ours by then, so the output call always asks for our own.
+ */
+async function locateMarks(
+  bytes: Uint8Array,
+  brandName: string | null,
+  label: "source" | "output",
+  competitorSource = false,
+): Promise<{ logo: ProductRegion | null; copy: ProductRegion[] } | null> {
+  try {
+    const result = await generateObject({
+      model: openai(LOCATOR_MODEL),
+      schema: markLocationSchema,
+      system: [
+        competitorSource
+          ? "Locate the brand mark of whoever advertises in this static ad — the brand whose product or service it sells, whichever brand that is."
+          : `Locate the advertiser's own brand mark${brandName ? ` (${brandName})` : ""} in this static ad.`,
+        "logo: one normalized bounding box (x, y, w, h in 0-1 from the top-left) covering the logo, wordmark, or brand badge as tightly as you can. Exclude taglines, CTAs, and any product packaging that merely carries the mark. Null when no brand mark is visible.",
+        "copy: normalized boxes for every block of set text — headline, subhead, CTA, offer, price, legal disclaimer — so a pasted mark can avoid them. Empty when the ad has no text.",
+        competitorSource
+          ? "Ignore retailer logos, platform badges, and any mark belonging to someone other than the brand running the ad: only that brand's own mark counts."
+          : "Ignore third-party marks, retailer logos, and platform badges: only the advertiser's own mark counts.",
+      ].join("\n"),
+      messages: [{ role: "user", content: [{ type: "image", image: bytes }] }],
+    });
+    const { logo, copy, confidence, note } = result.object;
+    const region = logo ? clampRegion(logo) : null;
+    const area = region ? region.w * region.h : 0;
+    // Too small is noise — a favicon-sized box is as likely a bullet or a
+    // badge — and a box covering a quarter of the canvas is the artwork the
+    // mark sits on rather than the mark.
+    const usable =
+      region !== null && confidence >= 0.4 && area >= LOGO_MIN_AREA && area <= LOGO_MAX_AREA;
+    // Copy boxes are only ever used to reject a placement, so a degenerate one
+    // is dropped rather than allowed to veto the whole canvas.
+    const copyRegions = copy
+      .map((box) => clampRegion(box))
+      .filter((box) => box.w > 0 && box.h > 0);
+    logger.info("Mark locator", {
+      label,
+      asked: competitorSource ? "the ad's own advertiser" : "ours",
+      found: Boolean(logo),
+      copy: copyRegions.length,
+      confidence,
+      area,
+      usable,
+      note,
+      // Only meaningful on a rejection; a call that returns a usable mark has
+      // no failed check to report.
+      reason: usable
+        ? null
+        : !region
+          ? "none"
+          : confidence < 0.4
+            ? "low_confidence"
+            : area < LOGO_MIN_AREA
+              ? "too_small"
+              : area > LOGO_MAX_AREA
+                ? "fills_canvas"
+                // No check left to fail: `usable` and the chain agree.
+                : null,
+    });
+    return { logo: usable ? region : null, copy: copyRegions };
+  } catch (error) {
+    logger.warn("Mark locator failed", {
+      label,
+      error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    });
+    return null;
+  }
+}
+
+/**
  * Cuts the product at `box` out of `bytes`, trying the margins narrowest
  * first. The box is tight, so the matte cuts an expanded one: the margin keeps
  * the product's anti-aliased edge out of the border ring the flood starts
@@ -294,7 +425,7 @@ async function locateProduct(
 async function matteWithMargins(
   bytes: Uint8Array,
   box: ProductRegion,
-  label: "source" | "asset",
+  label: "source" | "asset" | "source_mark" | "logo_asset",
 ): Promise<MatteResult> {
   let fallback: MatteResult | null = null;
   let matted: MatteResult | null = null;
@@ -421,9 +552,312 @@ async function matteFromProductPhoto(args: {
   }
 }
 
+/** A mark's pasteable pixels and the box they came from, normalized to their own image. */
+type LogoPatchBytes = {
+  bytes: Uint8Array;
+  from: ProductRegion;
+  /**
+   * True when the patch arrived as a transparent PNG and already carries the
+   * designer's own anti-aliased edge. False when a flood-fill matte cut it,
+   * which leaves the hard edge the paste's feather exists to soften. Spec §6:
+   * an asset that brings its own alpha "needs none added", and blurring it
+   * would soften the brand's own type.
+   */
+  ownAlpha: boolean;
+};
+/**
+ * One prepared logo asset, carrying the provenance the keep records: the
+ * contrast step may paste any of them, so each keeps its own id and box
+ * rather than borrowing the candidate's.
+ */
+type LogoVariant = { imageId: string } & LogoPatchBytes;
+
+/**
+ * A logo asset ready to paste. A transparent PNG is already a cut-out and only
+ * needs its padding trimmed off; anything else is a mark on a flat panel,
+ * which goes through the same flood-fill matte the product uses. Null when
+ * neither holds: a plain rectangle of the asset's own background is not a mark.
+ */
+async function prepareLogoAsset(bytes: Uint8Array): Promise<LogoPatchBytes | null> {
+  const meta = await sharp(bytes, { failOn: "none" }).metadata();
+  const size = meta.autoOrient;
+  if (meta.hasAlpha && size?.width && size?.height) {
+    // `hasAlpha` only says the channel exists. A fully opaque one is a flat
+    // background wearing an alpha channel, and pasting it stamps that
+    // background over the scene, so it still goes through the matte. A fully
+    // transparent one has no mark in it at all.
+    const stats = await sharp(bytes, { failOn: "none" }).stats();
+    const alpha = stats.channels.at(-1);
+    if (!stats.isOpaque && alpha && alpha.max > 0) {
+      // Logo exports carry generous transparent padding, and the paste fits
+      // the patch's own canvas into the target box: pasting the padding whole
+      // would render the mark at a fraction of the size it had in the source
+      // and shove it off the anchor wherever the padding is uneven. Trim to
+      // the alpha bounding box first, and report that box as `from`.
+      const trimmed = await sharp(bytes, { failOn: "none" })
+        .autoOrient()
+        .trim({ background: "#00000000", threshold: 0 })
+        .png()
+        .toBuffer({ resolveWithObject: true });
+      // sharp reports the trim as the offset that would put the content back,
+      // so it is negative or zero.
+      const left = Math.abs(trimmed.info.trimOffsetLeft ?? 0);
+      const top = Math.abs(trimmed.info.trimOffsetTop ?? 0);
+      return {
+        bytes: new Uint8Array(trimmed.data),
+        from: clampRegion({
+          x: left / size.width,
+          y: top / size.height,
+          w: trimmed.info.width / size.width,
+          h: trimmed.info.height / size.height,
+        }),
+        ownAlpha: true,
+      };
+    }
+  }
+  const cut = await matteWithMargins(bytes, { x: 0, y: 0, w: 1, h: 1 }, "logo_asset");
+  return cut.matted ? { bytes: cut.patch, from: cut.region, ownAlpha: false } : null;
+}
+
+/**
+ * One vision call: is the uploaded asset the same lockup as the mark the
+ * source ad carries? Answered per feature rather than by one similarity
+ * score, because a single number rates the wrong mark as close. Anything that
+ * goes wrong answers "no": standing an unverified mark in for the
+ * advertiser's own is the mistake this feature exists to prevent.
+ */
+async function assetMatchesSourceMark(input: {
+  sourceBytes: Uint8Array;
+  sourceMark: ProductRegion;
+  assetBytes: Uint8Array;
+  assetImageId: string;
+  brandName: string | null;
+}): Promise<boolean> {
+  try {
+    // A hair of margin, as the product match uses: the located box is as tight
+    // as the locator could draw it, and this crop is evidence rather than a
+    // cut, so clipping the mark's edge only costs accuracy.
+    const markCrop = await cropRegion(input.sourceBytes, expandRegion(input.sourceMark, 0.01));
+    const result = await generateObject({
+      model: openai(LOCATOR_MODEL),
+      schema: logoMatchSchema,
+      system: buildLogoMatchPrompt(input.brandName),
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "image", image: markCrop },
+            { type: "image", image: input.assetBytes },
+          ],
+        },
+      ],
+    });
+    const same = assetIsSameLockup(result.object);
+    logger.info("Logo lockup match", {
+      assetImageId: input.assetImageId,
+      ...result.object,
+      same,
+    });
+    return same;
+  } catch (error) {
+    logger.warn("Logo lockup check failed; treating the asset as a different mark", {
+      assetImageId: input.assetImageId,
+      error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    });
+    return false;
+  }
+}
+
+/** What will stand in for the advertiser's mark, or why nothing can. */
+export type LogoPatchResult =
+  | { kind: "none" }
+  | { kind: "unavailable" }
+  | {
+      kind: "patch";
+      bytes: Uint8Array;
+      from: ProductRegion;
+      /** See `LogoPatchBytes.ownAlpha`: whether the pixels bring their own edge. */
+      ownAlpha: boolean;
+      patchSource: "asset" | "source";
+      assetImageId: string | null;
+      /** Every usable logo asset, each with the provenance the keep records. */
+      variants: LogoVariant[];
+    };
+
+/**
+ * The pixels that will stand in for the advertiser's mark, highest fidelity
+ * first: the uploaded logo asset when it is the same lockup as the source's
+ * mark, else a cut of the source ad, and only when that source is the
+ * advertiser's own creative — cutting a competitor's ad copies their mark, and
+ * cutting an AI-generated one copies a pseudo-logo.
+ *
+ * Exported for `src/lib/logo-patch.test.ts`: spec §12 calls these four rules
+ * hard, and every input the ladder reads is already a parameter.
+ */
+export async function resolveLogoPatch(input: {
+  sourceBytes: Uint8Array;
+  sourceMark: ProductRegion | null;
+  sourceKind: VariationSource["kind"];
+  /** Spec §4's gate: only the advertiser's own creative may be cut. */
+  sourceIsOwnCreative: boolean;
+  rebrand: boolean;
+  brandName: string | null;
+  library: StudioContextLibrary;
+  fetchBytes: (url: string) => Promise<Uint8Array>;
+}): Promise<LogoPatchResult> {
+  const { sourceMark } = input;
+  // The source carried no mark, so there is nothing to preserve and the run
+  // proceeds normally. Adding a mark the original never had is a different
+  // change, on a different axis.
+  if (!sourceMark) return { kind: "none" };
+
+  // `pasteLogo` caps the pasted mark at `LOGO_SCALE_CAP` times the width it had
+  // in the source, so a mark this narrow can never clear §7's legibility floor
+  // at any placement. Every attempt would paste, measure, reject, and fail the
+  // review identically, at full image-model cost. The terminal state is the
+  // same failed run either way, so reach it here, before anything is drawn or
+  // even fetched.
+  if (LOGO_SCALE_CAP * sourceMark.w < LOGO_MIN_WIDTH) {
+    logger.warn("The source's mark is too narrow to paste back legibly; failing the variation", {
+      sourceWidth: sourceMark.w,
+      cappedWidth: LOGO_SCALE_CAP * sourceMark.w,
+      minWidth: LOGO_MIN_WIDTH,
+    });
+    return { kind: "unavailable" };
+  }
+
+  const assets = input.library.images
+    .filter((image) => image.kind === "logo")
+    // Newest first: the library lists every image by title, and the mark the
+    // brand uploaded most recently is its current one.
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  // One unreachable or unmattable asset must not lose the others, so a
+  // failure here is logged and skipped rather than thrown.
+  const prepare = async (asset: StudioContextImage): Promise<LogoVariant | null> => {
+    try {
+      const patch = await prepareLogoAsset(await input.fetchBytes(asset.imageUrl));
+      if (patch) return { imageId: asset.id, ...patch };
+      logger.warn("Logo asset would not cut out cleanly; skipping it", { imageId: asset.id });
+    } catch (error) {
+      logger.warn("Logo asset could not be read; skipping it", {
+        imageId: asset.id,
+        error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+      });
+    }
+    return null;
+  };
+  // Only the candidate is prepared up front: a run whose lockup check fails
+  // pays for one fetch and one matte instead of the whole library's.
+  let candidate: LogoVariant | null = null;
+  let candidateIndex = -1;
+  for (const [index, asset] of assets.entries()) {
+    candidate = await prepare(asset);
+    if (candidate) {
+      candidateIndex = index;
+      break;
+    }
+  }
+  if (candidate) {
+    // A rebrand replaces the competitor's mark with the advertiser's, so the
+    // two are meant to differ and the lockup check would reject the right
+    // answer. Every other run has to show the asset is the mark the source
+    // already carries before it stands in for it.
+    const useAsset =
+      input.rebrand ||
+      (await assetMatchesSourceMark({
+        sourceBytes: input.sourceBytes,
+        sourceMark,
+        assetBytes: candidate.bytes,
+        assetImageId: candidate.imageId,
+        brandName: input.brandName,
+      }));
+    if (useAsset) {
+      // Now that the mark is going to be pasted, the rest are worth preparing:
+      // the contrast step chooses between them, and each carries its own
+      // provenance so the keep records the variant that actually landed.
+      const variants: LogoVariant[] = [candidate];
+      for (const asset of assets.slice(candidateIndex + 1)) {
+        const ready = await prepare(asset);
+        if (ready) variants.push(ready);
+      }
+      logger.info("Brand mark resolved", {
+        patchSource: "asset",
+        assetImageId: candidate.imageId,
+        rebrand: input.rebrand,
+        variants: variants.length,
+      });
+      return {
+        kind: "patch",
+        bytes: candidate.bytes,
+        from: candidate.from,
+        ownAlpha: candidate.ownAlpha,
+        patchSource: "asset",
+        assetImageId: candidate.imageId,
+        variants,
+      };
+    }
+  }
+  // A rebrand must never carry the competitor's mark forward, and a source
+  // that is not the advertiser's own creative may itself carry a pseudo-logo:
+  // with no usable asset there is nothing legitimate left to paste.
+  if (input.rebrand || !input.sourceIsOwnCreative) {
+    logger.info("No usable logo asset, and cutting this source is not allowed", {
+      rebrand: input.rebrand,
+      sourceKind: input.sourceKind,
+      sourceIsOwnCreative: input.sourceIsOwnCreative,
+      assets: assets.length,
+      // With a candidate in hand the only way here is a lockup mismatch: a
+      // rebrand takes its asset unconditionally.
+      reason: candidate ? "lockup_mismatch" : "no_usable_asset",
+    });
+    return { kind: "unavailable" };
+  }
+  try {
+    const cut = await matteWithMargins(input.sourceBytes, sourceMark, "source_mark");
+    if (cut.matted) {
+      logger.info("Brand mark resolved", {
+        patchSource: "source",
+        assetImageId: null,
+        rebrand: false,
+        variants: 0,
+      });
+      return {
+        kind: "patch",
+        bytes: cut.patch,
+        from: cut.region,
+        // A flood-fill cut of the source ad leaves a hard alpha edge, so this
+        // one does want the feather.
+        ownAlpha: false,
+        patchSource: "source",
+        assetImageId: null,
+        variants: [],
+      };
+    }
+    logger.warn("The source's mark would not matte", { coverage: cut.coverage });
+  } catch (error) {
+    logger.warn("The source's mark could not be cut", {
+      error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    });
+  }
+  // An unmatted cut is a rectangle carrying the source's own background, which
+  // pastes a boxed mark over the new scene. A mark that will not cut cleanly
+  // is never pasted; the run fails instead.
+  return { kind: "unavailable" };
+}
+
+/**
+ * `ownCreative` is spec §4's "the advertiser's own creative", the only source
+ * the logo ladder may cut a mark out of. It is false for a creative the org
+ * marked as somebody else's, and for one a Studio variation was published to:
+ * a launched Studio ad comes back through the Meta sync as an `adCreatives`
+ * row whose mark the image model drew, and cutting that propagates a fake one.
+ * A null `ownership` stays true — it is the unset default on every row today,
+ * so reading it as "unknown, therefore refuse" would disable the rung for
+ * every org rather than tighten it.
+ */
 async function loadSource(
   payload: GenerateVariationPayload,
-): Promise<VariationSource> {
+): Promise<VariationSource & { ownCreative: boolean }> {
   if (payload.source.kind === "creative") {
     const [row] = await db
       .select({
@@ -431,6 +865,16 @@ async function loadSource(
         name: adCreatives.name,
         assetUrl: adCreatives.assetUrl,
         notes: adCreatives.notes,
+        ownership: adCreatives.ownership,
+        // A qualified subquery, not a raw one: `sql` renders a bare column
+        // name, and `studio_variant` has an `id` of its own for the comparison
+        // to bind to silently.
+        publishedFromStudio: exists(
+          db
+            .select({ one: sql`1` })
+            .from(studioVariants)
+            .where(eq(studioVariants.linkedCreativeId, adCreatives.id)),
+        ).mapWith(Boolean),
       })
       .from(adCreatives)
       .where(
@@ -473,6 +917,7 @@ async function loadSource(
     const linkClicks = toNumber(engagement?.linkClicks);
     return {
       kind: "creative",
+      ownCreative: row.ownership !== "theirs" && !row.publishedFromStudio,
       name: row.name,
       imageUrl: row.assetUrl,
       text: row.notes,
@@ -508,6 +953,7 @@ async function loadSource(
   }
   return {
     kind: "competitor_ad",
+    ownCreative: false,
     name: ad.title ?? "Competitor ad",
     imageUrl: ad.imageUrl,
     text: [ad.title, ad.bodyText, ad.ctaText].filter(Boolean).join("\n"),
@@ -668,6 +1114,99 @@ export const generateVariationTask = task({
         }
       }
 
+      // A rebrand keeps the competitor's layout on purpose: its mark is the
+      // one thing that must not survive, and the advertiser's own stands in
+      // for it. The review reads the same flag further down.
+      const rebrand = source.kind === "competitor_ad";
+      // The advertiser's mark, resolved before the agent starts for the same
+      // reason the product's cut is: the prompt only tells the model to leave
+      // the mark out when a real one is waiting to be pasted back, and a
+      // source whose mark cannot be honoured has to fail before an image call
+      // is spent on it.
+      // Gated on the dimensions for the same reason the product locator is: a
+      // source sharp cannot read a header for is one nothing downstream can
+      // crop, matte, or paste, and a run that used to produce an ad must not
+      // start failing on a mark it could never have honoured anyway.
+      let marks: { logo: ProductRegion | null; copy: ProductRegion[] } | null = null;
+      if (sourceDimensions) {
+        onStep("locating the brand mark in the source");
+        marks = await locateMarks(sourceBytes, brand?.brandName ?? null, "source", rebrand);
+        // `locateMarks` answers null only when the call itself failed; a call
+        // that ran and saw no mark answers `{ logo: null }`. Collapsing the two
+        // would turn a transient vision error into "this ad has no logo", and
+        // the run would then proceed with nothing to preserve and ship an ad
+        // whose mark the model redrew — the exact outcome this feature exists
+        // to prevent, arriving silently. One retry covers a flake; past that
+        // the error is real, and throwing hands it to the task's own retry
+        // policy instead of guessing.
+        if (!marks) {
+          logger.warn("Mark locator failed on the source; retrying once before failing the run");
+          marks = await locateMarks(sourceBytes, brand?.brandName ?? null, "source", rebrand);
+        }
+        if (!marks) {
+          throw new Error(
+            "Could not read the source for a brand mark, so there is no way to tell whether this variation must preserve one.",
+          );
+        }
+      }
+      const sourceMark = marks?.logo ?? null;
+      if (sourceMark) onStep("resolving the brand mark");
+      const logoResult = await resolveLogoPatch({
+        sourceBytes,
+        sourceMark,
+        sourceKind: source.kind,
+        sourceIsOwnCreative: source.ownCreative,
+        rebrand,
+        brandName: brand?.brandName ?? null,
+        library,
+        fetchBytes,
+      });
+      if (logoResult.kind === "unavailable") {
+        // A variation that should carry the advertiser's mark and cannot is a
+        // failed run, not a mark-less ad that ships. Nothing has been drawn
+        // yet, so this is the cheap place to stop.
+        logger.warn("No usable brand mark for this source; failing the variation", {
+          generationId: payload.generationId,
+          variantId: payload.variantId,
+          sourceKind: source.kind,
+          ownCreative: source.ownCreative,
+          rebrand,
+          logoAssets: library.images.filter((image) => image.kind === "logo").length,
+        });
+        await markVariant({
+          status: "failed",
+          attempts: [],
+          // The column is the row's failure reason, and it is the only one the
+          // card reads: without it the variation would show the generic
+          // "Variation failed" and hide why nothing was drawn.
+          moderationReason: "logo_unavailable",
+          plan: {
+            summary: "Failed: logo_unavailable",
+            kept: [],
+            changed: [],
+            rationale: "",
+            evidence: [],
+            inImageCopy: [],
+            finalAttempt: 0,
+            synthesized: true,
+            // No agent ran, so there is no brief to carry into the next run's
+            // EARLIER VARIATIONS.
+            funnel: null,
+            lane: null,
+            axis: null,
+            hypothesis: null,
+          },
+        });
+        const status = await finalizeStudioGenerationIfSettled(
+          payload.generationId,
+          payload.organizationId,
+        );
+        metadata.set("status", status ?? "generating");
+        onStep("failed (logo_unavailable)");
+        return { outcome: "failed" as const, reason: "logo_unavailable" as const };
+      }
+      const logoPatch = logoResult.kind === "patch" ? logoResult : null;
+
       // What this creative already tested, newest first, so the agent rotates
       // the axis instead of repeating one. Only creative sources carry a
       // sourceCreativeId, so a competitor ad simply has no history here.
@@ -723,6 +1262,7 @@ export const generateVariationTask = task({
         format,
         useSourceLayout: !payload.withoutSourceImage,
         productPatch: productPatch ? { source: productPatch.source } : null,
+        logoKeep: logoPatch ? { patchSource: logoPatch.patchSource } : null,
         earlierVariations,
       };
 
@@ -846,6 +1386,187 @@ export const generateVariationTask = task({
               });
             }
           }
+          // The prompt told the model to leave the brand mark out, so the
+          // advertiser's own pixels are pasted in after the product: a mark it
+          // drew anyway has to be covered, or the ad ships two logos. This runs
+          // in both modes because the LOGO KEEP block is written per run, not
+          // per attempt — an edit attempt is told not to draw a mark too, and
+          // the model regenerates the whole canvas outside the kept box, so
+          // skipping the paste here would ship an ad with no branding at all.
+          // Every failure here is recoverable the way the transplant's is — the
+          // unpasted bytes stay and no keep is recorded — except a chooser
+          // with nowhere legal to put the mark, which leaves `keeps` empty on
+          // purpose so the review can fail the attempt instead of shipping a
+          // variation with no branding.
+          const keeps: VariationKeep[] = [];
+          if (logoPatch && sourceMark) {
+            try {
+              onStep(`locating the brand mark in attempt ${attempt}`);
+              // The output's own pixel size: `pasteLogo` reports the box it
+              // fitted the mark into in pixels, and the keep records normalized
+              // boxes. Read from the same oriented metadata the paste uses.
+              const outputSize = (await sharp(produced).metadata()).autoOrient;
+              if (!outputSize?.width || !outputSize?.height) {
+                throw new Error("Could not read the attempt's dimensions");
+              }
+              const located = await locateMarks(produced, brand?.brandName ?? null, "output");
+              // Null is a failed call, not an empty canvas. Treating it as
+              // "no mark drawn and no copy anywhere" would leave a mark the
+              // model drew uncovered and let the real one land on the
+              // headline, because every collision check would pass against an
+              // empty list. Without that read there is no safe placement, so
+              // the attempt goes unpasted and the review fails it.
+              if (!located) {
+                throw new Error("Could not locate marks or copy in the attempt; placement would be unchecked");
+              }
+              // The product that was just pasted in is as protected as the set
+              // copy: a mark landing on it covers the one thing the transplant
+              // exists to preserve. The drawn rung returns before any collision
+              // check, so this reaches the source-position and anchor rungs
+              // only — deliberately, because an uncovered drawn mark is worse
+              // than an overlapping one.
+              const protectedRegions: ProductRegion[] = [];
+              if (mode === "edit" && pasted && keepRegion) protectedRegions.push(expandRegion(keepRegion));
+              if (transplant) protectedRegions.push(transplant.to);
+              const placements = logoPlacementCandidates({
+                drawn: located.logo,
+                sourceBox: sourceMark,
+                copyRegions: [...located.copy, ...protectedRegions],
+                format,
+              });
+              // The paste caps the mark at 1.25x the width it had in the
+              // source, so a mark that was tiny there can never reach the
+              // legibility floor however it is placed: walking the candidates
+              // would spend a paste each to learn the same thing.
+              const reachable = LOGO_SCALE_CAP * sourceMark.w >= LOGO_MIN_WIDTH;
+              if (placements.length === 0) {
+                logger.warn("No legal placement for the brand mark; leaving the attempt unpasted", {
+                  attempt,
+                  sourceMark,
+                  copy: located.copy.length,
+                  protected: protectedRegions.length,
+                });
+              } else if (!reachable) {
+                logger.warn("The mark cannot reach the width floor at any placement; leaving the attempt unpasted", {
+                  attempt,
+                  sourceWidth: sourceMark.w,
+                  cappedWidth: LOGO_SCALE_CAP * sourceMark.w,
+                  minWidth: LOGO_MIN_WIDTH,
+                });
+              } else {
+                // A source cut has no variants to choose between, so the patch
+                // itself is the only candidate; each asset variant carries its
+                // own provenance, which is what the keep records.
+                const candidates: Array<{ imageId: string | null; bytes: Uint8Array; from: ProductRegion; ownAlpha: boolean }> =
+                  logoPatch.variants.length > 0
+                    ? logoPatch.variants
+                    : [{ imageId: logoPatch.assetImageId, bytes: logoPatch.bytes, from: logoPatch.from, ownAlpha: logoPatch.ownAlpha }];
+                // Every candidate placement is measured against the same bytes
+                // — the attempt as it stood before any mark was pasted — so a
+                // rejected try leaves nothing behind for the next one to land
+                // on top of.
+                const beforeLogo = produced;
+                const rejected: Array<Record<string, unknown>> = [];
+                for (const placement of placements) {
+                  let chosen = candidates[0];
+                  let variant: "light" | "dark" | "only" = "only";
+                  if (candidates.length > 1) {
+                    // The background behind the box is the same whichever mark
+                    // lands in it, so it is measured once per placement; what
+                    // differs is each candidate's own colour, and the legible
+                    // one is the one furthest from that background.
+                    const background = await ringLuminance(beforeLogo, placement.box);
+                    let best = -Infinity;
+                    for (const candidate of candidates) {
+                      const mean = await patchMean(sharp(candidate.bytes, { failOn: "none" }));
+                      // An all-transparent candidate has no colour to compare;
+                      // it is skipped rather than allowed to win on a default.
+                      if (!mean) continue;
+                      const ratio = contrastRatio(mean, background);
+                      if (ratio > best) {
+                        best = ratio;
+                        chosen = candidate;
+                        variant =
+                          relativeLuminance(mean) >= LIGHT_MARK_LUMINANCE ? "light" : "dark";
+                      }
+                    }
+                    logger.info("Chose a brand mark variant", {
+                      attempt,
+                      placement: placement.placement,
+                      imageId: chosen.imageId,
+                      variant,
+                      ratio: best,
+                      candidates: candidates.length,
+                    });
+                  }
+                  const pastedMark = await pasteLogo({
+                    output: beforeLogo,
+                    patch: chosen.bytes,
+                    region: placement.box,
+                    // The mark's width in the source, never the variant's own:
+                    // a variant's `from` is provenance, not a scale.
+                    sourceWidth: sourceMark.w,
+                    // A transparent PNG already carries the designer's own
+                    // anti-aliased edge; feathering it again softens the
+                    // brand's own type for nothing.
+                    feather: !chosen.ownAlpha,
+                  });
+                  // Spec §7's two measured thresholds. A mark that fails either
+                  // is illegible at feed size, so the next placement is tried
+                  // rather than shipped; if none clears, `keeps` stays empty and
+                  // the review's forced-fail clause fails the attempt.
+                  const width = pastedMark.box.width / outputSize.width;
+                  if (pastedMark.contrast < LOGO_CONTRAST_FLOOR || width < LOGO_MIN_WIDTH) {
+                    rejected.push({
+                      placement: placement.placement,
+                      box: placement.box,
+                      contrast: pastedMark.contrast,
+                      width,
+                      failed: [
+                        pastedMark.contrast < LOGO_CONTRAST_FLOOR ? "contrast" : null,
+                        width < LOGO_MIN_WIDTH ? "width" : null,
+                      ].filter(Boolean),
+                    });
+                    continue;
+                  }
+                  produced = pastedMark.bytes;
+                  keeps.push({
+                    kind: "logo",
+                    patchSource: logoPatch.patchSource,
+                    assetImageId: chosen.imageId,
+                    from: chosen.from,
+                    // The box the mark landed in, not the slot it was offered:
+                    // the paste preserves the patch's aspect, so a stacked mark
+                    // in a wide slot fills a fraction of it, and the card and any
+                    // later audit read this box as the mark's real footprint.
+                    to: normalizeBox(pastedMark.box, outputSize.width, outputSize.height),
+                    placement: placement.placement,
+                    contrast: { ratio: pastedMark.contrast, variant },
+                  });
+                  logger.info("Pasted brand mark", {
+                    attempt,
+                    ...keeps[0],
+                    box: pastedMark.box,
+                    rejected: rejected.length,
+                  });
+                  break;
+                }
+                if (keeps.length === 0) {
+                  logger.warn("No placement met the contrast and width floors; leaving the attempt unpasted", {
+                    attempt,
+                    minWidth: LOGO_MIN_WIDTH,
+                    contrastFloor: LOGO_CONTRAST_FLOOR,
+                    rejected,
+                  });
+                }
+              }
+            } catch (error) {
+              logger.warn("Logo paste failed; keeping the unpasted output", {
+                attempt,
+                error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+              });
+            }
+          }
           const stored = await putStudioObject(
             `${env}/create/${ctx.run.id}-${ctx.attempt.number}-${attempt}.png`,
             produced,
@@ -853,9 +1574,9 @@ export const generateVariationTask = task({
           );
           imageBytes.set(stored.url, produced);
           if (pasted) pastedUrls.add(stored.url);
-          return { imageUrl: stored.url, transplant };
+          return { imageUrl: stored.url, transplant, keeps };
         },
-        reviewImage: async ({ imageUrl, prompt, mode, keepRegion, transplant, brief }) => {
+        reviewImage: async ({ imageUrl, prompt, mode, keepRegion, transplant, keeps, brief }) => {
           // The same gate the transplant block runs under. When it holds and
           // `transplant` is still null (the output locator found neither a
           // product nor a landing area, or the paste threw), the image is
@@ -863,6 +1584,12 @@ export const generateVariationTask = task({
           // so judging it against the product photo would fail it for obeying
           // us.
           const transplantExpected = mode === "generate" && Boolean(productPatch);
+          // The same shape for the mark, in both modes: an empty `keeps` says
+          // nothing on its own — a run with no mark to keep, a placement the
+          // chooser refused, a placement no candidate made legible, and a paste
+          // that threw all produce one — so the review only misses a mark on an
+          // attempt that was supposed to carry one.
+          const logoKeepExpected = Boolean(logoPatch);
           // The photo the patch was cut from, when there is one. The third
           // image, the premise, and the same-model check all key off this one
           // value so they cannot describe a different set of images.
@@ -885,9 +1612,6 @@ export const generateVariationTask = task({
             // a "retry without image" run has no source to show.
             const sourceSecond =
               mode === "edit" || Boolean(transplant) || !payload.withoutSourceImage;
-            // A rebrand keeps the competitor's layout on purpose, so it is
-            // judged on what was replaced rather than on a declared axis.
-            const rebrand = source.kind === "competitor_ad";
             // The photo the drawn product is judged against, when no patch was
             // cut for this run. Attaching the source must not cost the review
             // that comparison, so the photo moves to third instead of dropping
@@ -949,6 +1673,15 @@ export const generateVariationTask = task({
                 transplant
                   ? "- If the scene shows a stand, pedestal, or platform under the product that the source ad does not have, say so in the notes; it is not a failure on its own."
                   : null,
+                // The paste covers its box but never clears the region, and the
+                // scale cap can leave the pasted mark narrower than the one the
+                // model drew underneath it: the review has to look for a second
+                // visible mark rather than assume the paste hid the first.
+                keeps.length > 0
+                  ? "- The advertiser's logo was pasted into this image as real artwork, not drawn by the model. Fail when: the mark is distorted, stretched, cropped, or recoloured; a second logo the model drew is still visible anywhere, including an uncovered edge or sliver showing around the pasted mark; the mark overlaps the headline, CTA, or disclaimer; or the mark is too small or too low in contrast to read at feed size."
+                  : logoKeepExpected
+                    ? "- The advertiser's logo was not pasted into this attempt (the paste step did not run: the composition left nowhere legal and legible to put the mark), so the ad carries no real branding and any logo-like shape you can see is the model's own. Fail and say 'no place for the logo', so the next attempt leaves clear space for it."
+                    : null,
                 "- Every line of ad copy (headline, subhead, badges, CTA, tile labels) is legible and matches the quoted copy in the prompt, with no garbled or invented copy. Incidental labels on props and packaging inside the scene (a shampoo bottle, a book spine) are fine and are not ad copy.",
                 `- No logos or brand marks other than ${brand?.brandName ?? "the advertiser's"}; no platform UI, no watermarks.`,
                 "- The palette is consistent with a clean brand look: no clashing neon, no split panels unless the prompt asked for them.",

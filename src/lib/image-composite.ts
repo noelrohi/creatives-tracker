@@ -5,6 +5,7 @@
 
 import sharp from "sharp";
 import { clampRegion, type ProductRegion } from "@/lib/image-mask";
+import { contrastRatio, LOGO_SCALE_CAP } from "@/lib/logo-placement";
 
 export type PasteBox = { left: number; top: number; width: number; height: number };
 
@@ -14,6 +15,16 @@ export function pixelBox(region: ProductRegion, width: number, height: number): 
   const right = Math.round((region.x + region.w) * width);
   const bottom = Math.round((region.y + region.h) * height);
   return { left, top, width: right - left, height: bottom - top };
+}
+
+/**
+ * The inverse of `pixelBox`: the box a paste actually landed in, back in
+ * normalized coordinates. `fitBox` preserves aspect, so the box a caller asked
+ * for and the box it got differ whenever the patch and the slot differ in
+ * shape, and it is the latter that a record of where the mark landed means.
+ */
+export function normalizeBox(box: PasteBox, width: number, height: number): ProductRegion {
+  return { x: box.left / width, y: box.top / height, w: box.width / width, h: box.height / height };
 }
 
 export type PasteAlign = "center" | "bottom";
@@ -168,8 +179,10 @@ async function ringMean(
  * Mean RGB of the patch's opaque pixels (alpha > 200); null when the patch is
  * all transparent. A greyscale or palette patch decodes to one or two bands, so
  * the pipeline is normalized to sRGB with alpha before the raw pixels are read.
+ * Exported because the logo variant chooser weighs each candidate's own mean
+ * against the background it would sit on, before any of them is pasted.
  */
-async function patchMean(patch: sharp.Sharp): Promise<[number, number, number] | null> {
+export async function patchMean(patch: sharp.Sharp): Promise<[number, number, number] | null> {
   const { data, info } = await patch
     .toColourspace("srgb")
     .ensureAlpha()
@@ -334,4 +347,164 @@ export async function pastePatch(input: {
 
   const bytes = await base.composite(layers).png().toBuffer();
   return { bytes: new Uint8Array(bytes), box: paste, blend };
+}
+
+/**
+ * Mean RGB of the ring around `region`'s own pixel box in `output` (a thin
+ * wrapper over `ringMean` that opens the bytes for callers who have not
+ * already computed a box, e.g. a legibility check made before any patch
+ * exists to paste).
+ */
+export async function ringLuminance(output: Uint8Array, region: ProductRegion): Promise<[number, number, number]> {
+  const meta = await sharp(output).metadata();
+  const size = meta.autoOrient;
+  if (!size?.width || !size.height) {
+    throw new Error("ringLuminance: could not read image dimensions");
+  }
+  const box = pixelBox(clampRegion(region), size.width, size.height);
+  return ringMean(sharp(output).autoOrient(), { width: size.width, height: size.height }, box);
+}
+
+/** How far the mark's alpha edge is softened, relative to its pasted width. */
+const LOGO_FEATHER = 0.004;
+/**
+ * Spec §6 calls for "a subpixel-to-two-pixel edge feather". The relative sigma
+ * above reaches 2px at a 500px-wide mark and keeps growing, so a large
+ * placement would soften far past what the design asks for; this is the
+ * ceiling that keeps it inside the stated range.
+ */
+const LOGO_FEATHER_MAX_SIGMA = 2;
+
+/**
+ * Stamps a brand mark into the output. Unlike the product transplant this
+ * applies no colour cast and no contact shadow: a logo is flat art, not a lit
+ * object, and casting its colours toward the scene would corrupt the brand's
+ * own palette. The only softening is a sub-pixel alpha feather so the paste
+ * does not read as a hard cut; a transparent PNG asset already carries its
+ * own edge and gains almost nothing from it.
+ *
+ * Returns the measured contrast between the mark and the ring of output
+ * around it, which the caller compares against the legibility floor.
+ */
+/**
+ * Softens an alpha edge in premultiplied space. Kept separate so the paste can
+ * skip it outright for an asset that brings its own edge.
+ */
+async function blurEdge(padded: Uint8Array | Buffer, sigma: number) {
+  const { data, info } = await sharp(padded).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const premultiplied = Buffer.alloc(data.length);
+  for (let i = 0; i + 3 < data.length; i += 4) {
+    const a = data[i + 3];
+    premultiplied[i] = Math.round((data[i] * a) / 255);
+    premultiplied[i + 1] = Math.round((data[i + 1] * a) / 255);
+    premultiplied[i + 2] = Math.round((data[i + 2] * a) / 255);
+    premultiplied[i + 3] = a;
+  }
+  const raw = { width: info.width, height: info.height, channels: 4 as const };
+  const blurred = await sharp(premultiplied, { raw }).blur(sigma).raw().toBuffer();
+  const unpremultiplied = Buffer.alloc(blurred.length);
+  for (let i = 0; i + 3 < blurred.length; i += 4) {
+    const a = blurred[i + 3];
+    for (let c = 0; c < 3; c += 1) {
+      unpremultiplied[i + c] = a === 0 ? 0 : Math.min(255, Math.round((blurred[i + c] * 255) / a));
+    }
+    unpremultiplied[i + 3] = a;
+  }
+  return sharp(unpremultiplied, { raw });
+}
+
+export async function pasteLogo(input: {
+  output: Uint8Array;
+  patch: Uint8Array;
+  region: ProductRegion;
+  /** The mark's width in the source, normalized; the paste is capped at 1.25x it. */
+  sourceWidth: number;
+  /**
+   * False when the patch is a transparent PNG that already carries the
+   * designer's own anti-aliased edge. Spec §6: such an asset "needs none
+   * added", and blurring it a second time softens the brand's own type.
+   * Defaults to true, the flood-fill matte's hard-edged case.
+   */
+  feather?: boolean;
+}): Promise<{ bytes: Uint8Array; box: PasteBox; contrast: number }> {
+  const region = clampRegion(input.region);
+  const [outputMeta, patchMeta] = await Promise.all([
+    sharp(input.output).metadata(),
+    sharp(input.patch).metadata(),
+  ]);
+  const outputSize = outputMeta.autoOrient;
+  if (!outputSize?.width || !outputSize?.height || !patchMeta.width || !patchMeta.height) {
+    throw new Error("pasteLogo: could not read image dimensions");
+  }
+  const to = pixelBox(region, outputSize.width, outputSize.height);
+  if (to.width <= 0 || to.height <= 0) throw new Error("pasteLogo: the region is empty after clamping");
+  // Fit uniformly into the region, then cap at 1.25x the source width, the
+  // same guard the product uses so a generous box cannot inflate the mark.
+  const fitted = fitBox({ left: 0, top: 0, width: patchMeta.width, height: patchMeta.height }, to);
+  const box = capWidth(fitted, to, Math.round(input.sourceWidth * LOGO_SCALE_CAP * outputSize.width));
+
+  // Resize onto a padded transparent canvas (padding by three sigma, as
+  // contactShadow does) so a fully-opaque source patch has a transparent
+  // margin of its own to feather into, then blur the whole padded composite
+  // in premultiplied space (see below).
+  const feather = input.feather ?? true;
+  // sharp's blur needs sigma >= 0.3, and §6 caps the softening at two pixels.
+  const sigma = Math.min(LOGO_FEATHER_MAX_SIGMA, Math.max(0.3, LOGO_FEATHER * box.width));
+  // No feather means no margin to feather into, so the padded canvas collapses
+  // to the mark itself and every crop below still reads the same fields.
+  const pad = feather ? Math.ceil(3 * sigma) : 0;
+  const canvasWidth = box.width + 2 * pad;
+  const canvasHeight = box.height + 2 * pad;
+  const resized = await sharp(input.patch)
+    .resize(box.width, box.height, { fit: "fill" })
+    .ensureAlpha()
+    .png()
+    .toBuffer();
+  const padded = await sharp({
+    create: { width: canvasWidth, height: canvasHeight, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+  })
+    .composite([{ input: resized, left: pad, top: pad }])
+    .png()
+    .toBuffer();
+  // Blur in premultiplied space, then undo it. Blurring the alpha band alone
+  // leaves the padding's own RGB — black — under the ring the blur opens up,
+  // so a red mark on white used to sit inside a grey halo ((165,165,165) one
+  // pixel out at 400px width) instead of a soft edge. Premultiplied, a
+  // transparent pixel carries no colour weight at all, so the blurred ring is
+  // the mark's own colour at a falling alpha and the halo disappears.
+  const feathered = feather ? await blurEdge(padded, sigma) : sharp(padded);
+
+  // Crop the padded, feathered canvas back down to whatever part of it falls
+  // on the output, the same clipping contactShadow uses for a box that hangs
+  // off the canvas edge.
+  const left = box.left - pad;
+  const top = box.top - pad;
+  const cropLeft = Math.max(0, -left);
+  const cropTop = Math.max(0, -top);
+  const visibleWidth = Math.min(canvasWidth - cropLeft, outputSize.width - Math.max(0, left));
+  const visibleHeight = Math.min(canvasHeight - cropTop, outputSize.height - Math.max(0, top));
+  if (visibleWidth <= 0 || visibleHeight <= 0) {
+    throw new Error("pasteLogo: the paste box is entirely off-canvas");
+  }
+  const clipped =
+    cropLeft > 0 || cropTop > 0 || visibleWidth !== canvasWidth || visibleHeight !== canvasHeight
+      ? await feathered
+          .extract({ left: cropLeft, top: cropTop, width: visibleWidth, height: visibleHeight })
+          .png()
+          .toBuffer()
+      : await feathered.png().toBuffer();
+
+  const base = sharp(input.output).autoOrient();
+  const [ring, mark] = await Promise.all([
+    ringMean(base, { width: outputSize.width, height: outputSize.height }, box),
+    patchMean(sharp(input.patch)),
+  ]);
+  const contrast = mark ? contrastRatio(mark, ring) : 1;
+
+  const bytes = await base
+    .composite([{ input: clipped, left: Math.max(0, left), top: Math.max(0, top) }])
+    .png()
+    .toBuffer();
+
+  return { bytes: new Uint8Array(bytes), box, contrast };
 }

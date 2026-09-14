@@ -36,6 +36,8 @@ export type StudioContextImage = {
   description: string;
   kind: StudioContextImageKind;
   imageUrl: string;
+  /** Upload time, so a caller that needs the brand's current asset can find the newest. */
+  createdAt: Date;
 };
 
 export type StudioContextLibrary = {
@@ -85,6 +87,7 @@ export async function loadStudioContextLibrary(
         description: studioContextImages.description,
         kind: studioContextImages.kind,
         imageUrl: studioContextImages.imageUrl,
+        createdAt: studioContextImages.createdAt,
       })
       .from(studioContextImages)
       .where(eq(studioContextImages.organizationId, organizationId))

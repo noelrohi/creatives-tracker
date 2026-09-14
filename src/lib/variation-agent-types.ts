@@ -23,6 +23,26 @@ export type VariationTransplant = {
   blend?: { lightGain: number; channelGains: [number, number, number]; shadowOpacity: number } | null;
 };
 
+export type VariationKeepKind = "logo";
+/** Which rule chose the box: a mark the model drew, the source's own position, or a safe-area corner. */
+export type KeepPlacement = "drawn" | "source_position" | "anchor";
+
+/** A preserved region pasted back into a generated variation. The logo is the only kind today. */
+export type VariationKeep = {
+  kind: VariationKeepKind;
+  /** Where the pixels came from: the brand's logo asset, or a cut of the source ad. */
+  patchSource: "asset" | "source";
+  /** The context image the asset came from, when `patchSource` is "asset". */
+  assetImageId: string | null;
+  /** The mark's box in whatever image it was cut from. */
+  from: ProductRegion;
+  /** The output box it landed in. */
+  to: ProductRegion;
+  placement: KeepPlacement;
+  /** Measured contrast against the background behind `to`, and which asset variant was used. */
+  contrast: { ratio: number; variant: "light" | "dark" | "only" };
+};
+
 export const VARIATION_AXES = [
   "hook",
   "angle",
@@ -84,6 +104,8 @@ export type VariationPlan = {
   axis?: VariationAxis | null;
   /** Copied from the brief at finish. */
   hypothesis?: string | null;
+  /** Set by the core on finish: the marks preserved in the shipped attempt. */
+  keptMarks?: VariationKeep[] | null;
 };
 
 export type VariationReview = {
@@ -100,5 +122,7 @@ export type VariationAttempt = {
   keepRegion?: ProductRegion | null;
   /** The product transplant applied to a generate attempt, if any. */
   transplant?: VariationTransplant | null;
+  /** The brand marks pasted into this attempt. */
+  keeps?: VariationKeep[] | null;
   review: VariationReview;
 };
