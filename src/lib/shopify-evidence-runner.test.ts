@@ -1770,7 +1770,10 @@ describe("Shopify evidence Trigger orchestration boundary", () => {
     expect(source).toContain('id: "shopify-evidence-start"');
     expect(source).toContain('id: "shopify-evidence-batch"');
     expect(source.match(/maxDuration: 600/g)).toHaveLength(2);
-    expect(source.match(/retry: ATTRIBUTION_TASK_RETRY/g)).toHaveLength(2);
+    expect(
+      source.match(/retry: (\{ \.\.\.)?ATTRIBUTION_TASK_RETRY/g),
+    ).toHaveLength(2);
+    expect(source).toContain('machine: { preset: "micro" }');
     expect(source.match(/onFailure:/g)).toHaveLength(2);
     expect(source).not.toContain("schedules.");
   });
