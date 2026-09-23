@@ -44,7 +44,10 @@ function tupleHash(value: unknown): string {
  */
 export const klaviyoClaimsTask = task({
   id: "klaviyo-claims",
-  retry: ATTRIBUTION_TASK_RETRY,
+  // Waits on transpacific DB round-trips, not CPU: bill the smallest machine
+  // and step up only if a batch runs out of memory.
+  machine: { preset: "micro" },
+  retry: { ...ATTRIBUTION_TASK_RETRY, outOfMemory: { machine: "small-1x" } },
   maxDuration: 600,
   queue: KLAVIYO_CLAIMS_QUEUE,
   onFailure: async ({ payload }) => {
