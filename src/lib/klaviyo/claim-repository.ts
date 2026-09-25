@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql, type SQL, type SQLWrapper } from "drizzle-orm";
 import { db } from "@/db";
 import { KlaviyoApiClient } from "@/lib/klaviyo/client";
 import {
@@ -461,6 +461,27 @@ async function loadConversion(
   };
 }
 
+/**
+ * The coverage rule selection and claim-count carry-forward share: this
+ * connection holds a complete replay state for the conversion under its
+ * current event checksum. One definition, so a conversion's counts are
+ * carried forward exactly when the selection skips re-fetching it.
+ */
+function completeUnderCurrentChecksum(
+  connectionId: string | SQLWrapper,
+  conversionEventId: SQLWrapper,
+  sourceChecksum: SQLWrapper,
+): SQL {
+  return sql`exists (
+    select 1
+      from klaviyo_claim_replay_state covered
+     where covered.connection_id = ${connectionId}
+       and covered.conversion_event_id = ${conversionEventId}
+       and covered.status = 'complete'
+       and covered.source_checksum = ${sourceChecksum}
+  )`;
+}
+
 async function selectNextConversion(
   tx: KlaviyoStoreTransaction,
   scope: KlaviyoConnectionScope,
@@ -480,14 +501,11 @@ async function selectNextConversion(
     // or a claim count, and syncCanonicalClaimCounts carries claim counts
     // onto new runs without a fetch. Incomplete and failed states are the
     // retry phases' job and are untouched here.
-    const inScopePredicate = sql`not exists (
-        select 1
-          from klaviyo_claim_replay_state covered
-         where covered.connection_id = ${scope.connectionId}
-           and covered.conversion_event_id = ${klaviyoEventMatchResults.eventId}
-           and covered.status = 'complete'
-           and covered.source_checksum = ${klaviyoEvents.sourceChecksum}
-      )`;
+    const inScopePredicate = sql`not ${completeUnderCurrentChecksum(
+      scope.connectionId,
+      klaviyoEventMatchResults.eventId,
+      klaviyoEvents.sourceChecksum,
+    )}`;
     const [row] = await tx
       .select({ eventId: klaviyoEventMatchResults.eventId })
       .from(klaviyoEventMatchResults)
@@ -648,14 +666,11 @@ export async function syncCanonicalClaimCounts(
        and emr.superseded_at is null
        and emr.status = 'confirmed'
        and emr.selected_candidate_id = omr.selected_candidate_id
-       and exists (
-         select 1
-           from klaviyo_claim_replay_state covered
-          where covered.connection_id = emr.connection_id
-            and covered.conversion_event_id = emr.event_id
-            and covered.status = 'complete'
-            and covered.source_checksum = e.source_checksum
-       )
+       and ${completeUnderCurrentChecksum(
+         sql`emr.connection_id`,
+         sql`emr.event_id`,
+         sql`e.source_checksum`,
+       )}
        and omr.claim_count <> counted.claims
     returning omr.id
   `);

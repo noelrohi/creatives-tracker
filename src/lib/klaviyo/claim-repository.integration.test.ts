@@ -1251,6 +1251,36 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
       expect(fetchedExternalIds(client)).toContain("external-event-old");
     });
 
+    it("retries a conversion left incomplete on the bound run", async () => {
+      const { matchRunId } = await publishMatchWorld();
+      // Same source and match run as the graph, current checksum: phase
+      // missing excludes it via the current-run join, so only the
+      // incomplete-retry phase can pick it up.
+      await testPool!.query(
+        `INSERT INTO klaviyo_claim_replay_state
+           (id, organization_id, shopify_store_id, connection_id,
+            source_run_id, match_run_id, conversion_event_id, source_checksum,
+            status, reason_codes, attempt_count, attempted_at)
+         VALUES ('state-bound-incomplete', 'org-a', 'store-a', 'connection-a',
+           'source-run-a', $1, 'event-a', 'event-checksum-a', 'incomplete',
+           '[]', 1, now())`,
+        [matchRunId],
+      );
+      const claimReplayId = await startGraph(matchRunId);
+      const client = fakeClaimClient();
+      const result = await repository.processClaimBatch(
+        { scope, claimReplayId },
+        dependenciesFor(client),
+      );
+      expect(result.outcome).toBe("done");
+      expect(fetchedExternalIds(client)).toContain("external-event-a");
+      const state = await testPool!.query(
+        `SELECT status FROM klaviyo_claim_replay_state
+          WHERE id = 'state-bound-incomplete'`,
+      );
+      expect(state.rows[0].status).toBe("complete");
+    });
+
     it("skips a covered five-day-old conversion", async () => {
       // Covered under its current checksum: skipped at any age.
       const occurredAt = new Date(Date.now() - 5 * DAY_MS);
