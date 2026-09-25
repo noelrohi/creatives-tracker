@@ -48,6 +48,7 @@ vi.mock("@/db", () => ({
 const repository = await import("@/lib/klaviyo/claim-repository");
 const matchService = await import("@/lib/klaviyo/match-service");
 const evidenceStore = await import("@/lib/shopify-evidence-store");
+const sourceStore = await import("@/lib/klaviyo/source-store");
 const describeIfDb = baseConnectionString ? describe : describe.skip;
 
 const scope = MATCH_SCOPE;
@@ -386,6 +387,61 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
          '2026-07-15')`,
     );
   });
+
+  // A prior replay's state under an earlier run scope: visible to the
+  // connection-wide coverage check, invisible to the current-run join.
+  // Defaults to the event's current checksum, i.e. "covered as it is now".
+  async function insertCoverageState(input: {
+    conversionEventId: string;
+    status: "complete" | "incomplete";
+    matchRunId: string;
+    sourceChecksum?: string;
+  }): Promise<void> {
+    const inserted = await testPool!.query(
+      `INSERT INTO klaviyo_claim_replay_state
+         (id, organization_id, shopify_store_id, connection_id,
+          source_run_id, match_run_id, conversion_event_id, source_checksum,
+          status, reason_codes, attempt_count, attempted_at, completed_at)
+       SELECT $1, 'org-a', 'store-a', 'connection-a', 'probe-run-a', $2,
+              e.id, coalesce($4::text, e.source_checksum), $5, '[]', 1,
+              now(), $6::timestamp
+         FROM klaviyo_event e
+        WHERE e.id = $3`,
+      [
+        `state-${input.conversionEventId}`,
+        input.matchRunId,
+        input.conversionEventId,
+        input.sourceChecksum ?? null,
+        input.status,
+        input.status === "complete" ? new Date() : null,
+      ],
+    );
+    if (inserted.rowCount !== 1) {
+      throw new Error(`no event ${input.conversionEventId} to cover`);
+    }
+  }
+
+  async function insertStoredClaim(conversionEventId: string): Promise<void> {
+    await testPool!.query(
+      `INSERT INTO klaviyo_attribution_claim
+         (id, organization_id, shopify_store_id, connection_id,
+          conversion_event_id, klaviyo_attribution_id, unknown_reason_codes,
+          source_checksum, api_revision)
+       VALUES ($1, 'org-a', 'store-a', 'connection-a', $2, 'attribution-1',
+         '[]', 'claim-checksum', '2026-07-15')`,
+      [`claim-${conversionEventId}`, conversionEventId],
+    );
+  }
+
+  async function claimCountOn(runId: string): Promise<number[]> {
+    const result = await testPool!.query(
+      `SELECT claim_count FROM klaviyo_order_match_result
+        WHERE run_id = $1 AND status = 'confirmed'
+        ORDER BY id`,
+      [runId],
+    );
+    return result.rows.map((row) => row.claim_count as number);
+  }
 
   it("starts one graph, reuses it live, and conflicts on a different binding", async () => {
     const { matchRunId } = await publishMatchWorld();
@@ -1055,31 +1111,6 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
   });
 
   describe("age-bounded replay scope", () => {
-    // A prior replay's state under an earlier run scope: visible to the
-    // connection-wide coverage check, invisible to the current-run join.
-    async function insertCoverageState(input: {
-      conversionEventId: string;
-      status: "complete" | "incomplete";
-      matchRunId: string;
-    }): Promise<void> {
-      await testPool!.query(
-        `INSERT INTO klaviyo_claim_replay_state
-           (id, organization_id, shopify_store_id, connection_id,
-            source_run_id, match_run_id, conversion_event_id, source_checksum,
-            status, reason_codes, attempt_count, attempted_at, completed_at)
-         VALUES ($1, 'org-a', 'store-a', 'connection-a', 'probe-run-a', $2,
-           $3, $4, $5, '[]', 1, now(), $6)`,
-        [
-          `state-${input.conversionEventId}`,
-          input.matchRunId,
-          input.conversionEventId,
-          `${input.conversionEventId}-checksum`,
-          input.status,
-          input.status === "complete" ? new Date() : null,
-        ],
-      );
-    }
-
     function dependenciesFor(client: ReturnType<typeof fakeClaimClient>) {
       return {
         createClient: () => client,
@@ -1284,6 +1315,126 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
         `SELECT count(*)::int AS count FROM klaviyo_attribution_claim`,
       );
       expect(claims.rows[0].count).toBe(6);
+    });
+  });
+
+  describe("claim-count carry-forward", () => {
+    const gateClosed = async () => ({ ready: false });
+
+    function dependenciesFor(
+      client: ReturnType<typeof fakeClaimClient>,
+      verifyWriterReadiness = gateOpen,
+    ) {
+      return {
+        createClient: () => client,
+        credentialProvider: fakeCredentialProvider,
+        verifyWriterReadiness,
+      };
+    }
+
+    function syncOn(runId: string): Promise<number> {
+      return sourceStore.withKlaviyoStoreConnectionLock(scope, (tx) =>
+        repository.syncCanonicalClaimCounts(tx, scope, runId),
+      );
+    }
+
+    it("sets claim_count for a covered conversion the graph does not re-fetch", async () => {
+      const { matchRunId } = await publishMatchWorld();
+      await insertCoverageState({
+        conversionEventId: "event-a",
+        status: "complete",
+        matchRunId,
+      });
+      await insertStoredClaim("event-a");
+      expect(await claimCountOn(matchRunId)).toEqual([0]);
+
+      const claimReplayId = await startGraph(matchRunId);
+      const client = fakeClaimClient();
+      const result = await repository.processClaimBatch(
+        { scope, claimReplayId },
+        dependenciesFor(client),
+      );
+
+      expect(result).toMatchObject({ outcome: "done", processed: 0 });
+      expect(client.getEventById).not.toHaveBeenCalled();
+      expect(await claimCountOn(matchRunId)).toEqual([1]);
+    });
+
+    it("carries claim_count onto the run a graph rebinds to", async () => {
+      const { matchRunId: firstRunId } = await publishMatchWorld();
+      await insertCoverageState({
+        conversionEventId: "event-a",
+        status: "complete",
+        matchRunId: firstRunId,
+      });
+      await insertStoredClaim("event-a");
+      const claimReplayId = await startGraph(firstRunId);
+      const second = await publishSecondMatchWorld();
+
+      const client = fakeClaimClient();
+      const result = await repository.processClaimBatch(
+        { scope, claimReplayId },
+        dependenciesFor(client),
+      );
+
+      expect(result.outcome).toBe("done");
+      expect(client.getEventById).not.toHaveBeenCalled();
+      expect(await claimCountOn(second.runId)).toEqual([1]);
+      const graph = await graphRow(claimReplayId);
+      expect((graph.checkpoint as ClaimReplayCheckpoint).matchRunId).toBe(
+        second.runId,
+      );
+    });
+
+    it("writes only current canonical results and is idempotent", async () => {
+      const { matchRunId: firstRunId } = await publishMatchWorld();
+      await insertCoverageState({
+        conversionEventId: "event-a",
+        status: "complete",
+        matchRunId: firstRunId,
+      });
+      await insertStoredClaim("event-a");
+      const second = await publishSecondMatchWorld();
+
+      // The first run's results are superseded: nothing to write there.
+      expect(await syncOn(firstRunId)).toBe(0);
+      expect(await syncOn(second.runId)).toBe(1);
+      expect(await claimCountOn(second.runId)).toEqual([1]);
+      // Second pass changes nothing.
+      expect(await syncOn(second.runId)).toBe(0);
+    });
+
+    it("does not propagate claims whose complete state is under a stale checksum", async () => {
+      const { matchRunId } = await publishMatchWorld();
+      await insertCoverageState({
+        conversionEventId: "event-a",
+        status: "complete",
+        matchRunId,
+        sourceChecksum: "stale-checksum",
+      });
+      await insertStoredClaim("event-a");
+
+      expect(await syncOn(matchRunId)).toBe(0);
+      expect(await claimCountOn(matchRunId)).toEqual([0]);
+    });
+
+    it("skips the sync without failing the batch when the gate is closed", async () => {
+      const { matchRunId } = await publishMatchWorld();
+      await insertCoverageState({
+        conversionEventId: "event-a",
+        status: "complete",
+        matchRunId,
+      });
+      await insertStoredClaim("event-a");
+      const claimReplayId = await startGraph(matchRunId);
+
+      const result = await repository.processClaimBatch(
+        { scope, claimReplayId },
+        dependenciesFor(fakeClaimClient(), gateClosed),
+      );
+
+      expect(result.outcome).toBe("done");
+      expect(await claimCountOn(matchRunId)).toEqual([0]);
     });
   });
 });

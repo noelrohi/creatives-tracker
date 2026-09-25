@@ -602,6 +602,64 @@ async function unresolvedStateCount(
   return row?.count ?? 0;
 }
 
+/**
+ * Carries claim counts onto a match run's canonical order results from
+ * claims already stored. Claims are per-conversion facts that outlive any
+ * one publication, but `claim_count` lives on the run's order results, which
+ * every new publication creates at 0 — and the selection only re-fetches a
+ * conversion that has no complete state under its current checksum, so the
+ * per-conversion commit alone would leave covered conversions at 0.
+ *
+ * "Canonical" is exactly verifyCurrentClaimAnchor's rule: a confirmed,
+ * unsuperseded order result whose same-run event result is confirmed,
+ * unsuperseded, and selects the identical candidate. Claims under a stale
+ * event checksum are never propagated; the re-fetch owns those. Set-based
+ * and idempotent: writes only counts that differ. Caller holds the
+ * store→connection lock and has passed the writer-readiness gate.
+ */
+export async function syncCanonicalClaimCounts(
+  tx: KlaviyoStoreTransaction,
+  scope: KlaviyoConnectionScope,
+  matchRunId: string,
+): Promise<number> {
+  const updated = await tx.execute<{ id: string }>(sql`
+    update klaviyo_order_match_result omr
+       set claim_count = counted.claims
+      from klaviyo_event_match_result emr
+      join klaviyo_event e
+        on e.connection_id = emr.connection_id
+       and e.id = emr.event_id
+      join lateral (
+        select count(*)::int as claims
+          from klaviyo_attribution_claim c
+         where c.connection_id = emr.connection_id
+           and c.conversion_event_id = emr.event_id
+      ) counted on true
+     where omr.run_id = ${matchRunId}
+       and omr.connection_id = ${scope.connectionId}
+       and omr.superseded_at is null
+       and omr.status = 'confirmed'
+       and omr.selected_candidate_id is not null
+       and emr.run_id = omr.run_id
+       and emr.connection_id = omr.connection_id
+       and emr.event_id = omr.selected_event_id
+       and emr.superseded_at is null
+       and emr.status = 'confirmed'
+       and emr.selected_candidate_id = omr.selected_candidate_id
+       and exists (
+         select 1
+           from klaviyo_claim_replay_state covered
+          where covered.connection_id = emr.connection_id
+            and covered.conversion_event_id = emr.event_id
+            and covered.status = 'complete'
+            and covered.source_checksum = e.source_checksum
+       )
+       and omr.claim_count <> counted.claims
+    returning omr.id
+  `);
+  return updated.rows.length;
+}
+
 export type ClaimClient = Pick<KlaviyoApiClient, "getEventById">;
 
 export type ClaimBatchDependencies = {
@@ -699,6 +757,8 @@ export async function processClaimBatch(
   const client = createClient(credential.privateApiKey);
 
   let checkpoint: ClaimReplayCheckpoint | null = null;
+  // The binding whose claim counts this batch has already carried forward.
+  let claimCountsSyncedFor: string | null = null;
 
   for (
     let conversionIndex = 0;
@@ -752,6 +812,18 @@ export async function processClaimBatch(
             return { kind: "stale" as const };
           }
           current = rebound;
+        }
+
+        // Once per binding: carry claim counts onto the bound run from
+        // stored claims, so conversions the selection no longer re-fetches
+        // still show them (see syncCanonicalClaimCounts). A closed gate
+        // skips it; a later selection retries.
+        if (claimCountsSyncedFor !== current.matchRunId) {
+          const countGate = await verifyGate(input.scope);
+          if (countGate.ready) {
+            await syncCanonicalClaimCounts(tx, input.scope, current.matchRunId);
+            claimCountsSyncedFor = current.matchRunId;
+          }
         }
 
         if (current.stage === "handoff") {
