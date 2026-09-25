@@ -473,19 +473,21 @@ async function selectNextConversion(
           (${checkpoint.afterOccurredAt}::timestamp, ${checkpoint.afterEventRowId})`;
 
   if (checkpoint.phase === "missing") {
-    // An anchor is in scope when its conversion is recent (occurred on or
-    // after the persisted lookback cutoff) or has never been successfully
-    // covered: no complete replay state for it anywhere on this connection.
-    // Old, already-covered conversions keep their existing claims untouched.
-    const inScopePredicate = sql`(
-      ${klaviyoEvents.occurredAt} >= ${checkpoint.lookbackCutoff}::timestamp
-      or not exists (
+    // An anchor is in scope only while this connection has no complete
+    // replay state for it under its CURRENT event checksum — never covered,
+    // or its source changed since. A covered, unchanged conversion is not
+    // re-fetched at any age: prod showed re-fetches never changed a checksum
+    // or a claim count, and syncCanonicalClaimCounts carries claim counts
+    // onto new runs without a fetch. Incomplete and failed states are the
+    // retry phases' job and are untouched here.
+    const inScopePredicate = sql`not exists (
         select 1
           from klaviyo_claim_replay_state covered
          where covered.connection_id = ${scope.connectionId}
            and covered.conversion_event_id = ${klaviyoEventMatchResults.eventId}
            and covered.status = 'complete'
-      ))`;
+           and covered.source_checksum = ${klaviyoEvents.sourceChecksum}
+      )`;
     const [row] = await tx
       .select({ eventId: klaviyoEventMatchResults.eventId })
       .from(klaviyoEventMatchResults)

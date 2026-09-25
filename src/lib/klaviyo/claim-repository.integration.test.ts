@@ -1061,8 +1061,8 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
   });
 
   it("is idempotent across a full replay of an already-complete graph", async () => {
-    // A conversion inside the lookback window: its second-graph skip must
-    // travel the checksum-equality path, not the age bound.
+    // A recent conversion: its second-graph skip must travel the
+    // checksum-coverage path, the only one there is now.
     await seedExtraConversionEvent(
       "event-recent",
       "external-event-recent",
@@ -1081,9 +1081,9 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
       dependenciesFor(firstClient),
     );
     expect(first).toMatchObject({ outcome: "done", processed: 2 });
-    // A second graph replays the same conversions: the old conversion is
-    // skipped by the age bound, the recent one by its unchanged checksum in
-    // phase missing, and both bounded retry phases stay empty.
+    // A second graph replays the same conversions: both are complete under
+    // their current checksums, so phase missing selects neither and both
+    // bounded retry phases stay empty.
     const secondStart = await repository.startOrResumeClaimReplay({
       scope,
       sourceRunId: "source-run-a",
@@ -1110,7 +1110,7 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
     expect(order.rows[0].claim_count).toBe(1);
   });
 
-  describe("age-bounded replay scope", () => {
+  describe("checksum-covered replay scope", () => {
     function dependenciesFor(client: ReturnType<typeof fakeClaimClient>) {
       return {
         createClient: () => client,
@@ -1203,7 +1203,7 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
       expect(state.rows[0].status).toBe("complete");
     });
 
-    it("re-replays a recent conversion that already has a complete state", async () => {
+    it("skips a recent conversion already complete under its current checksum", async () => {
       await seedExtraConversionEvent(
         "event-recent",
         "external-event-recent",
@@ -1222,17 +1222,37 @@ describeIfDb("Klaviyo claim repository on PostgreSQL", () => {
         dependenciesFor(client),
       );
       expect(result.outcome).toBe("done");
-      expect(result.processed).toBe(2);
-      expect(fetchedExternalIds(client)).toContain("external-event-recent");
+      expect(result.processed).toBe(1);
+      expect(fetchedExternalIds(client)).not.toContain("external-event-recent");
       const recentClaims = await testPool!.query(
         `SELECT count(*)::int AS count FROM klaviyo_attribution_claim
           WHERE conversion_event_id = 'event-recent'`,
       );
-      expect(recentClaims.rows[0].count).toBe(1);
+      expect(recentClaims.rows[0].count).toBe(0);
     });
 
-    it("skips a covered conversion older than the three-day refresh window", async () => {
-      // 5 days old: inside the old 14-day refresh, outside the new 3-day one.
+    it("fetches a conversion whose only complete state is under a stale checksum", async () => {
+      await seedOldConversionWorld();
+      const { matchRunId } = await publishMatchWorld();
+      await insertCoverageState({
+        conversionEventId: "event-old",
+        status: "complete",
+        matchRunId,
+        sourceChecksum: "stale-checksum",
+      });
+      const claimReplayId = await startGraph(matchRunId);
+      const client = fakeClaimClient();
+      const result = await repository.processClaimBatch(
+        { scope, claimReplayId },
+        dependenciesFor(client),
+      );
+      expect(result.outcome).toBe("done");
+      expect(result.processed).toBe(2);
+      expect(fetchedExternalIds(client)).toContain("external-event-old");
+    });
+
+    it("skips a covered five-day-old conversion", async () => {
+      // Covered under its current checksum: skipped at any age.
       const occurredAt = new Date(Date.now() - 5 * DAY_MS);
       await seedExtraConversionEvent("event-5d", "external-5d", occurredAt);
       const { matchRunId } = await publishMatchWorld();

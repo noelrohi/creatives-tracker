@@ -292,6 +292,7 @@ export type ClaimReplayCheckpoint = {
   claimReplayId: string;
   sourceRunId: string;
   matchRunId: string;
+  /** Written and validated but no longer read; see CLAIM_REPLAY_LOOKBACK_DAYS. */
   lookbackCutoff: string;
   phase: "missing" | "incomplete_retry" | "failed_retry";
   afterOccurredAt: string | null;
@@ -304,15 +305,13 @@ export type ClaimReplayCheckpoint = {
 };
 
 export const MAX_CLAIM_CONVERSIONS_PER_BATCH = 5;
-// Klaviyo attribution for a conversion is fixed once its attribution
-// windows close; 3 days is a generous bound on a late-resolving
-// attribution link, and ~5x cheaper than the 14 days it replaces — at
-// production volume the old window re-fetched ~2,450 conversions per pass
-// (~3.5 hours) and starved the backlog it was meant to serve. Anchors
-// older than the lookback are replayed only while the connection has no
-// complete replay state for them (never successfully covered). Follow-up:
-// if re-fetches are observed never to change a stored source_checksum,
-// refresh can be dropped entirely.
+// Selection no longer refreshes recent conversions: a conversion is fetched
+// only while it has no complete replay state under its current event
+// checksum (selectNextConversion). Measured in prod before the change
+// (14 days): 60-70% of daily attempts re-fetched complete, unchanged
+// conversions, and none changed a checksum or a claim count. This constant
+// now only computes the checkpoint's lookbackCutoff, kept so in-flight
+// checkpoints stay valid across deploy; remove both together later.
 export const CLAIM_REPLAY_LOOKBACK_DAYS = 3;
 export const MAX_CLAIM_REMOTE_CALLS_PER_BATCH = 25;
 export const MAX_REFERENCED_EVENT_FETCHES_PER_CONVERSION = 10;
