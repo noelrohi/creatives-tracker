@@ -1,7 +1,9 @@
 /**
  * Landing-page harvest (spec §5.1) as its own task, so the first run over
  * existing ads and orders — which is the backfill — can be triggered by hand
- * with `{ organizationId, storeId? }`. The syncs call the same function inline.
+ * with `{ organizationId, storeId? }`. meta-sync triggers it after every ad
+ * sync; the Shopify syncs harvest only the journey side inline
+ * (harvestLandingPagesFromOrders), since ad destinations change only here.
  */
 import { logger, metadata, tags, task } from "@trigger.dev/sdk";
 import { harvestLandingPages } from "@/lib/landing-page";
