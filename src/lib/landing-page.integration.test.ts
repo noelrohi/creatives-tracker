@@ -29,11 +29,11 @@ const DDL = [
      CONSTRAINT landing_page_org_normalized_url_uniq UNIQUE (organization_id, normalized_url))`,
 ];
 
-function journey(landingPage: string | null) {
+function journey(landingPage: unknown) {
   return JSON.stringify({ lastVisit: landingPage === null ? {} : { landingPage } });
 }
 
-async function seedOrder(id: string, landingPage: string | null) {
+async function seedOrder(id: string, landingPage: unknown) {
   await pool!.query(
     `INSERT INTO shopify_order (id, organization_id, store_id, journey_ready, customer_journey)
      VALUES ($1, 'org-a', 'store-a', true, $2)`,
@@ -88,10 +88,12 @@ async function landingPageIdOf(table: "shopify_order" | "ad", id: string) {
     expect(pages.rows[0].first_seen_in_journeys_at).not.toBeNull();
   });
 
-  it("does not scan journey-ready orders whose journey has no landing page", async () => {
+  it("does not scan journey-ready orders whose journey has no usable landing page", async () => {
     await seedOrder("order-linkable", "https://shop.example.com/products/x");
     await seedOrder("order-no-landing-1", null);
     await seedOrder("order-no-landing-2", null);
+    await seedOrder("order-blank-landing", "  ");
+    await seedOrder("order-non-string-landing", 42);
 
     const orderOnly = await harvestLandingPagesFromOrders({ organizationId: "org-a", storeId: "store-a" });
     expect(orderOnly.ordersScanned).toBe(1);

@@ -327,7 +327,8 @@ async function harvestFromOrders(params: {
       // store has. Already-linked orders are skipped: their page exists. So
       // are journeys with no landing page, which can never link and would
       // otherwise be re-read on every hourly run; a journey re-poll that
-      // fills one in makes the order eligible again.
+      // fills one in makes the order eligible again. Mirrors
+      // journeyLandingPage: only a non-blank string can ever link.
       const batch: Array<{ id: string; customerJourney: Record<string, unknown> | null }> =
         await db
           .select({
@@ -341,7 +342,8 @@ async function harvestFromOrders(params: {
               eq(shopifyOrders.storeId, store.id),
               eq(shopifyOrders.journeyReady, true),
               isNull(shopifyOrders.landingPageId),
-              sql`${shopifyOrders.customerJourney} #>> '{lastVisit,landingPage}' is not null`,
+              sql`jsonb_typeof(${shopifyOrders.customerJourney} #> '{lastVisit,landingPage}') = 'string'`,
+              sql`btrim(${shopifyOrders.customerJourney} #>> '{lastVisit,landingPage}') <> ''`,
               cursor ? gt(shopifyOrders.id, cursor) : undefined,
             ),
           )
