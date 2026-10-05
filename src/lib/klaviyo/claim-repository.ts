@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql, type SQL, type SQLWrapper } from "drizzle-orm";
 import { db } from "@/db";
 import { KlaviyoApiClient } from "@/lib/klaviyo/client";
 import {
@@ -461,6 +461,27 @@ async function loadConversion(
   };
 }
 
+/**
+ * The coverage rule selection and claim-count carry-forward share: this
+ * connection holds a complete replay state for the conversion under its
+ * current event checksum. One definition, so a conversion's counts are
+ * carried forward exactly when the selection skips re-fetching it.
+ */
+function completeUnderCurrentChecksum(
+  connectionId: string | SQLWrapper,
+  conversionEventId: SQLWrapper,
+  sourceChecksum: SQLWrapper,
+): SQL {
+  return sql`exists (
+    select 1
+      from klaviyo_claim_replay_state covered
+     where covered.connection_id = ${connectionId}
+       and covered.conversion_event_id = ${conversionEventId}
+       and covered.status = 'complete'
+       and covered.source_checksum = ${sourceChecksum}
+  )`;
+}
+
 async function selectNextConversion(
   tx: KlaviyoStoreTransaction,
   scope: KlaviyoConnectionScope,
@@ -473,19 +494,18 @@ async function selectNextConversion(
           (${checkpoint.afterOccurredAt}::timestamp, ${checkpoint.afterEventRowId})`;
 
   if (checkpoint.phase === "missing") {
-    // An anchor is in scope when its conversion is recent (occurred on or
-    // after the persisted lookback cutoff) or has never been successfully
-    // covered: no complete replay state for it anywhere on this connection.
-    // Old, already-covered conversions keep their existing claims untouched.
-    const inScopePredicate = sql`(
-      ${klaviyoEvents.occurredAt} >= ${checkpoint.lookbackCutoff}::timestamp
-      or not exists (
-        select 1
-          from klaviyo_claim_replay_state covered
-         where covered.connection_id = ${scope.connectionId}
-           and covered.conversion_event_id = ${klaviyoEventMatchResults.eventId}
-           and covered.status = 'complete'
-      ))`;
+    // An anchor is in scope only while this connection has no complete
+    // replay state for it under its CURRENT event checksum — never covered,
+    // or its source changed since. A covered, unchanged conversion is not
+    // re-fetched at any age: prod showed re-fetches never changed a checksum
+    // or a claim count, and syncCanonicalClaimCounts carries claim counts
+    // onto new runs without a fetch. Incomplete and failed states are the
+    // retry phases' job and are untouched here.
+    const inScopePredicate = sql`not ${completeUnderCurrentChecksum(
+      scope.connectionId,
+      klaviyoEventMatchResults.eventId,
+      klaviyoEvents.sourceChecksum,
+    )}`;
     const [row] = await tx
       .select({ eventId: klaviyoEventMatchResults.eventId })
       .from(klaviyoEventMatchResults)
@@ -602,6 +622,61 @@ async function unresolvedStateCount(
   return row?.count ?? 0;
 }
 
+/**
+ * Carries claim counts onto a match run's canonical order results from
+ * claims already stored. Claims are per-conversion facts that outlive any
+ * one publication, but `claim_count` lives on the run's order results, which
+ * every new publication creates at 0 — and the selection only re-fetches a
+ * conversion that has no complete state under its current checksum, so the
+ * per-conversion commit alone would leave covered conversions at 0.
+ *
+ * "Canonical" is exactly verifyCurrentClaimAnchor's rule: a confirmed,
+ * unsuperseded order result whose same-run event result is confirmed,
+ * unsuperseded, and selects the identical candidate. Claims under a stale
+ * event checksum are never propagated; the re-fetch owns those. Set-based
+ * and idempotent: writes only counts that differ. Caller holds the
+ * store→connection lock and has passed the writer-readiness gate.
+ */
+export async function syncCanonicalClaimCounts(
+  tx: KlaviyoStoreTransaction,
+  scope: KlaviyoConnectionScope,
+  matchRunId: string,
+): Promise<number> {
+  const updated = await tx.execute<{ id: string }>(sql`
+    update klaviyo_order_match_result omr
+       set claim_count = counted.claims
+      from klaviyo_event_match_result emr
+      join klaviyo_event e
+        on e.connection_id = emr.connection_id
+       and e.id = emr.event_id
+      join lateral (
+        select count(*)::int as claims
+          from klaviyo_attribution_claim c
+         where c.connection_id = emr.connection_id
+           and c.conversion_event_id = emr.event_id
+      ) counted on true
+     where omr.run_id = ${matchRunId}
+       and omr.connection_id = ${scope.connectionId}
+       and omr.superseded_at is null
+       and omr.status = 'confirmed'
+       and omr.selected_candidate_id is not null
+       and emr.run_id = omr.run_id
+       and emr.connection_id = omr.connection_id
+       and emr.event_id = omr.selected_event_id
+       and emr.superseded_at is null
+       and emr.status = 'confirmed'
+       and emr.selected_candidate_id = omr.selected_candidate_id
+       and ${completeUnderCurrentChecksum(
+         sql`emr.connection_id`,
+         sql`emr.event_id`,
+         sql`e.source_checksum`,
+       )}
+       and omr.claim_count <> counted.claims
+    returning omr.id
+  `);
+  return updated.rows.length;
+}
+
 export type ClaimClient = Pick<KlaviyoApiClient, "getEventById">;
 
 export type ClaimBatchDependencies = {
@@ -699,6 +774,8 @@ export async function processClaimBatch(
   const client = createClient(credential.privateApiKey);
 
   let checkpoint: ClaimReplayCheckpoint | null = null;
+  // The binding whose claim counts this batch has already carried forward.
+  let claimCountsSyncedFor: string | null = null;
 
   for (
     let conversionIndex = 0;
@@ -752,6 +829,18 @@ export async function processClaimBatch(
             return { kind: "stale" as const };
           }
           current = rebound;
+        }
+
+        // Once per binding: carry claim counts onto the bound run from
+        // stored claims, so conversions the selection no longer re-fetches
+        // still show them (see syncCanonicalClaimCounts). A closed gate
+        // skips it; a later selection retries.
+        if (claimCountsSyncedFor !== current.matchRunId) {
+          const countGate = await verifyGate(input.scope);
+          if (countGate.ready) {
+            await syncCanonicalClaimCounts(tx, input.scope, current.matchRunId);
+            claimCountsSyncedFor = current.matchRunId;
+          }
         }
 
         if (current.stage === "handoff") {
