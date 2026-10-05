@@ -30,7 +30,7 @@ import {
   type ShopifyStoreRecord,
 } from "@/lib/shopify-ingest";
 import { BUCKET_RULE_VERSION } from "@/lib/attribution-bucket";
-import { harvestLandingPages } from "@/lib/landing-page";
+import { harvestLandingPagesFromOrders } from "@/lib/landing-page";
 import { ATTRIBUTION_TASK_RETRY } from "./retry";
 
 const SHOPIFY_SYNC_QUEUE = { name: "shopify-sync", concurrencyLimit: 1 };
@@ -147,7 +147,7 @@ async function stampAndLog(params: {
   // landing page once their journey is ready, which is exactly what the pass
   // above just settled.
   try {
-    const harvested = await harvestLandingPages({
+    const harvested = await harvestLandingPagesFromOrders({
       organizationId: params.organizationId,
       storeId: params.storeId,
     });

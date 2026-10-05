@@ -134,6 +134,28 @@ export async function harvestLandingPages(params: {
 }
 
 /**
+ * The journey side of the harvest alone, for the hourly Shopify sync, which
+ * settles orders whose journeys just became ready. Ad destinations only
+ * change when Meta syncs, and meta-sync runs the full harvest afterwards, so
+ * re-walking every ad here each hour bought nothing but round-trips: one
+ * no-op UPDATE per distinct ad URL, plus a rewrite of every page row.
+ */
+export async function harvestLandingPagesFromOrders(params: {
+  organizationId: string;
+  storeId?: string;
+  now?: Date;
+}): Promise<Omit<HarvestResult, "adsScanned" | "adsLinked">> {
+  const pageIdsByUrl = new Map<string, string>();
+  const fromOrders = await harvestFromOrders({
+    organizationId: params.organizationId,
+    storeId: params.storeId,
+    now: params.now ?? new Date(),
+    pageIdsByUrl,
+  });
+  return { ...fromOrders, pages: pageIdsByUrl.size };
+}
+
+/**
  * Upserts the pages and returns their ids. `firstSeen*` is a first-sighting
  * record, so it is only ever filled in, never moved forward.
  */
@@ -302,7 +324,10 @@ async function harvestFromOrders(params: {
 
     for (;;) {
       // Keyset over the id, so the scan stays bounded however many orders the
-      // store has. Already-linked orders are skipped: their page exists.
+      // store has. Already-linked orders are skipped: their page exists. So
+      // are journeys with no landing page, which can never link and would
+      // otherwise be re-read on every hourly run; a journey re-poll that
+      // fills one in makes the order eligible again.
       const batch: Array<{ id: string; customerJourney: Record<string, unknown> | null }> =
         await db
           .select({
@@ -316,6 +341,7 @@ async function harvestFromOrders(params: {
               eq(shopifyOrders.storeId, store.id),
               eq(shopifyOrders.journeyReady, true),
               isNull(shopifyOrders.landingPageId),
+              sql`${shopifyOrders.customerJourney} #>> '{lastVisit,landingPage}' is not null`,
               cursor ? gt(shopifyOrders.id, cursor) : undefined,
             ),
           )
