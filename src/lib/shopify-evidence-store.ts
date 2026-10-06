@@ -28,6 +28,7 @@ import type { IdentityCryptoKeyChecks, IdentityScope } from "@/lib/identity-hmac
 import type {
   CompleteShopifyLineSet,
   NormalizedShopifyIdentityEvidence,
+  NormalizedShopifyOrderLine,
 } from "@/lib/shopify-evidence-admin";
 import {
   identityCryptoPolicies,
@@ -589,30 +590,41 @@ async function ensureIdentityCryptoPolicyWithExecutor(
   );
 }
 
-async function validateExistingIdentityCryptoPolicyWithExecutor(
+/**
+ * Reads the store's matching key binding and crypto policy in one round-trip
+ * and validates them against the supplied key checks. "missing" means the
+ * policy row, or the binding for the requested matching version, does not
+ * exist: a store's first identity write, or a version the policy was never
+ * bound to. The caller then runs the full ensure, which creates the rows or
+ * raises the conflict. Any mismatch throws identity_crypto_policy_conflict. Every
+ * policy writer holds the store row lock, so under that lock this read
+ * cannot observe a rotation half-applied.
+ */
+async function validateIdentityCryptoPolicyInOneRead(
   scope: IdentityScope,
   keyChecks: IdentityCryptoKeyChecks,
   executor: EvidenceExecutor,
-): Promise<void> {
+): Promise<"valid" | "missing"> {
   const checks = validateIdentityCryptoKeyChecks(keyChecks);
-  const [binding] = await executor
-    .select({ keyCheck: identityMatchingKeyBindings.keyCheck })
-    .from(identityMatchingKeyBindings)
-    .where(
+  const [row] = await executor
+    .select({
+      bindingKeyCheck: identityMatchingKeyBindings.keyCheck,
+      matchingPreviousVersion: identityCryptoPolicies.matchingPreviousVersion,
+      matchingPreviousKeyCheck: identityCryptoPolicies.matchingPreviousKeyCheck,
+      matchingCurrentVersion: identityCryptoPolicies.matchingCurrentVersion,
+      matchingCurrentKeyCheck: identityCryptoPolicies.matchingCurrentKeyCheck,
+      suppressionVersion: identityCryptoPolicies.suppressionVersion,
+      suppressionKeyCheck: identityCryptoPolicies.suppressionKeyCheck,
+    })
+    .from(identityCryptoPolicies)
+    .leftJoin(
+      identityMatchingKeyBindings,
       and(
-        eq(identityMatchingKeyBindings.organizationId, scope.organizationId),
-        eq(identityMatchingKeyBindings.storeId, scope.storeId),
+        eq(identityMatchingKeyBindings.organizationId, identityCryptoPolicies.organizationId),
+        eq(identityMatchingKeyBindings.storeId, identityCryptoPolicies.storeId),
         eq(identityMatchingKeyBindings.keyVersion, checks.matchingVersion),
       ),
     )
-    .limit(1);
-  if (!binding || !constantTimeTextEqual(binding.keyCheck, checks.matchingCheck)) {
-    return cryptoPolicyConflict();
-  }
-
-  const [policy] = await executor
-    .select()
-    .from(identityCryptoPolicies)
     .where(
       and(
         eq(identityCryptoPolicies.organizationId, scope.organizationId),
@@ -620,19 +632,31 @@ async function validateExistingIdentityCryptoPolicyWithExecutor(
       ),
     )
     .limit(1);
+  if (!row || row.bindingKeyCheck === null) return "missing";
   if (
-    !policy ||
-    policy.matchingPreviousVersion !== null ||
-    policy.matchingPreviousKeyCheck !== null ||
-    policy.matchingCurrentVersion !== checks.matchingVersion ||
-    policy.suppressionVersion !== checks.suppressionVersion ||
-    !constantTimeTextEqual(
-      policy.matchingCurrentKeyCheck,
-      checks.matchingCheck,
-    ) ||
-    !constantTimeTextEqual(policy.suppressionKeyCheck, checks.suppressionCheck)
+    !constantTimeTextEqual(row.bindingKeyCheck, checks.matchingCheck) ||
+    row.matchingPreviousVersion !== null ||
+    row.matchingPreviousKeyCheck !== null ||
+    row.matchingCurrentVersion !== checks.matchingVersion ||
+    row.suppressionVersion !== checks.suppressionVersion ||
+    !constantTimeTextEqual(row.matchingCurrentKeyCheck, checks.matchingCheck) ||
+    !constantTimeTextEqual(row.suppressionKeyCheck, checks.suppressionCheck)
   ) {
     return cryptoPolicyConflict();
+  }
+  return "valid";
+}
+
+async function validateExistingIdentityCryptoPolicyWithExecutor(
+  scope: IdentityScope,
+  keyChecks: IdentityCryptoKeyChecks,
+  executor: EvidenceExecutor,
+): Promise<void> {
+  if (
+    (await validateIdentityCryptoPolicyInOneRead(scope, keyChecks, executor)) ===
+    "missing"
+  ) {
+    cryptoPolicyConflict();
   }
 }
 
@@ -684,12 +708,7 @@ async function resolveScopedOrder(
   return order;
 }
 
-async function replaceCompleteLineSetWithExecutor(
-  executor: EvidenceExecutor,
-  scope: IdentityScope,
-  orderId: string,
-  evidence: CompleteShopifyLineSet,
-): Promise<void> {
+function assertCompleteLineSet(evidence: CompleteShopifyLineSet): void {
   if (
     evidence.completeness !== "complete" ||
     !(evidence.orderUpdatedAt instanceof Date) ||
@@ -698,6 +717,15 @@ async function replaceCompleteLineSetWithExecutor(
   ) {
     throw new Error("Shopify evidence line set is not complete");
   }
+}
+
+async function replaceCompleteLineSetWithExecutor(
+  executor: EvidenceExecutor,
+  scope: IdentityScope,
+  orderId: string,
+  evidence: CompleteShopifyLineSet,
+): Promise<void> {
+  assertCompleteLineSet(evidence);
   await executor.delete(shopifyOrderLines).where(
     and(
       eq(shopifyOrderLines.organizationId, scope.organizationId),
@@ -1109,6 +1137,67 @@ async function loadMatcherVisibleLines(
     );
 }
 
+/**
+ * Every reader-visible line column. It is both the select list of
+ * loadStoredLineSet and the set sameLineSet compares, so a column cannot be
+ * read without being compared. `satisfies` makes TypeScript fail when
+ * NormalizedShopifyOrderLine gains a field that is not listed here.
+ */
+const COMPARED_LINE_COLUMNS = {
+  shopifyLineItemId: shopifyOrderLines.shopifyLineItemId,
+  shopifyProductId: shopifyOrderLines.shopifyProductId,
+  shopifyVariantId: shopifyOrderLines.shopifyVariantId,
+  sku: shopifyOrderLines.sku,
+  productTitle: shopifyOrderLines.productTitle,
+  variantTitle: shopifyOrderLines.variantTitle,
+  quantity: shopifyOrderLines.quantity,
+  sourcePosition: shopifyOrderLines.sourcePosition,
+} satisfies Record<keyof NormalizedShopifyOrderLine, unknown>;
+
+const COMPARED_LINE_KEYS = Object.keys(
+  COMPARED_LINE_COLUMNS,
+) as (keyof NormalizedShopifyOrderLine)[];
+
+async function loadStoredLineSet(
+  executor: EvidenceExecutor,
+  scope: IdentityScope,
+  orderId: string,
+) {
+  return executor
+    .select(COMPARED_LINE_COLUMNS)
+    .from(shopifyOrderLines)
+    .where(
+      and(
+        eq(shopifyOrderLines.organizationId, scope.organizationId),
+        eq(shopifyOrderLines.storeId, scope.storeId),
+        eq(shopifyOrderLines.orderId, orderId),
+      ),
+    );
+}
+
+/**
+ * Whether the stored lines already say exactly what a fresh complete fetch
+ * says, in every column of COMPARED_LINE_COLUMNS. parent_order_updated_at is
+ * deliberately not compared: nothing reads it, and the lines it dates are
+ * unchanged.
+ */
+function sameLineSet(
+  stored: Awaited<ReturnType<typeof loadStoredLineSet>>,
+  fetched: NormalizedShopifyOrderLine[],
+): boolean {
+  if (stored.length !== fetched.length) return false;
+  if (new Set(fetched.map((line) => line.shopifyLineItemId)).size !== fetched.length) return false;
+  const storedById = new Map(stored.map((line) => [line.shopifyLineItemId, line]));
+  if (storedById.size !== stored.length) return false;
+  return fetched.every((line) => {
+    const current = storedById.get(line.shopifyLineItemId);
+    return (
+      current !== undefined &&
+      COMPARED_LINE_KEYS.every((key) => current[key] === line[key])
+    );
+  });
+}
+
 async function loadLockedRunningRun(
   executor: EvidenceExecutor,
   scope: IdentityScope,
@@ -1368,20 +1457,36 @@ export async function commitShopifyEvidenceOrder(
       };
     }
 
+    // The batch ensured the policy before its first order; per order one
+    // read re-validates it under the store lock, and only a store's first
+    // identity write (rows missing) falls back to the full ensure.
     if (input.identity.status === "available") {
-      await ensureIdentityCryptoPolicyWithExecutor(
+      const policy = await validateIdentityCryptoPolicyInOneRead(
         input.scope,
         input.identity.keyChecks,
         tx,
       );
+      if (policy === "missing") {
+        await ensureIdentityCryptoPolicyWithExecutor(
+          input.scope,
+          input.identity.keyChecks,
+          tx,
+        );
+      }
     }
+    // Unchanged lines (most re-fetches) are left as stored; the checksum
+    // below is computed from the same set either way.
     if (input.lines) {
-      await replaceCompleteLineSetWithExecutor(
-        tx,
-        input.scope,
-        order.id,
-        input.lines,
-      );
+      assertCompleteLineSet(input.lines);
+      const stored = await loadStoredLineSet(tx, input.scope, order.id);
+      if (!sameLineSet(stored, input.lines.lines)) {
+        await replaceCompleteLineSetWithExecutor(
+          tx,
+          input.scope,
+          order.id,
+          input.lines,
+        );
+      }
     }
 
     let identityDisposition: CommitShopifyEvidenceOrderResult["identityDisposition"];
@@ -1401,25 +1506,13 @@ export async function commitShopifyEvidenceOrder(
       identityDisposition = "not_refreshed";
     }
 
-    const [projection] = await tx
-      .select({
-        id: shopifyOrders.id,
-        shopifyOrderId: shopifyOrders.shopifyOrderId,
-        orderCreatedAt: shopifyOrders.orderCreatedAt,
-      })
-      .from(shopifyOrders)
-      .where(
-        and(
-          eq(shopifyOrders.organizationId, input.scope.organizationId),
-          eq(shopifyOrders.storeId, input.scope.storeId),
-          eq(shopifyOrders.id, order.id),
-        ),
-      )
-      .limit(1);
-    if (!projection) throw new Error("Shopify evidence order projection vanished");
-    const lines = await loadMatcherVisibleLines(tx, input.scope, order.id);
+    // `order` is locked FOR UPDATE above, so its columns cannot have moved
+    // within this transaction; complete lines are exactly what is now stored.
+    const lines = input.lines
+      ? input.lines.lines
+      : await loadMatcherVisibleLines(tx, input.scope, order.id);
     const observedContentChecksum = canonicalContentChecksum({
-      order: projection,
+      order,
       lines,
       lineDisposition: input.lineDisposition,
       identityDisposition,
