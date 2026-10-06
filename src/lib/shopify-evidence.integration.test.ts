@@ -359,6 +359,36 @@ async function twoRunsOfOrderA(
   return { first, second, secondStatements };
 }
 
+// Inserts the observation row a fresh commit of order_a would compute for
+// firstCompleteSet / complete / available, so the commit finds it on conflict.
+async function insertMatchingOrderAObservation(runId: string) {
+  const order = await testPool!.query(
+    `SELECT id, shopify_order_id AS "shopifyOrderId",
+            order_created_at::text AS "orderCreatedAtText"
+     FROM shopify_order WHERE id = 'order_a'`,
+  );
+  const { orderCreatedAtText, ...orderRow } = order.rows[0];
+  const checksum = canonicalContentChecksum({
+    order: {
+      ...orderRow,
+      orderCreatedAt: new Date(`${orderCreatedAtText.replace(" ", "T")}Z`),
+    },
+    lines: firstCompleteSet.lines,
+    lineDisposition: "complete",
+    identityDisposition: "available",
+  });
+  await testPool!.query(
+    `INSERT INTO shopify_evidence_run_observation
+       (id, organization_id, store_id, evidence_run_id, order_id,
+        line_disposition, identity_disposition, observed_content_checksum,
+        source_order_updated_at)
+     VALUES ('obs-matching', 'org_a', 'store_a', $1, 'order_a',
+       'complete', 'available', $2, $3)`,
+    [runId, checksum, firstCompleteSet.orderUpdatedAt.toISOString().replace("Z", "")],
+  );
+  return checksum;
+}
+
 async function readLineIds(): Promise<string[]> {
   const result = await testPool!.query<{ shopify_line_item_id: string }>(
     `SELECT shopify_line_item_id FROM shopify_order_line
@@ -946,50 +976,6 @@ describeIfDb("Shopify evidence persistence", () => {
         identityDisposition: "available",
       }),
     );
-  });
-
-  it("rejects a non-replay commit whose fetched lines repeat an id, leaving stored lines unchanged", async () => {
-    const firstRun = await startRun("trigger-duplicate-fetched-ids");
-    await commitOrderA(firstRun.id);
-    await finishShopifyEvidenceRun({
-      scope,
-      runId: firstRun.id,
-      expectedCursor: FIRST_CURSOR,
-      status: "success",
-      progress: ORDER_A_PROGRESS,
-    });
-    const before = await testPool!.query(
-      `SELECT id, shopify_line_item_id, product_title, quantity, xmin::text AS version
-       FROM shopify_order_line WHERE order_id = 'order_a' ORDER BY id`,
-    );
-    const secondRun = await startRun(
-      "trigger-duplicate-fetched-ids-2",
-      new Date("2026-08-02T00:00:00.000Z"),
-    );
-    const duplicated = {
-      ...firstCompleteSet,
-      lines: [firstCompleteSet.lines[0], { ...firstCompleteSet.lines[0] }],
-    };
-    await expect(
-      commitOrderA(secondRun.id, {
-        now: new Date("2026-08-02T00:01:00.000Z"),
-        lines: duplicated,
-      }),
-    ).rejects.toMatchObject({
-      cause: {
-        code: "23505",
-        constraint: "shopify_order_line_store_external_uniq",
-      },
-    });
-    const after = await testPool!.query(
-      `SELECT id, shopify_line_item_id, product_title, quantity, xmin::text AS version
-       FROM shopify_order_line WHERE order_id = 'order_a' ORDER BY id`,
-    );
-    expect(after.rows).toEqual(before.rows);
-    expect(await readLineIds()).toEqual([
-      "gid://shopify/LineItem/1",
-      "gid://shopify/LineItem/2",
-    ]);
   });
 
   it("rewrites stored lines when a title or quantity changed", async () => {
@@ -1842,6 +1828,201 @@ describeIfDb("Shopify evidence persistence", () => {
       ...before.run[0],
       heartbeat_at: "2026-08-01 00:02:00",
     });
+  });
+
+  it("does not rewrite an unchanged customer id or pre-read fresh observations", async () => {
+    const readOrderVersion = async () =>
+      (await testPool!.query(
+        `SELECT xmin::text AS version, shopify_customer_id FROM shopify_order
+         WHERE id = 'order_a'`,
+      )).rows[0];
+    const firstRun = await startRun("trigger-customer-probe");
+    await commitOrderA(firstRun.id);
+    const before = await readOrderVersion();
+    await finishShopifyEvidenceRun({
+      scope,
+      runId: firstRun.id,
+      expectedCursor: FIRST_CURSOR,
+      status: "success",
+      progress: ORDER_A_PROGRESS,
+    });
+    const secondRun = await startRun(
+      "trigger-customer-probe-2",
+      new Date("2026-08-02T00:00:00.000Z"),
+    );
+    const { statements } = await statementsDuring(() =>
+      commitOrderA(secondRun.id, { now: new Date("2026-08-02T00:01:00.000Z") }),
+    );
+
+    expect(await readOrderVersion()).toEqual(before);
+    expect(statements.some((s) => /update\s+"?shopify_order"?\s+set\s+"?shopify_customer_id/i.test(s))).toBe(false);
+    expect(statements.some((s) => /select[\s\S]*from "?shopify_evidence_run_observation/i.test(s))).toBe(false);
+    expect(statements.some((s) => /select[\s\S]*from "?shopify_evidence_run_identity_observation/i.test(s))).toBe(false);
+  });
+
+  it("rejects a fresh commit over a conflicting observation already in the run", async () => {
+    const run = await startRun("trigger-observation-conflict");
+    await testPool!.query(
+      `INSERT INTO shopify_evidence_run_observation
+         (id, organization_id, store_id, evidence_run_id, order_id,
+          line_disposition, identity_disposition, observed_content_checksum)
+       VALUES ('obs-conflict', 'org_a', 'store_a', $1, 'order_a',
+         'complete', 'available', 'not-the-real-checksum')`,
+      [run.id],
+    );
+    await expect(commitOrderA(run.id)).rejects.toThrow(
+      "Shopify evidence observation replay conflicts",
+    );
+  });
+
+  it("rejects a non-replay commit whose fetched lines repeat an id, leaving stored lines unchanged", async () => {
+    const firstRun = await startRun("trigger-duplicate-fetched-ids");
+    await commitOrderA(firstRun.id);
+    await finishShopifyEvidenceRun({
+      scope,
+      runId: firstRun.id,
+      expectedCursor: FIRST_CURSOR,
+      status: "success",
+      progress: ORDER_A_PROGRESS,
+    });
+    const before = await testPool!.query(
+      `SELECT id, shopify_line_item_id, product_title, quantity, xmin::text AS version
+       FROM shopify_order_line WHERE order_id = 'order_a' ORDER BY id`,
+    );
+    const secondRun = await startRun(
+      "trigger-duplicate-fetched-ids-2",
+      new Date("2026-08-02T00:00:00.000Z"),
+    );
+    const duplicated = {
+      ...firstCompleteSet,
+      lines: [firstCompleteSet.lines[0], { ...firstCompleteSet.lines[0] }],
+    };
+    await expect(
+      commitOrderA(secondRun.id, {
+        now: new Date("2026-08-02T00:01:00.000Z"),
+        lines: duplicated,
+      }),
+    ).rejects.toMatchObject({
+      cause: {
+        code: "23505",
+        constraint: "shopify_order_line_store_external_uniq",
+      },
+    });
+    const after = await testPool!.query(
+      `SELECT id, shopify_line_item_id, product_title, quantity, xmin::text AS version
+       FROM shopify_order_line WHERE order_id = 'order_a' ORDER BY id`,
+    );
+    expect(after.rows).toEqual(before.rows);
+    expect(await readLineIds()).toEqual([
+      "gid://shopify/LineItem/1",
+      "gid://shopify/LineItem/2",
+    ]);
+  });
+
+  it("lets a fresh commit proceed over a matching observation already in the run", async () => {
+    const run = await startRun("trigger-observation-matching");
+    const checksum = await insertMatchingOrderAObservation(run.id);
+    const result = await commitOrderA(run.id);
+    expect(result.observedContentChecksum).toBe(checksum);
+    const rows = await testPool!.query(
+      `SELECT id FROM shopify_evidence_run_observation
+       WHERE evidence_run_id = $1 AND order_id = 'order_a'`,
+      [run.id],
+    );
+    expect(rows.rows).toEqual([{ id: "obs-matching" }]);
+    const cursor = await testPool!.query(
+      `SELECT cursor FROM shopify_evidence_sync_run WHERE id = $1`,
+      [run.id],
+    );
+    expect(cursor.rows[0].cursor).toBeTruthy();
+  });
+
+  it("rejects a fresh commit whose identity link already points at a different HMAC", async () => {
+    const run = await startRun("trigger-identity-link-conflict");
+    await insertMatchingOrderAObservation(run.id);
+    await testPool!.query(
+      `INSERT INTO source_identity_hmac (
+         id, organization_id, store_id, source_kind, shopify_order_id,
+         key_version, digest, rotation_state
+       ) VALUES (
+         'other-hmac', 'org_a', 'store_a', 'shopify_order', 'order_a',
+         'v0', 'other-version-digest', 'active'
+       )`,
+    );
+    await testPool!.query(
+      `INSERT INTO shopify_evidence_run_identity_observation (
+         id, organization_id, store_id, evidence_run_id, order_id,
+         identity_hmac_id
+       ) VALUES ('link-other', 'org_a', 'store_a', $1, 'order_a', 'other-hmac')`,
+      [run.id],
+    );
+    await expect(commitOrderA(run.id)).rejects.toThrow(
+      "Shopify evidence identity observation replay conflicts",
+    );
+    const link = await testPool!.query(
+      `SELECT identity_hmac_id FROM shopify_evidence_run_identity_observation
+       WHERE evidence_run_id = $1`,
+      [run.id],
+    );
+    expect(link.rows).toEqual([{ identity_hmac_id: "other-hmac" }]);
+  });
+
+  it("lets a fresh commit proceed over an identity link already on the same HMAC", async () => {
+    // Commit once in a throwaway run so the commit's own HMAC row exists, then
+    // pre-link the target run to that exact row (the digest is not reproducible
+    // from the test).
+    const seedRun = await startRun("trigger-identity-link-same-seed");
+    await commitOrderA(seedRun.id);
+    const hmac = await testPool!.query(
+      `SELECT id FROM source_identity_hmac
+       WHERE organization_id = 'org_a' AND store_id = 'store_a'
+         AND shopify_order_id = 'order_a'`,
+    );
+    expect(hmac.rows).toHaveLength(1);
+    const hmacId = hmac.rows[0].id;
+    const run = await startRun(
+      "trigger-identity-link-same",
+      new Date("2026-08-02T00:00:00.000Z"),
+    );
+    await insertMatchingOrderAObservation(run.id);
+    await testPool!.query(
+      `INSERT INTO shopify_evidence_run_identity_observation (
+         id, organization_id, store_id, evidence_run_id, order_id,
+         identity_hmac_id
+       ) VALUES ('link-same', 'org_a', 'store_a', $1, 'order_a', $2)`,
+      [run.id, hmacId],
+    );
+    await expect(commitOrderA(run.id)).resolves.toMatchObject({
+      identityHmacId: hmacId,
+    });
+    const link = await testPool!.query(
+      `SELECT id, identity_hmac_id FROM shopify_evidence_run_identity_observation
+       WHERE evidence_run_id = $1`,
+      [run.id],
+    );
+    expect(link.rows).toEqual([{ id: "link-same", identity_hmac_id: hmacId }]);
+  });
+
+  it("rejects a fresh commit whose observation differs only in source update time", async () => {
+    const run = await startRun("trigger-observation-updated-at-conflict");
+    await insertMatchingOrderAObservation(run.id);
+    await testPool!.query(
+      `UPDATE shopify_evidence_run_observation
+       SET source_order_updated_at = source_order_updated_at + interval '1 second'
+       WHERE id = 'obs-matching'`,
+    );
+    await expect(commitOrderA(run.id)).rejects.toThrow(
+      "Shopify evidence observation replay conflicts",
+    );
+  });
+
+  it("still writes a changed customer id", async () => {
+    const changed = { ...availableIdentity(), shopifyCustomerId: "gid://shopify/Customer/2" };
+    await twoRunsOfOrderA({ identity: changed });
+    const order = await testPool!.query(
+      `SELECT shopify_customer_id FROM shopify_order WHERE id = 'order_a'`,
+    );
+    expect(order.rows[0].shopify_customer_id).toBe("gid://shopify/Customer/2");
   });
 
   it("rejects a replay whose complete content checksum disagrees without mutation", async () => {

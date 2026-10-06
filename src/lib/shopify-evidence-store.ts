@@ -691,6 +691,7 @@ async function resolveScopedOrder(
       id: shopifyOrders.id,
       shopifyOrderId: shopifyOrders.shopifyOrderId,
       orderCreatedAt: shopifyOrders.orderCreatedAt,
+      shopifyCustomerId: shopifyOrders.shopifyCustomerId,
     })
     .from(shopifyOrders)
     .where(
@@ -906,6 +907,9 @@ async function persistAvailableIdentityWithExecutor(
   scope: IdentityScope,
   orderId: string,
   evidence: Extract<NormalizedShopifyIdentityEvidence, { status: "available" }>,
+  // The order's current value, read under the caller's order lock; when it
+  // already matches, the write is skipped. Omitted: always write.
+  currentShopifyCustomerId?: string | null,
 ): Promise<IdentityPersistenceResult> {
   assertAvailableIdentityEvidence(evidence);
   if (await suppressionExists(executor, scope, evidence)) {
@@ -913,13 +917,15 @@ async function persistAvailableIdentityWithExecutor(
     return { disposition: "suppressed", identityHmacId: null };
   }
 
-  await executor.execute(sql`
-    update shopify_order
-    set shopify_customer_id = ${evidence.shopifyCustomerId}
-    where organization_id = ${scope.organizationId}
-      and store_id = ${scope.storeId}
-      and id = ${orderId}
-  `);
+  if (currentShopifyCustomerId !== evidence.shopifyCustomerId) {
+    await executor.execute(sql`
+      update shopify_order
+      set shopify_customer_id = ${evidence.shopifyCustomerId}
+      where organization_id = ${scope.organizationId}
+        and store_id = ${scope.storeId}
+        and id = ${orderId}
+    `);
+  }
 
   const existing =
     evidence.evaluatedKeyVersions.length === 0
@@ -1497,6 +1503,7 @@ export async function commitShopifyEvidenceOrder(
         input.scope,
         order.id,
         input.identity,
+        order.shopifyCustomerId,
       );
       identityDisposition = persisted.disposition;
       identityHmacId = persisted.identityHmacId;
@@ -1518,35 +1525,58 @@ export async function commitShopifyEvidenceOrder(
       identityDisposition,
     });
 
-    const [existingObservation] = await tx
-      .select({
-        id: shopifyEvidenceRunObservations.id,
-        lineDisposition: shopifyEvidenceRunObservations.lineDisposition,
-        identityDisposition: shopifyEvidenceRunObservations.identityDisposition,
-        observedContentChecksum:
-          shopifyEvidenceRunObservations.observedContentChecksum,
-        sourceOrderUpdatedAt:
-          shopifyEvidenceRunObservations.sourceOrderUpdatedAt,
+    const [insertedObservation] = await tx
+      .insert(shopifyEvidenceRunObservations)
+      .values({
+        organizationId: input.scope.organizationId,
+        storeId: input.scope.storeId,
+        evidenceRunId: input.evidenceRunId,
+        orderId: order.id,
+        lineDisposition: input.lineDisposition,
+        identityDisposition,
+        observedContentChecksum,
+        sourceOrderUpdatedAt,
+        observedAt: now,
       })
-      .from(shopifyEvidenceRunObservations)
-      .where(
-        and(
-          eq(
-            shopifyEvidenceRunObservations.organizationId,
-            input.scope.organizationId,
+      .onConflictDoNothing({
+        target: [
+          shopifyEvidenceRunObservations.organizationId,
+          shopifyEvidenceRunObservations.storeId,
+          shopifyEvidenceRunObservations.evidenceRunId,
+          shopifyEvidenceRunObservations.orderId,
+        ],
+      })
+      .returning({ id: shopifyEvidenceRunObservations.id });
+    if (!insertedObservation) {
+      // Already observed in this run: the stored row must say exactly this.
+      const [existingObservation] = await tx
+        .select({
+          lineDisposition: shopifyEvidenceRunObservations.lineDisposition,
+          identityDisposition: shopifyEvidenceRunObservations.identityDisposition,
+          observedContentChecksum:
+            shopifyEvidenceRunObservations.observedContentChecksum,
+          sourceOrderUpdatedAt:
+            shopifyEvidenceRunObservations.sourceOrderUpdatedAt,
+        })
+        .from(shopifyEvidenceRunObservations)
+        .where(
+          and(
+            eq(
+              shopifyEvidenceRunObservations.organizationId,
+              input.scope.organizationId,
+            ),
+            eq(shopifyEvidenceRunObservations.storeId, input.scope.storeId),
+            eq(
+              shopifyEvidenceRunObservations.evidenceRunId,
+              input.evidenceRunId,
+            ),
+            eq(shopifyEvidenceRunObservations.orderId, order.id),
           ),
-          eq(shopifyEvidenceRunObservations.storeId, input.scope.storeId),
-          eq(
-            shopifyEvidenceRunObservations.evidenceRunId,
-            input.evidenceRunId,
-          ),
-          eq(shopifyEvidenceRunObservations.orderId, order.id),
-        ),
-      )
-      .limit(1)
-      .for("update");
-    if (existingObservation) {
+        )
+        .limit(1)
+        .for("update");
       if (
+        !existingObservation ||
         existingObservation.lineDisposition !== input.lineDisposition ||
         existingObservation.identityDisposition !== identityDisposition ||
         !constantTimeTextEqual(
@@ -1558,49 +1588,50 @@ export async function commitShopifyEvidenceOrder(
       ) {
         throw new Error("Shopify evidence observation replay conflicts");
       }
-    } else {
-      await tx.insert(shopifyEvidenceRunObservations).values({
-        organizationId: input.scope.organizationId,
-        storeId: input.scope.storeId,
-        evidenceRunId: input.evidenceRunId,
-        orderId: order.id,
-        lineDisposition: input.lineDisposition,
-        identityDisposition,
-        observedContentChecksum,
-        sourceOrderUpdatedAt,
-        observedAt: now,
-      });
     }
 
-    const [existingIdentityObservation] = await tx
-      .select({ id: shopifyEvidenceRunIdentityObservations.id, identityHmacId: shopifyEvidenceRunIdentityObservations.identityHmacId })
-      .from(shopifyEvidenceRunIdentityObservations)
-      .where(
-        and(
-          eq(shopifyEvidenceRunIdentityObservations.organizationId, input.scope.organizationId),
-          eq(shopifyEvidenceRunIdentityObservations.storeId, input.scope.storeId),
-          eq(shopifyEvidenceRunIdentityObservations.evidenceRunId, input.evidenceRunId),
-          eq(shopifyEvidenceRunIdentityObservations.orderId, order.id),
-        ),
-      )
-      .limit(1)
-      .for("update");
+    const findIdentityObservation = async () => {
+      const [row] = await tx
+        .select({ identityHmacId: shopifyEvidenceRunIdentityObservations.identityHmacId })
+        .from(shopifyEvidenceRunIdentityObservations)
+        .where(
+          and(
+            eq(shopifyEvidenceRunIdentityObservations.organizationId, input.scope.organizationId),
+            eq(shopifyEvidenceRunIdentityObservations.storeId, input.scope.storeId),
+            eq(shopifyEvidenceRunIdentityObservations.evidenceRunId, input.evidenceRunId),
+            eq(shopifyEvidenceRunIdentityObservations.orderId, order.id),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      return row;
+    };
     if (identityHmacId) {
-      if (existingIdentityObservation) {
-        if (existingIdentityObservation.identityHmacId !== identityHmacId) {
-          throw new Error("Shopify evidence identity observation replay conflicts");
-        }
-      } else {
-        await tx.insert(shopifyEvidenceRunIdentityObservations).values({
+      const [insertedIdentityObservation] = await tx
+        .insert(shopifyEvidenceRunIdentityObservations)
+        .values({
           organizationId: input.scope.organizationId,
           storeId: input.scope.storeId,
           evidenceRunId: input.evidenceRunId,
           orderId: order.id,
           identityHmacId,
           observedAt: now,
-        });
+        })
+        .onConflictDoNothing({
+          target: [
+            shopifyEvidenceRunIdentityObservations.storeId,
+            shopifyEvidenceRunIdentityObservations.evidenceRunId,
+            shopifyEvidenceRunIdentityObservations.orderId,
+          ],
+        })
+        .returning({ id: shopifyEvidenceRunIdentityObservations.id });
+      if (!insertedIdentityObservation) {
+        const existing = await findIdentityObservation();
+        if (!existing || existing.identityHmacId !== identityHmacId) {
+          throw new Error("Shopify evidence identity observation replay conflicts");
+        }
       }
-    } else if (existingIdentityObservation) {
+    } else if (await findIdentityObservation()) {
       throw new Error("Shopify evidence identity observation replay conflicts");
     }
 
