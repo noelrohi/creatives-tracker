@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { Pool, type PoolClient } from "pg";
+import { Client, Pool, type PoolClient } from "pg";
 import type { IdentityCryptoKeyChecks } from "@/lib/identity-hmac";
 
 function resolveConnectionString(): string | null {
@@ -43,6 +43,7 @@ vi.mock("@/db", () => ({
 
 const {
   SHOPIFY_EVIDENCE_STALE_AFTER_MS,
+  canonicalContentChecksum,
   checkpointShopifyEvidenceRun,
   commitShopifyEvidenceOrder,
   countEvidenceOrders,
@@ -281,6 +282,81 @@ async function startRun(
     disposition: { kind: "running", identityCapability: "unknown" },
     now,
   });
+}
+
+// Every statement Drizzle sends goes through pg's Client#query (pool queries
+// and transaction clients alike), so spying on it shows exactly what a commit
+// asked the database to do.
+async function statementsDuring<T>(
+  work: () => Promise<T>,
+): Promise<{ result: T; statements: string[] }> {
+  const spy = vi.spyOn(Client.prototype, "query");
+  try {
+    const result = await work();
+    const statements = spy.mock.calls.map(([query]) =>
+      typeof query === "string"
+        ? query
+        : String((query as { text?: unknown } | undefined)?.text ?? ""),
+    );
+    return { result, statements };
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+const ORDER_A_PROGRESS = {
+  counts: { ...ZERO_COUNTS, ordersRead: 1, ordersEnriched: 1 },
+  identityCapability: "available" as const,
+  lineCompleteness: "complete" as const,
+};
+
+function commitOrderA(
+  runId: string,
+  overrides: Partial<Parameters<typeof commitShopifyEvidenceOrder>[0]> = {},
+) {
+  return commitShopifyEvidenceOrder({
+    scope,
+    evidenceRunId: runId,
+    orderId: "order_a",
+    shopifyOrderId: "gid://shopify/Order/1",
+    expectedCursor: null,
+    nextCursor: FIRST_CURSOR,
+    lines: firstCompleteSet,
+    lineDisposition: "complete",
+    identity: availableIdentity(),
+    progress: ORDER_A_PROGRESS,
+    now: new Date("2026-08-01T00:01:00.000Z"),
+    ...overrides,
+  });
+}
+
+// Commits order_a in a finished first run, then again in a fresh second run
+// (a non-replay commit over already-stored evidence), recording the second
+// commit's statements.
+async function twoRunsOfOrderA(
+  secondOverrides: Partial<Parameters<typeof commitShopifyEvidenceOrder>[0]> = {},
+) {
+  const firstRun = await startRun("trigger-first-of-two");
+  const first = await commitOrderA(firstRun.id);
+  await finishShopifyEvidenceRun({
+    scope,
+    runId: firstRun.id,
+    expectedCursor: FIRST_CURSOR,
+    status: "success",
+    progress: ORDER_A_PROGRESS,
+  });
+  const secondRun = await startRun(
+    "trigger-second-of-two",
+    new Date("2026-08-02T00:00:00.000Z"),
+  );
+  const { result: second, statements: secondStatements } =
+    await statementsDuring(() =>
+      commitOrderA(secondRun.id, {
+        now: new Date("2026-08-02T00:01:00.000Z"),
+        ...secondOverrides,
+      }),
+    );
+  return { first, second, secondStatements };
 }
 
 async function readLineIds(): Promise<string[]> {
@@ -819,6 +895,195 @@ describeIfDb("Shopify evidence persistence", () => {
     expect(await readLineIds()).toEqual([]);
   });
 
+  it("leaves identical stored lines untouched on a later run", async () => {
+    const readLines = () =>
+      testPool!.query(
+        `SELECT id, xmin::text AS version FROM shopify_order_line
+         WHERE order_id = 'order_a' ORDER BY id`,
+      );
+    const runFirstOnly = await startRun("trigger-lines-probe");
+    await commitOrderA(runFirstOnly.id);
+    const before = (await readLines()).rows;
+    await finishShopifyEvidenceRun({
+      scope,
+      runId: runFirstOnly.id,
+      expectedCursor: FIRST_CURSOR,
+      status: "success",
+      progress: ORDER_A_PROGRESS,
+    });
+    const secondRun = await startRun(
+      "trigger-lines-probe-2",
+      new Date("2026-08-02T00:00:00.000Z"),
+    );
+    const { result: second, statements } = await statementsDuring(() =>
+      commitOrderA(secondRun.id, { now: new Date("2026-08-02T00:01:00.000Z") }),
+    );
+
+    expect((await readLines()).rows).toEqual(before);
+    expect(statements.some((s) => /delete from "?shopify_order_line/i.test(s))).toBe(false);
+    expect(statements.some((s) => /insert into "?shopify_order_line/i.test(s))).toBe(false);
+    const stored = await testPool!.query(
+      `SELECT shopify_line_item_id AS "shopifyLineItemId",
+              shopify_product_id AS "shopifyProductId",
+              shopify_variant_id AS "shopifyVariantId", sku, quantity
+       FROM shopify_order_line WHERE order_id = 'order_a'`,
+    );
+    const order = await testPool!.query(
+      `SELECT id, shopify_order_id AS "shopifyOrderId",
+              order_created_at::text AS "orderCreatedAtText"
+       FROM shopify_order WHERE id = 'order_a'`,
+    );
+    // timestamp without time zone: read it as UTC, the instant the store used.
+    const { orderCreatedAtText, ...orderRow } = order.rows[0];
+    expect(second.observedContentChecksum).toBe(
+      canonicalContentChecksum({
+        order: {
+          ...orderRow,
+          orderCreatedAt: new Date(`${orderCreatedAtText.replace(" ", "T")}Z`),
+        },
+        lines: stored.rows,
+        lineDisposition: "complete",
+        identityDisposition: "available",
+      }),
+    );
+  });
+
+  it("rejects a non-replay commit whose fetched lines repeat an id, leaving stored lines unchanged", async () => {
+    const firstRun = await startRun("trigger-duplicate-fetched-ids");
+    await commitOrderA(firstRun.id);
+    await finishShopifyEvidenceRun({
+      scope,
+      runId: firstRun.id,
+      expectedCursor: FIRST_CURSOR,
+      status: "success",
+      progress: ORDER_A_PROGRESS,
+    });
+    const before = await testPool!.query(
+      `SELECT id, shopify_line_item_id, product_title, quantity, xmin::text AS version
+       FROM shopify_order_line WHERE order_id = 'order_a' ORDER BY id`,
+    );
+    const secondRun = await startRun(
+      "trigger-duplicate-fetched-ids-2",
+      new Date("2026-08-02T00:00:00.000Z"),
+    );
+    const duplicated = {
+      ...firstCompleteSet,
+      lines: [firstCompleteSet.lines[0], { ...firstCompleteSet.lines[0] }],
+    };
+    await expect(
+      commitOrderA(secondRun.id, {
+        now: new Date("2026-08-02T00:01:00.000Z"),
+        lines: duplicated,
+      }),
+    ).rejects.toMatchObject({
+      cause: {
+        code: "23505",
+        constraint: "shopify_order_line_store_external_uniq",
+      },
+    });
+    const after = await testPool!.query(
+      `SELECT id, shopify_line_item_id, product_title, quantity, xmin::text AS version
+       FROM shopify_order_line WHERE order_id = 'order_a' ORDER BY id`,
+    );
+    expect(after.rows).toEqual(before.rows);
+    expect(await readLineIds()).toEqual([
+      "gid://shopify/LineItem/1",
+      "gid://shopify/LineItem/2",
+    ]);
+  });
+
+  it("rewrites stored lines when a title or quantity changed", async () => {
+    const changedSet = {
+      ...firstCompleteSet,
+      lines: firstCompleteSet.lines.map((line, index) =>
+        index === 0 ? { ...line, productTitle: "First v2", quantity: 3 } : line,
+      ),
+    };
+    const { first, second, secondStatements } = await twoRunsOfOrderA({
+      lines: changedSet,
+    });
+
+    expect(secondStatements.some((s) => /delete from "?shopify_order_line/i.test(s))).toBe(true);
+    const stored = await testPool!.query(
+      `SELECT product_title, quantity FROM shopify_order_line
+       WHERE order_id = 'order_a' AND shopify_line_item_id = 'gid://shopify/LineItem/1'`,
+    );
+    expect(stored.rows[0]).toEqual({ product_title: "First v2", quantity: 3 });
+    expect(second.observedContentChecksum).not.toBe(first.observedContentChecksum);
+  });
+
+  it("rewrites stored lines when only a product title changed", async () => {
+    const { secondStatements } = await twoRunsOfOrderA({
+      lines: {
+        ...firstCompleteSet,
+        lines: firstCompleteSet.lines.map((line, index) =>
+          index === 0 ? { ...line, productTitle: "First retitled" } : line,
+        ),
+      },
+    });
+
+    expect(secondStatements.some((s) => /delete from "?shopify_order_line/i.test(s))).toBe(true);
+    const stored = await testPool!.query(
+      `SELECT product_title, quantity FROM shopify_order_line
+       WHERE order_id = 'order_a' AND shopify_line_item_id = 'gid://shopify/LineItem/1'`,
+    );
+    expect(stored.rows[0]).toEqual({ product_title: "First retitled", quantity: 1 });
+  });
+
+  it("rewrites stored lines when a line was added", async () => {
+    const { secondStatements } = await twoRunsOfOrderA({
+      lines: {
+        ...firstCompleteSet,
+        lines: [
+          ...firstCompleteSet.lines,
+          {
+            shopifyLineItemId: "gid://shopify/LineItem/3",
+            shopifyProductId: null,
+            shopifyVariantId: null,
+            sku: null,
+            productTitle: "Third",
+            variantTitle: null,
+            quantity: 1,
+            sourcePosition: 2,
+          },
+        ],
+      },
+    });
+
+    expect(secondStatements.some((s) => /delete from "?shopify_order_line/i.test(s))).toBe(true);
+    expect(await readLineIds()).toEqual([
+      "gid://shopify/LineItem/1",
+      "gid://shopify/LineItem/2",
+      "gid://shopify/LineItem/3",
+    ]);
+  });
+
+  it("rewrites stored lines when a line was removed", async () => {
+    const { secondStatements } = await twoRunsOfOrderA({
+      lines: { ...firstCompleteSet, lines: [firstCompleteSet.lines[0]] },
+    });
+
+    expect(secondStatements.some((s) => /delete from "?shopify_order_line/i.test(s))).toBe(true);
+    expect(await readLineIds()).toEqual(["gid://shopify/LineItem/1"]);
+  });
+
+  it("creates the key binding and policy on a store's first identity commit", async () => {
+    const run = await startRun("trigger-first-identity-commit");
+    const { statements } = await statementsDuring(() => commitOrderA(run.id));
+
+    expect(
+      statements.some((s) => /insert into "?identity_crypto_policy/i.test(s)),
+    ).toBe(true);
+    const counts = await testPool!.query<{ bindings: string; policies: string }>(
+      `SELECT
+         (SELECT count(*) FROM identity_matching_key_binding
+          WHERE organization_id = 'org_a' AND store_id = 'store_a') AS bindings,
+         (SELECT count(*) FROM identity_crypto_policy
+          WHERE organization_id = 'org_a' AND store_id = 'store_a') AS policies`,
+    );
+    expect(counts.rows[0]).toEqual({ bindings: "1", policies: "1" });
+  });
+
   it("initializes one lifetime crypto binding safely under replay and races", async () => {
     await Promise.all([
       ensureIdentityCryptoPolicy({ scope, keyChecks: KEY_CHECKS }),
@@ -865,6 +1130,38 @@ describeIfDb("Shopify evidence persistence", () => {
     await expect(
       ensureIdentityCryptoPolicy({ scope: otherScope, keyChecks: OTHER_KEY_CHECKS }),
     ).resolves.toBeUndefined();
+  });
+
+  it("checks an existing key policy with one read and no writes", async () => {
+    const { secondStatements } = await twoRunsOfOrderA();
+    const policyStatements = secondStatements.filter((statement) =>
+      /identity_crypto_policy|identity_matching_key_binding/i.test(statement),
+    );
+    expect(policyStatements).toHaveLength(1);
+    expect(policyStatements[0]).toMatch(/^\s*select/i);
+  });
+
+  it("still rejects a commit whose stored key policy no longer matches", async () => {
+    const firstRun = await startRun("trigger-policy-drift");
+    await commitOrderA(firstRun.id);
+    await finishShopifyEvidenceRun({
+      scope,
+      runId: firstRun.id,
+      expectedCursor: FIRST_CURSOR,
+      status: "success",
+      progress: ORDER_A_PROGRESS,
+    });
+    await testPool!.query(
+      `UPDATE identity_crypto_policy SET suppression_version = 'e2'
+       WHERE organization_id = 'org_a' AND store_id = 'store_a'`,
+    );
+    const secondRun = await startRun(
+      "trigger-policy-drift-2",
+      new Date("2026-08-02T00:00:00.000Z"),
+    );
+    await expect(
+      commitOrderA(secondRun.id, { now: new Date("2026-08-02T00:01:00.000Z") }),
+    ).rejects.toThrow("identity_crypto_policy_conflict");
   });
 
   it("allows only one divergent crypto-policy initializer to bind a store", async () => {
